@@ -46,11 +46,13 @@ function toolImageSource(image: ImageToolContent): string | null {
  * Details (command/diff/output) open in the side drawer via `onOpen`.
  */
 export function ToolCallCard({ tc, onOpen }: ToolCallCardProps) {
-  // Organization memory is an optional enhancement. If a credential expires
-  // or the server drops while a turn is running, the native bridge returns a
-  // successful silent skip and detaches itself. Do not turn that internal
-  // fallback into a conspicuous transcript row.
-  if (isSilentOrganizationSkip(tc)) return null;
+  if (isSilentOrganizationSkip(tc)) return (
+    <button type="button" className="toolcall toolcall--compact" onClick={() => onOpen?.(tc)}
+      title="本轮组织知识检索不可用，回答未包含该来源。点击查看原因；可在组织页面重新连接。">
+      <span className="toolcall__kind">知识来源</span>
+      <span className="toolcall__title">本轮未使用组织知识 · 查看原因</span>
+    </button>
+  );
 
   const statusCls =
     tc.status === "completed"

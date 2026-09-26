@@ -358,6 +358,47 @@ pub(crate) fn read_config() -> Value {
     read_config_unlocked()
 }
 
+/// Read settings without quarantining or replacing unreadable user data.
+fn read_config_checked_unlocked() -> Result<Value, String> {
+    let path = config_path();
+    match std::fs::symlink_metadata(&path) {
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+            return Ok(Value::Table(Map::new()))
+        }
+        Err(error) => return Err(format!("无法读取配置：{error}")),
+        Ok(metadata) if metadata.file_type().is_symlink() || !metadata.is_file() => {
+            return Err("配置不是普通文件".into())
+        }
+        Ok(_) => {}
+    }
+    let bytes = crate::shell_fs::read_regular_file_bounded(&path, MAX_RUNTIME_CONFIG_BYTES)?;
+    let text = std::str::from_utf8(&bytes).map_err(|error| format!("配置编码无效：{error}"))?;
+    text.parse::<Value>()
+        .map_err(|error| format!("配置无法解析，请修复后重试：{error}"))
+}
+
+pub(crate) fn read_config_checked() -> Result<Value, String> {
+    update_config_checked(|config| Ok(config.clone()))
+}
+
+pub(crate) fn update_config_checked<T>(
+    update: impl FnOnce(&mut Value) -> Result<T, String>,
+) -> Result<T, String> {
+    let _guard = config_transaction_lock()
+        .lock()
+        .unwrap_or_else(|e| e.into_inner());
+    let path = config_path();
+    let _transaction = echo_agent_runtime::util::config::acquire_config_transaction_lock_at(&path)
+        .map_err(|error| format!("无法锁定配置：{error}"))?;
+    let mut config = read_config_checked_unlocked()?;
+    let original = config.clone();
+    let result = update(&mut config)?;
+    if config != original {
+        write_config_unlocked(&config)?;
+    }
+    Ok(result)
+}
+
 fn read_config_unlocked() -> Value {
     let path = config_path();
     match std::fs::symlink_metadata(&path) {

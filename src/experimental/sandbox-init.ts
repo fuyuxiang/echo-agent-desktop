@@ -1,17 +1,5 @@
-/**
- * 沙箱自动激活 —— 装好 @anthropic-ai/sandbox-runtime 后零代码改动自动激活 OS 级沙箱。
- *
- * 原理:用动态 import 探测包是否存在;存在则调用其 API 创建沙箱实例,注入 sandbox-guard
- * 的 AnthropicSandboxExecutor;不存在则静默降级为 PassthroughExecutor(纯逻辑守卫)。
- *
- * 用户只需在联网环境执行 `pnpm add @anthropic-ai/sandbox-runtime`,重启即生效。
- *
- * 注:@anthropic-ai/sandbox-runtime v0.0.17 的 API(Claude Code 同款):
- *  - 默认导出 createSandbox(policy) → sandbox 实例
- *  - sandbox.exec(command) / sandbox.run(command) → { stdout, stderr, exitCode }
- *  - policy: { fileRules, networkPolicy, defaultAction } (与 SandboxRules 对齐)
- *
- * 由于无法静态 import(离线环境会报错),这里用动态 import + duck-typing。
+/** Experimental adapter only. Not connected to desktop startup or Runtime tool execution.
+ * Installing the package does not activate an OS sandbox in EchoAgent.
  */
 import {
   AnthropicSandboxExecutor,
@@ -19,7 +7,7 @@ import {
   getSandboxExecutor,
   DEFAULT_SANDBOX_RULES,
   type SandboxRuntimeLike,
-} from "./sandbox-guard";
+} from "../lib/sandbox-guard";
 
 /** 沙箱包名。 */
 const SANDBOX_PACKAGE = "@anthropic-ai/sandbox-runtime";

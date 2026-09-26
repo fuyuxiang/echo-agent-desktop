@@ -3,7 +3,7 @@ import {
   tryActivateSandbox,
   isSandboxActive,
   sandboxRulesToPolicy,
-} from "../sandbox-init";
+} from "../../experimental/sandbox-init";
 import {
   resetSandboxExecutor,
   getSandboxExecutor,

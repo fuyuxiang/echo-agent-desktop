@@ -5,9 +5,10 @@
  * 每条队列为「按会话隔离」的有序列表;完成一轮对话后由调用方(App)取下一条
  * active(非 paused)项继续 `agentSend`,实现「回完一条自动发下一条」。
  *
- * 仅内存(会话级临时态,切会话保留在 store,不持久化),便于单测。
+ * 持久化待发送内容；重启后暂停恢复，发送结果不确定的行需用户检查记录。
  */
 import { create } from "zustand";
+import { readDurable, writeDurable } from "@/lib/durable-ui-state";
 
 export type QueueItemStatus = "queued" | "paused" | "sending";
 type EditableQueueItemStatus = Exclude<QueueItemStatus, "sending">;
@@ -30,6 +31,7 @@ export interface QueueItem {
   /** Local paths that must travel with this queued prompt. */
   attachments?: string[];
   status: QueueItemStatus;
+  recovery?: "queued" | "uncertain";
   /** Prompt correlation id while this exact row is owned by an Agent turn. */
   promptId?: string;
   /** 入队时间戳(ms)。 */
@@ -81,8 +83,25 @@ function queueOf(map: QueueMap, sessionId: string): QueueItem[] {
   return map[sessionId] ?? [];
 }
 
+const OUTBOX_KEY = "echoagent.outbox.v1";
+function validQueues(value: unknown): value is QueueMap {
+  return !!value && typeof value === "object" && !Array.isArray(value)
+    && Object.values(value).every((items) => Array.isArray(items) && items.every((item) =>
+      item && typeof item.id === "string" && typeof item.text === "string"
+      && ["queued", "paused", "sending"].includes(item.status) && Number.isFinite(item.createdAt)
+      && (item.promptId === undefined || typeof item.promptId === "string")
+      && (item.attachments === undefined || (Array.isArray(item.attachments) && item.attachments.every((p: unknown) => typeof p === "string")))));
+}
+function restoredQueues(): QueueMap {
+  const queues = readDurable<QueueMap>(OUTBOX_KEY, {}, validQueues);
+  return Object.fromEntries(Object.entries(queues).map(([id, items]) => [id, items.map((item) => ({
+    ...item, status: "paused" as const,
+    recovery: item.recovery ?? (item.status === "sending" ? "uncertain" as const : "queued" as const),
+  }))]));
+}
+
 export const useMessageQueueStore = create<QueueState>((set, get) => ({
-  queues: {},
+  queues: restoredQueues(),
   enqueue: (sessionId, text, attachments = []) => {
     const id = newId();
     const item: QueueItem = {
@@ -92,9 +111,9 @@ export const useMessageQueueStore = create<QueueState>((set, get) => ({
       status: "queued",
       createdAt: Date.now(),
     };
-    set((s) => ({
-      queues: { ...s.queues, [sessionId]: [...queueOf(s.queues, sessionId), item] },
-    }));
+    const queues = { ...get().queues, [sessionId]: [...queueOf(get().queues, sessionId), item] };
+    if (!writeDurable(OUTBOX_KEY, queues)) throw new Error("队列未能保存，请保留输入并检查本机存储空间");
+    set({ queues });
     return id;
   },
   update: (sessionId, id, text) =>
@@ -137,7 +156,7 @@ export const useMessageQueueStore = create<QueueState>((set, get) => ({
         queues: {
           ...s.queues,
           [sessionId]: q.map((it) => (
-            it.id === id ? { ...it, status, promptId: undefined } : it
+            it.id === id ? { ...it, status, promptId: undefined, recovery: undefined } : it
           )),
         },
       };
@@ -151,6 +170,7 @@ export const useMessageQueueStore = create<QueueState>((set, get) => ({
       const next = [...q];
       claimed = { ...next[idx], status: "sending", ...(promptId ? { promptId } : {}) };
       next[idx] = claimed;
+      if (!writeDurable(OUTBOX_KEY, { ...s.queues, [sessionId]: next })) { claimed = null; return s; }
       return { queues: { ...s.queues, [sessionId]: next } };
     });
     return claimed;
@@ -164,6 +184,7 @@ export const useMessageQueueStore = create<QueueState>((set, get) => ({
       const next = [...q];
       claimed = { ...next[idx], status: "sending", promptId };
       next[idx] = claimed;
+      if (!writeDurable(OUTBOX_KEY, { ...s.queues, [sessionId]: next })) { claimed = null; return s; }
       return { queues: { ...s.queues, [sessionId]: next } };
     });
     return claimed;
@@ -173,7 +194,7 @@ export const useMessageQueueStore = create<QueueState>((set, get) => ({
     set((s) => {
       const q = queueOf(s.queues, sessionId);
       const idx = q.findIndex((it) => (
-        it.status === "sending" && (!promptId || it.promptId === promptId)
+        (it.status === "sending" || (it.recovery === "uncertain" && !!promptId)) && (!promptId || it.promptId === promptId)
       ));
       if (idx === -1) return s;
       settled = q[idx];
@@ -198,7 +219,7 @@ export const useMessageQueueStore = create<QueueState>((set, get) => ({
           items.map((item) => {
             if (item.status !== "sending") return item;
             changed = true;
-            return { ...item, status: "queued" as const, promptId: undefined };
+            return { ...item, status: "paused" as const, recovery: "uncertain" as const };
           }),
         ]),
       );
@@ -226,6 +247,10 @@ export const useMessageQueueStore = create<QueueState>((set, get) => ({
 }));
 
 /** 是否存在任意 active(非 paused)项 —— App 判定「回完一条是否自动续发」。 */
+useMessageQueueStore.subscribe((state, previous) => {
+  if (state.queues !== previous.queues) writeDurable(OUTBOX_KEY, state.queues);
+});
+
 export function hasActiveItems(q: QueueItem[]): boolean {
   return q.some((it) => it.status === "queued");
 }

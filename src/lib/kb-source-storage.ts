@@ -13,6 +13,7 @@ export interface KnowledgeSourceDescriptor {
   root: string;
   label: string;
   enabled: boolean;
+  resourceId?: string;
 }
 
 function hashPath(path: string): string {
@@ -33,7 +34,7 @@ export function localKnowledgeSourceDescriptor(root: string): KnowledgeSourceDes
   const normalized = normalizedRoot(root);
   const label = normalized.split("/").filter(Boolean).pop() ?? normalized;
   return {
-    id: `local-${hashPath(normalized.toLowerCase())}`,
+    id: `local-${hashPath(normalized)}`,
     kind: "local-folder",
     root: normalized,
     label: `本地：${label}`,
@@ -60,6 +61,7 @@ function parseDescriptors(value: unknown): KnowledgeSourceDescriptor[] {
         ? source.label.trim()
         : `本地：${source.root.split(/[\\/]/).filter(Boolean).pop() ?? source.root}`,
       enabled: source.enabled !== false,
+      resourceId: typeof source.resourceId === "string" ? source.resourceId : undefined,
     }];
   });
 }
@@ -124,11 +126,20 @@ export function hydrateKnowledgeSources(): Promise<KnowledgeSourceDescriptor[]> 
 
 export async function addLocalKnowledgeSource(root: string): Promise<{ descriptor: KnowledgeSourceDescriptor; added: boolean }> {
   await hydrateKnowledgeSources();
-  const descriptor = localKnowledgeSourceDescriptor(root);
+  let descriptor = localKnowledgeSourceDescriptor(root);
+  if (isTauriAvailable()) {
+    const identity = await invoke<{ id: string; canonicalPath: string }>("filesystem_resource_identity", { path: root, directory: true });
+    descriptor = { ...localKnowledgeSourceDescriptor(identity.canonicalPath), id: `local-${identity.id}`, resourceId: identity.id };
+  }
   const items = loadKnowledgeSourceDescriptors();
-  if (items.some((item) => item.id === descriptor.id)) {
-    registerDescriptor(descriptor);
-    return { descriptor, added: false };
+  for (const item of items) {
+    if (isTauriAvailable() && !item.resourceId) {
+      try { item.resourceId = (await invoke<{ id: string }>("filesystem_resource_identity", { path: item.root, directory: true })).id; } catch { /* Offline source remains in the catalog. */ }
+    }
+    if (item.id === descriptor.id || item.root === descriptor.root || (item.resourceId && item.resourceId === descriptor.resourceId)) {
+      registerDescriptor(item);
+      return { descriptor: item, added: false };
+    }
   }
   await saveKnowledgeSourceDescriptors([...items, descriptor]);
   registerDescriptor(descriptor);

@@ -8,7 +8,7 @@ import {
   generateState,
   type OidcConfig,
   type HttpPost,
-} from "../oidc-auth";
+} from "../../experimental/oidc-auth";
 
 const config: OidcConfig = {
   authorizationEndpoint: "https://idp.example.com/authorize",

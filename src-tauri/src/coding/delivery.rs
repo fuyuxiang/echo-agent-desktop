@@ -249,6 +249,7 @@ fn verification_gate(
                 VerificationStatus::TimedOut => "超时",
                 VerificationStatus::Cancelled => "已取消",
                 VerificationStatus::Running => "执行中",
+                VerificationStatus::EnvironmentUnavailable => "环境未就绪",
             };
             let detail = record
                 .test_summary

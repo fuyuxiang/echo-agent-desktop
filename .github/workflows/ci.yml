@@ -78,7 +78,7 @@ jobs:
       - run: node scripts/verify-vendored-runtime.mjs
       - run: cargo fmt --manifest-path src-tauri/Cargo.toml --check
       - run: cargo clippy --locked --manifest-path src-tauri/Cargo.toml --lib -- -D warnings
-      - run: cargo test --locked --manifest-path src-tauri/Cargo.toml --lib -j 2
+      - run: cargo test --locked --manifest-path src-tauri/Cargo.toml --lib --tests -j 2
 
   automation-macos:
     name: Automation / macOS Intel + Apple Silicon
@@ -169,3 +169,26 @@ jobs:
           --manifest-path vendor/echo-agent-build/Cargo.toml
           -p echo-agent-sampler
           ambiguous_parallel_tools_retry_once_with_parallel_disabled
+
+  theia-bridge:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v7
+        with:
+          node-version: '22'
+          cache: npm
+          cache-dependency-path: vendor/theia-platform/package-lock.json
+      - run: sudo apt-get update && sudo apt-get install -y libx11-dev libxkbfile-dev libsecret-1-dev
+      - uses: actions/cache@v4
+        with:
+          path: |
+            vendor/theia-platform/packages/*/lib
+            vendor/theia-platform/packages/*/tsconfig.tsbuildinfo
+          key: theia-types-${{ runner.os }}-${{ hashFiles('vendor/theia-platform/package-lock.json', 'vendor/theia-platform/packages/**/*.ts', 'vendor/theia-platform/configs/*.json') }}
+      - run: npm ci --prefix vendor/theia-platform
+        env:
+          PUPPETEER_SKIP_DOWNLOAD: '1'
+          PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD: '1'
+      - run: node scripts/check-theia-bridge.mjs

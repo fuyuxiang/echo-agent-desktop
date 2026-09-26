@@ -374,7 +374,7 @@ describe("queueTerminalPolicy", () => {
 describe("message-queue-store — 进程级故障恢复", () => {
   beforeEach(resetStore);
 
-  it("把所有会话的 sending 项恢复为可重试队列，保留其它状态", () => {
+  it("把所有会话的 sending 项恢复为待确认队列，保留其它状态", () => {
     const s = useMessageQueueStore.getState();
     s.enqueue("s1", "one");
     const pausedId = s.enqueue("s1", "paused");
@@ -386,10 +386,10 @@ describe("message-queue-store — 进程级故障恢复", () => {
     s.retryAllSending();
 
     expect(store().getQueue("s1").map((item) => item.status)).toEqual([
-      "queued",
+      "paused",
       "paused",
     ]);
-    expect(store().getQueue("s2")[0].status).toBe("queued");
+    expect(store().getQueue("s2")[0].status).toBe("paused");
   });
 });
 

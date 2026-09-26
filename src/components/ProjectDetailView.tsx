@@ -1,3 +1,4 @@
+import { useSessionsStore } from "@/stores/sessions-store";
 /**
  * 项目详情页 — 对齐目标截图（图3-6）。
  *
@@ -17,7 +18,7 @@ import {
   RefPickerDialog,
   type ProjectPickerOptions,
 } from "./project-picker";
-import { ActivityTab, PlanTab, TaskTab, AssetsTab } from "./project-tabs";
+import { ActivityTab, TaskTab, AssetsTab } from "./project-tabs";
 import { Composer } from "./Composer";
 import { ModelSelector, type ModelOption } from "./ModelSelector";
 import { FolderIcon } from "@/foundation/components/Icon/icons";
@@ -27,14 +28,13 @@ import type { AgentEntry } from "@/lib/types";
 import type { SlashCommandInvocation } from "@/lib/slash-commands";
 import { useWorkspaceMentions } from "@/lib/use-workspace-mentions";
 
-type TabKey = "activity" | "plan" | "task" | "asset";
+type TabKey = "activity" | "task" | "asset";
 type DrawerKey = "instruction" | "model" | "connectors" | "experts" | "skills" | "automation";
 
 const TABS: { key: TabKey; label: string }[] = [
   { key: "activity", label: "动态" },
-  { key: "plan", label: "计划" },
-  { key: "task", label: "任务" },
-  { key: "asset", label: "资产" },
+  { key: "task", label: "工作项" },
+  { key: "asset", label: "项目资料" },
 ];
 
 const CONFIG_CARDS: { key: DrawerKey; title: string; desc: string }[] = [
@@ -43,7 +43,7 @@ const CONFIG_CARDS: { key: DrawerKey; title: string; desc: string }[] = [
   { key: "connectors", title: "连接器", desc: "连接外部服务，扩展 AI 能力" },
   { key: "experts", title: "专家", desc: "配置项目专家，为成员提供更专业的服务" },
   { key: "skills", title: "技能", desc: "配置项目技能，让 AI 精准执行任务" },
-  { key: "automation", title: "自动化", desc: "让 AI 按计划自动执行任务" },
+  { key: "automation", title: "定时任务", desc: "让 AI 按计划自动执行任务" },
 ];
 
 export function ProjectDetailView({
@@ -97,6 +97,7 @@ export function ProjectDetailView({
   const updateConfig = useProjectsStore((s) => s.updateConfig);
   const addMember = useProjectsStore((s) => s.addMember);
 
+  const projectDraft = useSessionsStore((state) => state.drafts[`project:${project.id}`] ?? "");
   const [tab, setTab] = useState<TabKey>("activity");
   const [drawer, setDrawer] = useState<DrawerKey | null>(null);
   const [membersOpen, setMembersOpen] = useState(false);
@@ -252,21 +253,6 @@ export function ProjectDetailView({
                 models={models}
               />
             )}
-            {tab === "plan" && (
-              <PlanTab
-                projectId={live.id}
-                models={models}
-                defaultModelId={projectModelId}
-                onRun={onStartConversation
-                  ? (message, modelId) => onStartConversation(live.id, message, modelId, [])
-                  : undefined}
-                onOpenSession={onOpenSession ? (sessionId) => onOpenSession(sessionId, live.cwd) : undefined}
-                onRestoreSession={onArchiveSession
-                  ? (sessionId) => onArchiveSession(sessionId, false, live.cwd)
-                  : undefined}
-                onToast={onToast}
-              />
-            )}
             {tab === "task" && (
               <TaskTab
                 projectId={live.id}
@@ -319,6 +305,9 @@ export function ProjectDetailView({
               )}
             </div>
             <Composer
+              draftKey={`project:${project.id}`}
+              draft={projectDraft}
+              onDraftChange={(value) => useSessionsStore.getState().setDraft(`project:${project.id}`, value)}
               streaming={false}
               onSend={(text, attachments) => handleComposerSend(text, projectModelId!, attachments)}
               onCancel={() => { /* 项目页 composer 不流式,onCancel 为 Composer prop 必传的占位。 */ }}

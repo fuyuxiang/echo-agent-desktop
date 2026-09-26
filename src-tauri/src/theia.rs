@@ -6,7 +6,7 @@ use std::fs::{self, File, OpenOptions};
 use std::io::{Read, Write};
 use std::net::{TcpListener, TcpStream};
 use std::path::{Path, PathBuf};
-use std::process::{Child, Command, Stdio};
+use std::process::{Command, Stdio};
 use std::sync::Mutex;
 use std::time::{Duration, Instant};
 use tauri::{AppHandle, Manager, State};
@@ -20,10 +20,27 @@ pub struct TheiaServer {
 }
 
 struct RunningServer {
-    child: Child,
+    child: crate::process_supervisor::SyncChild,
     port: u16,
     embed_token: String,
     root: PathBuf,
+}
+
+impl RunningServer {
+    fn stop(&mut self) {
+        // The authenticated endpoint also triggers Theia's lifecycle on Windows,
+        // where Unix signals cannot request graceful Node shutdown.
+        if let Ok(mut stream) = TcpStream::connect_timeout(
+            &format!("127.0.0.1:{}", self.port)
+                .parse()
+                .expect("loopback"),
+            Duration::from_millis(200),
+        ) {
+            let _ = stream.set_write_timeout(Some(Duration::from_millis(200)));
+            let _ = write!(stream, "POST /__echo_shutdown HTTP/1.1\r\nHost: 127.0.0.1:{}\r\nX-Echo-Shutdown-Token: {}\r\nContent-Length: 0\r\nConnection: close\r\n\r\n", self.port, self.embed_token);
+        }
+        crate::process_supervisor::stop_sync(&mut self.child);
+    }
 }
 
 #[derive(Serialize)]
@@ -37,8 +54,7 @@ impl TheiaServer {
     pub fn stop(&self) {
         if let Ok(mut guard) = self.process.lock() {
             if let Some(mut running) = guard.take() {
-                let _ = running.child.kill();
-                let _ = running.child.wait();
+                running.stop();
             }
         }
     }
@@ -189,8 +205,7 @@ pub async fn coding_theia_start(
             });
         }
         if let Some(mut old) = guard.take() {
-            let _ = old.child.kill();
-            let _ = old.child.wait();
+            old.stop();
         }
     }
 
@@ -235,7 +250,8 @@ pub async fn coding_theia_start(
         )
         .map_err(|error| format!("无法写入 IDE 日志：{error}"))?;
         let err_log = log.try_clone().map_err(|error| error.to_string())?;
-        let mut child = Command::new(&node)
+        let mut command = Command::new(&node);
+        command
             .arg(app_dir.join("lib/backend/main.js"))
             .arg(format!("--port={port}"))
             .arg("--hostname=127.0.0.1")
@@ -244,8 +260,8 @@ pub async fn coding_theia_start(
             .current_dir(&app_dir)
             .stdin(Stdio::null())
             .stdout(Stdio::from(log))
-            .stderr(Stdio::from(err_log))
-            .spawn()
+            .stderr(Stdio::from(err_log));
+        let mut child = crate::process_supervisor::spawn_sync(command)
             .map_err(|error| format!("Theia 启动失败：{error}"))?;
 
         let deadline = Instant::now() + Duration::from_secs(30);
@@ -279,8 +295,7 @@ pub async fn coding_theia_start(
             .map_err(|error| error.to_string())?
             .is_none()
         {
-            let _ = child.kill();
-            let _ = child.wait();
+            crate::process_supervisor::stop_sync(&mut child);
             return Err(format!(
                 "Theia 启动超时，请查看日志：{}",
                 log_path.display()

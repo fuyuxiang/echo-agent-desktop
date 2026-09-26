@@ -376,7 +376,7 @@ export function DeliveryReportTab({
                   <td>
                     <code>{record.command}</code>
                   </td>
-                  <td>{record.status === "passed" ? "通过" : record.status === "failed" ? "失败" : record.status === "timed_out" ? "超时" : record.status === "cancelled" ? "已取消" : "执行中"}</td>
+                  <td>{record.status === "passed" ? "通过" : record.status === "environment_unavailable" ? "环境未就绪" : record.status === "failed" ? "失败" : record.status === "timed_out" ? "超时" : record.status === "cancelled" ? "已取消" : "执行中"}</td>
                   <td>{record.exitCode ?? "无"}</td>
                   <td>
                     {record.testSummary

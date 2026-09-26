@@ -1,3 +1,4 @@
+import { invoke } from "@tauri-apps/api/core";
 import { lazy, Suspense, useCallback, useEffect, useRef, useState } from "react";
 import { TitleBar } from "./components/TitleBar";
 import { Sidebar } from "./components/Sidebar";
@@ -213,6 +214,13 @@ export default function App() {
 
 function Shell() {
   const [init, setInit] = useState<InitResult | null>(null);
+  useEffect(() => {
+    if (init?.ok && "__TAURI_INTERNALS__" in window) {
+      const frame = requestAnimationFrame(() => { void invoke("desktop_validation_ready").catch(console.error); });
+      return () => cancelAnimationFrame(frame);
+    }
+  }, [init?.ok]);
+
   const [initError, setInitError] = useState<string | null>(null);
   const [initAttempt, setInitAttempt] = useState(0);
   const [settingsOpen, setSettingsOpen] = useState(false);

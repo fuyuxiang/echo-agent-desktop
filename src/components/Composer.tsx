@@ -1,4 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from "react";
+import { draftAttachments, saveDraftAttachments } from "@/lib/draft-attachments";
+import { useStorageHealth } from "@/lib/durable-ui-state";
 import { Globe2, Mic, Monitor, X, type LucideIcon } from "lucide-react";
 import { ChevronDownIcon, SendPlaneIcon } from "@/foundation/components/Icon/icons";
 import { ModelSelector, type ModelOption } from "./ModelSelector";
@@ -268,6 +270,8 @@ export function Composer({
   /** Opens organization login/connection management. */
   onOpenOrganization?: () => void;
 }) {
+  const storageErrors = useStorageHealth((state) => state.errors);
+  const draftScopeRef = useRef(draftKey === undefined ? undefined : String(draftKey));
   const [text, setText] = useState("");
   const textRef = useRef("");
   const [attachments, setAttachments] = useState<string[]>([]);
@@ -312,6 +316,7 @@ export function Composer({
       if (!retained.has(path)) attachmentSizesRef.current.delete(path);
     }
     setAttachments(value);
+    if (draftScopeRef.current !== undefined) saveDraftAttachments(draftScopeRef.current, value);
   };
 
   /** Resolve missing sizes natively and only return a total for a stable list. */
@@ -477,7 +482,7 @@ export function Composer({
     mountedRef.current = true;
     return () => {
       mountedRef.current = false;
-      discardOwnedAttachments([...ownedAttachmentPathsRef.current]);
+      if (draftScopeRef.current === undefined) discardOwnedAttachments([...ownedAttachmentPathsRef.current]);
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
@@ -546,7 +551,7 @@ export function Composer({
   // 依赖只看 draftKey(通常是 sessionId),draft 值变化不重新触发——否则用户
   // 每敲一个字都会被这个 effect 重置光标。
   useEffect(() => {
-    if (draftKey === undefined) return;
+    if (draftKey === undefined) { draftScopeRef.current = undefined; return; }
     const recognition = recognitionRef.current;
     if (recognition?.abort) recognition.abort();
     else recognition?.stop();
@@ -556,8 +561,9 @@ export function Composer({
     setText(next);
     // Attachments are session-scoped. Never carry an unsent local file into
     // another conversation when ChatView reuses the same Composer instance.
-    discardOwnedAttachments([...ownedAttachmentPathsRef.current]);
-    updateAttachments([]);
+    ownedAttachmentPathsRef.current.clear();
+    draftScopeRef.current = String(draftKey);
+    updateAttachments(draftAttachments(String(draftKey)));
     setCursorPos(next.length);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [draftKey]);
@@ -820,6 +826,15 @@ export function Composer({
   const [sending, setSending] = useState(false);
 
   const finishAcceptedSubmission = (submittedText: string) => {
+    const submittedScope = draftKey === undefined ? undefined : String(draftKey);
+    if (submittedScope !== draftScopeRef.current || !mountedRef.current) {
+      // This callback belongs to the Composer render which admitted the send.
+      // A late response must never erase the next conversation's draft.
+      onDraftChange?.("");
+      if (submittedScope !== undefined) saveDraftAttachments(submittedScope, []);
+      return;
+    }
+    if (textRef.current !== text) return; // User typed another draft while awaiting admission.
     if (submittedText.trim()) {
       histRef.current = pushHistory(histRef.current, submittedText);
       histCursorRef.current = histRef.current.items.length;
@@ -833,6 +848,7 @@ export function Composer({
       // Navigation commands and accepted new-session sends may unmount this
       // Composer before their promise settles. Clear the persisted draft too.
       onDraftChangeRef.current?.("");
+      if (draftScopeRef.current !== undefined) saveDraftAttachments(draftScopeRef.current, []);
     }
     onClearSceneTag?.();
   };
@@ -1036,6 +1052,7 @@ export function Composer({
         "echo-composer-wrap" + (showMeta ? " echo-composer-wrap--home" : "")
       }
     >
+      {Object.keys(storageErrors).length > 0 && <div role="alert" className="composer-storage-error">本机保存失败，当前输入仍保留在窗口中。请先复制内容或到「设置 → 数据」导出备份，再重试保存。{Object.values(storageErrors)[0]}</div>}
       <section
         className={composerCls}
         onClick={() => {

@@ -35,6 +35,7 @@ import {
   Monitor,
 } from "lucide-react";
 import { useTheme } from "./ThemeProvider";
+import { exportBackup, inspectBackup, restoreBackup, backupLastError } from "@/lib/backup-client";
 import {
   commandsList,
   internalReload,
@@ -287,17 +288,20 @@ export function MemorySettingsPanel({ sessionId }: { sessionId?: string }) {
   const [msg, setMsg] = useState<string | null>(null);
   const [config, setConfig] = useState<MemoryConfig>(DEFAULT_MEMORY_CONFIG);
   const [loading, setLoading] = useState(true);
+  const [loadError, setLoadError] = useState(false);
+  const [reload, setReload] = useState(0);
   const { requestConfirmation, dialog } = useAppDialog(sessionId);
 
   useEffect(() => {
     let cancelled = false;
     setLoading(true);
+    setLoadError(false);
     void memoryConfigGet()
       .then((value) => {
         if (!cancelled) setConfig(value);
       })
       .catch((error) => {
-        if (!cancelled) setMsg(`读取记忆配置失败：${String(error).replace(/^Error:\s*/, "")}`);
+        if (!cancelled) { setLoadError(true); setMsg(`读取记忆配置失败：${String(error).replace(/^Error:\s*/, "")}`); }
       })
       .finally(() => {
         if (!cancelled) setLoading(false);
@@ -305,18 +309,20 @@ export function MemorySettingsPanel({ sessionId }: { sessionId?: string }) {
     return () => {
       cancelled = true;
     };
-  }, []);
+  }, [reload]);
 
-  const updateConfig = async (key: keyof MemoryConfig, value: boolean) => {
+  const updateConfig = async (key: keyof MemoryConfig, value: boolean | string) => {
+    if (loading || loadError || busy) return;
     const previous = config;
-    const next = { ...config, [key]: value };
-    setConfig(next);
+    setConfig({ ...config, [key]: value });
     setBusy(true);
     try {
-      setConfig(await memoryConfigSave(next));
+      const saved = await memoryConfigSave({ [key]: value }, config.revision);
+      setConfig({ ...previous, [key]: value, ...saved });
       setMsg("记忆配置已保存，重启 Agent 后对新会话生效。");
     } catch (e) {
       setConfig(previous);
+      setLoadError(true);
       setMsg(`失败：${String(e).replace(/^Error:\s*/, "")}`);
     } finally {
       setBusy(false);
@@ -362,7 +368,7 @@ export function MemorySettingsPanel({ sessionId }: { sessionId?: string }) {
   };
 
   const toggles: Array<{
-    key: keyof MemoryConfig;
+    key: "enabled" | "initialInjectionEnabled" | "saveOnEnd" | "watcherEnabled" | "autoFlushEnabled" | "dreamEnabled";
     name: string;
     description: string;
   }> = [
@@ -379,6 +385,23 @@ export function MemorySettingsPanel({ sessionId }: { sessionId?: string }) {
       title="记忆"
       desc="本地、可审阅的跨会话记忆。会话摘要是自动提取的中间资料，不是完整聊天记录。"
     >
+      {loadError && <div role="alert" className="settings-hint">配置未加载，暂时无法修改。<button className="btn-secondary" onClick={() => setReload((n) => n + 1)}>重新加载</button></div>}
+      <SettingsGroup title="检索与数据来源" desc="记忆文件保存在本机。生成摘要和整理内容会使用当前会话的模型服务。">
+        <label className="settings-row">检索方式
+          <select aria-label="记忆检索方式" disabled={loading || loadError || busy} value={config.retrievalMode ?? "local"} onChange={(event) => {
+            const mode = event.target.value;
+            if (mode === "builtin") {
+              requestConfirmation({ title: "启用远端记忆检索？", description: "查询与记忆片段会发送至 http://123.56.188.16:8088/v1。该服务使用明文 HTTP，请勿用于敏感资料。修改在重启 Agent 后生效。", confirmLabel: "确认使用此服务", action: () => updateConfig("retrievalMode", mode) });
+            } else { void updateConfig("retrievalMode", mode); }
+          }}>
+            <option value="local">本机全文检索</option>
+            <option value="configured">使用配置文件中的检索服务</option>
+            <option value="builtin">内置远端服务（HTTP）</option>
+          </select>
+        </label>
+        <p className="settings-hint">{config.retrievalSummary ?? "本机检索不会向独立的向量化或重排服务发送内容。"}</p>
+        <p className="settings-hint">检索方式修改后，请重启 Agent 使其生效；已有会话在重启前继续使用原配置。</p>
+      </SettingsGroup>
       <SettingsGroup title="记忆能力" desc="修改后会原子写入本地配置，重启 Agent 后对新会话生效。">
         {toggles.map((toggle) => (
           <div className="settings-row settings-row--comfortable" key={toggle.key}>
@@ -391,7 +414,7 @@ export function MemorySettingsPanel({ sessionId }: { sessionId?: string }) {
                 type="checkbox"
                 aria-label={toggle.name}
                 checked={config[toggle.key]}
-                disabled={loading || busy || (toggle.key !== "enabled" && !config.enabled)}
+                disabled={loading || loadError || busy || (toggle.key !== "enabled" && !config.enabled)}
                 onChange={(event) => void updateConfig(toggle.key, event.target.checked)}
               />
               <span className="sk-toggle-track"><span className="sk-toggle-thumb" /></span>
@@ -800,8 +823,11 @@ export function SecuritySettingsPanel() {
 export function DataSettingsPanel() {
   const [agentHome, setAgentHome] = useState("");
   const [message, setMessage] = useState("");
+  const [busy, setBusy] = useState(false);
+  const { requestConfirmation, dialog } = useAppDialog();
 
   useEffect(() => {
+    void backupLastError().then((error) => { if (error) setMessage(`上次恢复失败，已保留原有数据：${error}`); }).catch(() => {});
     void echoAgentDataDir()
       .then(setAgentHome)
       .catch((error) => setMessage(`读取数据目录失败：${String(error).replace(/^Error:\s*/, "")}`));
@@ -809,6 +835,31 @@ export function DataSettingsPanel() {
 
   return (
     <SectionShell title="数据管理" desc="查看 EchoAgent 在本机保存的数据位置和内容范围。">
+      <SettingsGroup title="备份与恢复" desc="备份会话、项目资料、代码任务记录、记忆、粘贴附件、草稿、队列和本机用量。不包含模型密钥、组织凭据或外部工作目录的文件。">
+        <p className="settings-hint">建议在任务结束后备份。备份包含聊天和资料正文，请保存在可信位置。恢复会替换备份中同名的数据，其他数据保留；历史外部文件仍依赖原工作目录。</p>
+        <div className="settings-group__footer">
+          <button type="button" className="settings-btn" disabled={busy} onClick={async () => {
+            setBusy(true);
+            try { const path = await exportBackup(); if (path) setMessage(`备份已保存：${path}`); }
+            catch (error) { setMessage(`备份失败：${String(error)}`); }
+            finally { setBusy(false); }
+          }}>{busy ? "处理中…" : "导出备份"}</button>
+          <button type="button" className="settings-btn" disabled={busy} onClick={async () => {
+            setBusy(true);
+            try {
+              const preview = await inspectBackup();
+              if (preview) requestConfirmation({
+                title: "恢复备份并重启？",
+                description: `已校验 ${preview.fileCount} 个文件，约 ${(preview.totalBytes / 1024 / 1024).toFixed(1)} MB，创建于 ${new Date(preview.createdAt).toLocaleString()}。包含 ${preview.uiKeys.length} 类界面数据。恢复将停止当前任务并替换同名记录，旧文件保留在数据目录的 restore-previous 文件夹中。备份中的项目目录关联也会恢复，请确认来源可信。定时任务和待发送队列将暂停，需检查后手动恢复。`,
+                confirmLabel: "恢复并重启",
+                action: async () => { setBusy(true); try { await restoreBackup(preview.token); } finally { setBusy(false); } },
+                onError: (error) => setMessage(`恢复失败：${String(error)}`),
+              });
+            } catch (error) { setMessage(`备份校验失败：${String(error)}`); }
+            finally { setBusy(false); }
+          }}>选择备份恢复</button>
+        </div>
+      </SettingsGroup>
       <SettingsGroup title="本地数据目录" desc="会话、项目、自动化、通知和配置都保存在此目录。">
         <div className="settings-row settings-row--comfortable settings-row--path">
           <div className="settings-row__label settings-row__label--stacked">
@@ -825,7 +876,8 @@ export function DataSettingsPanel() {
           </button>
         </div>
       </SettingsGroup>
-      {message && <p className="settings-msg">{message}</p>}
+      {message && <p className="settings-msg" role="status">{message}</p>}
+      {dialog}
       <SettingsGroup title="数据安全" desc="建议通过应用内入口管理数据，避免直接删除目录中的文件。">
         <div className="settings-info-callout">
           删除会话请在侧栏对单个会话操作；直接修改或清理目录可能导致项目、通知或配置无法恢复。

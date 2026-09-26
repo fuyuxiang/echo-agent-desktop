@@ -57,7 +57,7 @@ describe("Sidebar", () => {
     const nav = container.querySelector(".sidebar__nav");
     expect(nav).not.toBeNull();
     expect(within(nav as HTMLElement).getAllByRole("button").map((button) => button.textContent?.trim())).toEqual([
-      "新建任务", "项目", "代码开发", "组织", "专家·技能·连接器", "自动化", "更多常用工具",
+      "新建任务", "项目", "代码开发", "组织", "能力", "定时任务", "更多常用工具",
     ]);
     expect(screen.queryByText("助理")).not.toBeInTheDocument();
   });

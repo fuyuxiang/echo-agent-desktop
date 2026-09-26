@@ -140,6 +140,7 @@ export function ChatView({
   const awaitingQuestion = Boolean(useQuestionStore(selectQuestionForSession(sessionId)));
   const mentionCandidates = useWorkspaceMentions(cwd);
   // 会话内查找(对齐 EchoAgent chat-search)。
+  const timeline = useMemo(() => buildTimeline(messages), [messages]);
   const [findOpen, setFindOpen] = useState(false);
   const [findQuery, setFindQuery] = useState("");
   const [findOccurrences, setFindOccurrences] = useState<FindOccurrence[]>([]);
@@ -729,7 +730,7 @@ export function ChatView({
               {teamsOpen && (
                 <TeamStatusView messages={messages} />
               )}
-              {buildTimeline(messages).map((node) => {
+              {timeline.map((node) => {
                 // 时间线分隔符(对齐 EchoAgent message-timeline):日期/模型切换分隔。
                 // 当前 ChatMessage 无 modelId/createdAt,无分隔符时仅渲染消息节点。
                 if (node.kind === "date-divider") {

@@ -566,6 +566,7 @@ pub async fn org_local_kb_sources_set(
             "kind": "local-folder",
             "label": label,
             "root": path.to_string_lossy(),
+            "resourceId": crate::resource_identity::identity(&path)?.id,
             "enabled": item.get("enabled").and_then(Value::as_bool).unwrap_or(true)
         }));
     }

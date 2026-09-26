@@ -64,6 +64,15 @@ describe("artifact catalog", () => {
     )[0].sessionTitle).toBe("new");
   });
 
+  it("大小写不同的产物分别保留，原生确认同一文件才合并", () => {
+    const entries = taskArtifactsFromMessages("s", "task", "/w", [
+      toolMessage("edit", "Write /w/A.txt", "/w/A.txt"),
+      toolMessage("edit", "Write /w/a.txt", "/w/a.txt"),
+    ], 1);
+    expect(mergeTaskArtifacts(entries)).toHaveLength(2);
+    expect(mergeTaskArtifacts(entries.map((item) => ({ ...item, canonicalPath: "/w/A.txt" })))).toHaveLength(1);
+  });
+
   it("加载旧目录时清除误收录的读取文件", () => {
     window.localStorage.setItem("echoagent.task-artifacts.v1", JSON.stringify([{
       id: "config", path: "/home/user/config.toml", kind: "read_file",

@@ -1285,14 +1285,17 @@ export interface MemoryConfig {
   watcherEnabled: boolean;
   autoFlushEnabled: boolean;
   dreamEnabled: boolean;
+  retrievalMode?: "local" | "configured" | "builtin";
+  retrievalSummary?: string;
+  revision?: string;
 }
 
 export async function memoryConfigGet(): Promise<MemoryConfig> {
   return invoke<MemoryConfig>("memory_config_get");
 }
 
-export async function memoryConfigSave(memory: MemoryConfig): Promise<MemoryConfig> {
-  return invoke<MemoryConfig>("memory_config_save", { memory });
+export async function memoryConfigSave(memory: Partial<MemoryConfig>, expectedRevision?: string): Promise<MemoryConfig> {
+  return invoke<MemoryConfig>("memory_config_save", { memory, expectedRevision });
 }
 
 /** List memory notes from global + workspace scope. */

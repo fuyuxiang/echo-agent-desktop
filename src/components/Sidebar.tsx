@@ -42,8 +42,8 @@ const NAV = [
   { label: "项目", icon: EchoProjectNavIcon },
   { label: "代码开发", icon: Code2Icon },
   { label: "组织", icon: BuildingIcon },
-  { label: "专家·技能·连接器", icon: EchoExpertNavIcon },
-  { label: "自动化", icon: EchoAutomationNavIcon },
+  { label: "专家·技能·连接器", display: "能力", icon: EchoExpertNavIcon },
+  { label: "自动化", display: "定时任务", icon: EchoAutomationNavIcon },
 ];
 
 /** Compact, locale-friendly relative time for the sidebar row tail. */
@@ -123,7 +123,7 @@ const DAY_MS = 24 * 60 * 60 * 1000;
 const STATUS_OPTIONS: { value: SessionStatus | null; label: string }[] = [
   { value: null,        label: "全部状态" },
   { value: "working",   label: "进行中" },
-  { value: "completed", label: "已完成" },
+  { value: "completed", label: "本轮结束" },
   { value: "failed",    label: "失败" },
   { value: "paused",    label: "已暂停" },
   { value: "stopped",   label: "已停止" },
@@ -920,7 +920,7 @@ export function Sidebar({
           <EchoNewTaskIcon size="md" />
           <span>新建任务</span>
         </button>
-        {NAV.map(({ label, icon: Icon }) => (
+        {NAV.map(({ label, display, icon: Icon }) => (
           <button
             key={label}
             className={
@@ -930,7 +930,7 @@ export function Sidebar({
             onClick={() => onNavigate(label)}
           >
             <Icon size="md" />
-            <span>{label}</span>
+            <span>{display ?? label}</span>
           </button>
         ))}
         <MoreDropdown onNavigate={onNavigate} activeNav={activeNav} />

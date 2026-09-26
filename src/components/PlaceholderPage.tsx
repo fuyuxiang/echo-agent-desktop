@@ -1,3 +1,4 @@
+import "@/styles/panel-navigation.css";
 import { lazy, Suspense, useState, type ReactNode } from "react";
 import { AgentToolIcon } from "@/foundation/components/Icon/icons";
 import type { ProjectMeta } from "@/stores/projects-store";
@@ -50,6 +51,18 @@ const CodingWorkbench = lazy(() =>
     default: module.CodingWorkbench,
   })),
 );
+
+function PanelNavigation({ family, active, onNavigate }: { family: "context" | "capabilities"; active: string; onNavigate?: (label: string) => void }) {
+  const tabs = family === "context"
+    ? [["知识库", "知识资料"], ["个人记忆", "个人记忆"]]
+    : [["专家·技能·连接器", "专家、技能与连接器"], ["插件·市场", "插件市场"]];
+  return <nav className="panel-navigation" aria-label={family === "context" ? "资料与记忆" : "能力管理"}>
+    <strong>{family === "context" ? "资料与记忆" : "能力"}</strong>
+    {tabs.map(([route, title]) => <button key={route} type="button" aria-current={route === active ? "page" : undefined}
+      onClick={() => onNavigate?.(route)}>{title}</button>)}
+    <span>{family === "context" ? "资料由你选择，记忆可查看和修订；是否发送由当前任务的来源设置决定。" : "选择当前任务需要的能力，可在详情中查看来源与权限。"}</span>
+  </nav>;
+}
 
 function DeferredPanel({ children }: { children: ReactNode }) {
   return (
@@ -210,7 +223,7 @@ export function PlaceholderPage({
     const initialTab = label === "技能" ? "skills" : label === "连接器" ? "connectors" : "experts";
     return (
       <DeferredPanel>
-        <ExpertsPanel onGoHome={onGoHome} onToast={onToast} initialTab={initialTab} />
+        <div className="panel-section"><PanelNavigation family="capabilities" active="专家·技能·连接器" onNavigate={onNavigate} /><ExpertsPanel onGoHome={onGoHome} onToast={onToast} initialTab={initialTab} /></div>
       </DeferredPanel>
     );
   }
@@ -260,12 +273,13 @@ export function PlaceholderPage({
   if (label === "插件·市场" || label === "插件市场") {
     return (
       <DeferredPanel>
+        <div className="panel-section"><PanelNavigation family="capabilities" active="插件·市场" onNavigate={onNavigate} />
         <PluginsMarketTabs
           key={label}
           sessionId={sessionId}
           onToast={onToast}
           initialTab={label === "插件市场" ? "marketplace" : "plugins"}
-        />
+        /></div>
       </DeferredPanel>
     );
   }
@@ -273,7 +287,7 @@ export function PlaceholderPage({
   if (label === "更多" || label === "资料库" || label === "个人记忆") {
     return (
       <DeferredPanel>
-        <ResourcesPanel cwd={cwd} sessionId={sessionId} onToast={onToast} />
+        <div className="panel-section"><PanelNavigation family="context" active="个人记忆" onNavigate={onNavigate} /><ResourcesPanel cwd={cwd} sessionId={sessionId} onToast={onToast} /></div>
       </DeferredPanel>
     );
   }
@@ -286,6 +300,7 @@ export function PlaceholderPage({
   if (label === "知识库") {
     return (
       <DeferredPanel>
+        <div className="panel-section"><PanelNavigation family="context" active="知识库" onNavigate={onNavigate} />
         <div className="placeholder-page placeholder-page--panel">
           <KnowledgeBasePanel
             onOpen={(id, url) => {
@@ -297,7 +312,7 @@ export function PlaceholderPage({
             }}
             onToast={onToast}
           />
-        </div>
+        </div></div>
       </DeferredPanel>
     );
   }

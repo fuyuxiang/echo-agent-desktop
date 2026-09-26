@@ -4043,6 +4043,7 @@ dependencies = [
  "objc2-app-kit",
  "objc2-foundation",
  "open",
+ "process-wrap",
  "quick-xml 0.38.4",
  "regex",
  "reqwest 0.12.28",

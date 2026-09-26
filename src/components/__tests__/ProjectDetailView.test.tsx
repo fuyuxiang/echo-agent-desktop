@@ -177,7 +177,7 @@ describe("ProjectDetailView 项目 composer 接入首页 Composer", () => {
     expect(composer).toHaveValue("草稿 A");
 
     // 切到计划 tab 再切回活动 tab。
-    fireEvent.click(screen.getByRole("button", { name: "计划" }));
+    fireEvent.click(screen.getByRole("button", { name: "工作项" }));
     expect(composer).toHaveValue("草稿 A");
     fireEvent.click(screen.getByRole("button", { name: "动态" }));
     expect(composer).toHaveValue("草稿 A");

@@ -1,4 +1,4 @@
-import { useLayoutEffect, useState, useCallback, createContext, useContext } from "react";
+import { useLayoutEffect, useState, useCallback, useMemo, createContext, useContext } from "react";
 
 export type Theme = "light" | "dark";
 export type ThemePreference = Theme | "system";
@@ -74,7 +74,8 @@ export function ThemeProvider({ children }: { children: React.ReactNode }) {
     []
   );
 
-  return <Ctx.Provider value={{ theme, preference, toggle, setTheme }}>{children}</Ctx.Provider>;
+  const value = useMemo(() => ({ theme, preference, toggle, setTheme }), [theme, preference, toggle, setTheme]);
+  return <Ctx.Provider value={value}>{children}</Ctx.Provider>;
 }
 
 export function useTheme(): ThemeCtx {

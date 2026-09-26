@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState } from "react";
+import { memo, useCallback, useEffect, useRef, useState } from "react";
 import {
   Check,
   ChevronDown,
@@ -82,7 +82,7 @@ function speechText(markdown: string): string {
  *  - assistant: rendered after the complete answer, so read-then-act follows
  *    the visual and keyboard order.
  */
-export function MessageItem({
+export const MessageItem = memo(function MessageItem({
   message,
   streaming,
   markdownConfig,
@@ -529,7 +529,7 @@ export function MessageItem({
       </div>
     </div>
   );
-}
+});
 
 /**
  * 反馈按钮(👍/👎)—— 对齐 EchoAgent message-feedback。

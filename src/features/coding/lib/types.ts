@@ -161,7 +161,7 @@ export interface CommitHunk {
 }
 
 export type VerificationKind = "build" | "lint" | "type_check" | "test" | "custom";
-export type VerificationStatus = "running" | "passed" | "failed" | "timed_out" | "cancelled";
+export type VerificationStatus = "running" | "passed" | "failed" | "timed_out" | "cancelled" | "environment_unavailable";
 
 export interface TestSummary {
   total: number;

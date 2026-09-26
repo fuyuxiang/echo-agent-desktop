@@ -6,6 +6,7 @@
  * 下一条 active 项(本面板的「立即发送」是手动触发)。
  */
 import { useState } from "react";
+import { useAppDialog } from "./AppDialog";
 import { useMessageQueueStore, type QueueItem } from "@/stores/message-queue-store";
 import { attachmentBasename } from "@/lib/user-message";
 import {
@@ -43,6 +44,7 @@ export function QueuePanel({
   const reorder = useMessageQueueStore((s) => s.reorder);
   const setStatus = useMessageQueueStore((s) => s.setStatus);
   const update = useMessageQueueStore((s) => s.update);
+  const { requestConfirmation, dialog } = useAppDialog(sessionId);
   const [sendingId, setSendingId] = useState<string | null>(null);
 
   if (queue.length === 0) return null;
@@ -53,6 +55,8 @@ export function QueuePanel({
         <span>待发送队列({queue.length})</span>
         <span className="queue-panel__hint">agent 完成回复后自动发送下一条</span>
       </div>
+      {dialog}
+      {queue.some((item) => item.recovery) && <p role="status" className="queue-panel__hint">已恢复上次保留的消息，暂未发送。请检查会话记录后逐条恢复。</p>}
       {queue.map((item, idx) => (
         <QueueRow
           key={item.id}
@@ -63,9 +67,11 @@ export function QueuePanel({
           onRemove={() => remove(sessionId, item.id)}
           onUp={() => reorder(sessionId, idx, idx - 1)}
           onDown={() => reorder(sessionId, idx, idx + 1)}
-          onTogglePause={() =>
-            setStatus(sessionId, item.id, item.status === "paused" ? "queued" : "paused")
-          }
+          onTogglePause={() => {
+            if (item.recovery === "uncertain") {
+              requestConfirmation({ title: "确认再次发送这条消息？", description: "上次退出时未收到发送结果。这条消息可能已经执行，请先查看会话记录。继续会再次发送，可能重复修改文件或其他操作。", confirmLabel: "已检查，允许再次发送", action: async () => { setStatus(sessionId, item.id, "queued"); } });
+            } else { setStatus(sessionId, item.id, item.status === "paused" ? "queued" : "paused"); }
+          }}
           onCommitEdit={(text) => update(sessionId, item.id, text)}
           sendLabel={
             sendingId === item.id || (streaming && sendNowPending)
@@ -185,6 +191,7 @@ function QueueRow({
           >
             {item.text}
           </span>
+          {item.recovery === "uncertain" && <span className="queue-panel__hint">发送结果待确认</span>}
           {(item.attachments?.length ?? 0) > 0 && (
             <span className="queue-row__attachments" aria-label="队列附件">
               {item.attachments!.map((path) => (

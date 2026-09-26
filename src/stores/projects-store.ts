@@ -77,7 +77,10 @@ export interface ProjectMeta {
   connectors: RefItem[];
   experts: RefItem[];
   skills: RefItem[];
+  /** Read-only migration source; new writes use tasks. */
   plans: PlanCard[];
+  legacyPlans?: PlanCard[];
+  schemaVersion?: 2;
   tasks: TaskItem[];
   assets: AssetItem[];
   members: string[];
@@ -90,13 +93,24 @@ export const PLAN_COLUMNS: { status: PlanStatus; label: string }[] = [
   { status: "pending", label: "待开始" },
   { status: "in_progress", label: "进行中" },
   { status: "paused", label: "暂停" },
-  { status: "completed", label: "完成" },
+  { status: "completed", label: "已验收" },
 ];
 
 const STORAGE_KEY = "echoagent.projects";
 const DIRTY_KEY = "echoagent.projects.pending-backend-sync";
 let persistChain: Promise<void> = Promise.resolve();
 let persistRevision = 0;
+
+/** Deterministic, lossless migration: identical ids in the two old lists stay distinct. */
+export function migrateProjectWorkItems(project: Pick<ProjectMeta, "tasks" | "plans">): TaskItem[] {
+  const tasks = (Array.isArray(project.tasks) ? project.tasks : []).map((item) => ({ ...item, status: item.status ?? "pending" }));
+  for (const plan of Array.isArray(project.plans) ? project.plans : []) {
+    let id = `legacy-plan:${plan.id}`;
+    while (tasks.some((task) => task.id === id)) id = `legacy-plan:${id}`;
+    tasks.push({ ...plan, id, status: plan.status ?? "pending", scope: "personal", source: plan.source ?? "legacy-plan" });
+  }
+  return tasks;
+}
 
 /** 旧数据/外部数据补齐缺省详情字段，保证组件可直接读数组。 */
 function normalize(x: unknown): ProjectMeta | null {
@@ -114,12 +128,10 @@ function normalize(x: unknown): ProjectMeta | null {
     connectors: Array.isArray(o.connectors) ? o.connectors : [],
     experts: Array.isArray(o.experts) ? o.experts : [],
     skills: Array.isArray(o.skills) ? o.skills : [],
-    plans: Array.isArray(o.plans)
-      ? o.plans.map((item) => ({ ...item, status: item.status ?? "pending" }))
-      : [],
-    tasks: Array.isArray(o.tasks)
-      ? o.tasks.map((item) => ({ ...item, status: item.status ?? "pending" }))
-      : [],
+    plans: [],
+    legacyPlans: o.legacyPlans ?? (Array.isArray(o.plans) && o.plans.length ? o.plans : undefined),
+    schemaVersion: 2,
+    tasks: migrateProjectWorkItems({ tasks: o.tasks ?? [], plans: o.plans ?? [] }),
     assets: Array.isArray(o.assets) ? o.assets : [],
     members: Array.isArray(o.members) ? o.members : [],
     conversations: Array.isArray(o.conversations) ? o.conversations : [],
@@ -195,11 +207,6 @@ interface ProjectsState {
     id: string,
     patch: Partial<Pick<ProjectMeta, "instructions" | "defaultModelId" | "connectors" | "experts" | "skills">>,
   ) => void;
-  addPlan: (id: string, title: string, status?: PlanStatus, modelId?: string) => void;
-  movePlan: (id: string, cardId: string, status: PlanStatus) => void;
-  setPlanModel: (id: string, cardId: string, modelId: string) => void;
-  linkPlanSession: (id: string, cardId: string, sessionId: string, modelId: string) => void;
-  removePlan: (id: string, cardId: string) => void;
   addTask: (id: string, title: string, modelId?: string) => void;
   moveTask: (id: string, taskId: string, status: PlanStatus) => void;
   setTaskModel: (id: string, taskId: string, modelId: string) => void;
@@ -267,25 +274,6 @@ export const useProjectsStore = create<ProjectsState>((set, get) => {
       persist(next);
     },
     updateConfig: (id, cfg) => patch(id, (p) => ({ ...p, ...cfg })),
-    addPlan: (id, title, status = "pending", modelId) =>
-      patch(id, (p) => ({ ...p, plans: [...p.plans, { id: uid("plan"), title, status, modelId }] })),
-    movePlan: (id, cardId, status) =>
-      patch(id, (p) => ({
-        ...p,
-        plans: p.plans.map((c) => (c.id === cardId ? { ...c, status } : c)),
-      })),
-    setPlanModel: (id, cardId, modelId) =>
-      patch(id, (p) => ({
-        ...p,
-        plans: p.plans.map((card) => card.id === cardId ? { ...card, modelId } : card),
-      })),
-    linkPlanSession: (id, cardId, sessionId, modelId) =>
-      patch(id, (p) => ({
-        ...p,
-        plans: p.plans.map((card) => card.id === cardId ? { ...card, sessionId, modelId } : card),
-      })),
-    removePlan: (id, cardId) =>
-      patch(id, (p) => ({ ...p, plans: p.plans.filter((c) => c.id !== cardId) })),
     addTask: (id, title, modelId) =>
       patch(id, (p) => ({
         ...p,

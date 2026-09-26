@@ -9,7 +9,7 @@ import {
   resetContainerExecutor,
   execInContainer,
   type ShellRunner,
-} from "../container-executor";
+} from "../../experimental/container-executor";
 
 function mockRunner(
   stdout = "",

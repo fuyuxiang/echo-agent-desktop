@@ -128,6 +128,8 @@ export function VerificationView({
                     }`
                   : record.status === "passed"
                     ? "通过"
+                    : record.status === "environment_unavailable"
+                      ? "环境未就绪"
                     : record.status === "timed_out"
                       ? "超时"
                       : record.status === "cancelled"

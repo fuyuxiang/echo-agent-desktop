@@ -232,6 +232,16 @@ pub fn decide_after_verification(
     changed_file_count: usize,
 ) -> PhaseDecision {
     let effective = latest_per_command(records);
+    if effective
+        .iter()
+        .any(|record| record.status == VerificationStatus::EnvironmentUnavailable)
+    {
+        return PhaseDecision {
+            next_phase: TaskPhase::Blocked,
+            reason: "验证环境未就绪，请安装项目声明的工具或修正验证命令后重试".into(),
+            blocker: Some("验证环境未就绪".into()),
+        };
+    }
     let failing: Vec<&&VerificationRecord> = effective
         .iter()
         .filter(|record| record.status != VerificationStatus::Passed)

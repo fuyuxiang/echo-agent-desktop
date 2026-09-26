@@ -38,7 +38,8 @@ describe("项目计划/任务与 Agent 会话闭环", () => {
     });
   });
 
-  it("计划交给 Agent 后进入进行中并关联会话", async () => {
+  it("看板工作项交给 Agent 后进入进行中并关联会话", async () => {
+    useProjectsStore.setState({ projects: [{ ...structuredClone(project), tasks: [{ ...project.tasks[0], title: "完成发布检查" }] }] });
     const onRun = vi.fn().mockResolvedValue("session-plan");
     render(<PlanTab projectId="p1" models={models} defaultModelId="model-a" onRun={onRun} />);
     fireEvent.click(screen.getByRole("button", { name: "交给 Agent" }));
@@ -46,7 +47,7 @@ describe("项目计划/任务与 Agent 会话闭环", () => {
       expect.stringContaining("完成发布检查"),
       "model-a",
     ));
-    await waitFor(() => expect(useProjectsStore.getState().projects[0].plans[0]).toMatchObject({
+    await waitFor(() => expect(useProjectsStore.getState().projects[0].tasks[0]).toMatchObject({
       status: "in_progress", sessionId: "session-plan", modelId: "model-a",
     }));
   });
@@ -69,7 +70,9 @@ describe("项目计划/任务与 Agent 会话闭环", () => {
     expect(screen.queryByRole("button", { name: "交给 Agent" })).toBeNull();
     expect(screen.getByText(/模型 B/)).toBeInTheDocument();
     fireEvent.change(screen.getByRole("combobox", { name: /调整任务状态/ }), { target: { value: "completed" } });
-    expect(useProjectsStore.getState().projects[0].tasks[0].status).toBe("completed");
+    expect(useProjectsStore.getState().projects[0].tasks[0].status).toBe("in_progress");
+    fireEvent.click(screen.getByRole("button", { name: "确认验收" }));
+    await waitFor(() => expect(useProjectsStore.getState().projects[0].tasks[0].status).toBe("completed"));
   });
 
   it("项目任务的关联会话归档后可就地恢复并打开", async () => {
@@ -128,31 +131,31 @@ describe("项目计划/任务与 Agent 会话闭环", () => {
 
   it("新建待办使用应用内输入对话框", async () => {
     render(<PlanTab projectId="p1" defaultModelId="model-a" />);
-    fireEvent.click(screen.getByRole("button", { name: "+ 新建待办" }));
-    const dialog = screen.getByRole("dialog", { name: "新建待办" });
-    fireEvent.change(screen.getByRole("textbox", { name: /待办标题/ }), { target: { value: "  发布验收  " } });
+    fireEvent.click(screen.getByRole("button", { name: "+ 新建任务" }));
+    const dialog = screen.getByRole("dialog", { name: "新建任务" });
+    fireEvent.change(screen.getByRole("textbox", { name: "任务标题" }), { target: { value: "  发布验收  " } });
     fireEvent.click(screen.getByRole("button", { name: "创建" }));
-    await waitFor(() => expect(screen.queryByRole("dialog", { name: "新建待办" })).toBeNull());
+    await waitFor(() => expect(screen.queryByRole("dialog", { name: "新建任务" })).toBeNull());
     expect(dialog).not.toBeInTheDocument();
-    expect(useProjectsStore.getState().projects[0].plans).toEqual(expect.arrayContaining([
+    expect(useProjectsStore.getState().projects[0].tasks).toEqual(expect.arrayContaining([
       expect.objectContaining({ title: "发布验收", status: "pending", modelId: undefined }),
     ]));
   });
 
   it("未显式选模型的新计划会在执行时继承最新项目默认模型", async () => {
     useProjectsStore.setState({
-      projects: [{ ...structuredClone(project), plans: [] }],
+      projects: [{ ...structuredClone(project), plans: [], tasks: [] }],
     });
     const onRun = vi.fn().mockResolvedValue("inherited-model-session");
     const { rerender } = render(
       <PlanTab projectId="p1" models={models} defaultModelId="model-a" onRun={onRun} />,
     );
-    fireEvent.click(screen.getByRole("button", { name: "+ 新建待办" }));
-    fireEvent.change(screen.getByRole("textbox", { name: /待办标题/ }), {
+    fireEvent.click(screen.getByRole("button", { name: "+ 新建任务" }));
+    fireEvent.change(screen.getByRole("textbox", { name: "任务标题" }), {
       target: { value: "继承模型" },
     });
     fireEvent.click(screen.getByRole("button", { name: "创建" }));
-    await waitFor(() => expect(useProjectsStore.getState().projects[0].plans[0].modelId).toBeUndefined());
+    await waitFor(() => expect(useProjectsStore.getState().projects[0].tasks[0].modelId).toBeUndefined());
 
     rerender(<PlanTab projectId="p1" models={models} defaultModelId="model-b" onRun={onRun} />);
     fireEvent.click(screen.getByRole("button", { name: "交给 Agent" }));
@@ -271,11 +274,12 @@ describe("项目计划/任务与 Agent 会话闭环", () => {
       ],
     });
 
+    useProjectsStore.setState({ projects: [{ ...useProjectsStore.getState().projects[0], tasks: [{ ...project.tasks[0], sessionId: "plan-session" }] }] });
     const { unmount } = render(<PlanTab projectId="p1" models={models} />);
     expect(screen.getByLabelText(/Agent 执行状态：执行失败/)).toBeInTheDocument();
-    expect(useProjectsStore.getState().projects[0].plans[0].status).toBe("pending");
+    expect(useProjectsStore.getState().projects[0].tasks[0].status).toBe("pending");
     unmount();
-
+    useProjectsStore.setState({ projects: [{ ...useProjectsStore.getState().projects[0], tasks: [{ ...project.tasks[0], sessionId: "task-session" }] }] });
     render(<TaskTab projectId="p1" models={models} />);
     expect(screen.getByLabelText(/Agent 执行状态：等待回答/)).toBeInTheDocument();
     expect(screen.getByText(/待开始 · 已关联 Agent/)).toBeInTheDocument();

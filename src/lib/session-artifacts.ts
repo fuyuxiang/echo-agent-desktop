@@ -200,7 +200,7 @@ function cleanTitlePath(path: string): string {
 }
 
 function pathKey(path: string): string {
-  return path.replace(/\\/g, "/").toLowerCase();
+  return path.replace(/\\/g, "/");
 }
 
 function looksLikePath(s: string): boolean {

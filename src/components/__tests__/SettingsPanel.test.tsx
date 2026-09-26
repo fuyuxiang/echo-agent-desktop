@@ -51,6 +51,7 @@ vi.mock("@/lib/org-client", () => ({
 import { SettingsPanel } from "../SettingsPanel";
 import { ThemeProvider } from "../ThemeProvider";
 import {
+  memoryConfigGet,
   memoryConfigSave,
   notificationList,
   openExternalUrl,
@@ -256,7 +257,23 @@ describe("SettingsPanel", () => {
     expect(screen.getByRole("button", { name: "清空" })).toBeEnabled();
   });
 
-  it("记忆开关保存完整配置", async () => {
+  it("记忆读取失败禁止默认值写回，重试后使用 revision 保存单字段", async () => {
+    vi.mocked(memoryConfigGet).mockRejectedValueOnce(new Error("read failed"));
+    vi.mocked(memoryConfigSave).mockClear();
+    render(<ThemeProvider><SettingsPanel open initialSection="memory" onClose={() => {}} /></ThemeProvider>);
+    await screen.findByText(/配置未加载/);
+    for (const input of screen.getAllByRole("checkbox")) expect(input).toBeDisabled();
+    fireEvent.click(screen.getByRole("checkbox", { name: "自动整理" }));
+    expect(memoryConfigSave).not.toHaveBeenCalled();
+    vi.mocked(memoryConfigGet).mockResolvedValueOnce({ enabled: true, initialInjectionEnabled: false, saveOnEnd: false, watcherEnabled: false, autoFlushEnabled: false, dreamEnabled: false, revision: "r1" });
+    fireEvent.click(screen.getByRole("button", { name: "重新加载" }));
+    await waitFor(() => expect(screen.getByRole("checkbox", { name: "自动整理" })).toBeEnabled());
+    fireEvent.click(screen.getByRole("checkbox", { name: "自动整理" }));
+    await waitFor(() => expect(memoryConfigSave).toHaveBeenCalledWith({ dreamEnabled: true }, "r1"));
+    expect(screen.getByRole("checkbox", { name: "监听外部修改" })).not.toBeChecked();
+  });
+
+  it("记忆开关仅保存更改字段", async () => {
     render(
       <ThemeProvider>
         <SettingsPanel open initialSection="memory" onClose={() => {}} />
@@ -268,10 +285,7 @@ describe("SettingsPanel", () => {
     fireEvent.click(autoFlush);
 
     await waitFor(() => {
-      expect(memoryConfigSave).toHaveBeenCalledWith(expect.objectContaining({
-        enabled: true,
-        autoFlushEnabled: false,
-      }));
+      expect(memoryConfigSave).toHaveBeenCalledWith({ autoFlushEnabled: false }, undefined);
     });
     expect(
       screen.getByText("记忆配置已保存，重启 Agent 后对新会话生效。"),

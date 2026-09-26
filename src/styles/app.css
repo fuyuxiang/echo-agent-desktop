@@ -15066,3 +15066,11 @@ body:has([aria-modal="true"]) .global-tooltip:not(.global-tooltip--dialog) {
 .org-overview__attention-row + .org-overview__attention-row {
   border-top: 1px solid var(--echo-border-default);
 }
+
+/* Project work items own their list/board layout. */
+.pd-workitems-board { display:grid; grid-template-columns:repeat(4,minmax(220px,1fr)); gap:12px; overflow-x:auto; padding:4px 0 12px; }
+.pd-workitems-column { border:1px solid var(--echo-border-default); border-radius:10px; padding:12px; min-width:0; }
+.pd-workitems-column h3 { margin:0 0 12px; font-size:14px; }
+.pd-workitems-column .pd-task-item { flex-wrap:wrap; }
+.pd-workitems-column .pd-task-item__actions { flex-wrap:wrap; }
+.composer-storage-error { padding:8px 12px; color:var(--echo-status-warning); font-size:12px; overflow-wrap:anywhere; }

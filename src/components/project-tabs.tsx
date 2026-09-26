@@ -418,7 +418,6 @@ export function ActivityTab({
         >
           {archivedCount} 个已归档
         </button>
-        <span className="pd-pill pd-pill--stat">{project?.plans.length ?? 0} 项计划</span>
         <span className="pd-pill pd-pill--stat">{project?.tasks.length ?? 0} 项任务</span>
         <span className="pd-pill pd-pill--stat">{project?.assets.length ?? 0} 个资产</span>
       </div>
@@ -559,251 +558,12 @@ export function ActivityTab({
 // 计划（看板）
 // ============================================================
 
-const COL_DOT: Record<PlanStatus, string> = {
-  pending: "var(--echo-text-medium)",
-  in_progress: "var(--echo-brand)",
-  paused: "var(--echo-status-warning)",
-  completed: "var(--echo-status-success)",
-};
-
-export function PlanTab({
-  projectId,
-  models = [],
-  defaultModelId,
-  onRun,
-  onOpenSession,
-  onRestoreSession,
-  onToast,
-}: {
-  projectId: string;
-  models?: ModelOption[];
-  defaultModelId?: string;
-  onRun?: (message: string, modelId: string) => Promise<string | undefined>;
-  onOpenSession?: (sessionId: string) => void;
-  onRestoreSession?: (sessionId: string) => Promise<void>;
-  onToast?: (message: string) => void;
-}) {
-  const plans = useProjectsStore((s) => s.projects.find((p) => p.id === projectId)?.plans ?? []);
-  const addPlan = useProjectsStore((s) => s.addPlan);
-  const movePlan = useProjectsStore((s) => s.movePlan);
-  const setPlanModel = useProjectsStore((s) => s.setPlanModel);
-  const linkPlanSession = useProjectsStore((s) => s.linkPlanSession);
-  const removePlan = useProjectsStore((s) => s.removePlan);
-  const sessionSummaries = useSessionsStore((s) => s.independent);
-  const summaryById = useMemo(
-    () => new Map(sessionSummaries.map((summary) => [summary.sessionId, summary])),
-    [sessionSummaries],
-  );
-  const runningPlanIdsRef = useRef(new Set<string>());
-  const [runningPlanIds, setRunningPlanIds] = useState<Set<string>>(() => new Set());
-  const [restoringSessionIds, setRestoringSessionIds] = useState<Set<string>>(() => new Set());
-  const { requestConfirmation, requestInput, dialog } = useAppDialog(projectId);
-
-  const newTodo = () => {
-    requestInput({
-      title: "新建待办",
-      fields: [{ name: "title", label: "待办标题", required: true, maxLength: 200 }],
-      confirmLabel: "创建",
-      action: ({ title }) => addPlan(projectId, title.trim(), "pending"),
-    });
-  };
-
-  const newTodoInColumn = (status: PlanStatus, label: string) => {
-    requestInput({
-      title: `在“${label}”新建待办`,
-      fields: [{ name: "title", label: "待办标题", required: true, maxLength: 200 }],
-      confirmLabel: "创建",
-      action: ({ title }) => addPlan(projectId, title.trim(), status),
-    });
-  };
-
-  const requestRemovePlan = (card: (typeof plans)[number]) => {
-    requestConfirmation({
-      title: `删除待办“${card.title}”？`,
-      description: "该待办及其关联信息将从项目中删除。",
-      confirmLabel: "删除待办",
-      danger: true,
-      action: () => removePlan(projectId, card.id),
-    });
-  };
-
-  const runWithAgent = async (
-    card: { id: string; title: string; status: PlanStatus },
-    modelId?: string,
-  ) => {
-    if (!onRun) return;
-    if (runningPlanIdsRef.current.has(card.id)) return;
-    if (!modelId) {
-      onToast?.("请先为该计划选择一个可用模型");
-      return;
-    }
-    runningPlanIdsRef.current.add(card.id);
-    setRunningPlanIds(new Set(runningPlanIdsRef.current));
-    const previous = card.status;
-    setPlanModel(projectId, card.id, modelId);
-    movePlan(projectId, card.id, "in_progress");
-    try {
-      const sessionId = await onRun(`请执行项目计划项「${card.title}」。先确认完成标准，再实施并汇报产出。`, modelId);
-      if (sessionId) linkPlanSession(projectId, card.id, sessionId, modelId);
-      else movePlan(projectId, card.id, previous);
-    } catch (error) {
-      movePlan(projectId, card.id, previous);
-      onToast?.(`启动计划失败：${String(error).replace(/^Error:\s*/, "")}`);
-    } finally {
-      runningPlanIdsRef.current.delete(card.id);
-      setRunningPlanIds(new Set(runningPlanIdsRef.current));
-    }
-  };
-
-  const restoreAndOpen = async (sessionId: string) => {
-    if (!onRestoreSession || restoringSessionIds.has(sessionId)) return;
-    setRestoringSessionIds((current) => new Set(current).add(sessionId));
-    try {
-      await onRestoreSession(sessionId);
-      onOpenSession?.(sessionId);
-    } catch (error) {
-      onToast?.(`恢复会话失败：${String(error).replace(/^Error:\s*/, "")}`);
-    } finally {
-      setRestoringSessionIds((current) => {
-        const next = new Set(current);
-        next.delete(sessionId);
-        return next;
-      });
-    }
-  };
-
-  return (
-    <div className="pd-tab">
-      <div className="pd-toolbar">
-        <div className="pd-toolbar__left">
-          <button className="pd-btn pd-btn--primary" onClick={newTodo}>+ 新建待办</button>
-        </div>
-      </div>
-
-      <div className="pd-board">
-        {PLAN_COLUMNS.map((col) => {
-          const cards = plans.filter((c) => c.status === col.status);
-          return (
-            <div className="pd-board-col" key={col.status}>
-              <div className="pd-board-col__head">
-                <span className="pd-board-col__dot" style={{ background: COL_DOT[col.status] }} />
-                <span className="pd-board-col__label">{col.label}</span>
-                <span className="pd-board-col__count">{cards.length}</span>
-                <button
-                  className="pd-board-col__add"
-                  aria-label={`在${col.label}新建`}
-                  onClick={() => newTodoInColumn(col.status, col.label)}
-                >
-                  +
-                </button>
-              </div>
-              <div className="pd-board-col__body">
-                {cards.length === 0 ? (
-                  <div className="pd-board-empty">
-                    {col.status === "pending" ? "暂无事项，可从这里开始新建。" : "暂无事项"}
-                  </div>
-                ) : (
-                  cards.map((c) => {
-                    const selectedModelId = availableModelId(models, c.modelId, defaultModelId);
-                    const running = runningPlanIds.has(c.id);
-                    const sessionSummary = c.sessionId ? summaryById.get(c.sessionId) : undefined;
-                    const sessionArchived = c.sessionId
-                      ? effectiveSessionArchived(c.sessionId, c.sessionArchived, summaryById)
-                      : false;
-                    const executionStatus = c.sessionId
-                      ? activityStatusMeta(sessionSummary?.status)
-                      : undefined;
-                    return (
-                      <div className="pd-board-card" key={c.id}>
-                        <span className="pd-board-card__title">{c.title}</span>
-                        <div className="pd-board-card__acts">
-                          {!c.sessionId && c.status !== "completed" && (
-                            <ProjectModelSelect
-                              label={`选择计划模型 ${c.title}`}
-                              models={models}
-                              modelId={selectedModelId}
-                              configuredModelId={c.modelId}
-                              disabled={running}
-                              onChange={(modelId) => setPlanModel(projectId, c.id, modelId)}
-                            />
-                          )}
-                          {onRun && !c.sessionId && c.status !== "completed" && (
-                            <button
-                              className="pd-board-card__run"
-                              onClick={() => void runWithAgent(c, selectedModelId)}
-                              disabled={!selectedModelId || running}
-                              title={!selectedModelId ? "请先选择可用模型" : `使用 ${modelLabel(models, selectedModelId)} 执行`}
-                            >
-                              {running ? "启动中…" : "交给 Agent"}
-                            </button>
-                          )}
-                          {c.sessionId && c.modelId && (
-                            <span className="pd-execution-model" title={`执行模型：${c.modelId}`}>
-                              {modelLabel(models, c.modelId)}
-                            </span>
-                          )}
-                          {executionStatus && (
-                            <span
-                              className={`pd-session-status pd-session-status--${executionStatus.tone}`}
-                              title={executionStatus.description}
-                              aria-label={`Agent 执行状态：${executionStatus.label}。${executionStatus.description}`}
-                            >
-                              <span className="pd-session-status__dot" aria-hidden="true" />
-                              {executionStatus.label}
-                            </span>
-                          )}
-                          {c.sessionId && onOpenSession && (
-                            <button
-                              className="pd-board-card__move"
-                              onClick={() => sessionArchived
-                                ? void restoreAndOpen(c.sessionId!)
-                                : onOpenSession(c.sessionId!)}
-                              disabled={sessionArchived && (!onRestoreSession || restoringSessionIds.has(c.sessionId))}
-                              title={sessionArchived ? "恢复归档会话并继续该计划" : undefined}
-                            >
-                              {sessionArchived
-                                ? restoringSessionIds.has(c.sessionId) ? "恢复中…" : "恢复并打开"
-                                : "打开会话"}
-                            </button>
-                          )}
-                          {PLAN_COLUMNS.filter((x) => x.status !== c.status).map((x) => (
-                            <button
-                              key={x.status}
-                              className="pd-board-card__move"
-                              title={`移到${x.label}`}
-                              onClick={() => movePlan(projectId, c.id, x.status)}
-                              disabled={running}
-                            >
-                              →{x.label}
-                            </button>
-                          ))}
-                          <button
-                            className="pd-board-card__del"
-                            aria-label={`删除待办 ${c.title}`}
-                            onClick={() => requestRemovePlan(c)}
-                            disabled={running}
-                          >×</button>
-                        </div>
-                      </div>
-                    );
-                  })
-                )}
-              </div>
-            </div>
-          );
-        })}
-      </div>
-      {dialog}
-    </div>
-  );
-}
-
-// ============================================================
-// 任务
-// ============================================================
+/** Legacy import compatibility; both views now share the same work items. */
+export function PlanTab(props: Parameters<typeof TaskTab>[0]) { return <TaskTab {...props} initialView="board" />; }
 
 export function TaskTab({
   projectId,
+  initialView = "list",
   models = [],
   defaultModelId,
   onRun,
@@ -812,6 +572,7 @@ export function TaskTab({
   onToast,
 }: {
   projectId: string;
+  initialView?: "list" | "board";
   models?: ModelOption[];
   defaultModelId?: string;
   onRun?: (message: string, modelId: string) => Promise<string | undefined>;
@@ -834,6 +595,7 @@ export function TaskTab({
   const [runningTaskIds, setRunningTaskIds] = useState<Set<string>>(() => new Set());
   const [restoringSessionIds, setRestoringSessionIds] = useState<Set<string>>(() => new Set());
   const [q, setQ] = useState("");
+  const [view, setView] = useState(initialView);
   const { requestConfirmation, requestInput, dialog } = useAppDialog(projectId);
 
   const filtered = tasks.filter((t) => t.title.toLowerCase().includes(q.toLowerCase()));
@@ -899,13 +661,106 @@ export function TaskTab({
     }
   };
 
+  const renderTask = (t: (typeof tasks)[number]) => {
+    const selectedModelId = availableModelId(models, t.modelId, defaultModelId);
+    const running = runningTaskIds.has(t.id);
+    const sessionSummary = t.sessionId ? summaryById.get(t.sessionId) : undefined;
+    const sessionArchived = t.sessionId
+      ? effectiveSessionArchived(t.sessionId, t.sessionArchived, summaryById)
+      : false;
+    const executionStatus = t.sessionId
+      ? activityStatusMeta(sessionSummary?.status)
+      : undefined;
+    return (
+      <li className="pd-task-item" key={t.id}>
+        <div className="pd-task-item__main">
+          <span className="pd-task-item__title">{t.title}</span>
+          <span className="pd-task-item__meta">
+            {PLAN_COLUMNS.find((column) => column.status === t.status)?.label ?? "待开始"}
+            {t.sessionId ? " · 已关联 Agent 会话" : ""}
+            {t.sessionId && t.modelId ? ` · ${modelLabel(models, t.modelId)}` : ""}
+            {executionStatus && (
+              <span
+                className={`pd-session-status pd-session-status--${executionStatus.tone}`}
+                title={executionStatus.description}
+                aria-label={`Agent 执行状态：${executionStatus.label}。${executionStatus.description}`}
+              >
+                <span className="pd-session-status__dot" aria-hidden="true" />
+                {executionStatus.label}
+              </span>
+            )}
+          </span>
+        </div>
+        <div className="pd-task-item__actions">
+          {!t.sessionId && t.status !== "completed" && (
+            <ProjectModelSelect
+              label={`选择任务模型 ${t.title}`}
+              models={models}
+              modelId={selectedModelId}
+              configuredModelId={t.modelId}
+              disabled={running}
+              onChange={(modelId) => setTaskModel(projectId, t.id, modelId)}
+            />
+          )}
+          {onRun && !t.sessionId && t.status !== "completed" && (
+            <button
+              className="pd-btn pd-btn--small"
+              onClick={() => void runWithAgent(t, selectedModelId)}
+              disabled={!selectedModelId || running}
+              title={!selectedModelId ? "请先选择可用模型" : `使用 ${modelLabel(models, selectedModelId)} 执行`}
+            >
+              {running ? "启动中…" : "交给 Agent"}
+            </button>
+          )}
+          {t.sessionId && onOpenSession && (
+            <button
+              className="pd-btn pd-btn--small"
+              onClick={() => sessionArchived
+                ? void restoreAndOpen(t.sessionId!)
+                : onOpenSession(t.sessionId!)}
+              disabled={sessionArchived && (!onRestoreSession || restoringSessionIds.has(t.sessionId))}
+              title={sessionArchived ? "恢复归档会话并继续该任务" : undefined}
+            >
+              {sessionArchived
+                ? restoringSessionIds.has(t.sessionId) ? "恢复中…" : "恢复并打开"
+                : "打开会话"}
+            </button>
+          )}
+          <select
+            aria-label={`调整任务状态 ${t.title}`}
+            value={t.status}
+            onChange={(event) => {
+              const status = event.target.value as PlanStatus;
+              if (status === "completed" && t.status !== "completed") {
+                requestConfirmation({ title: `验收「${t.title}」？`, description: "请确认成果符合要求。Agent 本轮结束不会自动完成工作项。", confirmLabel: "确认验收", action: () => moveTask(projectId, t.id, status) });
+              } else { moveTask(projectId, t.id, status); }
+            }}
+            disabled={running}
+          >
+            {PLAN_COLUMNS.map((column) => <option key={column.status} value={column.status}>{column.label}</option>)}
+          </select>
+        </div>
+        <button
+          className="pd-task-item__del"
+          aria-label={`删除任务 ${t.title}`}
+          onClick={() => requestRemoveTask(t)}
+          disabled={running}
+        >×</button>
+      </li>
+    );
+  };
+
   return (
     <div className="pd-tab">
       <div className="pd-toolbar">
         <div className="pd-toolbar__left">
-          <span className="pd-toolbar__hint">项目任务保存在本机 EchoAgent 私有数据目录</span>
+          <span className="pd-toolbar__hint">列表和看板展示同一组工作项；Agent 本轮结束后，请检查成果并确认验收。</span>
         </div>
         <div className="pd-toolbar__right">
+          <div role="group" aria-label="工作项视图">
+            <button className="pd-btn" aria-pressed={view === "list"} onClick={() => setView("list")}>列表</button>
+            <button className="pd-btn" aria-pressed={view === "board"} onClick={() => setView("board")}>看板</button>
+          </div>
           <input className="pd-search-inline" aria-label="搜索任务标题" placeholder="搜索任务标题" value={q} onChange={(e) => setQ(e.target.value)} />
           <button className="pd-btn pd-btn--primary" onClick={newTask}>+ 新建任务</button>
         </div>
@@ -914,91 +769,12 @@ export function TaskTab({
       {filtered.length === 0 ? (
         <div className="pd-empty">{q ? "没有符合条件的任务" : "暂无任务，点击「新建任务」开始。"}</div>
       ) : (
-        <ul className="pd-task-list">
-          {filtered.map((t) => {
-            const selectedModelId = availableModelId(models, t.modelId, defaultModelId);
-            const running = runningTaskIds.has(t.id);
-            const sessionSummary = t.sessionId ? summaryById.get(t.sessionId) : undefined;
-            const sessionArchived = t.sessionId
-              ? effectiveSessionArchived(t.sessionId, t.sessionArchived, summaryById)
-              : false;
-            const executionStatus = t.sessionId
-              ? activityStatusMeta(sessionSummary?.status)
-              : undefined;
-            return (
-              <li className="pd-task-item" key={t.id}>
-                <div className="pd-task-item__main">
-                  <span className="pd-task-item__title">{t.title}</span>
-                  <span className="pd-task-item__meta">
-                    {PLAN_COLUMNS.find((column) => column.status === t.status)?.label ?? "待开始"}
-                    {t.sessionId ? " · 已关联 Agent 会话" : ""}
-                    {t.sessionId && t.modelId ? ` · ${modelLabel(models, t.modelId)}` : ""}
-                    {executionStatus && (
-                      <span
-                        className={`pd-session-status pd-session-status--${executionStatus.tone}`}
-                        title={executionStatus.description}
-                        aria-label={`Agent 执行状态：${executionStatus.label}。${executionStatus.description}`}
-                      >
-                        <span className="pd-session-status__dot" aria-hidden="true" />
-                        {executionStatus.label}
-                      </span>
-                    )}
-                  </span>
-                </div>
-                <div className="pd-task-item__actions">
-                  {!t.sessionId && t.status !== "completed" && (
-                    <ProjectModelSelect
-                      label={`选择任务模型 ${t.title}`}
-                      models={models}
-                      modelId={selectedModelId}
-                      configuredModelId={t.modelId}
-                      disabled={running}
-                      onChange={(modelId) => setTaskModel(projectId, t.id, modelId)}
-                    />
-                  )}
-                  {onRun && !t.sessionId && t.status !== "completed" && (
-                    <button
-                      className="pd-btn pd-btn--small"
-                      onClick={() => void runWithAgent(t, selectedModelId)}
-                      disabled={!selectedModelId || running}
-                      title={!selectedModelId ? "请先选择可用模型" : `使用 ${modelLabel(models, selectedModelId)} 执行`}
-                    >
-                      {running ? "启动中…" : "交给 Agent"}
-                    </button>
-                  )}
-                  {t.sessionId && onOpenSession && (
-                    <button
-                      className="pd-btn pd-btn--small"
-                      onClick={() => sessionArchived
-                        ? void restoreAndOpen(t.sessionId!)
-                        : onOpenSession(t.sessionId!)}
-                      disabled={sessionArchived && (!onRestoreSession || restoringSessionIds.has(t.sessionId))}
-                      title={sessionArchived ? "恢复归档会话并继续该任务" : undefined}
-                    >
-                      {sessionArchived
-                        ? restoringSessionIds.has(t.sessionId) ? "恢复中…" : "恢复并打开"
-                        : "打开会话"}
-                    </button>
-                  )}
-                  <select
-                    aria-label={`调整任务状态 ${t.title}`}
-                    value={t.status}
-                    onChange={(event) => moveTask(projectId, t.id, event.target.value as PlanStatus)}
-                    disabled={running}
-                  >
-                    {PLAN_COLUMNS.map((column) => <option key={column.status} value={column.status}>{column.label}</option>)}
-                  </select>
-                </div>
-                <button
-                  className="pd-task-item__del"
-                  aria-label={`删除任务 ${t.title}`}
-                  onClick={() => requestRemoveTask(t)}
-                  disabled={running}
-                >×</button>
-              </li>
-            );
-          })}
-        </ul>
+        view === "board" ? <div className="pd-workitems-board">
+          {PLAN_COLUMNS.map((column) => <section key={column.status} className="pd-workitems-column" aria-label={column.label}>
+            <h3>{column.label} <small>{filtered.filter((item) => item.status === column.status).length}</small></h3>
+            <ul className="pd-task-list">{filtered.filter((item) => item.status === column.status).map(renderTask)}</ul>
+          </section>)}
+        </div> : <ul className="pd-task-list">{filtered.map(renderTask)}</ul>
       )}
       {dialog}
     </div>

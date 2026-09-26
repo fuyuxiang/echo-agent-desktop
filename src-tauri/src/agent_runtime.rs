@@ -53,11 +53,20 @@ pub(crate) const MEMORY_EMBEDDING_DIMENSIONS: usize = 1024;
 pub(crate) const MEMORY_RERANK_ENDPOINT: &str = "http://123.56.188.16:8088/v1/rerank";
 pub(crate) const MEMORY_RERANK_MODEL: &str = "rerank-pro";
 
-fn configure_memory_retrieval(cfg: &mut AgentConfig) {
+fn configure_memory_retrieval(cfg: &mut AgentConfig, mode: &str) {
     let Some(memory) = cfg.memory_config.as_mut() else {
         return;
     };
 
+    if mode == "configured" {
+        return;
+    }
+    if mode != "builtin" {
+        memory.embedding.provider = "local".into();
+        memory.embedding.model = None;
+        memory.search.reranker.enabled = false;
+        return;
+    }
     memory.embedding.provider = "api".to_owned();
     memory.embedding.model = Some(MEMORY_EMBEDDING_MODEL.to_owned());
     memory.embedding.dimensions = MEMORY_EMBEDDING_DIMENSIONS;
@@ -194,7 +203,37 @@ pub fn spawn_agent_runtime(_cwd: PathBuf) -> Result<AgentHandle> {
         laziness_debug_log: None,
         storage_mode: None,
     });
-    configure_memory_retrieval(&mut cfg);
+    let memory = raw.get("memory");
+    let mode = memory
+        .and_then(|v| v.get("retrieval_mode"))
+        .and_then(|v| v.as_str())
+        .unwrap_or_else(|| {
+            if memory.and_then(|v| v.get("embedding")).is_some()
+                || memory
+                    .and_then(|v| v.get("search"))
+                    .and_then(|v| v.get("reranker"))
+                    .is_some()
+            {
+                "configured"
+            } else {
+                "local"
+            }
+        });
+    let configured = memory.is_some_and(|value| {
+        value.get("embedding").is_some()
+            || value
+                .get("search")
+                .and_then(|search| search.get("reranker"))
+                .is_some()
+    });
+    configure_memory_retrieval(
+        &mut cfg,
+        if mode == "configured" && !configured {
+            "local"
+        } else {
+            mode
+        },
+    );
     tracing::info!(
         permission_mode,
         default_yolo_mode = cfg.default_yolo_mode,
@@ -632,6 +671,44 @@ fn build_prompt_blocks(
 /// Send a typed ACP prompt. Supported images are carried as real ImageContent;
 /// other files are explicit @path references so the runtime's read_file tool
 /// can load them on demand.
+pub async fn prompt_for_automation(
+    tx: &AcpAgentTx,
+    session_id: &str,
+    text: &str,
+) -> Result<crate::bridge::CompleteEvent> {
+    let prompt_id = uuid::Uuid::now_v7().to_string();
+    let meta = serde_json::Map::from_iter([("promptId".into(), serde_json::json!(prompt_id))]);
+    let req = acp::PromptRequest::new(
+        session_id.to_string(),
+        build_prompt_blocks(text, &[], None)?,
+    )
+    .meta(Some(meta));
+    let response: acp::PromptResponse = acp_send(req, tx)
+        .await
+        .map_err(|e| anyhow!("prompt: {e:?}"))?;
+    completion_from_prompt_response(response, session_id, &prompt_id)
+}
+
+pub(crate) fn completion_from_prompt_response(
+    response: acp::PromptResponse,
+    session_id: &str,
+    prompt_id: &str,
+) -> Result<crate::bridge::CompleteEvent> {
+    let mut payload = serde_json::to_value(&response.meta)?
+        .as_object()
+        .cloned()
+        .unwrap_or_default();
+    payload.insert("sessionId".into(), serde_json::json!(session_id));
+    payload.insert("promptId".into(), serde_json::json!(prompt_id));
+    payload.insert(
+        "stopReason".into(),
+        serde_json::to_value(response.stop_reason)?,
+    );
+    Ok(crate::bridge::parse_complete_event(
+        &serde_json::Value::Object(payload),
+    ))
+}
+
 pub async fn prompt_with_attachments(
     tx: &AcpAgentTx,
     session_id: &str,
@@ -1259,6 +1336,43 @@ mod byok_isolation_tests {
         assert_eq!(
             pick_byok_base_url(std::iter::empty(), std::iter::empty()),
             None
+        );
+    }
+}
+
+#[cfg(test)]
+mod memory_retrieval_tests {
+    use super::*;
+    #[test]
+    fn retrieval_modes_preserve_custom_config_and_default_to_no_remote_retrieval() {
+        let raw = serde_json::from_value(serde_json::json!({})).unwrap();
+        let mut config = AgentConfig::new_from_toml_cfg(&raw).unwrap();
+        config.memory_config = Some(Default::default());
+        let memory = config.memory_config.as_mut().unwrap();
+        memory.embedding.provider = "api".into();
+        memory.embedding.endpoint = Some("https://custom.example/v1/embeddings".into());
+        memory.embedding.api_key = Some("preserve-key".into());
+        memory.embedding.model = Some("custom-model".into());
+        memory.search.reranker.enabled = true;
+        memory.search.reranker.endpoint = Some("https://custom.example/rerank".into());
+        let before = format!("{:?}", config.memory_config);
+        configure_memory_retrieval(&mut config, "configured");
+        assert_eq!(format!("{:?}", config.memory_config), before);
+        configure_memory_retrieval(&mut config, "local");
+        let memory = config.memory_config.as_ref().unwrap();
+        assert_eq!(memory.embedding.provider, "local");
+        assert!(!memory.search.reranker.enabled);
+        assert_eq!(memory.embedding.api_key.as_deref(), Some("preserve-key"));
+        configure_memory_retrieval(&mut config, "builtin");
+        assert_eq!(
+            config
+                .memory_config
+                .as_ref()
+                .unwrap()
+                .embedding
+                .endpoint
+                .as_deref(),
+            Some(MEMORY_EMBEDDING_ENDPOINT)
         );
     }
 }

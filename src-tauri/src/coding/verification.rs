@@ -10,8 +10,9 @@ use std::process::Stdio;
 use std::time::Instant;
 
 use serde::{Deserialize, Serialize};
+use std::sync::{Arc, Mutex};
 use tauri::{AppHandle, Emitter, State};
-use tokio::io::{AsyncBufReadExt, BufReader};
+use tokio::io::{AsyncRead, AsyncReadExt};
 use tokio::process::Command;
 use tokio_util::sync::CancellationToken;
 
@@ -42,6 +43,47 @@ fn push_bounded(buffer: &mut String, line: &str, dropped_early_output: &mut bool
     buffer.drain(..cut);
 }
 
+/// Never allocate a whole unbounded line. Preserve UTF-8 across read boundaries.
+async fn read_output(mut reader: impl AsyncRead + Unpin, mut emit: impl FnMut(String)) {
+    let mut chunk = [0u8; 4096];
+    let mut pending = Vec::with_capacity(12288);
+    loop {
+        let count = reader.read(&mut chunk).await.unwrap_or_default();
+        pending.extend_from_slice(&chunk[..count]);
+        loop {
+            let newline = pending.iter().position(|b| *b == b'\n');
+            let mut end = newline.map(|i| i + 1).filter(|i| *i <= 8192).unwrap_or({
+                if pending.len() >= 8192 {
+                    8192
+                } else if count == 0 {
+                    pending.len()
+                } else {
+                    0
+                }
+            });
+            if end == 0 {
+                break;
+            }
+            if let Err(error) = std::str::from_utf8(&pending[..end]) {
+                if error.error_len().is_none() && count != 0 {
+                    end = error.valid_up_to();
+                }
+            }
+            if end == 0 {
+                break;
+            }
+            let text = String::from_utf8_lossy(&pending[..end])
+                .trim_end_matches(['\r', '\n'])
+                .to_owned();
+            emit(text);
+            pending.drain(..end);
+        }
+        if count == 0 {
+            break;
+        }
+    }
+}
+
 #[derive(Serialize, Deserialize, Clone, Copy, PartialEq, Eq, Debug)]
 #[serde(rename_all = "snake_case")]
 pub enum VerificationKind {
@@ -58,6 +100,7 @@ pub enum VerificationStatus {
     Running,
     Passed,
     Failed,
+    EnvironmentUnavailable,
     TimedOut,
     Cancelled,
 }
@@ -167,6 +210,10 @@ fn workspace_has_script(root: &Path, script: &str) -> bool {
 /// commands that actually exist are returned, so the orchestrator never invents
 /// a script the project does not define.
 pub fn detect_commands(root: &Path) -> Vec<DetectedCommand> {
+    detect_commands_for_platform(root, cfg!(windows))
+}
+
+fn detect_commands_for_platform(root: &Path, windows: bool) -> Vec<DetectedCommand> {
     let mut detected: Vec<DetectedCommand> = Vec::new();
     let push = |detected: &mut Vec<DetectedCommand>, kind: VerificationKind, command: String| {
         if !detected.iter().any(|entry| entry.command == command) {
@@ -233,7 +280,9 @@ pub fn detect_commands(root: &Path) -> Vec<DetectedCommand> {
         push(&mut detected, VerificationKind::Test, "cargo test".into());
     }
     if root.join("pom.xml").exists() {
-        let maven = if root.join("mvnw").exists() {
+        let maven = if windows && root.join("mvnw.cmd").is_file() {
+            r".\mvnw.cmd"
+        } else if !windows && root.join("mvnw").is_file() {
             "./mvnw"
         } else {
             "mvn"
@@ -250,7 +299,9 @@ pub fn detect_commands(root: &Path) -> Vec<DetectedCommand> {
         );
     }
     if root.join("build.gradle").exists() || root.join("build.gradle.kts").exists() {
-        let gradle = if root.join("gradlew").exists() {
+        let gradle = if windows && root.join("gradlew.bat").is_file() {
+            r".\gradlew.bat"
+        } else if !windows && root.join("gradlew").is_file() {
             "./gradlew"
         } else {
             "gradle"
@@ -266,10 +317,60 @@ pub fn detect_commands(root: &Path) -> Vec<DetectedCommand> {
             format!("{gradle} test"),
         );
     }
-    if root.join("pyproject.toml").exists() || root.join("requirements.txt").exists() {
-        push(&mut detected, VerificationKind::Test, "pytest".into());
-        if root.join("mypy.ini").exists() || root.join("pyproject.toml").exists() {
-            push(&mut detected, VerificationKind::TypeCheck, "mypy .".into());
+    let pyproject = std::fs::read_to_string(root.join("pyproject.toml"))
+        .ok()
+        .and_then(|text| text.parse::<toml::Value>().ok())
+        .unwrap_or(toml::Value::Table(Default::default()));
+    let tools = pyproject.get("tool");
+    let runner = if root.join("uv.lock").is_file() || tools.and_then(|v| v.get("uv")).is_some() {
+        "uv run --no-sync python -m"
+    } else if root.join("poetry.lock").is_file() || tools.and_then(|v| v.get("poetry")).is_some() {
+        "poetry run python -m"
+    } else if windows && root.join(".venv/Scripts/python.exe").is_file() {
+        r".\.venv\Scripts\python.exe -m"
+    } else if !windows && root.join(".venv/bin/python").is_file() {
+        "./.venv/bin/python -m"
+    } else if windows {
+        "py -m"
+    } else {
+        "python3 -m"
+    };
+    let requirement_files = [
+        "requirements.txt",
+        "requirements-dev.txt",
+        "requirements-test.txt",
+    ];
+    for (name, kind, args, config_files) in [
+        ("pytest", VerificationKind::Test, "", vec!["pytest.ini"]),
+        (
+            "mypy",
+            VerificationKind::TypeCheck,
+            " .",
+            vec!["mypy.ini", ".mypy.ini"],
+        ),
+    ] {
+        let matcher = regex::Regex::new(&format!(r"(?i)^{}(?:$|[\[<>=!~;\s])", name))
+            .expect("dependency pattern");
+        let declared = tools.and_then(|v| v.get(name)).is_some()
+            || config_files.iter().any(|file| root.join(file).is_file())
+            || requirement_files.iter().any(|file| {
+                std::fs::read_to_string(root.join(file))
+                    .ok()
+                    .is_some_and(|text| text.lines().any(|line| matcher.is_match(line.trim())))
+            })
+            || [
+                pyproject.get("project").and_then(|v| v.get("dependencies")),
+                pyproject
+                    .get("project")
+                    .and_then(|v| v.get("optional-dependencies")),
+                pyproject.get("dependency-groups"),
+                tools.and_then(|v| v.get("poetry")),
+            ]
+            .into_iter()
+            .flatten()
+            .any(|value| declares_python_dependency(value, name, &matcher));
+        if declared {
+            push(&mut detected, kind, format!("{runner} {name}{args}"));
         }
     }
     if root.join("go.mod").exists() {
@@ -325,6 +426,19 @@ pub fn detect_commands(root: &Path) -> Vec<DetectedCommand> {
         );
     }
     detected
+}
+
+fn declares_python_dependency(value: &toml::Value, name: &str, matcher: &regex::Regex) -> bool {
+    match value {
+        toml::Value::String(value) => matcher.is_match(value),
+        toml::Value::Array(values) => values
+            .iter()
+            .any(|v| declares_python_dependency(v, name, matcher)),
+        toml::Value::Table(values) => values
+            .iter()
+            .any(|(key, value)| key == name || declares_python_dependency(value, name, matcher)),
+        _ => false,
+    }
 }
 
 fn is_manifest_verification(root: &Path, command: &str) -> bool {
@@ -424,6 +538,13 @@ pub fn record_from_parts(
         VerificationStatus::TimedOut
     } else if exit_code == Some(0) {
         VerificationStatus::Passed
+    } else if matches!(exit_code, Some(127 | 9009))
+        || stderr.contains("No module named pytest")
+        || stderr.contains("No module named mypy")
+        || stderr.contains("No module named 'pytest'")
+        || stderr.contains("No module named 'mypy'")
+    {
+        VerificationStatus::EnvironmentUnavailable
     } else {
         VerificationStatus::Failed
     };
@@ -574,52 +695,38 @@ pub async fn run(
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
         .kill_on_drop(true);
-    #[cfg(unix)]
-    builder.process_group(0);
 
     let started_at = chrono::Utc::now().to_rfc3339();
     let started = Instant::now();
-    let mut child = builder.spawn().map_err(|error| {
+    let mut child = crate::process_supervisor::spawn_async(builder).map_err(|error| {
         processes.unregister(&run_id);
         format!("无法执行命令：{error}")
     })?;
-    let stdout = child.stdout.take().ok_or("无法捕获标准输出")?;
-    let stderr = child.stderr.take().ok_or("无法捕获错误输出")?;
+    let stdout = child.stdout().take().ok_or("无法捕获标准输出")?;
+    let stderr = child.stderr().take().ok_or("无法捕获错误输出")?;
 
-    let stdout_task = {
+    let stdout_buffer = Arc::new(Mutex::new((String::new(), false)));
+    let stderr_buffer = Arc::new(Mutex::new((String::new(), false)));
+    let spawn_reader = |stream: Box<dyn AsyncRead + Unpin + Send>,
+                        channel: &'static str,
+                        buffer: Arc<Mutex<(String, bool)>>| {
         let app = app.clone();
         let root = root.clone();
         let task_id = task_id.clone();
         let run_id = run_id.clone();
         tokio::spawn(async move {
-            let mut lines = BufReader::new(stdout).lines();
-            let mut buffer = String::new();
-            let mut dropped = false;
-            while let Ok(Some(raw)) = lines.next_line().await {
+            read_output(stream, |raw| {
                 let line = strip_ansi(raw);
-                emit_output(&app, &root, &task_id, &run_id, "stdout", &line);
-                push_bounded(&mut buffer, &line, &mut dropped);
-            }
-            (buffer, dropped)
+                emit_output(&app, &root, &task_id, &run_id, channel, &line);
+                let mut guard = buffer.lock().unwrap_or_else(|e| e.into_inner());
+                let (text, dropped) = &mut *guard;
+                push_bounded(text, &line, dropped);
+            })
+            .await;
         })
     };
-    let stderr_task = {
-        let app = app.clone();
-        let root = root.clone();
-        let task_id = task_id.clone();
-        let run_id = run_id.clone();
-        tokio::spawn(async move {
-            let mut lines = BufReader::new(stderr).lines();
-            let mut buffer = String::new();
-            let mut dropped = false;
-            while let Ok(Some(raw)) = lines.next_line().await {
-                let line = strip_ansi(raw);
-                emit_output(&app, &root, &task_id, &run_id, "stderr", &line);
-                push_bounded(&mut buffer, &line, &mut dropped);
-            }
-            (buffer, dropped)
-        })
-    };
+    let stdout_task = spawn_reader(Box::new(stdout), "stdout", stdout_buffer.clone());
+    let stderr_task = spawn_reader(Box::new(stderr), "stderr", stderr_buffer.clone());
 
     let timeout = std::time::Duration::from_secs(
         timeout_secs.unwrap_or(DEFAULT_TIMEOUT_SECS).clamp(5, 1_800),
@@ -630,19 +737,34 @@ pub async fn run(
         status = child.wait() => status.ok(),
         _ = tokio::time::sleep(timeout) => {
             timed_out = true;
-            let _ = child.start_kill();
-            child.wait().await.ok()
+            crate::process_supervisor::stop_async(&mut child).await
         }
         _ = cancellation.cancelled() => {
             cancelled = true;
-            let _ = child.start_kill();
-            child.wait().await.ok()
+            crate::process_supervisor::stop_async(&mut child).await
         }
     };
 
+    // Reclaim detached background workers even when the command exited normally.
+    let _ = child.start_kill();
+    for mut reader in [stdout_task, stderr_task] {
+        if tokio::time::timeout(std::time::Duration::from_secs(2), &mut reader)
+            .await
+            .is_err()
+        {
+            reader.abort();
+            let _ = reader.await;
+        }
+    }
     processes.unregister(&run_id);
-    let (stdout_buffer, stdout_dropped) = stdout_task.await.unwrap_or_default();
-    let (stderr_buffer, stderr_dropped) = stderr_task.await.unwrap_or_default();
+    let (stdout_buffer, stdout_dropped) = stdout_buffer
+        .lock()
+        .unwrap_or_else(|e| e.into_inner())
+        .clone();
+    let (stderr_buffer, stderr_dropped) = stderr_buffer
+        .lock()
+        .unwrap_or_else(|e| e.into_inner())
+        .clone();
     let stdout_text = label_dropped(stdout_buffer, stdout_dropped);
     let stderr_text = label_dropped(stderr_buffer, stderr_dropped);
     let mut record = record_from_parts(
@@ -761,6 +883,96 @@ mod tests {
         let dir = std::env::temp_dir().join(format!("coding-verify-{}", uuid::Uuid::now_v7()));
         std::fs::create_dir_all(&dir).unwrap();
         dir
+    }
+
+    #[test]
+    fn missing_tools_are_environment_errors_not_code_failures() {
+        let unavailable = record_from_parts(
+            "task",
+            VerificationKind::Test,
+            "python3 -m pytest",
+            Some(1),
+            String::new(),
+            "No module named pytest".into(),
+            1,
+            false,
+            false,
+        );
+        assert_eq!(
+            unavailable.status,
+            VerificationStatus::EnvironmentUnavailable
+        );
+        let failed = record_from_parts(
+            "task",
+            VerificationKind::Test,
+            "python3 -m pytest",
+            Some(1),
+            "1 failed".into(),
+            String::new(),
+            1,
+            false,
+            false,
+        );
+        assert_eq!(failed.status, VerificationStatus::Failed);
+        let cancelled = record_from_parts(
+            "task",
+            VerificationKind::Test,
+            "missing",
+            Some(127),
+            String::new(),
+            String::new(),
+            1,
+            false,
+            true,
+        );
+        assert_eq!(cancelled.status, VerificationStatus::Cancelled);
+    }
+
+    #[test]
+    fn python_detection_requires_declared_tools_and_uses_environment() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(
+            dir.path().join("pyproject.toml"),
+            "[project]\nname='demo'\n",
+        )
+        .unwrap();
+        assert!(detect_commands(dir.path()).is_empty());
+        std::fs::write(
+            dir.path().join("pyproject.toml"),
+            "[dependency-groups]\ndev=['pytest>=8']\n",
+        )
+        .unwrap();
+        std::fs::write(dir.path().join("uv.lock"), "").unwrap();
+        let commands = detect_commands(dir.path());
+        assert_eq!(commands.len(), 1);
+        assert_eq!(commands[0].command, "uv run --no-sync python -m pytest");
+    }
+
+    #[test]
+    fn windows_selects_native_java_wrappers() {
+        let dir = tempfile::tempdir().unwrap();
+        for file in [
+            "pom.xml",
+            "mvnw",
+            "mvnw.cmd",
+            "build.gradle",
+            "gradlew",
+            "gradlew.bat",
+        ] {
+            std::fs::write(dir.path().join(file), "").unwrap();
+        }
+        let commands = detect_commands_for_platform(dir.path(), true);
+        assert!(commands.iter().any(|c| c.command == r".\mvnw.cmd -B test"));
+        assert!(commands.iter().any(|c| c.command == r".\gradlew.bat test"));
+    }
+
+    #[tokio::test]
+    async fn output_without_newlines_is_bounded_and_preserves_utf8() {
+        let input = "记".repeat(100_000);
+        let mut chunks = Vec::new();
+        read_output(input.as_bytes(), |chunk| chunks.push(chunk)).await;
+        assert!(chunks.iter().all(|chunk| chunk.len() <= 8192));
+        assert_eq!(chunks.concat(), input);
     }
 
     #[test]

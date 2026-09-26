@@ -19,6 +19,9 @@
       "path": "../../packages/filesystem"
     },
     {
+      "path": "../../packages/terminal"
+    },
+    {
       "path": "../../packages/workspace"
     }
   ]

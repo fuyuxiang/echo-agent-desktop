@@ -2,10 +2,11 @@ import { chromium } from "../vendor/theia-platform/node_modules/playwright/index
 import { createServer } from "node:http";
 import { existsSync, readFileSync, writeFileSync, unlinkSync } from "node:fs";
 import { join } from "node:path";
+import { tmpdir } from "node:os";
 
 const backend = process.env.THEIA_URL ?? "http://127.0.0.1:31235/";
 const embedToken = process.env.ECHO_THEIA_EMBED_TOKEN;
-const workspace = process.env.THEIA_WORKSPACE ?? "/private/tmp/echo-theia-workspace";
+const workspace = process.env.THEIA_WORKSPACE ?? join(tmpdir(), "echo-theia-workspace");
 const testFile = join(workspace, "echo-bridge-smoke.ts");
 const priorFile = existsSync(testFile) ? readFileSync(testFile, "utf8") : null;
 // Keep the file much larger than the edit so Monaco takes its incremental
@@ -50,7 +51,9 @@ const hostServer = createServer((request, response) => {
   response.writeHead(200, { "Content-Type": "text/html; charset=utf-8" });
   response.end(request.url === "/preview" ? "<h1>Echo preview smoke</h1>" : hostHtml);
 });
-await new Promise(resolve => hostServer.listen(43121, "127.0.0.1", resolve));
+let browser;
+try {
+await new Promise((resolve, reject) => { hostServer.once("error", reject); hostServer.listen(43121, "127.0.0.1", resolve); });
 const healthUrl = new URL("/__echo_health", backend);
 healthUrl.searchParams.set("echoEmbedToken", embedToken);
 const health = await fetch(healthUrl);
@@ -60,12 +63,11 @@ if (health.status !== 204 || health.headers.get("x-echo-theia-ready") !== embedT
 healthUrl.searchParams.set("echoEmbedToken", "wrong-token");
 if ((await fetch(healthUrl)).status !== 403) throw new Error("Theia readiness endpoint accepted an invalid token");
 
-const browser = await chromium.launch({
-  executablePath: process.env.CHROME_BIN ?? "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome",
+browser = await chromium.launch({
+  ...(process.env.CHROME_BIN ? { executablePath: process.env.CHROME_BIN } : {}),
   headless: true,
   args: ["--no-sandbox"],
 });
-try {
   const page = await browser.newPage();
   if (process.env.ECHO_SMOKE_PREVIOUS_LOCALE) {
     await page.addInitScript(({ port, locale }) => {
@@ -85,7 +87,7 @@ try {
   await page.waitForFunction(() => window.echoReady, undefined, { timeout: 30_000 });
   await page.waitForFunction(path => window.echoWorkspace === path, workspace, { timeout: 15_000 });
   } catch (error) {
-    await page.screenshot({ path: "/private/tmp/echo-theia-smoke.png", fullPage: true });
+    await page.screenshot({ path: join(tmpdir(), "echo-theia-smoke.png"), fullPage: true });
     console.error("Frames:", page.frames().map(frame => frame.url()));
     console.error("Frame body:", await page.frames()[1]?.locator("body").innerText().catch(() => "unavailable"));
     console.error("Errors:", errors.slice(0, 20));
@@ -110,7 +112,7 @@ try {
     const locale = await ide.locator("body").evaluate(() => localStorage.getItem("localeId"));
     if (locale !== "zh-cn") throw new Error(`Legacy English locale was not migrated: ${locale}`);
   }
-  await page.screenshot({ path: "/private/tmp/echo-theia-welcome.png", fullPage: true });
+  await page.screenshot({ path: join(tmpdir(), "echo-theia-welcome.png"), fullPage: true });
   console.log("Chinese explorer, compact IDE menu, and Echo start page are visible.");
   for (const theme of ["dark", "light"]) {
     await page.evaluate(({ theme, origin }) => {
@@ -162,13 +164,14 @@ try {
       }, origin);
     }, { url: `${hostOrigin}/preview`, origin: new URL(backend).origin });
     await ide.locator('[id^="mini-browser:"]').waitFor({ timeout: 15_000 });
+    await ide.frameLocator('[id^="mini-browser:"] iframe').getByRole("heading", { name: "Echo preview smoke" }).waitFor({ timeout: 15_000 });
     console.log("Theia preview panel opened from the Echo host command.");
   }
-  await page.screenshot({ path: "/private/tmp/echo-theia-success.png", fullPage: true });
+  await page.screenshot({ path: join(tmpdir(), "echo-theia-success.png"), fullPage: true });
   console.log("Theia iframe loaded, IDE shell mounted, and Echo bridge sent ready.");
   if (errors.length) console.warn("Page errors:", errors.join(" | "));
 } finally {
-  await browser.close();
+  await browser?.close();
   hostServer.close();
   if (process.env.ECHO_SMOKE_EDIT === "1") {
     if (priorFile === null) unlinkSync(testFile);

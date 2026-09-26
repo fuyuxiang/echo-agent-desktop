@@ -48,10 +48,9 @@ describe("project detail theme contract", () => {
 
   it("uses theme-aware emphasis and status colours", () => {
     expect(rule(".pd-tab-btn--on")).toContain("border-bottom-color: var(--echo-brand);");
-    expect(projectTabs).toContain('pending: "var(--echo-text-medium)"');
-    expect(projectTabs).toContain('in_progress: "var(--echo-brand)"');
-    expect(projectTabs).toContain('paused: "var(--echo-status-warning)"');
-    expect(projectTabs).toContain('completed: "var(--echo-status-success)"');
+    // Unified work items reuse the shared task-status badge rather than a second palette.
+    expect(projectTabs).toContain('className={`pd-session-status pd-session-status--${executionStatus.tone}`}');
+    expect(css).toContain('.pd-session-status--finished');
   });
 
   it("preserves a visible interaction target for each column add action", () => {

@@ -13,6 +13,7 @@ mod attachment_blob;
 mod attachment_preview;
 mod automation;
 mod automations;
+mod backup;
 mod bridge;
 mod coding;
 mod coding_workspace;
@@ -20,6 +21,7 @@ mod commands;
 mod connector_cli;
 mod connectors_catalog;
 mod desktop_preferences;
+mod desktop_validation;
 mod experts;
 mod ext;
 mod logging;
@@ -33,8 +35,10 @@ mod paths;
 mod permission_config;
 mod personal_knowledge;
 mod policy;
+mod process_supervisor;
 mod projects;
 mod providers;
+mod resource_identity;
 mod session_title;
 mod sessions;
 mod shell_fs;
@@ -69,6 +73,18 @@ fn request_graceful_exit(app: tauri::AppHandle) {
         app.state::<theia::TheiaServer>().stop();
         commands::stop_agent_runtime(&state).await;
         app.exit(0);
+    });
+}
+
+fn request_graceful_restart(app: tauri::AppHandle) {
+    if !try_begin_exit(&EXIT_IN_PROGRESS) {
+        return;
+    }
+    tauri::async_runtime::spawn(async move {
+        automation::shutdown_all().await;
+        app.state::<theia::TheiaServer>().stop();
+        commands::stop_agent_runtime(&app.state::<AppState>()).await;
+        app.restart();
     });
 }
 
@@ -312,17 +328,6 @@ pub fn run() {
     if let Err(error) = paths::initialize_runtime_home() {
         tracing::error!(%error, "failed to initialize EchoAgent runtime home");
     }
-    // 离线租约过期时在 Agent Runtime 启动前移除受管 Skill 注入，
-    // 避免已撤权的长期离线客户继续加载企业能力。
-    org::enforce_skill_lease();
-
-    // Team MCP server（127.0.0.1 streamable-http）：同步 bind 后台 accept。
-    // 必须在任何 new_session 之前 —— 端口即刻写入 BOUND_PORT 供传参。
-    team_mcp::serve();
-    if let Err(error) = org_mcp::clear_persisted_registration() {
-        tracing::warn!(%error, "failed to remove legacy organization MCP registration");
-    }
-
     let builder = tauri::Builder::default();
     // Tauri requires single-instance to be the first registered plugin. A
     // second launch focuses the resident window (which may be tray-hidden)
@@ -336,6 +341,18 @@ pub fn run() {
 
     let app = builder
         .setup(|app| {
+            backup::apply_pending(app.handle()).map_err(std::io::Error::other)?;
+            // 离线租约过期时在 Agent Runtime 启动前移除受管 Skill 注入，
+            // 避免已撤权的长期离线客户继续加载企业能力。
+            org::enforce_skill_lease();
+
+            // Team MCP server（127.0.0.1 streamable-http）：同步 bind 后台 accept。
+            // 必须在任何 new_session 之前 —— 端口即刻写入 BOUND_PORT 供传参。
+            team_mcp::serve();
+            if let Err(error) = org_mcp::clear_persisted_registration() {
+                tracing::warn!(%error, "failed to remove legacy organization MCP registration");
+            }
+
             // Register the bounded, application-owned paste store so all
             // supported historical attachments remain previewable after a
             // process restart without exhausting exact-file grants.
@@ -366,6 +383,7 @@ pub fn run() {
         .plugin(tauri_plugin_notification::init())
         .plugin(tauri_plugin_updater::Builder::new().build())
         .manage(AppState::default())
+        .manage(backup::BackupState::default())
         .manage(Permissions::new())
         .manage(Questions::new())
         .manage(PlanApprovals::new())
@@ -376,6 +394,13 @@ pub fn run() {
         .manage(coding::watcher::WatcherRegistry::default())
         .manage(org::shared_state())
         .invoke_handler(tauri::generate_handler![
+            desktop_validation::desktop_validation_ready,
+            backup::backup_export,
+            backup::backup_inspect,
+            backup::backup_restore,
+            backup::backup_restored_ui,
+            backup::backup_acknowledge_ui,
+            backup::backup_last_error,
             // session lifecycle
             commands::agent_init,
             commands::agent_auth_status,
@@ -610,6 +635,7 @@ pub fn run() {
             automations::automation_records_archive,
             automations::automation_records_delete,
             // shell / filesystem (markdown links, path click, apply write)
+            resource_identity::filesystem_resource_identity,
             shell_fs::open_url,
             shell_fs::filesystem_pick_directory,
             shell_fs::filesystem_pick_files,

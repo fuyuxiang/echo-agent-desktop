@@ -111,7 +111,7 @@ describe("ToolCallCard", () => {
     expect(screen.queryByText(/\"sufficient\"/)).not.toBeInTheDocument();
   });
 
-  it("组织能力静默降级时不在对话中显示工具卡片", () => {
+  it("组织能力降级时明确显示本轮未使用的来源", () => {
     const { container } = render(
       <ToolCallCard
         tc={{
@@ -122,7 +122,7 @@ describe("ToolCallCard", () => {
         }}
       />,
     );
-    expect(container).toBeEmptyDOMElement();
+    expect(container).toHaveTextContent("本轮未使用组织知识");
   });
 
   it("组织知识回答可查看引用原文并提交反馈", async () => {

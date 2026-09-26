@@ -124,8 +124,8 @@ export function HomePage({
               <div className="home-setup__step home-setup__step--active">
                 <span className="home-setup__icon"><KeyRound size={18} /></span>
                 <div>
-                  <strong>填写 API Key 并测试</strong>
-                  <span>{setupHint || "在模型设置里填写 Base URL、API Key 和 Model ID。"}</span>
+                  <strong>{models?.length ? "检查当前连接" : "确认服务来源并测试"}</strong>
+                  <span>{setupHint || (models?.length ? "已有模型连接暂未就绪，请检查服务状态或切换可用模型。" : "可使用内置服务、组织连接或个人 API。个人连接按服务要求填写 API Key；发送前可查看数据会发往哪里。")}</span>
                 </div>
               </div>
               <div className={"home-setup__step" + (hasWorkspace ? " home-setup__step--done" : "")}>

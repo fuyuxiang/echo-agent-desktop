@@ -22,7 +22,7 @@ describe("KnowledgeBasePanel", () => {
     resetKbRegistry();
     localStorage.removeItem("echoagent.knowledge-sources.v1");
     invokeMock.mockReset();
-    invokeMock.mockResolvedValue(undefined);
+    invokeMock.mockImplementation(async (command: string, args?: { path: string }) => command === "filesystem_resource_identity" ? { id: `test-${args?.path}`, canonicalPath: args?.path } : undefined);
   });
 
   it("无 provider 显示未配置", async () => {
@@ -84,7 +84,8 @@ describe("KnowledgeBasePanel", () => {
       embeddingModel: "embed-pro",
       rerankModel: "rerank-pro",
     };
-    invokeMock.mockImplementation((command: string) => {
+    invokeMock.mockImplementation((command: string, args?: { path: string }) => {
+      if (command === "filesystem_resource_identity") return Promise.resolve({ id: `test-${args?.path}`, canonicalPath: args?.path });
       if (command === "personal_knowledge_index_status") return Promise.resolve(status);
       if (command === "personal_knowledge_search") {
         return Promise.resolve({
@@ -212,7 +213,7 @@ describe("KnowledgeBasePanel", () => {
 
   it("「添加本地文件夹」弹出目录选择并注册稳定 provider", async () => {
     invokeMock.mockImplementation((command: string) =>
-      Promise.resolve(command === "filesystem_pick_directory" ? "/my/notes" : undefined));
+      Promise.resolve(command === "filesystem_pick_directory" ? "/my/notes" : command === "filesystem_resource_identity" ? { id: "test-my-notes", canonicalPath: "/my/notes" } : undefined));
     const before = listKbProviders().length;
     render(<KnowledgeBasePanel onToast={vi.fn()} />);
     fireEvent.click(screen.getByRole("button", { name: /添加本地文件夹/ }));

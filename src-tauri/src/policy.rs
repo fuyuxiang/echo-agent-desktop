@@ -93,39 +93,48 @@ fn merge_rules(rules: Vec<PolicyRule>) -> Vec<PolicyRule> {
     values.into_iter().map(|(_, rule)| rule).collect()
 }
 
-pub fn read_policy() -> PolicySet {
-    let path = policy_path();
-    let Ok(file) = std::fs::File::open(&path) else {
-        return PolicySet::default();
+pub fn read_policy() -> Result<PolicySet, String> {
+    read_policy_at(&policy_path())
+}
+
+fn read_policy_at(path: &std::path::Path) -> Result<PolicySet, String> {
+    let file = match std::fs::File::open(path) {
+        Ok(file) => file,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+            return Ok(PolicySet::default())
+        }
+        Err(error) => {
+            return Err(format!(
+                "无法读取限制策略 {}：{error}；请恢复文件后重试",
+                path.display()
+            ))
+        }
     };
     let mut raw = Vec::new();
-    if file
-        .take(MAX_POLICY_BYTES.saturating_add(1))
+    file.take(MAX_POLICY_BYTES + 1)
         .read_to_end(&mut raw)
-        .is_err()
-        || raw.len() as u64 > MAX_POLICY_BYTES
-    {
-        tracing::warn!(path = %path.display(), "local policy file is unreadable or exceeds 1MB; no local policy was loaded");
-        return PolicySet::default();
+        .map_err(|error| format!("读取限制策略失败：{error}；受限操作暂时不可用"))?;
+    if raw.len() as u64 > MAX_POLICY_BYTES {
+        return Err("限制策略超过 1MB，请修复后重试".into());
     }
-    let mut set: PolicySet = match serde_json::from_slice(&raw) {
-        Ok(set) => set,
-        Err(error) => {
-            tracing::warn!(%error, "local policy file is invalid; no local policy was loaded");
-            return PolicySet::default();
-        }
-    };
-    // Legacy builds accepted policy kinds they never enforced. Never expose
-    // those entries as active policy after an upgrade.
+    let mut set: PolicySet = serde_json::from_slice(&raw).map_err(|error| {
+        format!(
+            "限制策略损坏（{}）：{error}；请恢复文件后重试",
+            path.display()
+        )
+    })?;
+    // These two legacy kinds were never enforcement boundaries.
     set.rules.retain(|rule| {
-        let result = validate_rule(rule);
-        if let Err(error) = &result {
-            tracing::warn!(rule_type = %rule.rule_type, %error, "ignored unsupported local policy rule");
-        }
-        result.is_ok()
+        !matches!(
+            rule.rule_type.as_str(),
+            "sandbox-rules" | "max-tokens-per-day"
+        )
     });
+    for rule in &set.rules {
+        validate_rule(rule)?;
+    }
     set.rules = merge_rules(set.rules);
-    set
+    Ok(set)
 }
 
 fn write_policy(mut set: PolicySet) -> Result<PolicySet, String> {
@@ -138,16 +147,16 @@ fn write_policy(mut set: PolicySet) -> Result<PolicySet, String> {
     Ok(set)
 }
 
-fn value(rule_type: &str) -> Option<Value> {
-    read_policy()
+fn value(rule_type: &str) -> Result<Option<Value>, String> {
+    Ok(read_policy()?
         .rules
         .into_iter()
         .find(|rule| rule.rule_type == rule_type)
-        .map(|rule| rule.value)
+        .map(|rule| rule.value))
 }
 
 pub fn require_model(model_id: &str) -> Result<(), String> {
-    let Some(models) = value("model-whitelist").and_then(|v| v.as_array().cloned()) else {
+    let Some(models) = value("model-whitelist")?.and_then(|v| v.as_array().cloned()) else {
         return Ok(());
     };
     if model_allowed(&models, model_id) {
@@ -162,7 +171,7 @@ fn model_allowed(models: &[Value], model_id: &str) -> bool {
 }
 
 pub fn require_skill_upload() -> Result<(), String> {
-    if value("skill-upload").and_then(|v| v.as_bool()) == Some(false) {
+    if value("skill-upload")?.and_then(|v| v.as_bool()) == Some(false) {
         Err("策略禁止安装或上传技能".into())
     } else {
         Ok(())
@@ -170,7 +179,7 @@ pub fn require_skill_upload() -> Result<(), String> {
 }
 
 pub fn require_feature(feature: &str) -> Result<(), String> {
-    let disabled = value("disabled-features")
+    let disabled = value("disabled-features")?
         .and_then(|v| v.as_array().cloned())
         .unwrap_or_default();
     if disabled.iter().any(|v| v.as_str() == Some(feature)) {
@@ -182,6 +191,10 @@ pub fn require_feature(feature: &str) -> Result<(), String> {
 
 pub fn locked_permission_mode() -> Option<String> {
     value("permission-mode")
+        .unwrap_or_else(|error| {
+            tracing::error!(%error, "policy unavailable; enforcing ask mode");
+            Some(Value::String("ask".into()))
+        })
         .and_then(|v| v.as_str().map(str::to_string))
         .filter(|m| ["ask", "auto", "always-approve"].contains(&m.as_str()))
 }
@@ -196,7 +209,7 @@ fn permission_policy_requires_runtime_restart(
 }
 
 #[tauri::command]
-pub fn policy_get() -> PolicySet {
+pub fn policy_get() -> Result<PolicySet, String> {
     read_policy()
 }
 
@@ -254,6 +267,28 @@ fn normalize_local_policy(mut policy: PolicySet) -> PolicySet {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn corrupt_or_unreadable_policy_never_becomes_empty_rules() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("policy.json");
+        assert!(read_policy_at(&path).unwrap().rules.is_empty());
+        std::fs::write(&path, "{broken").unwrap();
+        assert!(read_policy_at(&path).is_err());
+        assert!(read_policy_at(dir.path()).is_err());
+        std::fs::write(
+            &path,
+            r#"{"rules":[{"type":"model-whitelist","value":42}]}"#,
+        )
+        .unwrap();
+        assert!(read_policy_at(&path).is_err());
+        std::fs::write(
+            &path,
+            r#"{"rules":[{"type":"model-whitelist","value":[]}]}"#,
+        )
+        .unwrap();
+        assert_eq!(read_policy_at(&path).unwrap().rules.len(), 1);
+    }
 
     #[test]
     fn adding_permission_lock_restarts_runtime_even_when_effective_mode_is_unchanged() {
