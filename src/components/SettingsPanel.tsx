@@ -1,15 +1,12 @@
 import { useEffect, useState } from "react";
 import {
-  Mail,
   Settings as SettingsIcon,
   SlidersHorizontal,
   Keyboard,
   Brain,
-  BookOpen,
   Cpu,
   Palette,
   Database,
-  Archive,
   BarChart3,
   Shield,
   HelpCircle,
@@ -36,6 +33,7 @@ import { CloudStoragePanel } from "./CloudStoragePanel";
 import { ArchivedSessionsSettingsPanel } from "./ArchivedSessionsSettingsPanel";
 import { ResourcesPanel } from "./ResourcesPanel";
 import { useModalFocus } from "@/lib/use-modal-focus";
+import { useAppDialog } from "./AppDialog";
 import { useSessionsStore } from "@/stores/sessions-store";
 
 /**
@@ -77,12 +75,50 @@ interface NavGroup {
   items: NavItem[];
 }
 
+const NOTIFICATION_VIEWS: Array<[SettingsSectionId, string]> = [
+  ["agent-mail", "事件收件箱"], ["notify-channels", "通知渠道"],
+];
+const MEMORY_VIEWS: Array<[SettingsSectionId, string]> = [
+  ["memory", "记忆行为"], ["personal-memory", "个人记忆"],
+];
+const DATA_VIEWS: Array<[SettingsSectionId, string]> = [
+  ["data", "备份与目录"], ["archived", "已归档"],
+];
+
+function isActiveNavItem(active: SettingsSectionId, item: SettingsSectionId): boolean {
+  if (item === "agent-mail") return active === "agent-mail" || active === "notify-channels";
+  if (item === "memory") return active === "memory" || active === "personal-memory";
+  if (item === "data") return active === "data" || active === "archived";
+  return active === item;
+}
+
+function SettingsViewTabs({
+  label,
+  items,
+  active,
+  onSelect,
+}: {
+  label: string;
+  items: Array<[SettingsSectionId, string]>;
+  active: SettingsSectionId;
+  onSelect: (section: SettingsSectionId) => void;
+}) {
+  return (
+    <div className="settings-view-tabs" role="group" aria-label={label}>
+      {items.map(([id, title]) => (
+        <button key={id} type="button" aria-pressed={active === id}
+          className={`settings-view-tabs__item${active === id ? " settings-view-tabs__item--active" : ""}`}
+          onClick={() => onSelect(id)}>{title}</button>
+      ))}
+    </div>
+  );
+}
+
 const NAV_GROUPS: NavGroup[] = [
   {
     label: "通知",
     items: [
-      { id: "agent-mail", label: "事件收件箱", icon: Mail },
-      { id: "notify-channels", label: "通知渠道", icon: Send },
+      { id: "agent-mail", label: "通知", icon: Send },
     ],
   },
   {
@@ -90,8 +126,7 @@ const NAV_GROUPS: NavGroup[] = [
     items: [
       { id: "model", label: "模型", icon: Cpu },
       { id: "agent-settings", label: "智能体设置", icon: SlidersHorizontal },
-      { id: "memory", label: "记忆设置", icon: Brain },
-      { id: "personal-memory", label: "个人记忆", icon: BookOpen },
+      { id: "memory", label: "记忆", icon: Brain },
     ],
   },
   {
@@ -107,10 +142,9 @@ const NAV_GROUPS: NavGroup[] = [
     items: [
       { id: "usage", label: "用量统计", icon: BarChart3 },
       { id: "cloud-storage", label: "云存储", icon: Cloud },
-      { id: "archived", label: "已归档", icon: Archive },
       { id: "data", label: "数据管理", icon: Database },
       { id: "security", label: "安全中心", icon: Shield },
-      { id: "help", label: "帮助与反馈", icon: HelpCircle },
+      { id: "help", label: "帮助与更新", icon: HelpCircle },
     ],
   },
 ];
@@ -144,7 +178,23 @@ export function SettingsPanel({
   onToast?: (message: string) => void;
 }) {
   const [active, setActive] = useState<SettingsSectionId>(initialSection);
-  const modalRef = useModalFocus<HTMLDivElement>(open, onClose);
+  const [cloudDirty, setCloudDirty] = useState(false);
+  const { requestConfirmation, dialog } = useAppDialog();
+  const confirmLeave = (action: () => void) => {
+    if (active !== "cloud-storage" || !cloudDirty) {
+      action();
+      return;
+    }
+    requestConfirmation({
+      title: "舍弃云端文件未保存的修改？",
+      description: "当前云端文本尚未保存。继续将丢失这些修改。",
+      confirmLabel: "舍弃修改",
+      danger: true,
+      action: async () => action(),
+    });
+  };
+  const requestClose = () => confirmLeave(onClose);
+  const modalRef = useModalFocus<HTMLDivElement>(open, requestClose);
   const archivedCount = useSessionsStore((state) => state.independent
     .filter((session) => session.archived && !session.hidden).length);
 
@@ -164,7 +214,7 @@ export function SettingsPanel({
       aria-label="设置"
       onClick={(e) => {
         // 仅当点击遮罩本身(而非弹窗内容)时关闭,与 EchoAgent 一致。
-        if (e.target === e.currentTarget) onClose();
+        if (e.target === e.currentTarget) requestClose();
       }}
     >
       <div className="settings-modal">
@@ -181,16 +231,16 @@ export function SettingsPanel({
                         <button
                           className={
                             "settings-navigation__item" +
-                            (active === item.id ? " settings-navigation__item--active" : "")
+                            (isActiveNavItem(active, item.id) ? " settings-navigation__item--active" : "")
                           }
-                          onClick={() => setActive(item.id)}
-                          aria-current={active === item.id ? "page" : undefined}
+                          onClick={() => confirmLeave(() => setActive(item.id))}
+                          aria-current={isActiveNavItem(active, item.id) ? "page" : undefined}
                         >
                           <span className="settings-navigation__icon">
                             <Icon size={17} strokeWidth={1.75} />
                           </span>
                           <span className="settings-navigation__label">{item.label}</span>
-                          {item.id === "archived" && archivedCount > 0 && (
+                          {item.id === "data" && archivedCount > 0 && (
                             <span className="settings-navigation__badge" aria-label={`${archivedCount} 个已归档会话`}>
                               {archivedCount > 99 ? "99+" : archivedCount}
                             </span>
@@ -208,7 +258,7 @@ export function SettingsPanel({
         <div className="settings-modal__content">
           <button
             className="settings-modal__close"
-            onClick={onClose}
+            onClick={requestClose}
             aria-label="关闭设置"
             title="关闭 (Esc)"
             data-modal-initial-focus
@@ -223,9 +273,13 @@ export function SettingsPanel({
             ) : active === "shortcuts" ? (
               <ShortcutsSettingsPanel />
             ) : active === "memory" ? (
-              <MemorySettingsPanel sessionId={sessionId} />
+              <div className="settings-subview">
+                <SettingsViewTabs label="记忆视图" items={MEMORY_VIEWS} active={active} onSelect={setActive} />
+                <MemorySettingsPanel sessionId={sessionId} />
+              </div>
             ) : active === "personal-memory" ? (
-              <div className="settings-personal-memory">
+              <div className="settings-subview settings-personal-memory">
+                <SettingsViewTabs label="记忆视图" items={MEMORY_VIEWS} active={active} onSelect={setActive} />
                 <ResourcesPanel cwd={cwd} sessionId={sessionId} onToast={onToast} />
               </div>
             ) : active === "help" ? (
@@ -233,15 +287,21 @@ export function SettingsPanel({
             ) : active === "security" ? (
               <SecuritySettingsPanel />
             ) : active === "data" ? (
-              <DataSettingsPanel />
+              <div className="settings-subview">
+                <SettingsViewTabs label="数据视图" items={DATA_VIEWS} active={active} onSelect={setActive} />
+                <DataSettingsPanel />
+              </div>
             ) : active === "archived" ? (
-              <ArchivedSessionsSettingsPanel
-                onRestoreSession={onRestoreSession}
-                onDeleteSession={onDeleteSession}
-                onOpenSession={onOpenSession}
-                onClose={onClose}
-                onToast={onToast}
-              />
+              <div className="settings-subview">
+                <SettingsViewTabs label="数据视图" items={DATA_VIEWS} active={active} onSelect={setActive} />
+                <ArchivedSessionsSettingsPanel
+                  onRestoreSession={onRestoreSession}
+                  onDeleteSession={onDeleteSession}
+                  onOpenSession={onOpenSession}
+                  onClose={onClose}
+                  onToast={onToast}
+                />
+              </div>
             ) : active === "usage" ? (
               <div className="settings-section">
                 <header className="settings-section__header">
@@ -255,7 +315,8 @@ export function SettingsPanel({
                 </div>
               </div>
             ) : active === "notify-channels" ? (
-              <div className="settings-section">
+              <div className="settings-section settings-subview">
+                <SettingsViewTabs label="通知视图" items={NOTIFICATION_VIEWS} active={active} onSelect={setActive} />
                 <header className="settings-section__header">
                   <div className="settings-section__heading">
                     <h2 className="settings-section__title">通知渠道</h2>
@@ -271,11 +332,11 @@ export function SettingsPanel({
                 <header className="settings-section__header">
                   <div className="settings-section__heading">
                     <h2 className="settings-section__title">云存储</h2>
-                    <p className="settings-section__desc">管理文件同步和云端访问连接。</p>
+                    <p className="settings-section__desc">管理 WebDAV 连接，并手动浏览、上传和下载云端文件；不会自动同步。</p>
                   </div>
                 </header>
                 <div className="settings-section__body">
-                  <CloudStoragePanel onToast={onToast} />
+                  <CloudStoragePanel onToast={onToast} onUnsavedChange={setCloudDirty} />
                 </div>
               </div>
             ) : active === "general" ? (
@@ -283,11 +344,15 @@ export function SettingsPanel({
             ) : active === "agent-settings" ? (
               <AgentSettingsPanel />
             ) : active === "agent-mail" ? (
-              <NotificationCenterSettingsPanel />
+              <div className="settings-subview">
+                <SettingsViewTabs label="通知视图" items={NOTIFICATION_VIEWS} active={active} onSelect={setActive} />
+                <NotificationCenterSettingsPanel onOpenSession={onOpenSession} onClose={onClose} />
+              </div>
             ) : null}
           </div>
         </div>
       </div>
+      {dialog}
     </div>
   );
 }

@@ -10,6 +10,12 @@
  */
 @import "./tokens.css";
 
+/* All authored typography uses rem, preserving the original 13px default
+ * while letting the Settings preference scale text across every view. */
+body {
+  font-size: 0.8125rem;
+}
+
 /* Foundation Icon base (ported from EchoAgent agent-ui). */
 .echo-icon {
   display: inline-block;

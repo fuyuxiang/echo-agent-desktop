@@ -6,11 +6,11 @@
  *  - personalize: 主题（接 ThemeProvider）+ 字号
  *  - shortcuts: 当前版本真实生效的快捷键说明
  *  - memory: 本地记忆配置、当前会话落盘与整理
- *  - help: 帮助 + 反馈入口（含 EchoAgent 内核信息）
- *  - security: 安全中心（权限规则入口 + folder trust 说明）
- *  - data: 数据管理（清理会话/缓存 + 打开 EchoAgent 目录）
- *  - general: 系统设置（cwd/工作目录 + 重启 EchoAgent）
- *  - agent-settings: 展示当前智能体运行时配置
+ *  - help: 版本更新、文档与排查说明
+ *  - security: 系统授权、工具规则与诊断
+ *  - data: 备份恢复与本地数据目录
+ *  - general: 窗口偏好与运行时热重载
+ *  - agent-settings: 子代理与 Web 搜索运行时配置
  */
 import { useCallback, useEffect, useState } from "react";
 import {
@@ -37,9 +37,7 @@ import {
 import { useTheme } from "./ThemeProvider";
 import { exportBackup, inspectBackup, restoreBackup, backupLastError } from "@/lib/backup-client";
 import {
-  commandsList,
   internalReload,
-  mcpList,
   memoryConfigGet,
   memoryConfigSave,
   memoryDream,
@@ -50,7 +48,6 @@ import {
   notificationMarkRead,
   permissionList,
   permissionSave,
-  skillsList,
   subagentsConfigGet,
   subagentsConfigSave,
   webSearchConfigGet,
@@ -63,12 +60,9 @@ import {
   type MemoryConfig,
 } from "@/lib/agent-client";
 import type {
-  McpServerEntry,
   NotificationEntry,
   NotificationKind,
   PermissionRule,
-  SkillInfo,
-  SlashCommand,
 } from "@/lib/types";
 import { APP_VERSION } from "@/lib/app-version";
 import {
@@ -78,9 +72,9 @@ import {
 } from "@/lib/automation-client";
 import { useUpdateStore } from "@/stores/update-store";
 import { validateOtlpEndpoint } from "@/lib/otlp-exporter";
+import { DEFAULT_FONT_SIZE, MAX_FONT_SIZE, MIN_FONT_SIZE, readFontSize, saveFontSize } from "@/lib/font-size";
 import { useAppDialog } from "./AppDialog";
 
-const FONT_KEY = "echoagent.fontSize";
 const ECHO_AGENT_DOCS_URL = "https://fuyuxiang.github.io/echo-agent/";
 const ACP_SPEC_URL = "https://agentclientprotocol.com/";
 const SHORTCUT_GROUPS: Array<{
@@ -170,21 +164,16 @@ function SettingsGroup({
 
 export function PersonalizeSettingsPanel() {
   const { theme, preference, setTheme } = useTheme();
-  const [fontSize, setFontSize] = useState<number>(() => {
-    const saved = localStorage.getItem(FONT_KEY);
-    return saved ? Number(saved) : 13;
-  });
+  const [fontSize, setFontSize] = useState<number>(readFontSize);
 
   useEffect(() => {
-    localStorage.setItem(FONT_KEY, String(fontSize));
-    document.documentElement.style.setProperty("--echoagent-font-size", `${fontSize}px`);
-    document.body.style.fontSize = `${fontSize}px`;
+    saveFontSize(fontSize);
   }, [fontSize]);
 
   return (
     <SectionShell
       title="个性化"
-      desc="调整外观和字号。主题切换立即生效，字号应用到整个界面。"
+      desc="调整外观和阅读字号。主题与主要界面文字会立即更新。"
     >
       <SettingsGroup title="界面外观" desc="选择适合当前环境的显示主题和阅读字号。">
         <div className="settings-row settings-row--comfortable">
@@ -229,14 +218,14 @@ export function PersonalizeSettingsPanel() {
             <span className="settings-font-control__sample settings-font-control__sample--small">A</span>
             <input
               type="range"
-              min={11}
-              max={18}
+              min={MIN_FONT_SIZE}
+              max={MAX_FONT_SIZE}
               value={fontSize}
               onChange={(e) => setFontSize(Number(e.target.value))}
               aria-label="界面字号"
             />
             <span className="settings-font-control__sample settings-font-control__sample--large">A</span>
-            <button className="settings-reset" onClick={() => setFontSize(13)}>
+            <button className="settings-reset" onClick={() => setFontSize(DEFAULT_FONT_SIZE)}>
               重置
             </button>
           </div>
@@ -426,7 +415,7 @@ export function MemorySettingsPanel({ sessionId }: { sessionId?: string }) {
         <div className="settings-row settings-row--comfortable">
           <div className="settings-row__label settings-row__label--stacked">
             <span className="settings-row__name"><Database size={17} />本地记忆目录</span>
-            <span className="settings-row__description">可在“设置 → 个人记忆”中查看、编辑和审阅</span>
+            <span className="settings-row__description">可在“设置 → 记忆 → 个人记忆”中查看、编辑和审阅</span>
           </div>
           <code className="settings-path-chip">~/.echo-agent/memory/</code>
         </div>
@@ -457,7 +446,7 @@ export function MemorySettingsPanel({ sessionId }: { sessionId?: string }) {
   );
 }
 
-// ---------- 帮助与反馈 ----------
+// ---------- 帮助与更新 ----------
 
 export function HelpSettingsPanel() {
   const [resourceError, setResourceError] = useState("");
@@ -480,7 +469,7 @@ export function HelpSettingsPanel() {
   };
 
   return (
-    <SectionShell title="帮助与反馈" desc="查阅使用文档、协议说明和常见问题排查步骤。">
+    <SectionShell title="帮助与更新" desc="检查版本更新，查阅使用文档和常见问题排查步骤。">
       <SettingsGroup
         title="版本升级"
         desc="启动时会自动检查 EchoAgent 内网上的签名发布版。"
@@ -894,17 +883,23 @@ export function GeneralSettingsPanel() {
   const [msg, setMsg] = useState<string | null>(null);
   const [closeToTray, setCloseToTray] = useState(true);
   const [loadingDesktopPreferences, setLoadingDesktopPreferences] = useState(true);
+  const [desktopPreferencesError, setDesktopPreferencesError] = useState<string | null>(null);
+  const [desktopPreferencesReload, setDesktopPreferencesReload] = useState(0);
   const [savingDesktopPreferences, setSavingDesktopPreferences] = useState(false);
 
   useEffect(() => {
     let active = true;
+    setLoadingDesktopPreferences(true);
     void desktopPreferencesGet()
       .then((preferences) => {
-        if (active) setCloseToTray(preferences.closeToTray);
+        if (active) {
+          setCloseToTray(preferences.closeToTray);
+          setDesktopPreferencesError(null);
+        }
       })
       .catch((error) => {
         if (active) {
-          setMsg(`桌面偏好读取失败，已使用默认设置：${String(error).replace(/^Error:\s*/, "")}`);
+          setDesktopPreferencesError(String(error).replace(/^Error:\s*/, ""));
         }
       })
       .finally(() => {
@@ -913,7 +908,7 @@ export function GeneralSettingsPanel() {
     return () => {
       active = false;
     };
-  }, []);
+  }, [desktopPreferencesReload]);
 
   const handleCloseToTrayChange = async (enabled: boolean) => {
     const previous = closeToTray;
@@ -962,12 +957,18 @@ export function GeneralSettingsPanel() {
               type="checkbox"
               aria-label="关闭窗口时继续后台运行"
               checked={closeToTray}
-              disabled={loadingDesktopPreferences || savingDesktopPreferences}
+              disabled={loadingDesktopPreferences || savingDesktopPreferences || Boolean(desktopPreferencesError)}
               onChange={(event) => void handleCloseToTrayChange(event.target.checked)}
             />
             <span className="sk-toggle-track"><span className="sk-toggle-thumb" /></span>
           </label>
         </div>
+        {desktopPreferencesError && (
+          <div className="settings-msg settings-msg--warn" role="alert">
+            桌面偏好读取失败：{desktopPreferencesError}。在读取成功前不会修改原有设置。
+            <button type="button" className="settings-btn" onClick={() => setDesktopPreferencesReload((value) => value + 1)}>重试</button>
+          </div>
+        )}
         {!closeToTray && !loadingDesktopPreferences && (
           <div className="settings-info-callout settings-info-callout--warn" role="status">
             关闭主窗口将停止当前 Runtime 和自动化调度。仍可使用最小化保留窗口与任务。
@@ -995,14 +996,8 @@ export function GeneralSettingsPanel() {
 
 // ---------- 智能体设置 ----------
 
-/** AgentSettingsPanel — 汇总显示当前智能体配置（skills + MCP + slash 命令）。
- *  数据来自 EchoAgent 的 echo.agent/skills/config、echo.agent/mcp/list、echo.agent/commands/list，
- *  与「专家·技能·连接器」面板的数据源相同，但这里是设置视图：只读 + 刷新 +
- *  跳转到对应管理面板。 */
+/** Runtime behavior settings. Capability inventory belongs to the primary 能力 page. */
 export function AgentSettingsPanel() {
-  const [skills, setSkills] = useState<SkillInfo[]>([]);
-  const [servers, setServers] = useState<McpServerEntry[]>([]);
-  const [commands, setCommands] = useState<SlashCommand[]>([]);
   const [subagentDepth, setSubagentDepth] = useState<number | null>(null);
   const [subagentDraft, setSubagentDraft] = useState<string>("");
   const [webSearchEnabled, setWebSearchEnabled] = useState<boolean | null>(null);
@@ -1012,32 +1007,22 @@ export function AgentSettingsPanel() {
   const [runtimeMsg, setRuntimeMsg] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
   const [loadErrors, setLoadErrors] = useState<Partial<Record<
-    "skills" | "mcp" | "commands" | "subagents" | "webSearch",
+    "subagents" | "webSearch",
     string
   >>>({});
 
   const reload = useCallback(async () => {
     setLoading(true);
     setLoadErrors({});
-    const [sk, mc, cmd, sa, ws] = await Promise.allSettled([
-      skillsList(),
-      mcpList(),
-      commandsList(),
+    const [sa, ws] = await Promise.allSettled([
       subagentsConfigGet(),
       webSearchConfigGet(),
     ]);
     const failures: Partial<Record<
-      "skills" | "mcp" | "commands" | "subagents" | "webSearch",
+      "subagents" | "webSearch",
       string
     >> = {};
     const failureText = (reason: unknown) => String(reason).replace(/^Error:\s*/, "");
-
-    if (sk.status === "fulfilled") setSkills(sk.value);
-    else failures.skills = failureText(sk.reason);
-    if (mc.status === "fulfilled") setServers(mc.value);
-    else failures.mcp = failureText(mc.reason);
-    if (cmd.status === "fulfilled") setCommands(cmd.value);
-    else failures.commands = failureText(cmd.reason);
     if (sa.status === "fulfilled") {
       setSubagentDepth(sa.value.maxDepth);
       setSubagentDraft(String(sa.value.maxDepth));
@@ -1067,10 +1052,15 @@ export function AgentSettingsPanel() {
   /** Save subagent max_depth. Clamped to ≥1 on the backend. */
   const saveSubagentDepth = useCallback(async () => {
     if (subagentDepth === null || loadErrors.subagents) return;
+    const requestedDepth = Number(subagentDraft);
+    if (!Number.isInteger(requestedDepth) || requestedDepth < 1 || requestedDepth > 10) {
+      setRuntimeMsg("子代理嵌套深度须为 1 到 10 的整数");
+      return;
+    }
     setSavingRuntime(true);
     setRuntimeMsg(null);
     try {
-      const clamped = await subagentsConfigSave(Number(subagentDraft) || 1);
+      const clamped = await subagentsConfigSave(requestedDepth);
       setSubagentDepth(clamped);
       setSubagentDraft(String(clamped));
       setRuntimeMsg(`子代理深度已保存为 ${clamped}（重启 agent 后生效）`);
@@ -1081,7 +1071,7 @@ export function AgentSettingsPanel() {
     }
   }, [loadErrors.subagents, subagentDepth, subagentDraft]);
 
-  /** Toggle web search on/off. */
+  /** Save web search state and its model independently. */
   const saveWebSearch = useCallback(
     async (enable: boolean) => {
       if (webSearchEnabled === null || loadErrors.webSearch) return;
@@ -1093,9 +1083,9 @@ export function AgentSettingsPanel() {
           setSavingRuntime(false);
           return;
         }
-        await webSearchConfigSave(enable, webSearchDraftModel.trim() || undefined);
+        await webSearchConfigSave(enable, enable ? webSearchDraftModel.trim() : webSearchModel || undefined);
         setWebSearchEnabled(enable);
-        setWebSearchModel(enable ? webSearchDraftModel.trim() : "");
+        setWebSearchModel(enable ? webSearchDraftModel.trim() : webSearchModel);
         setRuntimeMsg(
           enable
             ? `Web 搜索已启用（模型 ${webSearchDraftModel.trim()}，重启 agent 后生效）`
@@ -1107,21 +1097,13 @@ export function AgentSettingsPanel() {
         setSavingRuntime(false);
       }
     },
-    [loadErrors.webSearch, webSearchDraftModel, webSearchEnabled],
+    [loadErrors.webSearch, webSearchDraftModel, webSearchEnabled, webSearchModel],
   );
-
-  const enabledSkills = skills.filter((s) => s.enabled);
-  const disabledSkills = skills.filter((s) => !s.enabled);
-  const enabledServers = servers.filter((s) => s.enabled);
-  const disabledServers = servers.filter((s) => !s.enabled);
-  const builtinCommands = commands.filter((c) => !c.source || c.source === "builtin");
-  const skillCommands = commands.filter((c) => c.source === "skill");
-  const pluginCommands = commands.filter((c) => c.source === "plugin");
 
   return (
     <SectionShell
       title="智能体设置"
-      desc="查看当前加载的能力，并调整子代理和 Web 搜索等运行时配置。"
+      desc="调整子代理和 Web 搜索的运行方式。技能、连接器与命令请在左侧“能力”中管理。"
       actions={(
         <button className="settings-btn" onClick={reload} disabled={loading}>
           <RefreshCw size={15} /> {loading ? "加载中…" : "刷新状态"}
@@ -1134,9 +1116,6 @@ export function AgentSettingsPanel() {
             部分智能体配置读取失败：
             {Object.entries(loadErrors)
               .map(([key, message]) => `${({
-                skills: "技能",
-                mcp: "MCP 连接器",
-                commands: "Slash 命令",
                 subagents: "子代理配置",
                 webSearch: "Web 搜索配置",
               } as Record<string, string>)[key]}：${message}`)
@@ -1147,138 +1126,6 @@ export function AgentSettingsPanel() {
           </button>
         </div>
       )}
-
-      {/* 汇总统计 */}
-      <SettingsGroup title="运行概览" desc="数据来自当前活动的 EchoAgent Runtime。">
-        <div className="agent-stats">
-          <div className="agent-stats__item">
-            <div className="agent-stats__num">{loadErrors.skills ? "—" : enabledSkills.length}</div>
-            <div className="agent-stats__label">启用技能</div>
-            {disabledSkills.length > 0 && (
-              <div className="agent-stats__sub">另有 {disabledSkills.length} 个已停用</div>
-            )}
-          </div>
-          <div className="agent-stats__item">
-            <div className="agent-stats__num">{loadErrors.mcp ? "—" : enabledServers.length}</div>
-            <div className="agent-stats__label">已连接 MCP</div>
-            {disabledServers.length > 0 && (
-              <div className="agent-stats__sub">另有 {disabledServers.length} 个已停用</div>
-            )}
-          </div>
-          <div className="agent-stats__item">
-            <div className="agent-stats__num">{loadErrors.commands ? "—" : commands.length}</div>
-            <div className="agent-stats__label">Slash 命令</div>
-            <div className="agent-stats__sub">
-              {builtinCommands.length} 内置 · {skillCommands.length} 技能 · {pluginCommands.length} 插件
-            </div>
-          </div>
-        </div>
-      </SettingsGroup>
-
-      <SettingsGroup title="已加载能力" desc="展开查看详细清单；启用、停用和安装请前往“专家·技能·连接器”。">
-        {/* 技能列表 */}
-        <details className="agent-section">
-        <summary className="agent-section__title">
-          技能（{skills.length}）
-        </summary>
-        <div className="agent-section__body">
-          {loadErrors.skills ? (
-            <p className="settings-hint">技能清单读取失败，请重试。</p>
-          ) : skills.length === 0 ? (
-            <p className="settings-hint">暂无技能。在「专家·技能·连接器」面板添加。</p>
-          ) : (
-            <ul className="agent-list">
-              {skills.map((s) => (
-                <li
-                  key={s.name + (s.path ?? "")}
-                  className={`agent-list__item ${s.enabled ? "" : "agent-list__item--muted"}`}
-                >
-                  <span className="agent-list__name">{s.displayName ?? s.name}</span>
-                  {s.scope && (
-                    <span className="agent-list__badge">{scopeLabel(s.scope)}</span>
-                  )}
-                  <span
-                    className={`agent-list__status ${
-                      s.enabled ? "agent-list__status--on" : "agent-list__status--off"
-                    }`}
-                  >
-                    {s.enabled ? "启用" : "禁用"}
-                  </span>
-                </li>
-              ))}
-            </ul>
-          )}
-        </div>
-        </details>
-
-      {/* MCP 连接器列表 */}
-        <details className="agent-section">
-        <summary className="agent-section__title">
-          MCP 连接器（{servers.length}）
-        </summary>
-        <div className="agent-section__body">
-          {loadErrors.mcp ? (
-            <p className="settings-hint">MCP 连接器清单读取失败，请重试。</p>
-          ) : servers.length === 0 ? (
-            <p className="settings-hint">
-              暂无连接器。编辑 <code>~/.echo-agent/config.toml</code> 的 <code>[mcp_servers.*]</code> 段。
-            </p>
-          ) : (
-            <ul className="agent-list">
-              {servers.map((s) => (
-                <li
-                  key={s.name}
-                  className={`agent-list__item ${s.enabled ? "" : "agent-list__item--muted"}`}
-                >
-                  <span className="agent-list__name">{s.name}</span>
-                  {s.transport && (
-                    <span className="agent-list__badge">{s.transport}</span>
-                  )}
-                  {s.source && (
-                    <span className="agent-list__badge">{scopeLabel(s.source)}</span>
-                  )}
-                  <span
-                    className={`agent-list__status ${
-                      s.enabled ? "agent-list__status--on" : "agent-list__status--off"
-                    }`}
-                  >
-                    {s.enabled ? "启用" : "禁用"}
-                  </span>
-                </li>
-              ))}
-            </ul>
-          )}
-        </div>
-        </details>
-
-      {/* Slash 命令 */}
-        <details className="agent-section">
-        <summary className="agent-section__title">
-          slash 命令（{commands.length}）
-        </summary>
-        <div className="agent-section__body">
-          {loadErrors.commands ? (
-            <p className="settings-hint">Slash 命令清单读取失败，请重试。</p>
-          ) : commands.length === 0 ? (
-            <p className="settings-hint">暂无命令。</p>
-          ) : (
-            <ul className="agent-list">
-              {commands.map((c) => (
-                <li key={c.name} className="agent-list__item">
-                  <code className="agent-list__name">/{c.name}</code>
-                  {c.source && (
-                    <span className="agent-list__badge">{c.source}</span>
-                  )}
-                  {c.description && (
-                    <span className="agent-list__desc">{c.description}</span>
-                  )}
-                </li>
-              ))}
-            </ul>
-          )}
-        </div>
-        </details>
-      </SettingsGroup>
 
       {/* 运行时配置：子代理深度 + Web 搜索 */}
       <SettingsGroup title="运行时配置" desc="以下修改需要重启 Agent 后生效。">
@@ -1297,6 +1144,7 @@ export function AgentSettingsPanel() {
                 type="number"
                 min={1}
                 max={10}
+                aria-label="子代理嵌套深度"
                 className="settings-input settings-input--narrow"
                 value={subagentDraft}
                 onChange={(e) => setSubagentDraft(e.target.value)}
@@ -1336,6 +1184,7 @@ export function AgentSettingsPanel() {
             <div className="agent-runtime-row__control">
               <input
                 type="text"
+                aria-label="Web 搜索模型 ID"
                 className="settings-input"
                 placeholder="搜索模型 ID，如 search-model"
                 value={webSearchDraftModel}
@@ -1343,13 +1192,22 @@ export function AgentSettingsPanel() {
                 disabled={savingRuntime || loading || webSearchEnabled === null || !!loadErrors.webSearch}
               />
               {webSearchEnabled === true ? (
-                <button
-                  className="settings-btn settings-btn--danger"
-                  onClick={() => saveWebSearch(false)}
-                  disabled={savingRuntime || loading || !!loadErrors.webSearch}
-                >
-                  关闭
-                </button>
+                <>
+                  <button
+                    className="settings-btn"
+                    onClick={() => saveWebSearch(true)}
+                    disabled={savingRuntime || loading || !!loadErrors.webSearch || !webSearchDraftModel.trim() || webSearchDraftModel.trim() === webSearchModel}
+                  >
+                    保存模型
+                  </button>
+                  <button
+                    className="settings-btn settings-btn--danger"
+                    onClick={() => saveWebSearch(false)}
+                    disabled={savingRuntime || loading || !!loadErrors.webSearch}
+                  >
+                    关闭
+                  </button>
+                </>
               ) : (
                 <button
                   className="settings-btn"
@@ -1373,30 +1231,8 @@ export function AgentSettingsPanel() {
           )}
       </SettingsGroup>
 
-      <div className="settings-info-callout">能力清单为只读概览。完成管理操作后，可使用页面右上角“刷新状态”查看最新结果。</div>
     </SectionShell>
   );
-}
-
-function scopeLabel(scope: string): string {
-  switch (scope) {
-    case "user":
-      return "用户";
-    case "local":
-      return "本地";
-    case "repo":
-    case "project":
-      return "项目";
-    case "server":
-      return "服务器";
-    case "bundled":
-    case "builtin":
-      return "内置";
-    case "plugin":
-      return "插件";
-    default:
-      return scope;
-  }
 }
 
 // ---------- 通知中心 ----------
@@ -1423,11 +1259,18 @@ const KIND_FILTERS: { key: string; label: string }[] = [
  *
  *  数据存在 ~/.echo-agent/echoagent-notifications.json（最多 200 条 FIFO）。
  *  写入由 App.tsx 的事件订阅回调触发（notificationAppend）。 */
-export function NotificationCenterSettingsPanel() {
+export function NotificationCenterSettingsPanel({
+  onOpenSession,
+  onClose,
+}: {
+  onOpenSession?: (sessionId: string) => void | Promise<void>;
+  onClose?: () => void;
+}) {
   const [entries, setEntries] = useState<NotificationEntry[]>([]);
   const [loading, setLoading] = useState(true);
   const [mutating, setMutating] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [sessionOpenError, setSessionOpenError] = useState<string | null>(null);
   const [filter, setFilter] = useState<string>("all");
   const { requestConfirmation, dialog } = useAppDialog();
 
@@ -1496,6 +1339,17 @@ export function NotificationCenterSettingsPanel() {
     });
   }, [reload, requestConfirmation]);
 
+  const openRelatedSession = async (sessionId: string) => {
+    if (!onOpenSession) return;
+    setSessionOpenError(null);
+    try {
+      await onOpenSession(sessionId);
+      onClose?.();
+    } catch (openError) {
+      setSessionOpenError(String(openError).replace(/^Error:\s*/, ""));
+    }
+  };
+
   const filtered = entries.filter(
     (e) => filter === "all" || String(e.kind) === filter,
   );
@@ -1527,6 +1381,9 @@ export function NotificationCenterSettingsPanel() {
         </>
       }
     >
+      {sessionOpenError && (
+        <p className="settings-msg settings-msg--warn" role="alert">打开相关会话失败：{sessionOpenError}</p>
+      )}
       {error && (
         <p className="settings-msg settings-msg--warn" role="alert">
           通知记录不可用：{error}。原文件未被覆盖；你可以修复文件后重试，或点击“清空”重建。
@@ -1612,9 +1469,12 @@ export function NotificationCenterSettingsPanel() {
                 <div className="notification-row__meta">
                   <span>{formatTime(entry.at)}</span>
                   {entry.sessionId && (
-                    <span className="notification-row__session">
-                      会话 #{entry.sessionId.slice(0, 8)}
-                    </span>
+                    onOpenSession ? (
+                      <button type="button" className="notification-row__session notification-row__session--link"
+                        onClick={() => void openRelatedSession(entry.sessionId!)} disabled={mutating}>
+                        打开相关会话 #{entry.sessionId.slice(0, 8)}
+                      </button>
+                    ) : <span className="notification-row__session">会话 #{entry.sessionId.slice(0, 8)}</span>
                   )}
                 </div>
               </div>

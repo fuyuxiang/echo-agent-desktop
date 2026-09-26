@@ -160,7 +160,7 @@ function connectionBaseUrlError(value: string, allowInsecureHttp: boolean): stri
   if (url.protocol !== "http:" && url.protocol !== "https:") return "Base URL 必须使用 HTTP 或 HTTPS。";
   const misplacedPort = /^\/:([0-9]+)(?:\/|$)/.exec(url.pathname);
   if (misplacedPort) return `端口号位置不对：请把 /:${misplacedPort[1]}/ 改成 :${misplacedPort[1]}/。`;
-  if (url.protocol === "http:" && !isOjlabBaseUrl(value) && !allowInsecureHttp) {
+  if (url.protocol === "http:" && !allowInsecureHttp) {
     return "使用 HTTP 前，请确认下方的明文传输选项；也可以改用 HTTPS。";
   }
   return null;
@@ -868,10 +868,10 @@ function ConnectionEditor({
                 ? { ...current, baseUrl: event.target.value, providerKind: "custom", apiBackend: "chat_completions", authScheme: "bearer", apiKey: "", allowInsecureHttp: false }
                 : { ...current, baseUrl: event.target.value, allowInsecureHttp: event.target.value.trim() === current.baseUrl.trim() && current.allowInsecureHttp }); }} placeholder="https://api.example.com/v1" inputMode="url" />
               <span className="model-connection-editor__help">填写 API 根地址，例如 https://example.com:60100/v1；端口写在主机名后。HTTPS 无需额外设置。</span>
-              {draft.baseUrl.trim().toLowerCase().startsWith("http://") && !isOjlabBaseUrl(draft.baseUrl) && (
+              {draft.baseUrl.trim().toLowerCase().startsWith("http://") && (
                 <label className="model-connection-editor__help model-connection-editor__http-consent">
                   <input type="checkbox" checked={draft.allowInsecureHttp} onChange={(event) => setDraft((current) => ({ ...current, allowInsecureHttp: event.target.checked }))} />
-                  允许此个人连接使用 HTTP。我了解 API Key、提问和模型回复会以明文传输。
+                  允许此个人连接使用 HTTP。我了解{isOjlabBaseUrl(draft.baseUrl) ? "提问和模型回复" : "API Key、提问和模型回复"}会以明文传输。
                 </label>
               )}
             </div>

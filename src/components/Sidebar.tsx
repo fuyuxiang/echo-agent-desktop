@@ -697,7 +697,7 @@ export function Sidebar({
         if (session) upsertSession({ ...session, archived: next });
         useProjectsStore.getState().setSessionArchived(sessionId, next);
         onSessionArchived?.(sessionId, next);
-        onToast?.(next ? "已归档，可在“设置 → 已归档”中恢复" : "已恢复会话");
+        onToast?.(next ? "已归档，可在“设置 → 数据管理 → 已归档”中恢复" : "已恢复会话");
       }
     } catch (e) {
       onToast?.(`${archived ? "归档" : "恢复"}失败：${String(e).replace(/^Error:\s*/, "")}`);

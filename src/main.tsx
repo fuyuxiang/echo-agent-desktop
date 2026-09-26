@@ -3,6 +3,7 @@ import { restoreUiBeforeBootstrap } from "./lib/backup-client";
 import { AppErrorBoundary } from "./components/AppErrorBoundary";
 import { GlobalTooltip } from "./components/GlobalTooltip";
 import { initializeTheme } from "./components/ThemeProvider";
+import { applyFontSize, readFontSize } from "./lib/font-size";
 import "./styles/global.css";
 import "./styles/app.css";
 import "./styles/automation-echo.css";
@@ -12,6 +13,7 @@ import "./styles/form-controls.css";
 async function bootstrap() {
   await restoreUiBeforeBootstrap();
   initializeTheme();
+  applyFontSize(readFontSize());
   const { default: App } = await import("./App");
   ReactDOM.createRoot(document.getElementById("root")!).render(
     <AppErrorBoundary>

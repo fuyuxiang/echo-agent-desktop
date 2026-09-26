@@ -1146,6 +1146,9 @@ fn provider_to_table(p: &ModelProviderEntry, existing: Option<&Value>) -> Result
     let allow_insecure_http = p.allow_insecure_http
         && !p.managed
         && !matches!(p.source.as_str(), "organization" | "builtin");
+    if is_ojlab_base_url(&base_url) && !allow_insecure_http {
+        return Err("远端 HTTP 服务需要明确同意明文传输".into());
+    }
     let parsed_base_url = validate_personal_provider_base_url(&base_url, allow_insecure_http)?;
     let keyless_service = is_ojlab_base_url(&base_url);
     let api_backend = if keyless_service {
@@ -1174,7 +1177,7 @@ fn provider_to_table(p: &ModelProviderEntry, existing: Option<&Value>) -> Result
     table.insert("base_url".into(), Value::String(base_url));
     table.insert("api_backend".into(), Value::String(api_backend));
     table.insert("auth_scheme".into(), Value::String(auth_scheme));
-    if allow_insecure_http && parsed_base_url.scheme() == "http" && !keyless_service {
+    if allow_insecure_http && parsed_base_url.scheme() == "http" {
         table.insert(ALLOW_INSECURE_HTTP_KEY.into(), Value::Boolean(true));
     } else {
         table.remove(ALLOW_INSECURE_HTTP_KEY);
@@ -2628,6 +2631,7 @@ model = "team"
                 api_backend: Some("responses".into()),
                 auth_scheme: Some("x_api_key".into()),
                 api_key: Some("must-not-be-sent".into()),
+                allow_insecure_http: true,
                 ..Default::default()
             },
             None,
@@ -2823,6 +2827,21 @@ base_url = "https://example.com"
         provider.source = "organization".into();
         provider.managed = true;
         assert!(provider_to_table(&provider, None).is_err());
+    }
+
+    #[test]
+    fn keyless_remote_service_still_requires_personal_http_consent() {
+        let mut provider = ModelProviderEntry {
+            id: "custom".into(),
+            provider_kind: "custom".into(),
+            base_url: Some(crate::agent_runtime::OJLAB_BASE_URL.into()),
+            source: "personal".into(),
+            ..Default::default()
+        };
+        assert!(provider_to_table(&provider, None).is_err());
+        provider.allow_insecure_http = true;
+        let approved = provider_to_table(&provider, None).unwrap();
+        assert_eq!(approved[ALLOW_INSECURE_HTTP_KEY].as_bool(), Some(true));
     }
 
     #[test]

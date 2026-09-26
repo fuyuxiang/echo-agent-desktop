@@ -104,6 +104,16 @@ try {
   }
   await page.getByRole("heading", { name: "我的专家" }).waitFor();
 
+  await page.setViewportSize({ width: 1024, height: 768 });
+  await page.goto("http://127.0.0.1:1439/__ui-review?surface=memory");
+  await page.getByRole("dialog", { name: "设置" }).waitFor();
+  const normalLabelSize = await page.locator(".settings-navigation__label").first().evaluate(element => parseFloat(getComputedStyle(element).fontSize));
+  await page.evaluate(() => { document.documentElement.style.fontSize = `${(16 * 18) / 13}px`; });
+  const enlargedLabelSize = await page.locator(".settings-navigation__label").first().evaluate(element => parseFloat(getComputedStyle(element).fontSize));
+  assert.ok(enlargedLabelSize > normalLabelSize * 1.3, "font preference does not scale settings text");
+  assert.ok(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth + 1), "large font causes horizontal overflow");
+  await page.screenshot({ path: join(output, "memory-large-font-1024.png") });
+
   await page.goto("http://127.0.0.1:1439/__ui-review?surface=coding");
   await page.getByRole("button", { name: "切换项目" }).focus();
   await page.keyboard.press("ArrowDown");
@@ -111,7 +121,7 @@ try {
   await page.keyboard.press("Escape");
   assert.equal(await page.getByRole("menu", { name: "项目列表" }).count(), 0);
   assert.deepEqual(errors, [], "browser runtime errors");
-  console.log(JSON.stringify({ passed: true, screenshots: output, layouts, interactions: ["memory", "notification", "storage", "expert creation", "capability navigation", "project keyboard navigation"] }, null, 2));
+  console.log(JSON.stringify({ passed: true, screenshots: output, layouts, interactions: ["memory", "notification", "storage", "expert creation", "capability navigation", "font scaling", "project keyboard navigation"] }, null, 2));
 } finally {
   await browser?.close();
   await server.close();

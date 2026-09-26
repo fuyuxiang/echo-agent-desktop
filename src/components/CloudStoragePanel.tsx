@@ -22,7 +22,10 @@ import {
 } from "@/lib/cloud-storage";
 import { useAppDialog } from "./AppDialog";
 
-export function CloudStoragePanel({ onToast }: { onToast?: (msg: string) => void }) {
+export function CloudStoragePanel({ onToast, onUnsavedChange }: {
+  onToast?: (msg: string) => void;
+  onUnsavedChange?: (dirty: boolean) => void;
+}) {
   const [providers, setProviders] = useState<Array<{ id: string; label: string }>>([]);
   const [configs, setConfigs] = useState<StorageProviderConfig[]>([]);
   const [selectedProvider, setSelectedProvider] = useState<string | null>(null);
@@ -33,12 +36,28 @@ export function CloudStoragePanel({ onToast }: { onToast?: (msg: string) => void
   const [configError, setConfigError] = useState<string | null>(null);
   const [browseError, setBrowseError] = useState<string | null>(null);
   const [showConfig, setShowConfig] = useState(false);
-  const [preview, setPreview] = useState<{ name: string; path: string; content: string } | null>(null);
+  const [preview, setPreview] = useState<{
+    providerId: string;
+    name: string;
+    path: string;
+    content: string;
+    savedContent: string;
+  } | null>(null);
+  const previewDirty = Boolean(preview && preview.content !== preview.savedContent);
+
+  useEffect(() => {
+    onUnsavedChange?.(previewDirty);
+  }, [onUnsavedChange, previewDirty]);
+
+  useEffect(() => {
+    return () => onUnsavedChange?.(false);
+  }, [onUnsavedChange]);
   const [busyAction, setBusyAction] = useState<string | null>(null);
   const [configSaving, setConfigSaving] = useState(false);
   const { requestConfirmation, requestInput, dialog } = useAppDialog(`${selectedProvider ?? ""}\u0000${currentPath}`);
   const configGeneration = useRef(0);
   const browseGeneration = useRef(0);
+  const previewReadGeneration = useRef(0);
   const configSavingRef = useRef(false);
   const [draft, setDraft] = useState<StorageProviderConfig>({
     id: "",
@@ -122,6 +141,8 @@ export function CloudStoragePanel({ onToast }: { onToast?: (msg: string) => void
         setProviders(listStorageProviders());
         setSelectedProvider(null);
         setEntries([]);
+        setPreview(null);
+        previewReadGeneration.current += 1;
         onToast?.("已移除存储源");
       },
       onError: (error) => onToast?.(`移除失败：${String(error).replace(/^Error:\s*/, "")}`),
@@ -149,16 +170,39 @@ export function CloudStoragePanel({ onToast }: { onToast?: (msg: string) => void
     }
   };
 
+  const leavePreview = (action: () => void) => {
+    previewReadGeneration.current += 1;
+    if (preview && preview.content !== preview.savedContent) {
+      requestConfirmation({
+        title: "舍弃未保存的文件修改？",
+        description: `“${preview.name}”的修改尚未保存，继续操作会丢失这些修改。`,
+        confirmLabel: "舍弃修改",
+        danger: true,
+        action: async () => {
+          setPreview(null);
+          action();
+        },
+      });
+      return;
+    }
+    setPreview(null);
+    action();
+  };
+
   const selectProvider = (id: string) => {
-    setSelectedProvider(id);
-    setEntries([]);
-    setCurrentPath("/");
-    void browse(id, "/");
+    if (id === selectedProvider) return;
+    leavePreview(() => {
+      setSelectedProvider(id || null);
+      setEntries([]);
+      setCurrentPath("/");
+      if (id) void browse(id, "/");
+    });
   };
 
   const openEntry = (entry: StorageEntry) => {
     if (entry.isDir && selectedProvider) {
-      void browse(selectedProvider, entry.path);
+      const providerId = selectedProvider;
+      leavePreview(() => { void browse(providerId, entry.path); });
     }
   };
 
@@ -166,7 +210,8 @@ export function CloudStoragePanel({ onToast }: { onToast?: (msg: string) => void
     if (!selectedProvider) return;
     const parts = currentPath.split("/").filter(Boolean);
     parts.pop();
-    void browse(selectedProvider, "/" + parts.join("/"));
+    const providerId = selectedProvider;
+    leavePreview(() => { void browse(providerId, "/" + parts.join("/")); });
   };
 
   const deleteEntry = (entry: StorageEntry) => {
@@ -192,18 +237,25 @@ export function CloudStoragePanel({ onToast }: { onToast?: (msg: string) => void
 
   const readFile = async (entry: StorageEntry) => {
     if (!selectedProvider) return;
-    const provider = getStorageProvider(selectedProvider);
+    const providerId = selectedProvider;
+    const provider = getStorageProvider(providerId);
     if (!provider) return;
-    try {
-      const content = await provider.readText(entry.path);
-      if (content != null) {
-        setPreview({ name: entry.name, path: entry.path, content });
-      } else {
-        onToast?.("(空文件或二进制)");
-      }
-    } catch (error) {
-      onToast?.(`读取失败：${String(error).replace(/^Error:\s*/, "")}`);
-    }
+    leavePreview(() => {
+      const generation = ++previewReadGeneration.current;
+      void (async () => {
+        try {
+          const content = await provider.readText(entry.path);
+          if (generation !== previewReadGeneration.current) return;
+          if (content != null) {
+            setPreview({ providerId, name: entry.name, path: entry.path, content, savedContent: content });
+          } else {
+            onToast?.("(空文件或二进制)");
+          }
+        } catch (error) {
+          if (generation === previewReadGeneration.current) onToast?.(`读取失败：${String(error).replace(/^Error:\s*/, "")}`);
+        }
+      })();
+    });
   };
 
   const beginNewConfig = () => {
@@ -277,12 +329,16 @@ export function CloudStoragePanel({ onToast }: { onToast?: (msg: string) => void
   };
 
   const savePreview = async () => {
-    if (!selectedProvider || !preview) return;
+    if (!preview || selectedProvider !== preview.providerId) return;
+    const snapshot = preview;
     setBusyAction("保存中…");
     try {
-      const ok = await getStorageProvider(selectedProvider)?.writeText(preview.path, preview.content);
+      const ok = await getStorageProvider(snapshot.providerId)?.writeText(snapshot.path, snapshot.content);
       if (!ok) throw new Error("写入失败");
-      await browse(selectedProvider, currentPath);
+      setPreview((current) => current?.providerId === snapshot.providerId && current.path === snapshot.path
+        ? { ...current, savedContent: snapshot.content }
+        : current);
+      if (selectedProvider === snapshot.providerId) await browse(snapshot.providerId, currentPath);
       onToast?.("文本已保存");
     } catch (error) {
       onToast?.(`保存失败：${String(error).replace(/^Error:\s*/, "")}`);
@@ -457,7 +513,7 @@ export function CloudStoragePanel({ onToast }: { onToast?: (msg: string) => void
             <strong>{preview.name}</strong>
             <span>
               <button type="button" className="form-button form-button--primary" onClick={() => void savePreview()} disabled={!!busyAction}>{busyAction === "保存中…" ? busyAction : "保存"}</button>
-              <button type="button" className="form-button" onClick={() => setPreview(null)}>关闭</button>
+              <button type="button" className="form-button" onClick={() => leavePreview(() => {})}>关闭</button>
             </span>
           </div>
           <textarea value={preview.content} onChange={(event) => setPreview({ ...preview, content: event.target.value })} aria-label={`编辑 ${preview.name}`} />

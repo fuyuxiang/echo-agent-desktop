@@ -279,9 +279,10 @@ describe("ModelConnectionsPanel", () => {
     fireEvent.change(within(dialog).getByLabelText("模型名称 / ID"), { target: { value: "chat-xc" } });
     expect(within(dialog).getByText("此服务无需 API Key")).toBeInTheDocument();
     expect(within(dialog).getByLabelText("API Key")).toBeDisabled();
+    fireEvent.click(within(dialog).getByLabelText(/允许此个人连接使用 HTTP/));
     fireEvent.click(within(dialog).getByRole("button", { name: "测试并保存" }));
     await waitFor(() => expect(mocks.providersSaveConnection).toHaveBeenCalledWith(
-      expect.objectContaining({ baseUrl: "http://123.56.188.16:8088/v1", apiKey: undefined }),
+      expect.objectContaining({ baseUrl: "http://123.56.188.16:8088/v1", apiKey: undefined, allowInsecureHttp: true }),
       [expect.objectContaining({ remoteModelId: "chat-xc" })],
       true,
     ));
@@ -488,9 +489,13 @@ describe("ModelConnectionsPanel", () => {
 
     fireEvent.change(baseUrl, { target: { value: "http://123.56.188.16:8088/v1" } });
     fireEvent.click(within(dialog).getByRole("button", { name: "获取模型列表（可选）" }));
+    expect(within(dialog).getByText(/使用 HTTP 前，请确认/)).toBeInTheDocument();
+    expect(mocks.providersTestConnection).toHaveBeenCalledTimes(1);
+    fireEvent.click(within(dialog).getByLabelText(/允许此个人连接使用 HTTP/));
+    fireEvent.click(within(dialog).getByRole("button", { name: "获取模型列表（可选）" }));
     await waitFor(() => expect(mocks.providersTestConnection).toHaveBeenCalledTimes(2));
     expect(mocks.providersTestConnection).toHaveBeenLastCalledWith(
-      expect.objectContaining({ baseUrl: "http://123.56.188.16:8088/v1", allowInsecureHttp: false }),
+      expect.objectContaining({ baseUrl: "http://123.56.188.16:8088/v1", allowInsecureHttp: true }),
     );
 
     fireEvent.change(baseUrl, { target: { value: "https://secure.example.com/v1" } });

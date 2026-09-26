@@ -9,7 +9,7 @@
   background-color: var(--echo-bg-primary);
   color: var(--echo-text-strong);
   font: inherit;
-  font-size: 13px;
+  font-size: 0.8125rem;
   line-height: 20px;
 }
 
@@ -47,7 +47,7 @@ select.form-control {
   background: var(--echo-bg-primary);
   color: var(--echo-text-strong);
   font: inherit;
-  font-size: 13px;
+  font-size: 0.8125rem;
   line-height: 20px;
   font-weight: 550;
   white-space: nowrap;
@@ -58,4 +58,4 @@ select.form-control {
 .form-button--primary { background: var(--echo-brand); border-color: var(--echo-brand); color: #fff; }
 .form-button--primary:hover:not(:disabled) { background: var(--echo-brand-hover); border-color: var(--echo-brand-hover); }
 .form-button--danger { color: var(--echo-status-error); }
-.form-button--compact { min-height: 30px; padding: 4px 9px; font-size: 12px; }
+.form-button--compact { min-height: 30px; padding: 4px 9px; font-size: 0.75rem; }

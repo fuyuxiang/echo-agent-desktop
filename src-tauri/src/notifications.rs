@@ -720,19 +720,27 @@ pub fn notify_channel_upsert(mut channel: NotifyChannel) -> Result<(), String> {
             .filter(|endpoint| !endpoint.is_empty())
             .map(String::from),
     };
-    validate_channel(&channel)?;
     let path = channels_path();
-    update_channels_at(&path, |store| {
-        if let Some(existing) = store.channels.iter_mut().find(|item| item.id == channel.id) {
-            *existing = channel;
-        } else {
-            if store.channels.len() >= MAX_CHANNELS {
-                return Err(format!("通知渠道数量不能超过 {MAX_CHANNELS} 个"));
-            }
-            store.channels.push(channel);
+    update_channels_at(&path, |store| upsert_channel_in_store(store, channel))
+}
+
+fn upsert_channel_in_store(store: &mut ChannelStore, mut channel: NotifyChannel) -> Result<(), String> {
+    if let Some(existing) = store.channels.iter_mut().find(|item| item.id == channel.id) {
+        // The list API intentionally redacts webhook credentials. An edit
+        // with no replacement URL keeps the existing secret server-side.
+        if existing.kind == channel.kind && channel.endpoint.is_none() {
+            channel.endpoint = existing.endpoint.clone();
         }
-        Ok(())
-    })
+        validate_channel(&channel)?;
+        *existing = channel;
+    } else {
+        validate_channel(&channel)?;
+        if store.channels.len() >= MAX_CHANNELS {
+            return Err(format!("通知渠道数量不能超过 {MAX_CHANNELS} 个"));
+        }
+        store.channels.push(channel);
+    }
+    Ok(())
 }
 
 #[tauri::command]
@@ -1225,6 +1233,25 @@ mod tests {
             ..webhook
         })
         .is_ok());
+    }
+
+    #[test]
+    fn editing_channel_without_replacement_keeps_existing_webhook_secret() {
+        let original = NotifyChannel {
+            id: "slack".into(),
+            label: "Old name".into(),
+            kind: ChannelKind::SlackWebhook,
+            endpoint: Some("https://hooks.example.test/private-token".into()),
+            enabled: true,
+        };
+        let mut store = ChannelStore { channels: vec![original.clone()] };
+        upsert_channel_in_store(&mut store, NotifyChannel {
+            label: "New name".into(),
+            endpoint: None,
+            ..original
+        }).unwrap();
+        assert_eq!(store.channels[0].label, "New name");
+        assert_eq!(store.channels[0].endpoint.as_deref(), Some("https://hooks.example.test/private-token"));
     }
 
     #[test]

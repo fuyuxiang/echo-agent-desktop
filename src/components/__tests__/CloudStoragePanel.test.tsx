@@ -1,7 +1,7 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { CloudStoragePanel } from "../CloudStoragePanel";
-import { getStorageProvider, hydrateStorageProviders, saveStorageProviderConfig } from "@/lib/cloud-storage";
+import { getStorageProvider, hydrateStorageProviders, listStorageProviders, saveStorageProviderConfig } from "@/lib/cloud-storage";
 import { open, save } from "@tauri-apps/plugin-dialog";
 
 vi.mock("@tauri-apps/plugin-dialog", () => ({ open: vi.fn(), save: vi.fn() }));
@@ -107,5 +107,44 @@ describe("CloudStoragePanel", () => {
     expect(screen.queryByText("未配置存储源")).toBeNull();
     fireEvent.click(screen.getByRole("button", { name: "重试" }));
     expect(await screen.findByRole("combobox")).toBeInTheDocument();
+  });
+
+  it("切换存储源前确认舍弃未保存内容，取消时保留当前文件", async () => {
+    vi.mocked(listStorageProviders).mockReturnValueOnce([
+      { id: "dav", label: "团队网盘" },
+      { id: "other", label: "其他网盘" },
+    ]);
+    provider.readText.mockResolvedValueOnce("原始内容");
+    await selectProvider();
+    fireEvent.click(screen.getByRole("button", { name: "读取 report.pdf" }));
+    const editor = await screen.findByRole("textbox", { name: "编辑 report.pdf" });
+    fireEvent.change(editor, { target: { value: "尚未保存" } });
+    fireEvent.change(screen.getByRole("combobox"), { target: { value: "other" } });
+    const dialog = await screen.findByRole("alertdialog", { name: "舍弃未保存的文件修改？" });
+    fireEvent.click(within(dialog).getByRole("button", { name: "取消" }));
+    expect(screen.getByRole("combobox")).toHaveValue("dav");
+    expect(editor).toHaveValue("尚未保存");
+  });
+
+  it("保存预览始终写回原存储源，切换后不残留预览", async () => {
+    vi.mocked(listStorageProviders).mockReturnValueOnce([
+      { id: "dav", label: "团队网盘" },
+      { id: "other", label: "其他网盘" },
+    ]);
+    const otherProvider = { ...provider, list: vi.fn().mockResolvedValue([]), writeText: vi.fn() };
+    vi.mocked(getStorageProvider).mockImplementation((id) => (id === "other" ? otherProvider : provider) as never);
+    provider.readText.mockResolvedValueOnce("原始内容");
+    let release!: (value: boolean) => void;
+    provider.writeText.mockImplementationOnce(() => new Promise<boolean>((resolve) => { release = resolve; }));
+    await selectProvider();
+    fireEvent.click(screen.getByRole("button", { name: "读取 report.pdf" }));
+    await screen.findByRole("textbox", { name: "编辑 report.pdf" });
+    fireEvent.click(screen.getByRole("button", { name: "保存" }));
+    fireEvent.change(screen.getByRole("combobox"), { target: { value: "other" } });
+    release(true);
+    await waitFor(() => expect(screen.getByRole("combobox")).toHaveValue("other"));
+    expect(screen.queryByRole("textbox", { name: "编辑 report.pdf" })).toBeNull();
+    expect(provider.writeText).toHaveBeenCalledWith("/report.pdf", "原始内容");
+    expect(otherProvider.writeText).not.toHaveBeenCalled();
   });
 });

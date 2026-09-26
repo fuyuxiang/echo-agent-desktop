@@ -7,9 +7,16 @@ const backend = vi.hoisted(() => {
   return {
     reset: () => { channels = []; },
     seed: (items: NotifyChannel[]) => { channels = items; },
-    load: vi.fn(async () => channels.map((item) => ({ ...item }))),
+    load: vi.fn(async () => channels.map((item) => ({
+      ...item,
+      endpoint: item.endpoint ? `${new URL(item.endpoint).origin}/…` : undefined,
+    }))),
     save: vi.fn(async (channel: NotifyChannel) => {
-      channels = [...channels.filter((item) => item.id !== channel.id), channel];
+      const previous = channels.find((item) => item.id === channel.id);
+      channels = [...channels.filter((item) => item.id !== channel.id), {
+        ...channel,
+        endpoint: channel.endpoint ?? previous?.endpoint,
+      }];
     }),
     remove: vi.fn(async (id: string) => {
       channels = channels.filter((item) => item.id !== id);
@@ -104,5 +111,40 @@ describe("NotifyChannelsPanel", () => {
     fireEvent.click(await screen.findByText("测试"));
     await waitFor(() => expect(onToast).toHaveBeenCalledWith("测试通知已发送"));
     expect(backend.test).toHaveBeenCalledWith("test");
+  });
+
+  it("编辑渠道名称时保留后端 Webhook 凭据，不把原始地址渲染在列表", async () => {
+    backend.seed([{
+      id: "test", label: "旧名称", kind: "slack-webhook",
+      endpoint: "https://hooks.example.test/private-token", enabled: true,
+    }]);
+    render(<NotifyChannelsPanel />);
+    await screen.findByText("旧名称");
+    expect(screen.queryByText(/private-token/)).toBeNull();
+    fireEvent.click(screen.getByRole("button", { name: "编辑" }));
+    expect(screen.getByRole("textbox", { name: "Webhook URL" })).toHaveValue("");
+    fireEvent.change(screen.getByRole("textbox", { name: "通知渠道显示名" }), { target: { value: "新名称" } });
+    fireEvent.click(screen.getByRole("button", { name: "保存修改" }));
+    await screen.findByText("新名称");
+    expect(backend.save).toHaveBeenCalledWith(expect.objectContaining({
+      id: "test", label: "新名称", endpoint: undefined,
+    }));
+    expect(screen.queryByText(/private-token/)).toBeNull();
+  });
+
+  it("保存成功但列表刷新失败时明确提示重试，不误报列表已更新", async () => {
+    const onToast = vi.fn();
+    render(<NotifyChannelsPanel onToast={onToast} />);
+    await screen.findByText("暂无通知渠道");
+    backend.load.mockRejectedValueOnce(new Error("配置暂时不可读"));
+    fireEvent.change(screen.getByRole("textbox", { name: "Webhook URL" }), {
+      target: { value: "https://hooks.example.test/new" },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "+ 添加" }));
+    await waitFor(() => expect(onToast).toHaveBeenCalledWith(expect.stringContaining("已保存，但列表刷新失败")));
+    expect(screen.getByRole("alert")).toHaveTextContent("配置暂时不可读");
+    fireEvent.click(screen.getByRole("button", { name: "重试" }));
+    await waitFor(() => expect(screen.getByText("1 个渠道")).toBeInTheDocument());
+    expect(screen.queryByRole("alert")).toBeNull();
   });
 });

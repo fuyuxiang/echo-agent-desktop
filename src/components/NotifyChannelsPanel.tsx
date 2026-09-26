@@ -32,7 +32,8 @@ const ADDABLE_KINDS: ChannelKind[] = [
 
 export function NotifyChannelsPanel({ onToast }: { onToast?: (msg: string) => void }) {
   const [channels, setChannels] = useState<NotifyChannel[]>([]);
-  // 新渠道表单。
+  // 新增和编辑共用表单；编辑时绝不回填后端遮蔽的 Webhook 凭据。
+  const [editingId, setEditingId] = useState<string | null>(null);
   const [newKind, setNewKind] = useState<ChannelKind>("slack-webhook");
   const [newLabel, setNewLabel] = useState("");
   const [newEndpoint, setNewEndpoint] = useState("");
@@ -50,11 +51,13 @@ export function NotifyChannelsPanel({ onToast }: { onToast?: (msg: string) => vo
     try {
       const items = await loadNotifyChannels();
       if (loadGeneration.current === generation) setChannels(items);
+      return loadGeneration.current === generation;
     } catch (error) {
-      if (loadGeneration.current !== generation) return;
+      if (loadGeneration.current !== generation) return false;
       const message = String(error).replace(/^Error:\s*/, "");
       setLoadError(message);
       onToast?.(`读取通知渠道失败：${message}`);
+      return false;
     } finally {
       if (loadGeneration.current === generation) setLoading(false);
     }
@@ -67,24 +70,30 @@ export function NotifyChannelsPanel({ onToast }: { onToast?: (msg: string) => vo
     };
   }, [load]);
 
-  const add = async () => {
+  const save = async () => {
     if (mutationInFlight.current) return;
+    const existing = editingId ? channels.find((item) => item.id === editingId) : undefined;
+    if (editingId && !existing) return;
     mutationInFlight.current = true;
-    const id = `ch_${Date.now()}`;
-    const label = newLabel.trim() || KIND_LABELS[newKind];
+    const id = editingId ?? `ch_${Date.now()}`;
+    const kind = existing?.kind ?? newKind;
+    const label = newLabel.trim() || KIND_LABELS[kind];
     const channel: NotifyChannel = {
       id,
       label,
-      kind: newKind,
+      kind,
       endpoint: newEndpoint.trim() || undefined,
-      enabled: true,
+      enabled: existing?.enabled ?? true,
     };
-    setMutating("add");
+    setMutating("save");
+    let refreshed = false;
     try {
       await saveNotifyChannel(channel);
-      setChannels((items) => [...items.filter((item) => item.id !== id), channel]);
+      // Only the backend's redacted view may enter list state. Never render a
+      // freshly submitted webhook secret in the channel list.
+      refreshed = await load();
     } catch (error) {
-      onToast?.(`添加失败：${String(error).replace(/^Error:\s*/, "")}`);
+      onToast?.(`${editingId ? "保存" : "添加"}失败：${String(error).replace(/^Error:\s*/, "")}`);
       return;
     } finally {
       mutationInFlight.current = false;
@@ -92,7 +101,25 @@ export function NotifyChannelsPanel({ onToast }: { onToast?: (msg: string) => vo
     }
     setNewLabel("");
     setNewEndpoint("");
-    onToast?.(`已添加渠道 ${label}`);
+    setNewKind("slack-webhook");
+    setEditingId(null);
+    onToast?.(refreshed
+      ? `渠道 ${label} 已${editingId ? "更新" : "添加"}`
+      : `渠道 ${label} 已保存，但列表刷新失败，请重试`);
+  };
+
+  const edit = (channel: NotifyChannel) => {
+    setEditingId(channel.id);
+    setNewKind(channel.kind);
+    setNewLabel(channel.label);
+    setNewEndpoint("");
+  };
+
+  const cancelEdit = () => {
+    setEditingId(null);
+    setNewKind("slack-webhook");
+    setNewLabel("");
+    setNewEndpoint("");
   };
 
   const remove = (channel: NotifyChannel) => {
@@ -104,6 +131,7 @@ export function NotifyChannelsPanel({ onToast }: { onToast?: (msg: string) => vo
       action: async () => {
         await removeNotifyChannel(channel.id);
         setChannels((items) => items.filter((item) => item.id !== channel.id));
+        if (editingId === channel.id) cancelEdit();
         onToast?.("已移除渠道");
       },
       onError: (error) => onToast?.(`移除失败：${String(error).replace(/^Error:\s*/, "")}`),
@@ -168,6 +196,7 @@ export function NotifyChannelsPanel({ onToast }: { onToast?: (msg: string) => vo
               <span className="notify-panel__row-label">{ch.label}</span>
               {ch.endpoint && <span className="notify-panel__row-endpoint" title={ch.endpoint}>{ch.endpoint.slice(0, 40)}{ch.endpoint.length > 40 ? "…" : ""}</span>}
               <div className="notify-panel__row-actions">
+                {ch.kind !== "email" && <button type="button" className="notify-panel__btn" onClick={() => edit(ch)} disabled={mutating !== null}>编辑</button>}
                 <button type="button" className="notify-panel__btn" onClick={() => void toggle(ch.id)} title={ch.enabled ? "禁用" : "启用"} aria-label={`${ch.enabled ? "禁用" : "启用"} ${ch.label}`} disabled={mutating !== null}>
                   <span className={ch.enabled ? "notify-dot notify-dot--on" : "notify-dot"} />
                 </button>
@@ -186,8 +215,9 @@ export function NotifyChannelsPanel({ onToast }: { onToast?: (msg: string) => vo
       ) : null}
 
       {/* 添加新渠道 */}
+      {editingId && <p className="notify-panel__edit-hint">正在编辑“{channels.find((item) => item.id === editingId)?.label}”。Webhook 地址已隐藏；留空表示保持原地址。</p>}
       <div className="notify-panel__add">
-        <label className="notify-panel__field">渠道类型<select className="form-control" aria-label="通知渠道类型" value={newKind} disabled={mutating !== null || loading || Boolean(loadError)} onChange={(e) => setNewKind(e.target.value as ChannelKind)}>
+        <label className="notify-panel__field">渠道类型<select className="form-control" aria-label="通知渠道类型" value={newKind} disabled={Boolean(editingId) || mutating !== null || loading || Boolean(loadError)} onChange={(e) => setNewKind(e.target.value as ChannelKind)}>
           {ADDABLE_KINDS.map((kind) => (
             <option key={kind} value={kind}>{KIND_LABELS[kind]}</option>
           ))}
@@ -201,18 +231,19 @@ export function NotifyChannelsPanel({ onToast }: { onToast?: (msg: string) => vo
           disabled={mutating !== null || loading || Boolean(loadError)}
           onChange={(e) => setNewLabel(e.target.value)}
         /></label>
-        <label className="notify-panel__field notify-panel__field--endpoint">Webhook URL<input
+        <label className="notify-panel__field notify-panel__field--endpoint">{editingId ? "替换 Webhook URL（留空保留）" : "Webhook URL"}<input
           className="form-control"
           type="text"
           aria-label="Webhook URL"
-          placeholder={newKind === "desktop" ? "(桌面通知无需 endpoint)" : "Webhook URL"}
+          placeholder={newKind === "desktop" ? "桌面通知无需地址" : editingId ? "留空保留现有地址" : "Webhook URL"}
           value={newEndpoint}
           onChange={(e) => setNewEndpoint(e.target.value)}
           disabled={newKind === "desktop" || mutating !== null || loading || Boolean(loadError)}
         /></label>
-        <button type="button" className="form-button form-button--primary" onClick={() => void add()} disabled={mutating !== null || loading || Boolean(loadError) || (newKind !== "desktop" && !newEndpoint.trim())}>
-          {mutating === "add" ? "添加中…" : "+ 添加"}
+        <button type="button" className="form-button form-button--primary" onClick={() => void save()} disabled={mutating !== null || loading || Boolean(loadError) || (!editingId && newKind !== "desktop" && !newEndpoint.trim())}>
+          {mutating === "save" ? "保存中…" : editingId ? "保存修改" : "+ 添加"}
         </button>
+        {editingId && <button type="button" className="form-button" onClick={cancelEdit} disabled={mutating !== null}>取消编辑</button>}
       </div>
       {dialog}
     </div>
