@@ -57,7 +57,7 @@ describe("Sidebar", () => {
     const nav = container.querySelector(".sidebar__nav");
     expect(nav).not.toBeNull();
     expect(within(nav as HTMLElement).getAllByRole("button").map((button) => button.textContent?.trim())).toEqual([
-      "新建任务", "项目", "代码开发", "组织", "能力", "定时任务", "更多常用工具",
+      "新建任务", "项目", "组织", "能力", "代码开发", "更多知识与工具",
     ]);
     expect(screen.queryByText("助理")).not.toBeInTheDocument();
   });
@@ -270,31 +270,21 @@ describe("Sidebar", () => {
     await waitFor(() => expect(onDeleteSession).toHaveBeenCalledWith("project-session", "/workspace"));
   });
 
-  it("hover「更多」只展示保留的功能入口", () => {
+  it("hover「更多」只展示知识库和定时任务", () => {
     const onNavigate = vi.fn();
     render(<Sidebar {...base} onNavigate={onNavigate} />);
     fireEvent.mouseEnter(screen.getByText("更多").closest(".sidebar__more-wrap")!);
     const menu = screen.getByRole("menu");
     expect(menu).toBeInTheDocument();
-    expect(within(menu).getByText("我的文件")).toBeInTheDocument();
     expect(within(menu).getByText("知识库")).toBeInTheDocument();
-    expect(within(menu).getByText("个人记忆")).toBeInTheDocument();
-    expect(within(menu).queryByText("插件市场")).not.toBeInTheDocument();
-    for (const settingsEntry of ["用量统计", "通知渠道", "云存储", "代码开发"]) {
+    expect(within(menu).getByRole("menuitem", { name: "定时任务" })).toBeInTheDocument();
+    expect(within(menu).getAllByRole("menuitem")).toHaveLength(2);
+    for (const settingsEntry of ["我的文件", "个人记忆", "用量统计", "通知渠道", "云存储", "代码开发"]) {
       expect(within(menu).queryByText(settingsEntry)).not.toBeInTheDocument();
     }
     for (const removed of ["灵感", "网页预览", "策略设置", "发现"]) {
       expect(within(menu).queryByText(removed)).not.toBeInTheDocument();
     }
-  });
-
-  it("「更多」菜单的个人记忆进入稳定路由", () => {
-    const onNavigate = vi.fn();
-    render(<Sidebar {...base} onNavigate={onNavigate} />);
-    fireEvent.mouseEnter(screen.getByText("更多").closest(".sidebar__more-wrap")!);
-    fireEvent.click(screen.getByText("个人记忆"));
-    expect(onNavigate).toHaveBeenCalledWith("个人记忆");
-
   });
 
   it.each(["专家·技能·连接器", "技能", "连接器", "插件·市场", "插件市场"])("能力子页 %s 始终选中同一个侧栏入口", activeNav => {
@@ -312,6 +302,21 @@ describe("Sidebar", () => {
     expect(menu).toBeInTheDocument();
     fireEvent.click(screen.getByText("知识库"));
     expect(onNavigate).toHaveBeenCalledWith("知识库");
+  });
+
+  it("「更多」中的定时任务进入自动化页面并显示选中状态", () => {
+    const onNavigate = vi.fn();
+    const { rerender } = render(<Sidebar {...base} onNavigate={onNavigate} />);
+    const trigger = screen.getByRole("button", { name: /更多/ });
+    fireEvent.click(trigger);
+    fireEvent.click(screen.getByRole("menuitem", { name: "定时任务" }));
+    expect(onNavigate).toHaveBeenCalledWith("自动化");
+    expect(screen.queryByRole("menu", { name: "更多功能" })).toBeNull();
+
+    rerender(<Sidebar {...base} activeNav="自动化" onNavigate={onNavigate} />);
+    expect(trigger).toHaveClass("sidebar__nav-item--active");
+    fireEvent.click(trigger);
+    expect(screen.getByRole("menuitem", { name: "定时任务" })).toHaveClass("sidebar__more-item--active");
   });
 
   it("主导航可进入代码开发工作台", () => {

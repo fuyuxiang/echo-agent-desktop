@@ -17,12 +17,6 @@ const ExpertsPanel = lazy(() =>
 const AutomationPanel = lazy(() =>
   import("./AutomationPanel").then((module) => ({ default: module.AutomationPanel })),
 );
-const ResourcesPanel = lazy(() =>
-  import("./ResourcesPanel").then((module) => ({ default: module.ResourcesPanel })),
-);
-const MyFilesPanel = lazy(() =>
-  import("./MyFilesPanel").then((module) => ({ default: module.MyFilesPanel })),
-);
 const PluginsPanel = lazy(() =>
   import("./PluginsPanel").then((module) => ({ default: module.PluginsPanel })),
 );
@@ -53,16 +47,13 @@ const CodingWorkbench = lazy(() =>
   })),
 );
 
-function PanelNavigation({ family, active, onNavigate }: { family: "context" | "capabilities"; active: string; onNavigate?: (label: string) => void }) {
-  const tabs = family === "context"
-    ? [["知识库", "知识资料"], ["个人记忆", "个人记忆"]]
-    : CAPABILITY_NAV_ITEMS.map(({ route, title }) => [route, title]);
-  return <nav className={`panel-navigation${family === "capabilities" ? " panel-navigation--capabilities" : ""}`} aria-label={family === "context" ? "资料与记忆" : "能力管理"}>
-    <strong>{family === "context" ? "资料与记忆" : "能力"}</strong>
+function PanelNavigation({ active, onNavigate }: { active: string; onNavigate?: (label: string) => void }) {
+  const tabs = CAPABILITY_NAV_ITEMS.map(({ route, title }) => [route, title]);
+  return <nav className="panel-navigation panel-navigation--capabilities" aria-label="能力管理">
+    <strong>能力</strong>
     <div className="panel-navigation__links">{tabs.map(([route, title]) => <button key={route} type="button" aria-current={route === active ? "page" : undefined}
       onClick={() => onNavigate?.(route)}>{title}</button>)}</div>
-    {family === "capabilities" && <button className="panel-navigation__market" type="button" aria-current={active === "插件市场" ? "page" : undefined} onClick={() => onNavigate?.("插件市场")}>浏览市场</button>}
-    {family === "context" && <span>资料由你选择，记忆可查看和修订；是否发送由当前任务的来源设置决定。</span>}
+    <button className="panel-navigation__market" type="button" aria-current={active === "插件市场" ? "page" : undefined} onClick={() => onNavigate?.("插件市场")}>浏览市场</button>
   </nav>;
 }
 
@@ -151,7 +142,7 @@ interface PlaceholderPageProps {
   automationRefreshSignal?: number;
 }
 
-/** EchoAgent 功能面板（项目/组织/专家能力/自动化/个人记忆/插件市场）。 */
+/** EchoAgent 功能面板（项目/组织/专家能力/自动化/知识库/插件市场）。 */
 export function PlaceholderPage({
   label,
   onNavigate,
@@ -225,7 +216,7 @@ export function PlaceholderPage({
     const initialTab = label === "技能" ? "skills" : label === "连接器" ? "connectors" : "experts";
     return (
       <DeferredPanel>
-        <div className="panel-section panel-section--capabilities"><PanelNavigation family="capabilities" active={label} onNavigate={onNavigate} /><ExpertsPanel onGoHome={onGoHome} onToast={onToast} initialTab={initialTab} hideNavigation /></div>
+        <div className="panel-section panel-section--capabilities"><PanelNavigation active={label} onNavigate={onNavigate} /><ExpertsPanel onGoHome={onGoHome} onToast={onToast} initialTab={initialTab} hideNavigation /></div>
       </DeferredPanel>
     );
   }
@@ -275,7 +266,7 @@ export function PlaceholderPage({
   if (label === "插件·市场" || label === "插件市场") {
     return (
       <DeferredPanel>
-        <div className="panel-section panel-section--capabilities"><PanelNavigation family="capabilities" active={label} onNavigate={onNavigate} />
+        <div className="panel-section panel-section--capabilities"><PanelNavigation active={label} onNavigate={onNavigate} />
           <div className="capabilities-content">
             {label === "插件市场" ? <MarketplacePanel sessionId={sessionId} onToast={onToast} /> : <PluginsPanel sessionId={sessionId} onToast={onToast} onBrowseMarket={() => onNavigate?.("插件市场")} />}
           </div>
@@ -284,24 +275,11 @@ export function PlaceholderPage({
     );
   }
 
-  if (label === "更多" || label === "资料库" || label === "个人记忆") {
-    return (
-      <DeferredPanel>
-        <div className="panel-section"><PanelNavigation family="context" active="个人记忆" onNavigate={onNavigate} /><ResourcesPanel cwd={cwd} sessionId={sessionId} onToast={onToast} /></div>
-      </DeferredPanel>
-    );
-  }
-
-  if (label === "我的文件") {
-    return <DeferredPanel><MyFilesPanel cwd={cwd} onToast={onToast} /></DeferredPanel>;
-  }
-
   // 知识库(可插拔源,对齐 EchoAgent knowledge-base-panel)。
   if (label === "知识库") {
     return (
       <DeferredPanel>
-        <div className="panel-section"><PanelNavigation family="context" active="知识库" onNavigate={onNavigate} />
-        <div className="placeholder-page placeholder-page--panel">
+        <div className="placeholder-page placeholder-page--panel knowledge-page">
           <KnowledgeBasePanel
             onOpen={(id, url) => {
               const target = url ?? id;
@@ -312,7 +290,7 @@ export function PlaceholderPage({
             }}
             onToast={onToast}
           />
-        </div></div>
+        </div>
       </DeferredPanel>
     );
   }

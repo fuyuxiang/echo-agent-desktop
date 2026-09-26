@@ -5,6 +5,7 @@
  * lib/knowledge-base)。本面板提供搜索框 + 跨源结果列表。无 provider 时显示空态。
  */
 import { useEffect, useState } from "react";
+import { FolderOpen, Info, Search } from "lucide-react";
 import {
   searchKbWithDiagnostics,
   listKbProvidersWithStats,
@@ -38,6 +39,8 @@ export function KnowledgeBasePanel({ onOpen, onToast }: KnowledgeBasePanelProps)
   const [searching, setSearching] = useState(false);
   const [refreshKey, setRefreshKey] = useState(0);
   const [sources, setSources] = useState<Array<{ id: string; label: string; stats: KbIndexStats }>>([]);
+  const [sourcesHydrated, setSourcesHydrated] = useState(false);
+  const [sourcesLoading, setSourcesLoading] = useState(true);
   const [sourcesError, setSourcesError] = useState<string | null>(null);
   const [searchError, setSearchError] = useState<string | null>(null);
   const [searchNotice, setSearchNotice] = useState<string | null>(null);
@@ -47,8 +50,14 @@ export function KnowledgeBasePanel({ onOpen, onToast }: KnowledgeBasePanelProps)
   useEffect(() => {
     let cancelled = false;
     void hydrateKnowledgeSources()
-      .then(() => { if (!cancelled) setRefreshKey((key) => key + 1); })
-      .catch((error) => onToast?.(`读取知识源失败：${String(error).replace(/^Error:\s*/, "")}`));
+      .then(() => { if (!cancelled) setSourcesHydrated(true); })
+      .catch((error) => {
+        if (cancelled) return;
+        const message = String(error).replace(/^Error:\s*/, "");
+        setSourcesError(message);
+        setSourcesLoading(false);
+        onToast?.(`读取知识源失败：${message}`);
+      });
     return () => { cancelled = true; };
   }, [onToast]);
 
@@ -58,7 +67,9 @@ export function KnowledgeBasePanel({ onOpen, onToast }: KnowledgeBasePanelProps)
   }, [query]);
   // 每当 refreshKey 变化(添加/移除/重建/搜索)重新拉取含索引状态的源列表。
   useEffect(() => {
+    if (!sourcesHydrated) return;
     let cancelled = false;
+    setSourcesLoading(true);
     void listKbProvidersWithStats()
       .then((s) => {
         if (!cancelled) {
@@ -72,11 +83,14 @@ export function KnowledgeBasePanel({ onOpen, onToast }: KnowledgeBasePanelProps)
           setSourcesError(message);
           onToast?.(`读取知识源失败：${message}`);
         }
+      })
+      .finally(() => {
+        if (!cancelled) setSourcesLoading(false);
       });
     return () => {
       cancelled = true;
     };
-  }, [refreshKey, onToast]);
+  }, [refreshKey, onToast, sourcesHydrated]);
 
   useEffect(() => {
     let cancelled = false;
@@ -116,6 +130,8 @@ export function KnowledgeBasePanel({ onOpen, onToast }: KnowledgeBasePanelProps)
   const removeSource = async (id: string) => {
     try {
       if (await removeKnowledgeSource(id)) {
+        if (sources.length === 1) setQuery("");
+        setSources((current) => current.filter((source) => source.id !== id));
         setRefreshKey((k) => k + 1);
         onToast?.("已移除知识源");
       }
@@ -215,46 +231,79 @@ export function KnowledgeBasePanel({ onOpen, onToast }: KnowledgeBasePanelProps)
     };
   }, [q, searchRetryKey]);
 
+  const retrySources = () => {
+    setSourcesError(null);
+    setSourcesLoading(true);
+    if (sourcesHydrated) {
+      setRefreshKey((key) => key + 1);
+      return;
+    }
+    void hydrateKnowledgeSources()
+      .then(() => setSourcesHydrated(true))
+      .catch((error) => {
+        setSourcesError(String(error).replace(/^Error:\s*/, ""));
+        setSourcesLoading(false);
+      });
+  };
+
   return (
     <div className="kb-panel" role="region" aria-label="知识库">
       <div className="kb-panel__head">
-        <span className="kb-panel__title">知识库</span>
-        <div className="kb-panel__head-right">
-          <span className="kb-panel__sources">
-            {sources.length > 0 ? `${sources.length} 个源` : "未配置知识源"}
-          </span>
-          <button
+        <div className="kb-panel__heading">
+          <h1 className="kb-panel__title">知识库</h1>
+          <p>管理知识源并搜索其中的资料</p>
+        </div>
+        {sources.length > 0 && <div className="kb-panel__head-right">
+          <span className="kb-panel__sources">{sources.length} 个知识源</span>
+          {isTauriAvailable() && <button
             type="button"
             className="kb-panel__add-btn"
             onClick={() => void addLocalFolder()}
             title="添加本地文件夹作为知识源"
           >
             + 添加本地文件夹
+          </button>}
+          <button
+            type="button"
+            className="kb-panel__refresh-btn"
+            onClick={() => void rebuildIndex()}
+            disabled={rebuilding}
+            title="重新扫描所有知识源(文件夹内容变化后刷新)"
+          >
+            {rebuilding ? "重建中…" : "↻ 刷新索引"}
           </button>
-          {sources.length > 0 && (
-            <button
-              type="button"
-              className="kb-panel__refresh-btn"
-              onClick={() => void rebuildIndex()}
-              disabled={rebuilding}
-              title="重新扫描所有知识源(文件夹内容变化后刷新)"
-            >
-              {rebuilding ? "重建中…" : "↻ 刷新索引"}
-            </button>
-          )}
-        </div>
-      </div>
-      <div className="kb-panel__index-status" role="note">
-        <span>原文件保留在所选目录；文本片段会发送到语义模型服务生成向量并进行相关性排序，索引保存在本机。任务回答会标注来源。</span>
+        </div>}
       </div>
       {sourcesError && (
-        <div className="kb-panel__index-status" role="alert">
+        <div className="kb-panel__index-status kb-panel__load-error" role="alert">
           <span>知识源读取失败：{sourcesError}</span>
-          <button type="button" className="kb-panel__refresh-btn" onClick={() => setRefreshKey((key) => key + 1)}>
+          <button type="button" className="kb-panel__refresh-btn" onClick={retrySources}>
             重试
           </button>
         </div>
       )}
+      {!sourcesError && sourcesLoading && sources.length === 0 && (
+        <div className="kb-panel__loading" role="status">正在读取知识源…</div>
+      )}
+      {!sourcesError && !sourcesLoading && sources.length === 0 && (
+        <div className="kb-panel__empty-state">
+          <div className="kb-panel__empty-icon"><FolderOpen size={30} strokeWidth={1.7} /></div>
+          <h2>还没有添加知识源</h2>
+          <p>选择一个存放资料的本地文件夹，添加后即可在这里搜索内容，并在任务中引用来源。</p>
+          {isTauriAvailable() ? (
+            <button type="button" className="kb-panel__add-btn" onClick={() => void addLocalFolder()}>
+              + 添加本地文件夹
+            </button>
+          ) : (
+            <span className="kb-panel__desktop-hint">请在桌面应用中添加本地文件夹</span>
+          )}
+          <span className="kb-panel__privacy-hint">文件保留在原目录；建立语义索引时，文本片段会发送到模型服务。</span>
+        </div>
+      )}
+      {sources.length > 0 && <div className="kb-panel__privacy" role="note">
+        <Info size={16} strokeWidth={1.8} aria-hidden="true" />
+        <span>原文件保留在所选目录；文本片段会发送到语义模型服务生成向量并排序，索引保存在本机。任务回答会标注来源。</span>
+      </div>}
       {/* 已注册知识源 chip 列表(每个可移除)。 */}
       {sources.length > 0 && (
         <div className="kb-panel__sources-row">
@@ -307,15 +356,18 @@ export function KnowledgeBasePanel({ onOpen, onToast }: KnowledgeBasePanelProps)
           </span>
         </div>
       )}
-      <input
-        className="kb-panel__input"
-        type="text"
-        value={query}
-        placeholder="搜索知识库…"
-        onChange={(e) => setQuery(e.target.value)}
-        aria-label="搜索知识库"
-      />
-      {q && (
+      {sources.length > 0 && <div className="kb-panel__search">
+        <Search size={18} strokeWidth={1.8} aria-hidden="true" />
+        <input
+          className="kb-panel__input"
+          type="text"
+          value={query}
+          placeholder="搜索知识库…"
+          onChange={(e) => setQuery(e.target.value)}
+          aria-label="搜索知识库"
+        />
+      </div>}
+      {sources.length > 0 && q && (
         <>
           {searchError && !searching && (
             <div className="kb-panel__index-status" role="alert">

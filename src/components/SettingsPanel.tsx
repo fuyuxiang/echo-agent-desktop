@@ -5,6 +5,7 @@ import {
   SlidersHorizontal,
   Keyboard,
   Brain,
+  BookOpen,
   Cpu,
   Palette,
   Database,
@@ -33,6 +34,7 @@ import { ModelConnectionsPanel } from "./ModelConnectionsPanel";
 import { NotifyChannelsPanel } from "./NotifyChannelsPanel";
 import { CloudStoragePanel } from "./CloudStoragePanel";
 import { ArchivedSessionsSettingsPanel } from "./ArchivedSessionsSettingsPanel";
+import { ResourcesPanel } from "./ResourcesPanel";
 import { useModalFocus } from "@/lib/use-modal-focus";
 import { useSessionsStore } from "@/stores/sessions-store";
 
@@ -54,6 +56,7 @@ export type SettingsSectionId =
   | "agent-settings"
   | "shortcuts"
   | "memory"
+  | "personal-memory"
   | "model"
   | "personalize"
   | "archived"
@@ -87,7 +90,8 @@ const NAV_GROUPS: NavGroup[] = [
     items: [
       { id: "model", label: "模型", icon: Cpu },
       { id: "agent-settings", label: "智能体设置", icon: SlidersHorizontal },
-      { id: "memory", label: "记忆", icon: Brain },
+      { id: "memory", label: "记忆设置", icon: Brain },
+      { id: "personal-memory", label: "个人记忆", icon: BookOpen },
     ],
   },
   {
@@ -116,6 +120,7 @@ export function SettingsPanel({
   onClose,
   onModelsChanged,
   sessionId,
+  cwd,
   initialSection = "model",
   onRestoreSession,
   onDeleteSession,
@@ -129,6 +134,8 @@ export function SettingsPanel({
   onModelsChanged?: () => void | Promise<void>;
   /** Current live session, required by memory flush/consolidation actions. */
   sessionId?: string;
+  /** Current workspace for viewing and editing workspace memory. */
+  cwd?: string;
   /** Section selected whenever the dialog is opened. */
   initialSection?: SettingsSectionId;
   onRestoreSession?: (sessionId: string, archived: boolean, cwd?: string) => Promise<void>;
@@ -217,6 +224,10 @@ export function SettingsPanel({
               <ShortcutsSettingsPanel />
             ) : active === "memory" ? (
               <MemorySettingsPanel sessionId={sessionId} />
+            ) : active === "personal-memory" ? (
+              <div className="settings-personal-memory">
+                <ResourcesPanel cwd={cwd} sessionId={sessionId} onToast={onToast} />
+              </div>
             ) : active === "help" ? (
               <HelpSettingsPanel />
             ) : active === "security" ? (

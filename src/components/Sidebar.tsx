@@ -28,10 +28,8 @@ import {
   PinFilledIcon,
   MoreDotsIcon,
   AddIcon,
-  MyFilesIconV2,
   BuildingIcon,
   MoreMenuImaKnowledgeIcon,
-  MemoryIcon,
   Code2Icon,
 } from "@/foundation/components/Icon/icons";
 import { SessionContextMenu } from "./SessionContextMenu";
@@ -40,10 +38,9 @@ const logoMarkUrl = "/app-icon.png";
 
 const NAV = [
   { label: "项目", icon: EchoProjectNavIcon },
-  { label: "代码开发", icon: Code2Icon },
   { label: "组织", icon: BuildingIcon },
   { label: "专家·技能·连接器", display: "能力", icon: EchoExpertNavIcon },
-  { label: "自动化", display: "定时任务", icon: EchoAutomationNavIcon },
+  { label: "代码开发", icon: Code2Icon },
 ];
 
 /** Compact, locale-friendly relative time for the sidebar row tail. */
@@ -311,7 +308,7 @@ function handleMenuKeyDown(
 /**
  * "更多" 侧栏按钮的弹出菜单 — 对齐 EchoAgent：
  * - hover 打开，向右浮出（不向下盖住会话列表）
- * - 展示内容和能力扩展入口；系统配置类入口收束到设置。
+ * - 展示知识库和定时任务；个人记忆由设置管理。
  */
 function MoreDropdown({
   onNavigate,
@@ -384,42 +381,29 @@ function MoreDropdown({
   const ITEMS: {
     id: string;
     label: string;
-    group: "内容" | "工具" | "系统";
     icon: React.ReactNode;
     action: () => void;
   }[] = [
     {
-      id: "my_files",
-      label: "我的文件",
-      group: "内容",
-      icon: <MyFilesIconV2 size="md" />,
-      action: () => {
-        setOpen(false);
-        onNavigate("我的文件");
-      },
-    },
-    {
-      id: "personal_memory",
-      label: "个人记忆",
-      group: "内容",
-      icon: <MemoryIcon size="md" />,
-      action: () => {
-        setOpen(false);
-        onNavigate("个人记忆");
-      },
-    },
-    {
       id: "knowledge_base",
       label: "知识库",
-      group: "内容",
       icon: <MoreMenuImaKnowledgeIcon size="md" />,
       action: () => {
         setOpen(false);
         onNavigate("知识库");
       },
     },
+    {
+      id: "automation",
+      label: "定时任务",
+      icon: <EchoAutomationNavIcon size="md" />,
+      action: () => {
+        setOpen(false);
+        onNavigate("自动化");
+      },
+    },
   ];
-  const activeMoreLabel = activeNav === "资料库" ? "个人记忆" : activeNav;
+  const activeMoreLabel = activeNav === "自动化" ? "定时任务" : activeNav;
   const isActive =
     activeNav === "更多" ||
     ITEMS.some((item) => item.label === activeMoreLabel);
@@ -454,7 +438,7 @@ function MoreDropdown({
       >
         <EchoMoreNavIcon size="md" />
         <span>更多</span>
-        <span className="sidebar__nav-sub">常用工具</span>
+        <span className="sidebar__nav-sub">知识与工具</span>
       </button>
       {open && (
         <div
@@ -468,27 +452,20 @@ function MoreDropdown({
             triggerRef.current?.focus();
           })}
         >
-          {(["内容", "工具"] as const).filter(group => ITEMS.some(item => item.group === group)).map((group) => (
-            <div className="sidebar__more-group" key={group}>
-              <div className="sidebar__more-group-title">{group}</div>
-              {ITEMS.filter((item) => item.group === group).map((item) => (
-                <button
-                  key={item.id}
-                  type="button"
-                  className={
-                    "sidebar__more-item" +
-                    (activeMoreLabel === item.label
-                      ? " sidebar__more-item--active"
-                      : "")
-                  }
-                  role="menuitem"
-                  onClick={item.action}
-                >
-                  <span className="sidebar__more-item-icon">{item.icon}</span>
-                  <span className="sidebar__more-item-label">{item.label}</span>
-                </button>
-              ))}
-            </div>
+          {ITEMS.map((item) => (
+            <button
+              key={item.id}
+              type="button"
+              className={
+                "sidebar__more-item" +
+                (activeMoreLabel === item.label ? " sidebar__more-item--active" : "")
+              }
+              role="menuitem"
+              onClick={item.action}
+            >
+              <span className="sidebar__more-item-icon">{item.icon}</span>
+              <span className="sidebar__more-item-label">{item.label}</span>
+            </button>
           ))}
         </div>
       )}

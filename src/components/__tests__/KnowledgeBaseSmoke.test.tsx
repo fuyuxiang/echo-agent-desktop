@@ -112,12 +112,12 @@ describe("知识库端到端冒烟", () => {
     render(<KnowledgeBasePanel onToast={vi.fn()} />);
 
     // 1. 初始未配置。
-    expect(screen.getByText("未配置知识源")).toBeInTheDocument();
+    expect(await screen.findByRole("heading", { name: "还没有添加知识源" })).toBeInTheDocument();
 
     // 2. 添加本地文件夹。
     fireEvent.click(screen.getByRole("button", { name: /添加本地文件夹/ }));
     await waitFor(() => expect(listKbProviders().length).toBe(1));
-    expect(screen.getByText(/1 个源/)).toBeInTheDocument();
+    expect(await screen.findByText(/1 个知识源/)).toBeInTheDocument();
 
     // 3. 搜索 docx 内容。
     const input = screen.getByRole("textbox", { name: "搜索知识库" });
@@ -146,11 +146,11 @@ describe("知识库端到端冒烟", () => {
     invokeMock.mockImplementation((command: string) =>
       Promise.resolve(command === "filesystem_pick_directory" ? "/notes" : command === "filesystem_resource_identity" ? { id: "test-notes", canonicalPath: "/notes" } : undefined));
     render(<KnowledgeBasePanel onToast={vi.fn()} />);
-    fireEvent.click(screen.getByRole("button", { name: /添加本地文件夹/ }));
-    await waitFor(() => expect(screen.getByText(/1 个源/)).toBeInTheDocument());
+    fireEvent.click(await screen.findByRole("button", { name: /添加本地文件夹/ }));
+    await waitFor(() => expect(screen.getByText(/1 个知识源/)).toBeInTheDocument());
     // 点击移除按钮。
     fireEvent.click(screen.getByRole("button", { name: "移除知识源 本地：notes" }));
-    await waitFor(() => expect(screen.getByText("未配置知识源")).toBeInTheDocument());
+    await waitFor(() => expect(screen.getByRole("heading", { name: "还没有添加知识源" })).toBeInTheDocument());
     expect(listKbProviders().length).toBe(0);
   });
 });

@@ -56,6 +56,13 @@ describe("PlaceholderPage", () => {
     expect(await screen.findByText("coding workbench")).toBeInTheDocument();
   });
 
+  it("知识库页面只展示知识库，不混入个人记忆导航", async () => {
+    render(<PlaceholderPage label="知识库" />);
+    expect(await screen.findByRole("region", { name: "知识库" })).toBeInTheDocument();
+    expect(screen.queryByRole("navigation", { name: "资料与记忆" })).toBeNull();
+    expect(screen.queryByText("个人记忆")).toBeNull();
+  });
+
   it("能力页面保持单层导航，可往返所有类别和市场", async () => {
     function Page() {
       const [label, setLabel] = useState("专家·技能·连接器");

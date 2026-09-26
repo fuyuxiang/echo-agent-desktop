@@ -426,7 +426,7 @@ export function MemorySettingsPanel({ sessionId }: { sessionId?: string }) {
         <div className="settings-row settings-row--comfortable">
           <div className="settings-row__label settings-row__label--stacked">
             <span className="settings-row__name"><Database size={17} />本地记忆目录</span>
-            <span className="settings-row__description">可在侧栏“个人记忆”中查看、编辑和审阅</span>
+            <span className="settings-row__description">可在“设置 → 个人记忆”中查看、编辑和审阅</span>
           </div>
           <code className="settings-path-chip">~/.echo-agent/memory/</code>
         </div>

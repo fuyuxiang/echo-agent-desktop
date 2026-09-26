@@ -39,6 +39,7 @@ vi.mock("@/lib/agent-client", () => ({
   memoryConfigSave: vi.fn(async (memory) => memory),
   memoryFlush: vi.fn(),
   memoryDream: vi.fn(),
+  memoryList: vi.fn().mockResolvedValue([]),
   openExternalUrl: vi.fn().mockResolvedValue(undefined),
 }));
 
@@ -53,6 +54,7 @@ import { ThemeProvider } from "../ThemeProvider";
 import {
   memoryConfigGet,
   memoryConfigSave,
+  memoryList,
   notificationList,
   openExternalUrl,
   permissionList,
@@ -75,6 +77,17 @@ function renderSettings() {
 }
 
 describe("SettingsPanel", () => {
+  it("个人记忆在设置中使用当前工作区和会话上下文", async () => {
+    vi.mocked(memoryList).mockClear();
+    render(<ThemeProvider><SettingsPanel open initialSection="personal-memory" cwd="/workspace" sessionId="session-1" onClose={() => {}} /></ThemeProvider>);
+
+    expect(await screen.findByRole("heading", { name: "个人记忆" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "个人记忆" })).toHaveAttribute("aria-current", "page");
+    expect(screen.getByLabelText("当前记忆上下文")).toHaveTextContent("/workspace");
+    expect(screen.getByLabelText("当前记忆上下文")).toHaveTextContent("已连接当前会话");
+    await waitFor(() => expect(memoryList).toHaveBeenCalledWith("/workspace"));
+  });
+
   it("打开后置焦点、圈定 Tab，Escape 关闭并恢复原焦点", async () => {
     const opener = document.createElement("button");
     opener.textContent = "打开设置";
@@ -113,7 +126,7 @@ describe("SettingsPanel", () => {
       expect(screen.getByRole("heading", { name: group, level: 2 })).toBeInTheDocument();
     }
 
-    expect(container.querySelectorAll(".settings-navigation__item")).toHaveLength(14);
+    expect(container.querySelectorAll(".settings-navigation__item")).toHaveLength(15);
     expect(screen.getByRole("button", { name: "用量统计" })).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "通知渠道" })).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "云存储" })).toBeInTheDocument();
@@ -158,7 +171,8 @@ describe("SettingsPanel", () => {
       "通知渠道",
       "模型与连接",
       "智能体设置",
-      "记忆",
+      "记忆设置",
+      "个人记忆",
       "系统设置",
       "个性化",
       "快捷键",
@@ -176,7 +190,7 @@ describe("SettingsPanel", () => {
     });
     fireEvent.click(navigationItem);
       expect(await screen.findByRole("heading", {
-        name: page === "事件收件箱" ? "通知中心" : page,
+        name: page === "事件收件箱" ? "通知中心" : page === "记忆设置" ? "记忆" : page,
         level: 2,
       })).toBeInTheDocument();
       expect(navigationItem).toHaveAttribute("aria-current", "page");

@@ -199,11 +199,6 @@ function findSessionSummary(sessionId: string): SessionSummary | undefined {
     .find((entry) => entry.sessionId === sessionId);
 }
 
-/** Views that inspect or maintain memory belonging to the active session. */
-function isMemoryResourceView(label: string | null): boolean {
-  return label === "更多" || label === "资料库" || label === "个人记忆";
-}
-
 export default function App() {
   return (
     <ThemeProvider>
@@ -1119,6 +1114,10 @@ function Shell() {
     return undefined;
   };
   const navigateNow = (label: string) => {
+    if (label === "个人记忆" || label === "资料库" || label === "更多") {
+      openSettings("personal-memory");
+      return;
+    }
     if (label === "用量统计") {
       openSettings("usage");
       return;
@@ -1143,10 +1142,6 @@ function Shell() {
       setSidebarCollapsed(true);
       return;
     }
-    // Personal memory is an inspector for the active session, not a separate
-    // navigation context. Keep both stores focused so the panel can address the
-    // live session for flush/dream and resolve its authoritative workspace cwd.
-    if (isMemoryResourceView(label)) return;
     sessionsStore.getState().setCurrent(null);
     sessionStore.getState().reset();
     setCurrentModelId(resolveConfiguredModelId(models, newSessionModelOverrideRef.current, init?.auth.defaultModelId));
@@ -2583,9 +2578,7 @@ function Shell() {
                   onGoHome={handleGoHome}
                   onStartOrganizationConversation={handleStartOrganizationConversation}
                   onToast={showToast}
-                  cwd={isMemoryResourceView(placeholderView)
-                    ? activeSessionCwd || newSessionTargetCwd
-                    : placeholderView === "代码开发"
+                  cwd={placeholderView === "代码开发"
                       ? activeCodingWorkspaceCwd || codingWorkspaceCwd || activeSessionCwd || newSessionTargetCwd
                       : newSessionTargetCwd}
                   onSelectWorkspace={placeholderView === "代码开发"
@@ -2733,6 +2726,7 @@ function Shell() {
             open
             initialSection={settingsSection}
             sessionId={currentSessionId ?? undefined}
+            cwd={activeSessionCwd || newSessionTargetCwd}
             onClose={() => setSettingsOpen(false)}
             onModelsChanged={refreshModels}
             onRestoreSession={handleArchiveSession}
