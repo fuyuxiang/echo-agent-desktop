@@ -86,7 +86,7 @@ const PROVIDER_PRESETS: Record<ProviderKind, ProviderPreset> = {
     placeholderKey: "sk-ant-...",
   },
   minimax: {
-    label: "MiniMax 官方接口（支持录音转写）",
+    label: "MiniMax 官方接口",
     shortLabel: "MiniMax",
     baseUrl: "https://api.minimax.cn/v1",
     apiBackend: "chat_completions",
@@ -886,8 +886,10 @@ function ConnectionEditor({
                 {draft.providerKind === "openai"
                   ? "使用 OpenAI Platform API Key；ChatGPT 订阅登录不能作为模型 API 凭据。"
                   : draft.providerKind === "minimax"
-                    ? "同一 MiniMax API Key 用于对话、录音转写与会议纪要；语音额度需在 MiniMax 开放平台单独开通。"
-                  : "保存在本机私有配置中；编辑时无需重复输入。"}
+                    ? "录音转写页会检测此接口和 API Key 是否具备语音能力；语音额度可能需要单独开通。"
+                  : draft.providerKind === "custom"
+                    ? "保存在本机私有配置中；MiniMax 模型可在录音转写页检测 /speech_to_text 能力。"
+                    : "保存在本机私有配置中；编辑时无需重复输入。"}
               </span>
             </div>
           </section>

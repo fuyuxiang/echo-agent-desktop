@@ -14,7 +14,7 @@ import { InputAddMenu } from "../InputAddMenu";
 import { agentsList } from "@/lib/agent-client";
 
 describe("InputAddMenu", () => {
-  it("仅在当前模型具备会议能力时显示录音转写", async () => {
+  it("按录音页面入口可用状态显示录音转写", async () => {
     const onOpenMeetingMinutes = vi.fn();
     const { rerender } = render(
       <InputAddMenu

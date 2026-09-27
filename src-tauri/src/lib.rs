@@ -564,6 +564,7 @@ pub fn run() {
             attachment_blob::discard_attachment_blob,
             // Durable long-form recording, MiniMax ASR, minutes and exports.
             meeting_minutes::meeting_create,
+            meeting_minutes::meeting_check_connection,
             meeting_minutes::meeting_append_pcm,
             meeting_minutes::meeting_set_paused,
             meeting_minutes::meeting_finish_recording,

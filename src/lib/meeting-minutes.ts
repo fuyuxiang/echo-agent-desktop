@@ -52,6 +52,18 @@ export function meetingCreate(title: string, modelId: string, providerId: string
   return invoke("meeting_create", { title, modelId, providerId });
 }
 
+export function meetingCheckConnection(modelId: string, providerId: string): Promise<void> {
+  return invoke("meeting_check_connection", { modelId, providerId });
+}
+
+export function isMiniMaxMeetingModel(model: {
+  id: string;
+  remoteModelId?: string;
+}): boolean {
+  const slug = model.remoteModelId?.trim() || model.id;
+  return /minimax/i.test(slug);
+}
+
 export function meetingAppendPcm(meetingId: string, samples: number[]): Promise<MeetingRecord> {
   return invoke("meeting_append_pcm", { meetingId, samples });
 }
@@ -177,6 +189,9 @@ class MeetingRecorder {
     if (this.snapshot.active) throw new Error("已有会议正在录音，请先结束当前录音");
     if (!navigator.mediaDevices?.getUserMedia) throw new Error("当前系统不支持麦克风录音");
     this.publish({ error: null });
+    // Verify the service before requesting microphone permission. A connection
+    // may have changed since the meeting panel's readiness check.
+    await meetingCheckConnection(modelId, providerId);
     const stream = await navigator.mediaDevices.getUserMedia({
       audio: {
         channelCount: 1,

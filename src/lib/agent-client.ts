@@ -732,8 +732,11 @@ export interface ProviderListModel {
 export interface ModelOptionRow {
   id: string;
   label: string;
+  remoteModelId?: string;
   providerKind: ProviderKind;
   providerId: string;
+  source?: ProviderSource;
+  insecureHttp?: boolean;
 }
 
 /**
@@ -780,8 +783,11 @@ export function flattenModels(list: ProviderListModel): ModelOptionRow[] {
     return {
       id: m.modelId,
       label: (labels.get(baseLabel) ?? 0) > 1 ? `${baseLabel} · ${sourceLabel}` : baseLabel,
+      remoteModelId: m.remoteModelId ?? m.modelId,
       providerKind: (provider?.providerKind ?? "custom") as ProviderKind,
       providerId: m.providerId,
+      source: provider?.source,
+      insecureHttp: provider?.baseUrl?.toLowerCase().startsWith("http://") ?? false,
     };
   });
 }

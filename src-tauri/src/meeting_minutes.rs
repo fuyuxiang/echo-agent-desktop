@@ -1,4 +1,4 @@
-//! Durable long-form meeting recording, MiniMax ASR, and minutes generation.
+//! Durable long-form meeting recording, Speech-to-Text, and minutes generation.
 //!
 //! Audio is normalized to mono 16 kHz PCM WAV and split into bounded seven
 //! minute requests.  API credentials never leave the native process.
@@ -237,7 +237,7 @@ pub fn meeting_create(
     provider_id: String,
 ) -> Result<MeetingRecord, String> {
     if model_id.trim().is_empty() || provider_id.trim().is_empty() {
-        return Err("请先选择可用的 MiniMax 模型".into());
+        return Err("请先选择可用的会议模型".into());
     }
     // Fail before asking for microphone permission when the selected provider
     // cannot actually supply the ASR credential.
@@ -571,13 +571,73 @@ fn asr_endpoint(base_url: &str) -> String {
     }
 }
 
+fn probe_confirms_speech_endpoint(status: reqwest::StatusCode, body: &str) -> bool {
+    if status.is_success() {
+        return serde_json::from_str::<serde_json::Value>(body)
+            .ok()
+            .is_some_and(|value| value.get("text").is_some() || value.get("segments").is_some());
+    }
+    if status != reqwest::StatusCode::BAD_REQUEST
+        && status != reqwest::StatusCode::UNPROCESSABLE_ENTITY
+    {
+        return false;
+    }
+    let message = body.to_ascii_lowercase();
+    message.contains("file")
+        && (message.contains("missing")
+            || message.contains("required")
+            || message.contains("缺少")
+            || message.contains("必填")
+            || message.contains("未提供"))
+}
+
+/// Check the actual Speech-to-Text route with the selected connection's key.
+/// No recording or sample audio is sent during this check. Both personal and
+/// organization connections use this path, regardless of provider branding.
+#[tauri::command]
+pub async fn meeting_check_connection(model_id: String, provider_id: String) -> Result<(), String> {
+    let access = crate::providers::meeting_provider_access(&model_id, &provider_id)?;
+    let client = reqwest::Client::builder()
+        .connect_timeout(Duration::from_secs(5))
+        .timeout(Duration::from_secs(15))
+        .redirect(reqwest::redirect::Policy::none())
+        .build()
+        .map_err(|error| format!("创建转写接口检测请求失败：{error}"))?;
+    let form = reqwest::multipart::Form::new()
+        .text("model", "asr-1.0")
+        .text("response_format", "verbose_json");
+    let response = client
+        .post(asr_endpoint(&access.base_url))
+        .bearer_auth(&access.api_key)
+        .multipart(form)
+        .send()
+        .await
+        .map_err(|error| format!("无法连接转写接口：{error}"))?;
+    let status = response.status();
+    let body = String::from_utf8_lossy(&response_bytes_bounded(response).await?).into_owned();
+    if probe_confirms_speech_endpoint(status, &body) {
+        return Ok(());
+    }
+    if status == reqwest::StatusCode::UNAUTHORIZED || status == reqwest::StatusCode::FORBIDDEN {
+        return Err("转写接口拒绝当前 API Key，请检查凭据和语音权限".into());
+    }
+    if status == reqwest::StatusCode::NOT_FOUND {
+        return Err("当前连接没有 /speech_to_text 转写接口，请选择支持该接口的连接".into());
+    }
+    if status.is_redirection() {
+        return Err("转写接口返回重定向，请直接配置最终地址".into());
+    }
+    let detail = body.chars().take(200).collect::<String>();
+    Err(format!("转写接口检测失败（{status}）：{detail}"))
+}
+
 async fn response_bytes_bounded(response: reqwest::Response) -> Result<Vec<u8>, String> {
     let mut stream = response.bytes_stream();
     let mut bytes = Vec::new();
     while let Some(chunk) = stream.next().await {
-        let chunk = chunk.map_err(|error| format!("读取 MiniMax 响应失败：{error}"))?;
+        let chunk = chunk.map_err(|error| format!("读取转写服务响应失败：{error}"))?;
         if bytes.len().saturating_add(chunk.len()) > MAX_API_RESPONSE_BYTES {
-            return Err("MiniMax 响应超过安全上限".into());
+            return Err("转写服务响应超过安全上限".into());
         }
         bytes.extend_from_slice(&chunk);
     }
@@ -609,7 +669,7 @@ async fn transcribe_chunk(
         .multipart(form)
         .send()
         .await
-        .map_err(|error| format!("连接 MiniMax ASR 失败：{error}"))?;
+        .map_err(|error| format!("连接转写服务失败：{error}"))?;
     let status = response.status();
     let bytes = response_bytes_bounded(response).await?;
     if !status.is_success() {
@@ -622,9 +682,9 @@ async fn transcribe_chunk(
                     .map(String::from)
             })
             .unwrap_or_else(|| String::from_utf8_lossy(&bytes).chars().take(300).collect());
-        return Err(format!("MiniMax ASR 返回 {status}：{detail}"));
+        return Err(format!("转写服务返回 {status}：{detail}"));
     }
-    serde_json::from_slice(&bytes).map_err(|error| format!("解析 MiniMax ASR 响应失败：{error}"))
+    serde_json::from_slice(&bytes).map_err(|error| format!("解析转写服务响应失败：{error}"))
 }
 
 fn normalize_transcript(chunks: &[(MeetingChunk, AsrResponse)]) -> Vec<TranscriptSegment> {
@@ -688,6 +748,17 @@ fn transcript_as_text(segments: &[TranscriptSegment]) -> String {
         .join("\n")
 }
 
+fn visible_completion_text(value: &str) -> &str {
+    let mut visible = value.trim();
+    while let Some(reasoning) = visible.strip_prefix("<think>") {
+        let Some((_, remainder)) = reasoning.split_once("</think>") else {
+            return "";
+        };
+        visible = remainder.trim_start();
+    }
+    visible.trim()
+}
+
 async fn chat_completion(
     client: &reqwest::Client,
     base_url: &str,
@@ -711,7 +782,7 @@ async fn chat_completion(
         }))
         .send()
         .await
-        .map_err(|error| format!("请求 MiniMax 纪要模型失败：{error}"))?;
+        .map_err(|error| format!("请求会议纪要模型失败：{error}"))?;
     let status = response.status();
     let bytes = response_bytes_bounded(response).await?;
     if !status.is_success() {
@@ -719,14 +790,14 @@ async fn chat_completion(
             .chars()
             .take(400)
             .collect::<String>();
-        return Err(format!("MiniMax 纪要模型返回 {status}：{detail}"));
+        return Err(format!("会议纪要模型返回 {status}：{detail}"));
     }
-    let value: serde_json::Value = serde_json::from_slice(&bytes)
-        .map_err(|error| format!("解析 MiniMax 纪要响应失败：{error}"))?;
+    let value: serde_json::Value =
+        serde_json::from_slice(&bytes).map_err(|error| format!("解析会议纪要响应失败：{error}"))?;
     value
         .pointer("/choices/0/message/content")
         .and_then(serde_json::Value::as_str)
-        .map(str::trim)
+        .map(visible_completion_text)
         .filter(|value| !value.is_empty())
         .map(String::from)
         .ok_or("纪要模型没有返回文本".into())
@@ -805,7 +876,7 @@ fn api_client() -> Result<reqwest::Client, String> {
         .timeout(Duration::from_secs(600))
         .redirect(reqwest::redirect::Policy::none())
         .build()
-        .map_err(|error| format!("创建 MiniMax 客户端失败：{error}"))
+        .map_err(|error| format!("创建会议服务客户端失败：{error}"))
 }
 
 #[tauri::command]
@@ -1163,6 +1234,39 @@ pub fn meeting_open_audio(meeting_id: String) -> Result<(), String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn meeting_minutes_hide_leading_model_reasoning() {
+        assert_eq!(
+            visible_completion_text("<think>internal notes</think>\n\n# 会议纪要"),
+            "# 会议纪要"
+        );
+        assert_eq!(visible_completion_text("<think>unfinished"), "");
+    }
+
+    #[test]
+    fn speech_probe_requires_a_real_route_that_rejects_missing_audio() {
+        assert!(probe_confirms_speech_endpoint(
+            reqwest::StatusCode::BAD_REQUEST,
+            r#"{"detail":"missing required form field: file"}"#,
+        ));
+        assert!(!probe_confirms_speech_endpoint(
+            reqwest::StatusCode::UNAUTHORIZED,
+            r#"{"detail":"invalid api key"}"#,
+        ));
+        assert!(!probe_confirms_speech_endpoint(
+            reqwest::StatusCode::NOT_FOUND,
+            r#"{"detail":"Not Found"}"#,
+        ));
+        assert!(!probe_confirms_speech_endpoint(
+            reqwest::StatusCode::BAD_REQUEST,
+            r#"{"detail":"unsupported model"}"#,
+        ));
+        assert!(!probe_confirms_speech_endpoint(
+            reqwest::StatusCode::OK,
+            "<html>sign in</html>",
+        ));
+    }
 
     #[test]
     fn splits_text_without_losing_lines() {

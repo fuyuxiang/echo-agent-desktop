@@ -34,6 +34,7 @@ import {
 } from "@/lib/slash-commands";
 import { replaceAtToken } from "@/lib/at-commands";
 import { InputAddMenu } from "./InputAddMenu";
+import { useMeetingTranscriptionCapability } from "@/lib/use-meeting-transcription-capability";
 import { KnowledgePicker } from "./KnowledgePicker";
 import {
   automationCapabilities,
@@ -278,6 +279,11 @@ export function Composer({
   /** Opens organization login/connection management. */
   onOpenOrganization?: () => void;
 }) {
+  const meetingModel = models?.find((model) => model.id === modelId);
+  const meetingCapability = useMeetingTranscriptionCapability(
+    onOpenMeetingMinutes ? meetingModel : undefined,
+    models,
+  );
   const storageErrors = useStorageHealth((state) => state.errors);
   const draftScopeRef = useRef(draftKey === undefined ? undefined : String(draftKey));
   const persistedRevision = useDraftRevision(draftKey === undefined ? undefined : String(draftKey));
@@ -1389,7 +1395,7 @@ export function Composer({
               }
             }}
             onNavigateConnectors={onNavigateConnectors}
-            meetingMinutesAvailable={models?.some((model) => model.id === modelId && model.providerKind === "minimax")}
+            meetingMinutesAvailable={Boolean(onOpenMeetingMinutes && !modelLoading && meetingCapability.available)}
             onOpenMeetingMinutes={onOpenMeetingMinutes}
             automationMode={automationMode}
             automationCapabilities={automationSupport}

@@ -459,16 +459,22 @@ fn approved_insecure_http_urls(config: &Value) -> Vec<String> {
         .get("model_providers")
         .and_then(Value::as_table)
         .into_iter()
-        .flat_map(|providers| providers.values())
-        .filter_map(Value::as_table)
-        .filter(|provider| provider.get(MANAGED_BY_KEY).is_none())
-        .filter(|provider| {
+        .flat_map(|providers| providers.iter())
+        .filter_map(|(id, provider)| provider.as_table().map(|table| (id.as_str(), table)))
+        .filter(
+            |(id, provider)| match provider.get(MANAGED_BY_KEY).and_then(Value::as_str) {
+                None => true,
+                Some(MANAGED_BY_ORGANIZATION) => *id == ORGANIZATION_PROVIDER_ID,
+                _ => false,
+            },
+        )
+        .filter(|(_, provider)| {
             provider
                 .get(ALLOW_INSECURE_HTTP_KEY)
                 .and_then(Value::as_bool)
                 == Some(true)
         })
-        .filter_map(|provider| provider.get("base_url").and_then(Value::as_str))
+        .filter_map(|(_, provider)| provider.get("base_url").and_then(Value::as_str))
         .filter(|url| {
             validate_provider_base_url_with_options(url, false, true)
                 .is_ok_and(|parsed| parsed.scheme() == "http")
@@ -659,21 +665,20 @@ pub(crate) struct MeetingProviderAccess {
     pub remote_model_id: String,
 }
 
-/// Resolve a selected model to a verified MiniMax connection while keeping the
-/// credential inside the native process.  Model-name matching is intentionally
-/// not used: a model called "MiniMax" behind an unrelated gateway is not proof
-/// that the Speech-to-Text endpoint exists.
-pub(crate) fn meeting_provider_access(
+/// Resolve a meeting model's chat connection without exposing its credential
+/// to the frontend. Speech-to-Text support is checked against the actual
+/// endpoint separately; neither the model name nor the provider brand proves it.
+fn meeting_provider_access_from_config(
+    config: &Value,
     model_id: &str,
     expected_provider_id: &str,
 ) -> Result<MeetingProviderAccess, String> {
-    let config = read_config();
     let model = config
         .get("model")
         .and_then(Value::as_table)
         .and_then(|models| models.get(model_id))
         .and_then(Value::as_table)
-        .ok_or("当前模型已不存在，请重新选择 MiniMax 模型")?;
+        .ok_or("当前模型已不存在，请重新选择会议模型")?;
     // Current configurations reference a shared provider. Legacy BYOK models
     // stored the same fields directly in `[model.<id>]`; keep those usable so
     // adding meeting support does not force a destructive settings migration.
@@ -687,32 +692,48 @@ pub(crate) fn meeting_provider_access(
             .and_then(Value::as_table)
             .and_then(|providers| providers.get(provider_id))
             .and_then(Value::as_table)
-            .ok_or("MiniMax 连接已被删除")?
+            .ok_or("会议模型连接已被删除")?
     } else {
         model
     };
+    if expected_provider_id == BUILTIN_PROVIDER_ID
+        || model_id.starts_with(BUILTIN_MODEL_PREFIX)
+        || provider.get(MANAGED_BY_KEY).and_then(Value::as_str) == Some(MANAGED_BY_BUILTIN)
+    {
+        return Err("内置模型不提供录音转写".into());
+    }
+    if provider.get(MANAGED_BY_KEY).and_then(Value::as_str) == Some(MANAGED_BY_ORGANIZATION) {
+        let lease_until = provider
+            .get(LEASE_UNTIL_KEY)
+            .and_then(Value::as_integer)
+            .unwrap_or(0);
+        let now = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_millis() as i64;
+        if lease_until <= now {
+            return Err("组织模型配置已过期，请重新同步".into());
+        }
+    }
     let base_url = provider
         .get("base_url")
         .and_then(Value::as_str)
         .map(str::trim)
         .filter(|value| !value.is_empty())
-        .ok_or("MiniMax Base URL 未配置")?
+        .ok_or("会议模型 Base URL 未配置")?
         .trim_end_matches('/')
         .to_string();
-    let organization_kind = provider
-        .get("organization_provider")
-        .and_then(Value::as_str)
-        .unwrap_or("")
-        .to_ascii_lowercase();
-    let kind = infer_provider_kind(provider);
-    let official_host = url::Url::parse(&base_url)
-        .ok()
-        .and_then(|url| url.host_str().map(str::to_ascii_lowercase))
-        .is_some_and(|host| host == "api.minimax.cn" || host == "api.minimaxi.com");
-    if kind != "minimax" && organization_kind != "minimax" && !official_host {
-        return Err("当前模型提供商未声明 MiniMax 录音转写能力".into());
+    if provider.get("api_backend").and_then(Value::as_str) != Some("chat_completions")
+        || provider.get("auth_scheme").and_then(Value::as_str) != Some("bearer")
+    {
+        return Err("会议纪要需要使用 Bearer Key 的 Chat Completions 模型连接".into());
     }
-    let api_key = resolved_provider_api_key(provider).ok_or("MiniMax API Key 未配置或已失效")?;
+    let allow_http = provider
+        .get(ALLOW_INSECURE_HTTP_KEY)
+        .and_then(Value::as_bool)
+        == Some(true);
+    validate_provider_base_url_with_options(&base_url, false, allow_http)?;
+    let api_key = resolved_provider_api_key(provider).ok_or("会议模型 API Key 未配置或已失效")?;
     let remote_model_id = model
         .get("model")
         .and_then(Value::as_str)
@@ -720,11 +741,21 @@ pub(crate) fn meeting_provider_access(
         .filter(|value| !value.is_empty())
         .unwrap_or(model_id)
         .to_string();
+    if !remote_model_id.to_ascii_lowercase().contains("minimax") {
+        return Err("当前会议模型不是 MiniMax 模型".into());
+    }
     Ok(MeetingProviderAccess {
         api_key,
         base_url,
         remote_model_id,
     })
+}
+
+pub(crate) fn meeting_provider_access(
+    model_id: &str,
+    expected_provider_id: &str,
+) -> Result<MeetingProviderAccess, String> {
+    meeting_provider_access_from_config(&read_config(), model_id, expected_provider_id)
 }
 
 /// Mask helper: returns `Some("••••")` only when a static key or referenced
@@ -771,7 +802,8 @@ fn provider_from_table(id: &str, table: &Map<String, Value>) -> ModelProviderEnt
             .get("context_window")
             .and_then(Value::as_integer)
             .map(|n| n as u64),
-        allow_insecure_http: !managed
+        allow_insecure_http: (!managed
+            || source == "organization" && id == ORGANIZATION_PROVIDER_ID)
             && table.get(ALLOW_INSECURE_HTTP_KEY).and_then(Value::as_bool) == Some(true),
         source: source.into(),
         managed,
@@ -1143,9 +1175,14 @@ fn provider_to_table(p: &ModelProviderEntry, existing: Option<&Value>) -> Result
         "base_url",
         needs_base_url,
     )?;
-    let allow_insecure_http = p.allow_insecure_http
+    let personal_http = p.allow_insecure_http
         && !p.managed
         && !matches!(p.source.as_str(), "organization" | "builtin");
+    let organization_http = p.allow_insecure_http
+        && p.managed
+        && p.source == "organization"
+        && p.id == ORGANIZATION_PROVIDER_ID;
+    let allow_insecure_http = personal_http || organization_http;
     if is_ojlab_base_url(&base_url) && !allow_insecure_http {
         return Err("远端 HTTP 服务需要明确同意明文传输".into());
     }
@@ -1452,7 +1489,7 @@ fn apply_organization_model_config(
     if provider.is_empty() || model.is_empty() || base_url.is_empty() || api_key.is_empty() {
         return Err("organization model config is incomplete".into());
     }
-    validate_provider_base_url(base_url)
+    let parsed_base_url = validate_provider_base_url_with_options(base_url, false, true)
         .map_err(|error| format!("invalid organization model Base URL: {error}"))?;
 
     let normalized_provider = provider.to_ascii_lowercase();
@@ -1489,7 +1526,7 @@ fn apply_organization_model_config(
         context_window: None,
         source: "organization".into(),
         managed: true,
-        allow_insecure_http: false,
+        allow_insecure_http: parsed_base_url.scheme() == "http",
         credential_configured: true,
         synced_at: Some(synced_at),
         organization_provider: Some(provider.into()),
@@ -2739,6 +2776,113 @@ base_url = "https://example.com"
     }
 
     #[test]
+    fn meeting_access_accepts_personal_and_organization_compatible_speech_gateways() {
+        let mut config: Value = r#"
+            [model_providers.personal]
+            base_url = "https://gateway.example/v1"
+            api_backend = "chat_completions"
+            auth_scheme = "bearer"
+            api_key = "personal-key"
+            [model_providers.echoagent-organization]
+            base_url = "http://managed.example/v1"
+            api_backend = "chat_completions"
+            auth_scheme = "bearer"
+            api_key = "organization-key"
+            echoagent_allow_insecure_http = true
+            echoagent_managed_by = "organization"
+            echoagent_lease_until = 9223372036854775807
+            organization_provider = "openai-compatible"
+            [model."personal/MiniMax-M3"]
+            model_provider = "personal"
+            model = "MiniMax-M3"
+            [model."organization/MiniMax-M3"]
+            model_provider = "echoagent-organization"
+            model = "MiniMax-M3"
+        "#
+        .parse()
+        .unwrap();
+        let personal =
+            meeting_provider_access_from_config(&config, "personal/MiniMax-M3", "personal")
+                .unwrap();
+        assert_eq!(personal.base_url, "https://gateway.example/v1");
+        assert_eq!(personal.remote_model_id, "MiniMax-M3");
+        let organization = meeting_provider_access_from_config(
+            &config,
+            "organization/MiniMax-M3",
+            ORGANIZATION_PROVIDER_ID,
+        )
+        .unwrap();
+        assert_eq!(organization.base_url, "http://managed.example/v1");
+        assert_eq!(organization.api_key, "organization-key");
+        config
+            .get_mut("model_providers")
+            .and_then(Value::as_table_mut)
+            .and_then(|providers| providers.get_mut(ORGANIZATION_PROVIDER_ID))
+            .and_then(Value::as_table_mut)
+            .unwrap()
+            .insert(LEASE_UNTIL_KEY.into(), Value::Integer(0));
+        assert!(meeting_provider_access_from_config(
+            &config,
+            "organization/MiniMax-M3",
+            ORGANIZATION_PROVIDER_ID,
+        )
+        .err()
+        .unwrap()
+        .contains("过期"));
+    }
+
+    #[test]
+    fn meeting_access_rejects_unapproved_http_and_unsupported_chat_protocol() {
+        let mut config: Value = r#"
+            [model_providers.personal]
+            base_url = "http://gateway.example/v1"
+            api_backend = "chat_completions"
+            auth_scheme = "bearer"
+            api_key = "personal-key"
+            [model.meeting]
+            model_provider = "personal"
+            model = "MiniMax-M3"
+        "#
+        .parse()
+        .unwrap();
+        assert!(meeting_provider_access_from_config(&config, "meeting", "personal").is_err());
+        let provider = config
+            .get_mut("model_providers")
+            .and_then(Value::as_table_mut)
+            .and_then(|providers| providers.get_mut("personal"))
+            .and_then(Value::as_table_mut)
+            .unwrap();
+        provider.insert(ALLOW_INSECURE_HTTP_KEY.into(), Value::Boolean(true));
+        provider.insert("api_backend".into(), Value::String("messages".into()));
+        assert!(meeting_provider_access_from_config(&config, "meeting", "personal").is_err());
+    }
+
+    #[test]
+    fn meeting_access_rejects_builtin_even_with_a_minimax_model_name() {
+        let config: Value = r#"
+            [model_providers.echoagent-ojlab]
+            base_url = "https://example.com/v1"
+            api_backend = "chat_completions"
+            auth_scheme = "bearer"
+            api_key = "test-key"
+            echoagent_managed_by = "builtin"
+            [model."echoagent-ojlab/MiniMax-M3"]
+            model_provider = "echoagent-ojlab"
+            model = "MiniMax-M3"
+        "#
+        .parse()
+        .unwrap();
+        let error = meeting_provider_access_from_config(
+            &config,
+            "echoagent-ojlab/MiniMax-M3",
+            BUILTIN_PROVIDER_ID,
+        )
+        .err()
+        .unwrap();
+        assert!(error.contains("内置"));
+    }
+
+    #[test]
     fn infer_custom_for_unknown() {
         let mut table = Map::new();
         table.insert(
@@ -2845,7 +2989,7 @@ base_url = "https://example.com"
     }
 
     #[test]
-    fn runtime_http_approval_only_uses_personal_opted_in_urls() {
+    fn runtime_http_approval_uses_personal_and_canonical_organization_urls() {
         let config: Value = r#"
             [model_providers.personal]
             base_url = "http://approved.example:60100/v1"
@@ -2857,13 +3001,21 @@ base_url = "https://example.com"
             base_url = "http://organization.example/v1"
             echoagent_allow_insecure_http = true
             echoagent_managed_by = "organization"
+            [model_providers.echoagent-organization]
+            base_url = "http://managed.example/v1"
+            echoagent_allow_insecure_http = true
+            echoagent_managed_by = "organization"
+            [model_providers.builtin]
+            base_url = "http://builtin.example/v1"
+            echoagent_allow_insecure_http = true
+            echoagent_managed_by = "builtin"
         "#
         .parse()
         .unwrap();
-        assert_eq!(
-            approved_insecure_http_urls(&config),
-            vec!["http://approved.example:60100/v1"]
-        );
+        let approved = approved_insecure_http_urls(&config);
+        assert_eq!(approved.len(), 2);
+        assert!(approved.contains(&"http://approved.example:60100/v1".to_string()));
+        assert!(approved.contains(&"http://managed.example/v1".to_string()));
     }
 
     #[test]
@@ -3158,6 +3310,51 @@ base_url = "https://example.com"
             organization_model["model_provider"].as_str(),
             Some(ORGANIZATION_PROVIDER_ID)
         );
+    }
+
+    #[test]
+    fn organization_http_model_approves_only_its_current_base_url() {
+        let mut config = Value::Table(Map::new());
+        apply_organization_model_config(
+            &mut config,
+            &OrganizationModelConfig {
+                provider: "openai-compatible".into(),
+                model: "MiniMax-M3".into(),
+                base_url: "http://123.56.188.16:60100/v1/".into(),
+                api_key: "sk-organization".into(),
+                lease_until: u64::MAX,
+            },
+        )
+        .unwrap();
+        let organization = config["model_providers"][ORGANIZATION_PROVIDER_ID]
+            .as_table()
+            .unwrap();
+        assert_eq!(
+            organization["base_url"].as_str(),
+            Some("http://123.56.188.16:60100/v1")
+        );
+        assert_eq!(organization[ALLOW_INSECURE_HTTP_KEY].as_bool(), Some(true));
+        assert!(provider_from_table(ORGANIZATION_PROVIDER_ID, organization).allow_insecure_http);
+        assert_eq!(
+            approved_insecure_http_urls(&config),
+            vec!["http://123.56.188.16:60100/v1"]
+        );
+
+        apply_organization_model_config(
+            &mut config,
+            &OrganizationModelConfig {
+                provider: "openai-compatible".into(),
+                model: "MiniMax-M3".into(),
+                base_url: "https://managed.example/v1".into(),
+                api_key: "sk-organization".into(),
+                lease_until: u64::MAX,
+            },
+        )
+        .unwrap();
+        assert!(approved_insecure_http_urls(&config).is_empty());
+        assert!(config["model_providers"][ORGANIZATION_PROVIDER_ID]
+            .get(ALLOW_INSECURE_HTTP_KEY)
+            .is_none());
     }
 
     #[test]

@@ -16,10 +16,15 @@ import {
 export interface ModelOption {
   id: string;
   label?: string;
+  /** Exact model slug sent to the upstream, independent of the display name. */
+  remoteModelId?: string;
   /** Optional provider kind, used to group/sort models in the dropdown. */
   providerKind?: string;
   /** Optional provider id this model belongs to. */
   providerId?: string;
+  source?: "personal" | "organization" | "builtin" | "legacy";
+  /** The selected connection sends credentials and content over plaintext HTTP. */
+  insecureHttp?: boolean;
 }
 
 export function ModelSelector({

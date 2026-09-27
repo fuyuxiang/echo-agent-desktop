@@ -6346,7 +6346,7 @@ button.diff__path {
 }
 .meeting-panel__create label { display: grid; gap: 6px; flex: 1; min-width: 180px; }
 .meeting-panel__create label span { font-size: 0.75rem; color: var(--echo-text-secondary); }
-.meeting-panel__create input {
+.meeting-panel__create input,.meeting-panel__create select {
   height: 36px;
   padding: 0 11px;
   color: var(--echo-text-primary);
@@ -6355,8 +6355,10 @@ button.diff__path {
   border-radius: 8px;
   outline: none;
 }
-.meeting-panel__create input:focus { border-color: var(--echo-accent); box-shadow: 0 0 0 3px color-mix(in srgb, var(--echo-accent) 12%, transparent); }
+.meeting-panel__create input:focus,.meeting-panel__create select:focus { border-color: var(--echo-accent); box-shadow: 0 0 0 3px color-mix(in srgb, var(--echo-accent) 12%, transparent); }
+.meeting-panel__connection-error { flex-basis: 100%; color: var(--echo-danger, #c93535); font-size: 0.75rem; line-height: 1.4; }
 .meeting-panel__privacy { flex-basis: 100%; color: var(--echo-text-tertiary); font-size: 0.625rem; line-height: 1.5; }
+.meeting-panel__privacy.is-insecure { color: var(--echo-danger, #c93535); }
 .meeting-primary,.meeting-secondary,.meeting-danger,.meeting-detail__actions button,.meeting-content-toolbar button {
   min-height: 34px;
   padding: 0 12px;

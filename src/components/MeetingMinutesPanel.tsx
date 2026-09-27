@@ -19,6 +19,7 @@ import { filesystemPickFiles } from "@/lib/agent-client";
 import {
   formatMeetingDuration,
   meetingDelete,
+  isMiniMaxMeetingModel,
   meetingExport,
   meetingGet,
   meetingImportAudio,
@@ -32,6 +33,7 @@ import {
   type MeetingRecord,
   type TranscriptSegment,
 } from "@/lib/meeting-minutes";
+import { useMeetingTranscriptionCapability } from "@/lib/use-meeting-transcription-capability";
 import type { ModelOption } from "./ModelSelector";
 import { Markdown } from "./markdown/Markdown";
 
@@ -78,8 +80,17 @@ export function MeetingMinutesPanel({
   onToast,
   onOpenModelSettings,
 }: MeetingMinutesPanelProps) {
-  const selectedModel = models.find((model) => model.id === modelId);
-  const capable = selectedModel?.providerKind === "minimax" && Boolean(selectedModel.providerId);
+  const [chosenModelId, setChosenModelId] = useState<string | null>(null);
+  const meetingModels = models.filter((model) => model.providerId
+    && model.source !== "builtin"
+    && model.providerId !== "echoagent-ojlab"
+    && !model.id.startsWith("echoagent-ojlab/")
+    && isMiniMaxMeetingModel(model));
+  const selectedModel = meetingModels.find((model) => model.id === chosenModelId)
+    ?? meetingModels.find((model) => model.id === modelId)
+    ?? meetingModels[0];
+  const connection = useMeetingTranscriptionCapability(selectedModel, models);
+  const capable = connection.available;
   const [records, setRecords] = useState<MeetingRecord[]>([]);
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [selected, setSelected] = useState<MeetingRecord | null>(null);
@@ -172,11 +183,11 @@ export function MeetingMinutesPanel({
   };
 
   const requireProvider = () => {
-    if (capable && modelId && selectedModel?.providerId) {
-      return { modelId, providerId: selectedModel.providerId };
+    if (capable && selectedModel?.providerId) {
+      return { modelId: selectedModel.id, providerId: selectedModel.providerId };
     }
-    onToast?.("请先选择并配置 MiniMax 模型");
-    onOpenModelSettings?.();
+    onToast?.(selectedModel ? connection.error ?? "正在检测转写接口，请稍后重试" : "请先配置 MiniMax 模型");
+    if (!selectedModel) onOpenModelSettings?.();
     return null;
   };
 
@@ -334,15 +345,23 @@ export function MeetingMinutesPanel({
       <header className="meeting-panel__header">
         <div>
           <h1>录音转写</h1>
-          <p>本地保存完整录音，使用 MiniMax 进行说话人转写并生成可追溯的会议纪要。</p>
+          <p>本地保存完整录音，使用当前连接的语音接口转写并生成可追溯的会议纪要。</p>
         </div>
         <div className={`meeting-panel__provider${capable ? " is-ready" : ""}`}>
-          <span>{capable ? "MiniMax 已就绪" : "需要 MiniMax 模型"}</span>
-          {!capable && <button type="button" onClick={onOpenModelSettings}>配置模型</button>}
+          <span>{capable ? "转写接口已就绪" : !selectedModel ? "需要配置 MiniMax 模型" : connection.state === "checking" ? "正在检测转写接口" : "转写接口不可用"}</span>
+          {!selectedModel && <button type="button" onClick={onOpenModelSettings}>配置模型</button>}
+          {selectedModel && connection.state === "unavailable" && <button type="button" onClick={connection.retry}>重新检测</button>}
         </div>
       </header>
 
       <section className="meeting-panel__create">
+        <label>
+          <span>会议模型</span>
+          <select aria-label="会议模型" value={selectedModel?.id ?? ""} onChange={(event) => setChosenModelId(event.target.value)} disabled={recorder.active || busy !== null}>
+            {meetingModels.length === 0 && <option value="">请先配置 MiniMax 模型</option>}
+            {meetingModels.map((model) => <option key={model.id} value={model.id}>{model.label || model.id}</option>)}
+          </select>
+        </label>
         <label>
           <span>会议名称</span>
           <input value={title} maxLength={100} onChange={(event) => setTitle(event.target.value)} disabled={recorder.active} />
@@ -355,7 +374,11 @@ export function MeetingMinutesPanel({
           {busy === "import" ? <Loader2 className="meeting-spin" size={17} /> : <Upload size={17} />}
           导入录音
         </button>
-        <small className="meeting-panel__privacy">录音默认仅保存在本机；开始前请确认已获得参会者同意。转写时仅向 MiniMax 上传不超过 7 分钟的分片。</small>
+        {connection.state === "unavailable" && <small className="meeting-panel__connection-error" role="alert">{connection.error}</small>}
+        <small className={`meeting-panel__privacy${selectedModel?.insecureHttp ? " is-insecure" : ""}`}>
+          录音默认仅保存在本机；开始前请确认已获得参会者同意。转写时向所选服务上传不超过 7 分钟的分片。
+          {selectedModel?.insecureHttp && " 此连接使用 HTTP，录音和 API Key 将通过明文网络传输。"}
+        </small>
       </section>
 
       {recorder.active && recorder.meeting && (
@@ -472,7 +495,7 @@ export function MeetingMinutesPanel({
                       </div>
                     </div>
                   ) : (
-                    <div className="meeting-tab-empty"><FileText size={34} /><h3>尚未生成转写</h3><p>录音保存在本地，开始转写后才会上传分片到 MiniMax。</p></div>
+                    <div className="meeting-tab-empty"><FileText size={34} /><h3>尚未生成转写</h3><p>录音保存在本地，开始转写后才会上传分片到所选服务。</p></div>
                   )
                 )}
 
