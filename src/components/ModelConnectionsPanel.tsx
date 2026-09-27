@@ -506,11 +506,9 @@ export function ModelConnectionsPanel({ onModelsChanged }: ModelConnectionsPanel
                 <div><dt>Base URL</dt><dd title={selectedProvider.baseUrl}>{selectedProvider.baseUrl || "—"}{selectedProvider.managed && <span> · 只读</span>}</dd></div>
                 <div><dt>上下文窗口</dt><dd>{selectedProvider.contextWindow ? `${selectedProvider.contextWindow.toLocaleString()} tokens` : selectedModels.some((model) => model.contextWindow) ? "按模型配置" : "使用模型默认值"}</dd></div>
               </dl>
-              {selectedProvider.baseUrl?.startsWith("http://") && (
+              {selectedProvider.source !== "organization" && selectedProvider.source !== "builtin" && selectedProvider.baseUrl?.startsWith("http://") && (
                 <div className="model-connections__message model-connections__message--warn">
-                  {selectedProvider.source === "builtin"
-                    ? "此连接使用 HTTP 明文传输；提问和模型回复可能被网络路径上的其他人看到。"
-                    : "此连接使用 HTTP 明文传输；API Key、提问和模型回复可能被网络路径上的其他人看到。"}
+                  此连接使用 HTTP 明文传输；API Key、提问和模型回复可能被网络路径上的其他人看到。
                 </div>
               )}
               {savedDefaultMissing && (

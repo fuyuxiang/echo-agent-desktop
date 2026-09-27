@@ -61,7 +61,7 @@ describe("ModelConnectionsPanel", () => {
         source: "organization",
         managed: true,
         credentialConfigured: true,
-        baseUrl: "https://organization.example/v1",
+        baseUrl: "http://organization.example/v1",
         apiBackend: "chat_completions",
         authScheme: "bearer",
         syncedAt: 1_800_000_000_000,
@@ -83,6 +83,7 @@ describe("ModelConnectionsPanel", () => {
     expect(screen.queryByRole("button", { name: "编辑连接" })).not.toBeInTheDocument();
     expect(screen.queryByRole("button", { name: "删除连接" })).not.toBeInTheDocument();
     expect(screen.getByText("远端模型 ID：MiniMax-M3")).toBeInTheDocument();
+    expect(screen.queryByText(/此连接使用 HTTP 明文传输/)).not.toBeInTheDocument();
   });
 
   it("内置模型无需密钥且显示实际默认模型", async () => {
@@ -106,13 +107,22 @@ describe("ModelConnectionsPanel", () => {
     });
     render(<ModelConnectionsPanel />);
     expect(await screen.findByText("此服务无需 API Key")).toBeInTheDocument();
-    expect(screen.getByText("此连接使用 HTTP 明文传输；提问和模型回复可能被网络路径上的其他人看到。")).toBeInTheDocument();
+    expect(screen.queryByText(/此连接使用 HTTP 明文传输/)).not.toBeInTheDocument();
     expect(screen.getByText("内置只读")).toBeInTheDocument();
     expect(screen.getByText("当前自动使用")).toBeInTheDocument();
     expect(screen.getAllByText("上下文 262,144 · 最大输出 8,192 tokens")).toHaveLength(1);
     expect(screen.getByText("上下文 131,072 · 最大输出 8,192 tokens")).toBeInTheDocument();
     expect(screen.getByText("上下文 262,144 · 最大输出 65,536 tokens")).toBeInTheDocument();
     expect(screen.queryByRole("button", { name: "编辑连接" })).not.toBeInTheDocument();
+  });
+
+  it("个人 HTTP 连接仍显示明文传输提醒", async () => {
+    mocks.providersList.mockResolvedValue({
+      providers: [{ id: "custom", providerKind: "custom", label: "个人连接", source: "personal", baseUrl: "http://example.com/v1" }],
+      models: [{ modelId: "model-a", providerId: "custom" }],
+    });
+    render(<ModelConnectionsPanel />);
+    expect(await screen.findByText("此连接使用 HTTP 明文传输；API Key、提问和模型回复可能被网络路径上的其他人看到。")).toBeInTheDocument();
   });
 
   it("区分用户设定的默认模型与当前自动使用的模型", async () => {
