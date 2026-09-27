@@ -1,6 +1,7 @@
 import { forwardRef, useCallback, useEffect, useImperativeHandle, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { Code2, LoaderCircle, RotateCw } from "lucide-react";
+import { idePath, relativeToWorkspace } from "./lib/windows-path";
 
 export interface TheiaMutationTicket {
   taskId: string | null;
@@ -35,14 +36,7 @@ interface ActiveTheiaEndpoint extends TheiaEndpoint {
 }
 
 function belongsToWorkspace(root: string, path: string): boolean {
-  const normalize = (value: string) => value.replaceAll("\\", "/").replace(/\/+$/, "");
-  if (path.replaceAll("\\", "/").split("/").includes("..")) return false;
-  const normalizedRoot = normalize(root);
-  const normalizedPath = normalize(path);
-  const windows = /^[A-Za-z]:\//.test(normalizedRoot);
-  const compareRoot = windows ? normalizedRoot.toLowerCase() : normalizedRoot;
-  const comparePath = windows ? normalizedPath.toLowerCase() : normalizedPath;
-  return comparePath === compareRoot || comparePath.startsWith(`${compareRoot}/`);
+  return relativeToWorkspace(root, path) !== null;
 }
 
 /** Theia owns the IDE surface; EchoAgent owns the surrounding task UI. */
@@ -166,7 +160,7 @@ export const TheiaIdeFrame = forwardRef<TheiaIdeFrameHandle, TheiaIdeFrameProps>
   const frameUrl = useMemo(() => {
     if (!activeEndpoint) return null;
     const url = new URL(activeEndpoint.url);
-    url.hash = encodeURI(root.replaceAll("\\", "/"));
+    url.hash = encodeURI(idePath(root));
     return url.toString();
   }, [activeEndpoint, root]);
   const frameName = useMemo(() => activeEndpoint ? `echo-embed:${JSON.stringify({
@@ -324,7 +318,15 @@ export const TheiaIdeFrame = forwardRef<TheiaIdeFrameHandle, TheiaIdeFrameProps>
           {status === "error" ? (
             <>
               <strong>IDE 启动失败</strong>
-              <p>{error}</p>
+              <p>{error.startsWith("Theia 启动后退出：")
+                ? "本地 IDE 进程启动后退出。请重试；若仍失败，请将下方日志位置提供给技术支持。"
+                : error}</p>
+              {error.startsWith("Theia 启动后退出：") && (
+                <details className="echo-theia__diagnostics">
+                  <summary>查看错误和日志位置</summary>
+                  <pre>{error}</pre>
+                </details>
+              )}
               <button type="button" onClick={() => setAttempt((value) => value + 1)}>
                 <RotateCw size={14} /> 重试
               </button>

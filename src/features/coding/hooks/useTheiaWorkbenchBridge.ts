@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import type { ChatMessage } from "@/stores/session-store";
 import { localPreviewUrls } from "../lib/preview-url";
+import { idePath, relativeToWorkspace } from "../lib/windows-path";
 import type { TheiaIdeFrameHandle } from "../TheiaIdeFrame";
 
 const maximumAgentWidth = (workbenchWidth: number) => Math.max(300, Math.min(800, workbenchWidth - 320));
@@ -43,16 +44,14 @@ export function useTheiaWorkbenchBridge(
   }, [messages, onDetectedPreviewUrl]);
 
   const openTheiaFile = useCallback((rawPath: string, line?: number) => {
-    const root = cwd.replaceAll("\\", "/").replace(/\/+$/, "");
-    const path = rawPath.replaceAll("\\", "/").replace(/^\.\//, "").replace(/\/\.\//g, "/");
+    const root = idePath(cwd);
+    const path = idePath(rawPath).replace(/^\.\//, "").replace(/\/\.\//g, "/");
     if (!path || path.split("/").includes("..")) {
       onToast?.("文件路径无效");
       return;
     }
-    const absolute = path.startsWith("/") || /^[A-Za-z]:\//.test(path) ? path : `${root}/${path}`;
-    const compareRoot = /^[A-Za-z]:\//.test(root) ? root.toLowerCase() : root;
-    const comparePath = /^[A-Za-z]:\//.test(absolute) ? absolute.toLowerCase() : absolute;
-    if (!comparePath.startsWith(`${compareRoot}/`)) {
+    const absolute = path.startsWith("/") || /^[A-Za-z]:\//.test(path) ? path : `${root.replace(/\/+$/, "")}/${path}`;
+    if (!relativeToWorkspace(root, absolute)) {
       onToast?.("只能打开当前项目内的文件");
       return;
     }

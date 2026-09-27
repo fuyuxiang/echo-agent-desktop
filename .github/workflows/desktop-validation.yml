@@ -18,7 +18,7 @@ jobs:
       - uses: pnpm/action-setup@v4
       - uses: actions/setup-node@v7
         with:
-          node-version: '22'
+          node-version: ${{ runner.os == 'Windows' && '24.17.0' || '22' }}
           cache: pnpm
       - uses: dtolnay/rust-toolchain@stable
       - uses: arduino/setup-protoc@v3
@@ -28,6 +28,10 @@ jobs:
       - uses: Swatinem/rust-cache@v2
         with:
           workspaces: src-tauri -> target
+      - name: Enable Windows long paths for IDE validation
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: New-ItemProperty -Path 'HKLM:\SYSTEM\CurrentControlSet\Control\FileSystem' -Name LongPathsEnabled -PropertyType DWord -Value 1 -Force
       - run: pnpm install --frozen-lockfile
       - run: pnpm test
       - run: pnpm ide:build
@@ -37,6 +41,8 @@ jobs:
       - run: node vendor/theia-platform/node_modules/playwright/cli.js install chromium
       - run: node scripts/validate-theia-runtime.mjs
       - run: cargo test --locked --manifest-path src-tauri/Cargo.toml --lib --tests -j 2
+        env:
+          ECHO_VALIDATE_LONG_PATHS: ${{ runner.os == 'Windows' && '1' || '0' }}
       - name: Package macOS validation build
         if: runner.os == 'macOS'
         run: pnpm tauri build --bundles app,dmg --config src-tauri/tauri.macos.conf.json --config '{"identifier":"com.echoagent.validation","bundle":{"createUpdaterArtifacts":false}}'
@@ -51,7 +57,7 @@ jobs:
         shell: pwsh
         run: |
           $installer = Get-ChildItem src-tauri/target/release/bundle/nsis/*.exe | Select-Object -First 1
-          $installDir = Join-Path $env:RUNNER_TEMP 'EchoAgentValidation'
+          $installDir = Join-Path $env:RUNNER_TEMP 'EchoAgent中文路径验证'
           $result = Start-Process $installer.FullName -ArgumentList @('/S', "/D=$installDir") -Wait -PassThru
           if ($result.ExitCode -ne 0) { throw "Installer failed: $($result.ExitCode)" }
           node scripts/validate-packaged-desktop.mjs "$installDir/echoagent.exe"

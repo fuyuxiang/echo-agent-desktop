@@ -90,4 +90,23 @@ describe("Theia IDE bridge", () => {
     expect(JSON.parse(second.name.slice("echo-embed:".length)).bridgeToken).not.toBe(firstToken);
     expect(invoke).toHaveBeenCalledWith("coding_theia_start", { root: "/repo-two" });
   });
+
+  it("opens a Chinese Windows workspace from a verbatim native path", async () => {
+    const root = String.raw`\\?\C:\项目\代码开发`;
+    const onBeforeMutation = vi.fn(async () => ({ taskId: "task-1", closeRound: false }));
+    const onActiveFile = vi.fn();
+    const onToast = vi.fn();
+    render(<TheiaIdeFrame root={root} onBeforeMutation={onBeforeMutation} onAfterMutation={vi.fn()} onActiveFile={onActiveFile} onToast={onToast} />);
+    const frame = await screen.findByTitle("Echo Code IDE") as HTMLIFrameElement;
+    expect(decodeURI(new URL(frame.src).hash)).toBe("#C:/项目/代码开发");
+
+    sendFrameMessage(frame, { type: "echo/workspace", path: String.raw`C:\项目\代码开发` });
+    expect(onToast).not.toHaveBeenCalled();
+    sendFrameMessage(frame, { type: "echo/active-file", path: String.raw`C:\项目\代码开发\src\main.ts` });
+    expect(onActiveFile).toHaveBeenLastCalledWith(String.raw`C:\项目\代码开发\src\main.ts`);
+    sendFrameMessage(frame, { type: "echo/before-mutation", id: "win-write", operation: "write", paths: [String.raw`C:\项目\代码开发\src\main.ts`] });
+    await waitFor(() => expect(onBeforeMutation).toHaveBeenCalledWith("write", [String.raw`C:\项目\代码开发\src\main.ts`]));
+    sendFrameMessage(frame, { type: "echo/active-file", path: String.raw`c:\项目\代码开发\src\other.ts` });
+    expect(onActiveFile).toHaveBeenLastCalledWith(String.raw`c:\项目\代码开发\src\other.ts`);
+  });
 });

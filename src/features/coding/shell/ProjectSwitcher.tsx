@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { Check, ChevronDown, FolderGit2, FolderOpen, X } from "lucide-react";
+import { idePath } from "../lib/windows-path";
 
 export interface ProjectSwitcherItem {
   cwd: string;
@@ -16,7 +17,7 @@ interface ProjectSwitcherProps {
 }
 
 function projectName(cwd: string): string {
-  const normalized = cwd.replace(/\\/g, "/").replace(/\/+$/, "");
+  const normalized = idePath(cwd).replace(/\/+$/, "");
   return normalized.split("/").filter(Boolean).pop() ?? cwd ?? "选择项目";
 }
 
@@ -85,7 +86,7 @@ export function ProjectSwitcher({
         aria-label="切换项目"
         aria-expanded={open}
         aria-haspopup="menu"
-        title={`当前项目：${activeLabel}\n${activeCwd}`}
+        title={`当前项目：${activeLabel}\n${idePath(activeCwd)}`}
         onClick={() => setOpen((value) => !value)}
         onKeyDown={(event) => {
           if (event.key !== "ArrowDown" && event.key !== "ArrowUp") return;
@@ -153,7 +154,7 @@ export function ProjectSwitcher({
                   </span>
                   <span>
                     <strong>{name}</strong>
-                    <small>{project.cwd}</small>
+                    <small>{idePath(project.cwd)}</small>
                   </span>
                 </button>
                 {!active && (

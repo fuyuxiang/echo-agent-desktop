@@ -16,7 +16,7 @@ if (!embedToken) throw new Error("Set ECHO_THEIA_EMBED_TOKEN for the running The
 
 const hostOrigin = "http://127.0.0.1:43121";
 const iframeUrl = new URL(backend);
-iframeUrl.hash = encodeURI(workspace);
+iframeUrl.hash = encodeURI(workspace.replaceAll("\\", "/"));
 const iframeName = `echo-embed:${JSON.stringify({
   embedToken, bridgeToken: "smoke-bridge-token", parentOrigin: hostOrigin,
 })}`;
@@ -85,7 +85,10 @@ browser = await chromium.launch({
   await page.goto(`${hostOrigin}/`);
   try {
   await page.waitForFunction(() => window.echoReady, undefined, { timeout: 30_000 });
-  await page.waitForFunction(path => window.echoWorkspace === path, workspace, { timeout: 15_000 });
+  await page.waitForFunction(path => {
+    const comparable = value => value?.replaceAll("\\", "/").replace(/^\/\/\?\//, "").toLowerCase();
+    return comparable(window.echoWorkspace) === comparable(path);
+  }, workspace, { timeout: 15_000 });
   } catch (error) {
     await page.screenshot({ path: join(tmpdir(), "echo-theia-smoke.png"), fullPage: true });
     console.error("Frames:", page.frames().map(frame => frame.url()));
@@ -136,8 +139,11 @@ browser = await chromium.launch({
       document.querySelector("#ide").contentWindow.postMessage({
         type: "echo/open-file", token: "smoke-bridge-token", path, line: 1,
       }, origin);
-    }, { path: testFile, origin: new URL(backend).origin });
-    await page.waitForFunction(path => window.echoActiveFile === path, testFile, { timeout: 15_000 });
+    }, { path: testFile.replaceAll("\\", "/"), origin: new URL(backend).origin });
+    await page.waitForFunction(path => {
+      const comparable = value => value?.replaceAll("\\", "/").replace(/^\/\/\?\//, "").toLowerCase();
+      return comparable(window.echoActiveFile) === comparable(path);
+    }, testFile, { timeout: 15_000 });
     const editor = ide.locator(".monaco-editor").first();
     await editor.waitFor({ timeout: 15_000 });
     await editor.click();

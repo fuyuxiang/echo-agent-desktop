@@ -4021,6 +4021,7 @@ dependencies = [
  "chrono",
  "core-graphics",
  "dirs 6.0.0",
+ "dunce",
  "echo-agent-acp",
  "echo-agent-memory",
  "echo-agent-pty",

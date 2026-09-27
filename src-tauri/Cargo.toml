@@ -39,6 +39,7 @@ hyper = { version = "1", features = ["client", "http1", "server"] }
 hyper-util = { version = "0.1", features = ["tokio"] }
 tokio = { version = "1", features = ["full"] }
 process-wrap = { version = "9.0.0", features = ["std", "tokio1"] }
+dunce = "1"
 anyhow = "1"
 uuid = { version = "1", features = ["v7"] }
 tempfile = "3"

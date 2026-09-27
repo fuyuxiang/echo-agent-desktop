@@ -3,7 +3,7 @@
 use tauri::Manager;
 
 #[tauri::command]
-pub fn desktop_validation_ready(
+pub async fn desktop_validation_ready(
     app: tauri::AppHandle,
     window: tauri::WebviewWindow,
 ) -> Result<(), String> {
@@ -26,11 +26,37 @@ pub fn desktop_validation_ready(
             return Err(format!("Packaged resource missing: {relative}"));
         }
     }
+    // The staged-runtime smoke check starts Node from a normal build path.
+    // On Windows, also start it through the packaged Tauri resource path: that
+    // path can carry a verbatim prefix which Node rejects for its main script.
+    #[cfg(windows)]
+    let ide_error = async {
+        let workspace = crate::paths::echo_agent_home_dir().join("中文项目验证");
+        std::fs::create_dir_all(&workspace).map_err(|error| error.to_string())?;
+        let access = app.state::<crate::shell_fs::FilesystemAccess>();
+        let authorized = access.authorize_workspace(&workspace.to_string_lossy())?;
+        let server = app.state::<crate::theia::TheiaServer>();
+        let result = crate::theia::coding_theia_start(
+            app.clone(),
+            access,
+            server,
+            authorized.to_string_lossy().into_owned(),
+        )
+        .await;
+        app.state::<crate::theia::TheiaServer>().stop();
+        result.map(|_| ())
+    }
+    .await
+    .err();
+    #[cfg(not(windows))]
+    let ide_error: Option<String> = None;
     crate::paths::write_private_file(
         &crate::paths::echo_agent_home_dir().join("desktop-validation.json"),
         &serde_json::to_vec(&serde_json::json!({
             "version": env!("CARGO_PKG_VERSION"), "platform": std::env::consts::OS,
             "webviewRendered": true, "ipcReady": true, "resourcesPresent": true,
+            "ideStarted": cfg!(windows) && ide_error.is_none(),
+            "ideError": ide_error,
         }))
         .map_err(|e| e.to_string())?,
     )?;

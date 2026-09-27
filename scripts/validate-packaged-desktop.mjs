@@ -12,11 +12,11 @@ let passed = false;
 app.once("error", value => { error = value; });
 const exited = new Promise(resolve => { app.once("exit", resolve); app.once("error", resolve); });
 try {
-  const finished = await Promise.race([exited.then(() => true), delay(60_000, undefined, { ref: false }).then(() => false)]);
+  const finished = await Promise.race([exited.then(() => true), delay(100_000, undefined, { ref: false }).then(() => false)]);
   if (error) throw error;
-  if (!finished) throw new Error("Packaged desktop did not finish its WebView/IPC startup check within 60 seconds");
+  if (!finished) throw new Error("Packaged desktop did not finish its WebView/IPC startup check within 100 seconds");
   const report = JSON.parse(readFileSync(join(home, "desktop-validation.json"), "utf8"));
-  if (!report.webviewRendered || !report.ipcReady || !report.resourcesPresent || app.exitCode !== 0) throw new Error("Packaged desktop startup check failed");
+  if (!report.webviewRendered || !report.ipcReady || !report.resourcesPresent || (process.platform === "win32" && !report.ideStarted) || app.exitCode !== 0) throw new Error(`Packaged desktop startup check failed: ${report.ideError ?? "see the validation report"}`);
   passed = true;
   console.log(JSON.stringify(report));
 } finally {

@@ -36,6 +36,13 @@ describe("buildFileIndex", () => {
     expect(result.truncated).toBe(false);
   });
 
+  it("keeps file index entries relative when Windows reports a verbatim root", async () => {
+    const root = String.raw`\\?\C:\项目`;
+    tree({ [root]: [{ name: "main.ts", path: String.raw`c:\项目\main.ts`, kind: "file" }] });
+    const result = await buildFileIndex(root);
+    expect(result.paths).toEqual(["main.ts"]);
+  });
+
   it("skips noisy build and VCS directories", async () => {
     tree({
       "/repo": [dir("/repo", "node_modules"), dir("/repo", "src"), dir("/repo", ".git")],

@@ -18,6 +18,13 @@ delivery gates.
   rebuilds if the staged runtime is absent, for a different architecture, or
   older than the vendored source or staging scripts. Release scripts run the
   full build and stage steps explicitly.
+- The packaged Windows validation launch starts Theia through Tauri's resource
+  path and checks its authenticated health endpoint. This catches Windows
+  extended-path failures that a staging-directory smoke check cannot see. The
+  validation installation and selected project use Chinese paths. The runtime
+  smoke test edits a file in a long Chinese project path, and the Windows CI
+  unit test requires Node.js 24.17.0 to execute a script beyond 260 UTF-16
+  code units.
 
 The staged resource directories are generated and ignored by Git. Theia's
 source snapshot, Echo bridge extension, runtime lock file, and Node.js fallback
@@ -43,6 +50,9 @@ and exact origin checks. The backend token authenticates Socket.IO and
 protected file transfer endpoints without relying on third-party cookies in
 the desktop webview. The backend remains loopback-only. Theia's standalone
 cookie authentication still works when it is opened outside EchoAgent.
+On Windows, the host converts verbatim disk paths to ordinary paths at the
+Node.js launch and iframe workspace boundaries; native workspace grants keep
+their canonical paths. This also preserves Chinese path components.
 The desktop host passes bootstrap credentials in the iframe browsing-context
 name, not its URL; Theia captures and clears that name before extensions run.
 It retains credentials in iframe session storage for reloads and in memory for

@@ -8,6 +8,7 @@
  */
 
 import { listDir } from "@/lib/agent-client";
+import { idePath, relativeToWorkspace } from "./windows-path";
 
 const MAX_FILES = 20_000;
 const MAX_DEPTH = 12;
@@ -63,11 +64,7 @@ export function applyFileIndexEvent(
 }
 
 function relative(root: string, absolute: string): string {
-  const normalizedRoot = root.replace(/\\/g, "/").replace(/\/+$/, "");
-  const normalized = absolute.replace(/\\/g, "/");
-  return normalized.startsWith(`${normalizedRoot}/`)
-    ? normalized.slice(normalizedRoot.length + 1)
-    : normalized;
+  return relativeToWorkspace(root, absolute) ?? idePath(absolute);
 }
 
 /**

@@ -1,5 +1,5 @@
 import { spawn } from "node:child_process";
-import { mkdtempSync, existsSync, rmSync } from "node:fs";
+import { mkdtempSync, mkdirSync, existsSync, rmSync } from "node:fs";
 import { join, resolve } from "node:path";
 import { tmpdir } from "node:os";
 import { randomBytes } from "node:crypto";
@@ -9,7 +9,10 @@ const root = resolve(import.meta.dirname, "../src-tauri/resources/theia");
 const node = join(root, process.platform === "win32" ? "node/node.exe" : "node/bin/node");
 const entry = join(root, "browser/lib/backend/main.js");
 if (!existsSync(node) || !existsSync(entry)) throw new Error("Staged Node or Theia backend missing");
-const temporary = mkdtempSync(join(tmpdir(), "echo-ide-validation-"));
+const temporary = mkdtempSync(join(tmpdir(), "echo-中文项目验证-"));
+const workspace = join(temporary, "中文路径".repeat(30), "代码开发".repeat(30));
+mkdirSync(workspace, { recursive: true });
+if (process.platform === "win32" && workspace.length <= 260) throw new Error("Long-path workspace fixture is too short");
 const token = randomBytes(32).toString("hex");
 const url = "http://127.0.0.1:31235";
 const env = { ...process.env, ECHO_THEIA_EMBED_TOKEN: token, THEIA_CONFIG_DIR: join(temporary, "config") };
@@ -30,7 +33,7 @@ try {
   }
   if (!ready) throw new Error("Theia did not become ready within 60 seconds");
   const result = await new Promise((resolve, reject) => {
-    const child = spawn(process.execPath, [resolvePath("smoke-theia.mjs")], { stdio: "inherit", env: { ...env, THEIA_URL: url, THEIA_WORKSPACE: temporary, ECHO_SMOKE_EDIT: "1", ECHO_SMOKE_PREVIEW: "1" } });
+    const child = spawn(process.execPath, [resolvePath("smoke-theia.mjs")], { stdio: "inherit", env: { ...env, THEIA_URL: url, THEIA_WORKSPACE: workspace, ECHO_SMOKE_EDIT: "1", ECHO_SMOKE_PREVIEW: "1" } });
     const timer = setTimeout(() => { child.kill(); reject(new Error("IDE interaction smoke exceeded 90 seconds")); }, 90_000);
     child.once("error", error => { clearTimeout(timer); reject(error); }); child.once("exit", code => { clearTimeout(timer); resolve(code); });
   });

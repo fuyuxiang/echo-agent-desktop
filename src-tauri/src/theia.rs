@@ -120,6 +120,61 @@ fn node_executable(app: &AppHandle) -> PathBuf {
     PathBuf::from("node")
 }
 
+/// Tauri's Windows resource directory can inherit a `\\?\` prefix from
+/// `current_exe()`. Node.js 22/24 fails while resolving its main script from
+/// that path (EISDIR on the bare drive letter), before Theia can start.
+fn node_compatible_path(path: &Path) -> Result<PathBuf, String> {
+    #[cfg(windows)]
+    {
+        let simplified = dunce::simplified(path);
+        if simplified != path {
+            return Ok(simplified.to_path_buf());
+        }
+        if !path.to_string_lossy().starts_with(r"\\?\") {
+            return Ok(path.to_path_buf());
+        }
+        let Some(raw) = path.to_str() else {
+            return Err(format!(
+                "IDE 路径包含无法转换的 Windows 字符：{}",
+                path.display()
+            ));
+        };
+        let plain = raw.strip_prefix(r"\\?\").expect("checked above");
+        let bytes = plain.as_bytes();
+        let candidate = if bytes.len() >= 3
+            && bytes[0].is_ascii_alphabetic()
+            && bytes[1] == b':'
+            && bytes[2] == b'\\'
+        {
+            PathBuf::from(plain)
+        } else if let Some(unc) = plain.strip_prefix("UNC\\") {
+            PathBuf::from(format!(r"\\{unc}"))
+        } else {
+            return Err(format!("IDE 不支持此 Windows 设备路径：{}", path.display()));
+        };
+        // dunce keeps paths over MAX_PATH in verbatim form. For a long path,
+        // compare both spellings against the same real file before passing the
+        // plain Unicode path to Node. This preserves long-path support on
+        // Windows installations that enable it, without changing the target of
+        // a path containing a reserved name or trailing space/dot.
+        let same_target = matches!(
+            (fs::canonicalize(path), fs::canonicalize(&candidate)),
+            (Ok(original), Ok(plain)) if original == plain
+        );
+        if !same_target {
+            return Err(format!(
+                "Node.js 无法访问 IDE 路径：{}。请检查 Windows 长路径设置或改用较短的本地路径。",
+                path.display()
+            ));
+        }
+        Ok(candidate)
+    }
+    #[cfg(not(windows))]
+    {
+        Ok(path.to_path_buf())
+    }
+}
+
 fn check_node(node: &PathBuf) -> Result<(), String> {
     let output = Command::new(node)
         .arg("--version")
@@ -186,6 +241,9 @@ pub async fn coding_theia_start(
     // Theia receives the selected root via the browser URL fragment. Reuse
     // EchoAgent's workspace allow-list before exposing that folder to the IDE.
     let authorized_root = access.require_workspace(&root)?;
+    // The iframe must use the same ordinary spelling as Theia's file service.
+    // Reject a verbatim path if removing its prefix would change its target.
+    node_compatible_path(&authorized_root)?;
 
     let mut guard = server
         .process
@@ -209,8 +267,8 @@ pub async fn coding_theia_start(
         }
     }
 
-    let app_dir = browser_app_dir(&app)?;
-    let node = node_executable(&app);
+    let app_dir = node_compatible_path(&browser_app_dir(&app)?)?;
+    let node = node_compatible_path(&node_executable(&app))?;
     check_node(&node)?;
     let data_dir = app
         .path()
@@ -218,6 +276,7 @@ pub async fn coding_theia_start(
         .map_err(|error| error.to_string())?;
     let config_dir = data_dir.join("theia-config");
     fs::create_dir_all(&config_dir).map_err(|error| format!("无法创建 IDE 配置目录：{error}"))?;
+    let config_dir = node_compatible_path(&config_dir)?;
     let log_path = data_dir.join("theia.log");
     // One launch gets one fresh log; retries within that launch remain visible.
     File::create(&log_path).map_err(|error| format!("无法创建 IDE 日志：{error}"))?;
@@ -322,5 +381,65 @@ mod tests {
         writeln!(log, "second attempt: missing module").unwrap();
         assert!(!port_conflict_in_attempt(&log_path, second_attempt_offset));
         assert!(port_conflict_in_attempt(&log_path, 0));
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn node_entry_uses_a_regular_windows_path() {
+        let path = Path::new(r"\\?\C:\Program Files\EchoAgent\theia\browser");
+        assert_eq!(
+            node_compatible_path(path).unwrap(),
+            PathBuf::from(r"C:\Program Files\EchoAgent\theia\browser")
+        );
+        let chinese = Path::new(r"\\?\C:\应用\代码开发\theia\browser");
+        assert_eq!(
+            node_compatible_path(chinese).unwrap(),
+            PathBuf::from(r"C:\应用\代码开发\theia\browser")
+        );
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn node_entry_keeps_long_unicode_paths_when_windows_can_resolve_them() {
+        let directory = tempfile::tempdir().unwrap();
+        let base = directory.path().canonicalize().unwrap();
+        let long_dir = base.join("中文路径".repeat(30)).join("代码开发".repeat(30));
+        fs::create_dir_all(&long_dir).unwrap();
+        let entry = long_dir.join("入口.js");
+        fs::write(&entry, "process.stdout.write('ok')").unwrap();
+        let plain = PathBuf::from(entry.to_str().unwrap().strip_prefix(r"\\?\").unwrap());
+        assert!(plain.to_string_lossy().encode_utf16().count() > 260);
+
+        let require_long_path = std::env::var_os("ECHO_VALIDATE_LONG_PATHS").as_deref()
+            == Some(std::ffi::OsStr::new("1"));
+        let plain_is_resolvable = plain.canonicalize().is_ok();
+        if require_long_path {
+            assert!(
+                plain_is_resolvable,
+                "Windows must resolve ordinary long Unicode paths"
+            );
+        }
+        if plain_is_resolvable {
+            assert_eq!(node_compatible_path(&entry).unwrap(), plain);
+            let staged_node =
+                PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("resources/theia/node/node.exe");
+            if require_long_path {
+                assert!(
+                    staged_node.is_file(),
+                    "stage the packaged Node.js before this test"
+                );
+            }
+            if staged_node.is_file() {
+                let output = Command::new(staged_node).arg(&plain).output().unwrap();
+                assert!(
+                    output.status.success(),
+                    "{}",
+                    String::from_utf8_lossy(&output.stderr)
+                );
+                assert_eq!(output.stdout.as_slice(), b"ok");
+            }
+        } else {
+            assert!(node_compatible_path(&entry).is_err());
+        }
     }
 }

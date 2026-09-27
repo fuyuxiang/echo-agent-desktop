@@ -37,6 +37,7 @@ import { TheiaTaskReview } from "./TheiaTaskReview";
 import { ChangeSetView } from "./explorer/ChangeSetView";
 import { codingTaskDraftKey } from "./lib/task-draft-key";
 import { useTheiaWorkbenchBridge } from "./hooks/useTheiaWorkbenchBridge";
+import { idePath, relativeToWorkspace } from "./lib/windows-path";
 import { useCodingMutationLifecycle } from "./hooks/useCodingMutationLifecycle";
 import {
   buildCodingWorkflowPrompt,
@@ -119,12 +120,7 @@ function normalizedRelativePath(path: string): string {
 }
 
 function workspaceRelativePath(root: string, path: string): string {
-  const normalizedRoot = root.replace(/\\/g, "/").replace(/\/+$/, "");
-  const normalizedPath = path.replace(/\\/g, "/");
-  if (normalizedPath.startsWith(`${normalizedRoot}/`)) {
-    return normalizedRelativePath(normalizedPath.slice(normalizedRoot.length + 1));
-  }
-  return normalizedRelativePath(normalizedPath);
+  return normalizedRelativePath(relativeToWorkspace(root, path) ?? idePath(path));
 }
 /**
  * Integrated coding workbench: repository navigation, editing, task-bound Agent
@@ -1158,7 +1154,7 @@ export function CodingWorkbench({
                 <li key={workspace.cwd}>
                   <button type="button" onClick={() => onSelectWorkspace?.(workspace.cwd)}>
                     {basename(workspace.cwd)}
-                    <small>{workspace.cwd}</small>
+                    <small>{idePath(workspace.cwd)}</small>
                   </button>
                 </li>
               ))}
