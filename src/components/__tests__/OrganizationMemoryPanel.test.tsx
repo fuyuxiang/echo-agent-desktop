@@ -237,7 +237,7 @@ describe("OrganizationMemoryPanel", () => {
     expect(screen.getByRole("heading", { name: "文档" })).toBeInTheDocument();
     fireEvent.click(screen.getByRole("button", { name: "概览" }));
     fireEvent.click(screen.getByRole("button", { name: "查看 Skills" }));
-    expect(screen.getAllByRole("heading", { name: "组织 Skills" })).toHaveLength(2);
+    expect(screen.getByRole("heading", { name: "组织 Skills" })).toBeInTheDocument();
   });
 
   it("经验或 Skill 待审核时持续刷新工作区状态", async () => {

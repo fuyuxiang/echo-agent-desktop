@@ -15130,3 +15130,27 @@ body:has([aria-modal="true"]) .global-tooltip:not(.global-tooltip--dialog) {
   .org-document-library__row .org-library__actions { margin-left: 0; flex-wrap: wrap; }
   .org-document-submissions { padding: 17px 16px; }
 }
+
+/* Organization Skills */
+.org-skill-library__toolbar { align-items: center; gap: 16px; padding: 14px 20px; }
+.org-skill-library__summary { display: inline-flex; align-items: center; gap: 8px; white-space: nowrap; }
+.org-skill-library__summary strong { color: var(--echo-text-strong); font-size: .8125rem; }
+.org-skill-library__summary span { color: var(--echo-text-light); font-size: .6875rem; font-variant-numeric: tabular-nums; }
+.org-skill-library__actions { align-items: center; justify-content: flex-end; gap: 8px; margin-left: auto; }
+.org-skill-library__scope-field { flex-direction: row; align-items: center; gap: 8px; white-space: nowrap; }
+.org-skill-library__scope-field select { min-width: 150px; max-width: 190px; }
+.org-skill-library__actions button { flex: none; white-space: nowrap; }
+.org-skill-library__empty { grid-column: 1 / -1; display: flex; min-height: 145px; flex-direction: column; align-items: center; justify-content: center; gap: 7px; padding: 20px; text-align: center; }
+.org-skill-library__empty-icon { display: grid; width: 42px; height: 42px; place-items: center; margin-bottom: 3px; border-radius: 12px; background: color-mix(in srgb, var(--echo-brand) 9%, var(--echo-bg-primary)); color: var(--echo-brand); }
+.org-skill-library__empty strong { color: var(--echo-text-strong); font-size: .8125rem; font-weight: 600; }
+.org-skill-library__empty > span:last-child { color: var(--echo-text-light); font-size: .6875rem; }
+@media (max-width: 900px) {
+  .org-skill-library__toolbar { align-items: stretch; }
+  .org-skill-library__actions { justify-content: flex-start; margin-left: 0; }
+}
+@media (max-width: 650px) {
+  .org-skill-library__actions { gap: 9px; }
+  .org-skill-library__scope-field { width: 100%; }
+  .org-skill-library__scope-field select { flex: 1; max-width: none; }
+  .org-skill-library__actions button { flex: 1; }
+}

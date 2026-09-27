@@ -61,7 +61,7 @@ Object.assign(window, {
         }
         case "marketplace_list": return { sources: [], plugins: [] };
         case "plugins_list": return { plugins: [] };
-        case "org_session": return { loggedIn: true, organizationMemoryEnabled: true, serverUrl: "https://10.132.19.82:8787", user: orgUser, bootstrap: { apiVersion: 1, user: orgUser, scopes: orgScopes, policy: { allowPersonalCloud: true }, serverTime: 1 } };
+        case "org_session": return { loggedIn: true, organizationMemoryEnabled: true, serverUrl: "https://10.132.19.82:8787", user: orgUser, bootstrap: { apiVersion: 1, user: orgUser, scopes: orgScopes, policy: { allowPersonalCloud: true, allowSkillSubmission: true }, serverTime: 1 } };
         case "org_list_scopes": return orgScopes;
         case "org_list_documents": {
           const items = orgDocuments.filter((document) => !args.scopeId || document.scopeId === args.scopeId);

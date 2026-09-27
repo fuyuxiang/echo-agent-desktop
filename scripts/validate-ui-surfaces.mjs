@@ -62,6 +62,17 @@ try {
         await page.screenshot({ path: join(output, `${surface}-upload-${width}-${theme}.png`) });
         layouts += 1;
         await uploadDialog.getByRole("button", { name: "取消" }).click();
+        await page.locator(".org-memory__nav button", { hasText: "Skills" }).click();
+        await page.getByText("暂无已发布的 Skill").waitFor();
+        const skillsGeometry = await page.evaluate(() => {
+          const summary = document.querySelector(".org-skill-library__summary").getBoundingClientRect();
+          const actions = document.querySelector(".org-skill-library__actions").getBoundingClientRect();
+          return { summary: { right: summary.right, bottom: summary.bottom }, actions: { left: actions.left, top: actions.top } };
+        });
+        assert.ok(skillsGeometry.summary.right <= skillsGeometry.actions.left + 1 || skillsGeometry.summary.bottom <= skillsGeometry.actions.top + 1, "organization Skills toolbar overlaps");
+        assert.ok(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth + 1), "organization Skills: horizontal page overflow");
+        await page.screenshot({ path: join(output, `${surface}-skills-${width}-${theme}.png`) });
+        layouts += 1;
         continue;
       }
       if (surface === "capabilities") await page.getByRole("heading", { name: "我的专家" }).waitFor();

@@ -17,6 +17,7 @@ import {
   History,
   LayoutDashboard,
   MessageSquareText,
+  PackageOpen,
   Plus,
   Upload,
   UserRound,
@@ -795,7 +796,7 @@ export function OrganizationMemoryPanel({
   const pageDescription = tab === "overview" ? "管理可供 Agent 使用的组织经验、文档与 Skills。"
     : tab === "memories" ? "沉淀决策、规范、操作手册和踩坑记录，供 Agent 在任务前召回。"
       : tab === "documents" ? "查看、上传和管理组织文档。"
-        : "查看组织分发的能力包，并管理当前设备上的安装状态。";
+        : "管理组织 Skill 的提交、安装与同步。";
 
   return (
     <div className="org-memory">
@@ -939,17 +940,17 @@ export function OrganizationMemoryPanel({
       )}
 
       {tab === "skills" && (
-        <section className="org-library">
-          <div className="org-library__toolbar">
-            <div><h2>组织 Skills</h2><p>点击安装后下载到用户全局 <code>~/.echo-agent/skills/organization</code>，专家技能页直接读取并使用。</p></div>
-            <div className="org-library__actions">
-              <label className="org-library__scope-field"><span>提交到</span><select aria-label="Skill 提交范围" value={writeScope} onChange={(event) => setWriteScope(event.target.value)}><option value="">选择提交范围</option>{scopes.map((scope) => <option key={scope.id} value={scope.id}>{scopeLabel(scope.kind)} · {scope.name}</option>)}</select></label>
-              {skills.some((skill) => skill.scopeKind === "personal") && scopes.some((scope) => scope.kind !== "personal") && <label className="org-library__scope-field"><span>副本发布到</span><select aria-label="Skill 副本发布目标" value={publishScope} onChange={(event) => setPublishScope(event.target.value)}><option value="">选择副本发布目标</option>{scopes.filter((scope) => scope.kind !== "personal").map((scope) => <option key={scope.id} value={scope.id}>{scopeLabel(scope.kind)} · {scope.name}</option>)}</select></label>}
+        <section className="org-library org-skill-library">
+          <div className="org-library__toolbar org-skill-library__toolbar">
+            <div className="org-skill-library__summary"><strong>已发布</strong><span>{visibleSkills.length}</span></div>
+            <div className="org-library__actions org-skill-library__actions">
+              <label className="org-library__scope-field org-skill-library__scope-field"><span>提交到</span><select aria-label="Skill 提交范围" value={writeScope} onChange={(event) => setWriteScope(event.target.value)}><option value="">选择提交范围</option>{scopes.map((scope) => <option key={scope.id} value={scope.id}>{scopeLabel(scope.kind)} · {scope.name}</option>)}</select></label>
+              {skills.some((skill) => skill.scopeKind === "personal") && scopes.some((scope) => scope.kind !== "personal") && <label className="org-library__scope-field org-skill-library__scope-field"><span>副本发布到</span><select aria-label="Skill 副本发布目标" value={publishScope} onChange={(event) => setPublishScope(event.target.value)}><option value="">选择副本发布目标</option>{scopes.filter((scope) => scope.kind !== "personal").map((scope) => <option key={scope.id} value={scope.id}>{scopeLabel(scope.kind)} · {scope.name}</option>)}</select></label>}
               <button onClick={() => void syncSkills()} disabled={busy}><RefreshCw size={15} />安全同步</button><button className="org-memory__primary" onClick={() => void pickAndUploadSkill()} disabled={busy || !uploadScope || !allowSkillSubmission}><Upload size={15} />提交 Skill</button>
             </div>
           </div>
           <div className="org-skill-grid">
-            {visibleSkills.length === 0 && <div className="org-library__empty">当前授权范围还没有已发布 Skills</div>}
+            {visibleSkills.length === 0 && <div className="org-skill-library__empty"><span className="org-skill-library__empty-icon"><PackageOpen size={20} /></span><strong>暂无已发布的 Skill</strong><span>提交并通过审核后会显示在这里</span></div>}
             {visibleSkills.map((skill) => (
               <article className="org-skill-card" key={skill.skillId}>
                 <div><strong>{skill.name}</strong><span>v{skill.version}</span></div>
