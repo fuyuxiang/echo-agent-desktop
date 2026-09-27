@@ -2054,10 +2054,12 @@ function Shell() {
     // don't (first open / post-restart) the upcoming replay fills the empty
     // transcript. Either way the focused mirror is refreshed in one step.
     sessionStore.getState().setSession(sessionId);
+    let historyLoaded = false;
     try {
       // Load with the session's own cwd. Opening history must not re-aim the
       // working directory selected for the next new task.
       const loadedModelId = await agentLoadSession(sessionId, entry.cwd);
+      historyLoaded = true;
       if (selectionGenerationRef.current !== generation) {
         if (strict) throw new Error("任务打开已被新的导航操作取代");
         return;
@@ -2085,6 +2087,13 @@ function Shell() {
       }
       if (strict) throw e;
     } finally {
+      // Historical replay can omit its terminal turn update. A replay-created
+      // assistant must not keep the Composer in a running state after load.
+      // Cached live turns are protected by finalizeIncompleteReplay itself.
+      sessionStore.getState().finalizeIncompleteReplay(
+        sessionId,
+        historyLoaded && findSessionSummary(sessionId)?.status === "completed",
+      );
       setLoadingSession((pending) => pending?.generation === generation ? null : pending);
       // Replay window is over: a *new* turn's updates for this session must be
       // ingested again. (No-op when there was no cached transcript to suppress.)

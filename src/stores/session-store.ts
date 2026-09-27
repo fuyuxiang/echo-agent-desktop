@@ -203,8 +203,10 @@ interface SessionState {
   clearReplaySuppression: (id?: string) => void;
   /** Finish only a replay-created, unterminated historical tail after
    *  agentLoadSession returns. A process exit can leave the durable log at a
-   *  tool_call with no turn_completed event; that must not look live forever. */
-  finalizeIncompleteReplay: (id?: string) => void;
+   *  tool_call with no turn_completed event; that must not look live forever.
+   *  A persisted completed status confirms the turn ended normally even when
+   *  the replay omitted its terminal update. */
+  finalizeIncompleteReplay: (id?: string, knownCompleted?: boolean) => void;
 
   // --- transcript ops ---
   /** Append a user message (sent optimistically before the round-trip). */
@@ -1205,7 +1207,7 @@ export const useSessionStore = create<SessionState>((set, get) => {
       );
     },
 
-    finalizeIncompleteReplay: (id) => {
+    finalizeIncompleteReplay: (id, knownCompleted = false) => {
       const target = id ?? get().sessionId;
       if (!target) return;
       applyToTranscript(target, (transcript) => {
@@ -1215,6 +1217,12 @@ export const useSessionStore = create<SessionState>((set, get) => {
         // Cached live turns do not have replayed=true. Never terminate them:
         // they may still be producing updates while the user changes pages.
         if (!active?.replayed) return transcript;
+        const hasUnfinishedTool = active.parts.some(
+          (part) => part.kind === "tool_call" && part.toolCall.status === "in_progress",
+        );
+        const hasVisibleReply = active.parts.some(
+          (part) => part.kind === "text" && part.text.trim().length > 0,
+        );
         const messages = transcript.messages.map((message) => {
           if (message.id !== activeId) return message;
           const parts = message.parts.map((part) => {
@@ -1240,9 +1248,14 @@ export const useSessionStore = create<SessionState>((set, get) => {
             ...message,
             parts,
             complete: true,
-            stopReason: "cancelled",
-            cancellationCategory: "session_replay_incomplete",
-            agentResult: "上次执行在应用退出或 Runtime 中断前未留下完成事件，已结束历史恢复中的假运行状态。",
+            ...(knownCompleted ? { stopReason: "end_turn" } : {}),
+            ...(!knownCompleted && (!hasVisibleReply || hasUnfinishedTool)
+              ? {
+                  stopReason: "cancelled",
+                  cancellationCategory: "session_replay_incomplete",
+                  agentResult: "上次执行在应用退出或 Runtime 中断前未留下完成事件，已结束历史恢复中的假运行状态。",
+                }
+              : {}),
           };
         });
         return {

@@ -1996,6 +1996,13 @@ fn handle_session_notification(app: &AppHandle, params: &Value) {
     tracing::info!(session_id, kind, "received echo.agent/session_notification");
     match kind {
         "turn_completed" => {
+            // Durable turn endings arrive through this extension notification,
+            // not ACP SessionNotification. Forward them to the transcript so
+            // replayed replies close their streaming state on session load.
+            let _ = app.emit(
+                "agent://update",
+                durable_completion_update_event(session_id, params, update),
+            );
             if let Some(event) = parse_turn_usage_event(session_id, params, update) {
                 let _ = app.emit("agent://turn-usage", event);
             }
@@ -2045,6 +2052,18 @@ fn handle_session_notification(app: &AppHandle, params: &Value) {
                 "session_notification: unhandled kind, ignoring"
             );
         }
+    }
+}
+
+fn durable_completion_update_event(
+    session_id: &str,
+    params: &Value,
+    update: &Value,
+) -> UpdateEvent {
+    UpdateEvent {
+        session_id: Some(session_id.to_string()),
+        meta: params.get("_meta").cloned(),
+        update: update.clone(),
     }
 }
 
@@ -2508,6 +2527,24 @@ mod tests {
         assert_eq!(event.occurred_at, Some(1_788_000_000_000));
         assert_eq!(event.event_id.as_deref(), Some("evt-1"));
         assert_eq!(event.usage["modelCalls"], 2);
+    }
+
+    #[test]
+    fn forwards_durable_turn_completion_with_session_and_replay_metadata() {
+        let params = serde_json::json!({
+            "_meta": { "isReplay": true, "agentTimestampMs": 1_788_000_000_000_i64 }
+        });
+        let update = serde_json::json!({
+            "sessionUpdate": "turn_completed",
+            "prompt_id": "p-1",
+            "stop_reason": "end_turn"
+        });
+        let value = serde_json::to_value(durable_completion_update_event("s-1", &params, &update))
+            .expect("serializable update");
+        assert_eq!(value["sessionId"], "s-1");
+        assert_eq!(value["_meta"]["isReplay"], true);
+        assert_eq!(value["sessionUpdate"], "turn_completed");
+        assert_eq!(value["stop_reason"], "end_turn");
     }
 
     #[test]
