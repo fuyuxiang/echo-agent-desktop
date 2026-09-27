@@ -192,7 +192,7 @@ export const orgSubmitMemoryCandidate = (input: {
   sensitivity: input.sensitivity ?? 0,
 });
 export const orgSubmitDocument = (filePath: string, scopeId: string, title?: string, tags?: string[]) =>
-  invoke<{ submissionId?: string | null; docId?: string | null; state: string; documentStatus?: string }>(
+  invoke<{ submissionId?: string | null; docId?: string | null; state: string; documentStatus?: string; dedup?: boolean }>(
     "org_submit_document",
     { filePath, scopeId, title: title ?? null, tags: tags ?? null },
   );
@@ -210,7 +210,7 @@ export interface OrgFolderFile { path: string; relativePath: string; size: numbe
 export const orgScanDocumentFolder = (folderPath: string) =>
   invoke<{ items: OrgFolderFile[]; skipped: number; totalBytes: number }>("org_scan_document_folder", { folderPath });
 export const orgFetchDocument = (docId: string, page?: number | null, range?: string) =>
-  invoke<{ docId: string; text: string; chunks: Array<{ seq: number; text: string; heading?: string; locPage?: number }> }>(
+  invoke<{ docId: string; text: string; chunks: Array<{ seq: number; text: string; heading?: string; locPage?: number }>; hasMore?: boolean; nextSeq?: number | null }>(
     "org_fetch_document",
     { docId, page: page ?? null, range: range ?? null },
   );

@@ -466,18 +466,18 @@ export function OrganizationMemoryPanel({
       );
       const failures: string[] = [];
       let done = 0;
+      let skipped = 0;
       settled.forEach((result, index) => {
-        if (result.status === "fulfilled") done += 1;
+        if (result.status === "fulfilled") {
+          if (result.value.dedup || result.value.state === "duplicate") skipped += 1;
+          else done += 1;
+        }
         else failures.push(`${files[index].title ?? files[index].path}: ${String(result.reason).replace(/^Error:\s*/, "")}`);
       });
       batchError = failures.length > 0 ? failures.slice(0, 3).join("\n") : null;
       setError(batchError);
-      if (done > 0) {
-        onToast?.(
-          failures.length > 0
-            ? `已上传 ${done} 个文档，失败 ${failures.length} 个`
-            : `已上传 ${done} 个文档，正在建立索引`,
-        );
+      if (done > 0 || skipped > 0) {
+        onToast?.(`新增 ${done} 个文档，跳过重复 ${skipped} 个${failures.length ? `，失败 ${failures.length} 个` : ""}${done ? "；正在建立索引" : ""}`);
       } else {
         onToast?.(`上传失败：${failures[0] ?? "未知原因"}`);
       }
@@ -538,7 +538,7 @@ export function OrganizationMemoryPanel({
       if (officeDocument && parsedDocId) {
         const parsed = await orgFetchDocument(parsedDocId, null, "0:199");
         if (parsed.chunks.length > 0) {
-          setPreview({ name, content: parsed.text, parsed: true, docId: parsedDocId, nextChunk: 200, more: parsed.chunks.length === 200, resourceId: id, submission, sourceType });
+          setPreview({ name, content: parsed.text, parsed: true, docId: parsedDocId, nextChunk: (parsed.nextSeq ?? 199) + 1, more: parsed.hasMore ?? parsed.chunks.length === 200, resourceId: id, submission, sourceType });
           return;
         }
       }
@@ -557,7 +557,7 @@ export function OrganizationMemoryPanel({
         try {
           const parsed = await orgFetchDocument(parsedDocId, null, "0:199");
           if (parsed.chunks.length === 0) throw new Error("尚无解析内容");
-          setPreview({ name, content: parsed.text, parsed: true, docId: parsedDocId, nextChunk: 200, more: parsed.chunks.length === 200, resourceId: id, submission, sourceType });
+          setPreview({ name, content: parsed.text, parsed: true, docId: parsedDocId, nextChunk: (parsed.nextSeq ?? 199) + 1, more: parsed.hasMore ?? parsed.chunks.length === 200, resourceId: id, submission, sourceType });
           return;
         } catch { /* Show the original preview error. */ }
       }
@@ -574,8 +574,8 @@ export function OrganizationMemoryPanel({
       setPreview((current) => current ? {
         ...current,
         content: `${current.content}\n\n${parsed.text}`,
-        nextChunk: start + 200,
-        more: parsed.chunks.length === 200,
+        nextChunk: (parsed.nextSeq ?? start + 199) + 1,
+        more: parsed.hasMore ?? parsed.chunks.length === 200,
       } : current);
     } catch (reason) { setError(String(reason)); } finally { setPreviewLoading(false); }
   };

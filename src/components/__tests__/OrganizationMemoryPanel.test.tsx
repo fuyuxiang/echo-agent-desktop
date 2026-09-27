@@ -308,6 +308,20 @@ describe("OrganizationMemoryPanel", () => {
     expect(peak).toBeLessThanOrEqual(3);
   });
 
+  it("重复文档在批量上传结果中计为跳过", async () => {
+    const toast = vi.fn();
+    api.orgSubmitDocument.mockImplementation(async (path: string) => path.endsWith("0.md")
+      ? { state: "duplicate", dedup: true }
+      : { state: "approved", dedup: false });
+    vi.mocked(filesystemPickFiles).mockResolvedValue(["/tmp/0.md", "/tmp/1.md"]);
+    render(<OrganizationMemoryPanel onToast={toast} />);
+    await screen.findByText("Alice · https://memory.example.com");
+    fireEvent.click(screen.getByRole("button", { name: /^文档/ }));
+    fireEvent.click(screen.getByRole("button", { name: "上传文档" }));
+    fireEvent.click(within(screen.getByRole("dialog", { name: "选择上传位置" })).getByRole("button", { name: "选择文件" }));
+    await waitFor(() => expect(toast).toHaveBeenCalledWith(expect.stringContaining("新增 1 个文档，跳过重复 1 个")));
+  });
+
   it("已提交文档可预览、下载并由本人确认移除", async () => {
     api.orgDocumentSubmissionsMinePage.mockResolvedValue({
       items: [{ id: "submission-1", title: "报告", sourceType: "md", byteSize: 128,
