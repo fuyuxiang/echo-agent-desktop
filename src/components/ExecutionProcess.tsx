@@ -8,8 +8,15 @@ import {
   summarizeExecutionProcess,
 } from "@/lib/execution-process";
 import type { KnowledgeTurnTrace } from "@/stores/knowledge-store";
+import {
+  forgetExecutionDisclosureChoice,
+  getExecutionDisclosureChoice,
+  rememberExecutionDisclosureChoice,
+} from "@/lib/execution-disclosure";
 
 interface ExecutionProcessProps {
+  sessionId?: string;
+  messageId?: string;
   parts: MessagePart[];
   active: boolean;
   startedAt?: number;
@@ -113,6 +120,8 @@ function ReasoningDisclosure({
  * dense tool output to the existing right-side detail panel.
  */
 export function ExecutionProcess({
+  sessionId,
+  messageId,
   parts,
   active,
   startedAt,
@@ -140,14 +149,15 @@ export function ExecutionProcess({
     [active, cancellationCategory, cancelTrigger, parts, stopReason],
   );
   const needsAttention = summary.state === "attention" || summary.state === "stopped";
-  // Keep live reasoning visible until the first user-facing answer arrives.
-  // Abnormal endings stay open so the diagnostic context is never hidden.
-  const shouldOpenAutomatically = needsAttention || !hasFinalAnswer;
-  const [open, setOpen] = useState(shouldOpenAutomatically);
+  // Show work while it is happening. Completed turns stay compact, including
+  // tool-only and failed turns; their status remains visible in the header.
+  const shouldOpenAutomatically = active && !hasFinalAnswer;
+  const savedChoice = getExecutionDisclosureChoice(sessionId, messageId);
+  const [open, setOpen] = useState(savedChoice ?? shouldOpenAutomatically);
   const [now, setNow] = useState(() => Date.now());
   const previousActive = useRef(active);
   const previousAutomaticOpen = useRef(shouldOpenAutomatically);
-  const userToggled = useRef(false);
+  const userToggled = useRef(savedChoice !== undefined);
 
   useLayoutEffect(() => {
     if (!startedAt || !active) return;
@@ -161,6 +171,7 @@ export function ExecutionProcess({
     const beganNewRun = active && !previousActive.current;
     if (beganNewRun) {
       userToggled.current = false;
+      forgetExecutionDisclosureChoice(sessionId, messageId);
     }
 
     // Follow the automatic state only until the user makes an explicit choice.
@@ -175,7 +186,7 @@ export function ExecutionProcess({
 
     previousActive.current = active;
     previousAutomaticOpen.current = shouldOpenAutomatically;
-  }, [active, shouldOpenAutomatically]);
+  }, [active, messageId, sessionId, shouldOpenAutomatically]);
 
   const processRows = useMemo(() => groupProcessRows(parts), [parts]);
   const duration = startedAt
@@ -215,7 +226,9 @@ export function ExecutionProcess({
         aria-controls={bodyId}
         onClick={() => {
           userToggled.current = true;
-          setOpen((value) => !value);
+          const next = !open;
+          rememberExecutionDisclosureChoice(sessionId, messageId, next);
+          setOpen(next);
         }}
       >
         <span className="execution-process__status" aria-hidden="true" />

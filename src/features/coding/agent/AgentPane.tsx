@@ -233,8 +233,10 @@ export function AgentPane({
                   <div className="coding-agent__assistant" key={entry.id}>
                     {(groups.processParts.length > 0 || hasTerminalStatus) && (
                       <ExecutionProcess
+                        sessionId={sessionId ?? undefined}
+                        messageId={entry.id}
                         parts={groups.processParts}
-                        active={!entry.complete}
+                        active={streaming && !entry.complete}
                         startedAt={entry.startedAt}
                         completedAt={entry.completedAt}
                         stopReason={entry.stopReason}

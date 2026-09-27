@@ -405,6 +405,8 @@ export const MessageItem = memo(function MessageItem({
             && (assistantGroups.processParts.length > 0 || hasTerminalProcessStatus || hasKnowledgeTrace)
             && (
               <ExecutionProcess
+                sessionId={sessionId}
+                messageId={message.id}
                 parts={assistantGroups.processParts}
                 active={streaming && !message.complete}
                 startedAt={message.startedAt}

@@ -51,6 +51,104 @@ describe("assistant execution process", () => {
     expect(screen.queryByText("需要从客户端交互状态入手。")).toBeNull();
   });
 
+  it("没有最终答复的历史工具过程也默认收起", () => {
+    render(
+      <ThemeProvider>
+        <MessageItem
+          message={{
+            id: "tool-only-history",
+            role: "assistant",
+            complete: true,
+            parts: [message.parts[2]],
+          }}
+          streaming={false}
+        />
+      </ThemeProvider>,
+    );
+
+    expect(screen.getByRole("button", { name: /已完成执行过程/ }))
+      .toHaveAttribute("aria-expanded", "false");
+    expect(screen.queryByRole("button", { name: /edit_file/i })).toBeNull();
+  });
+
+  it("只有工具调用的轮次在执行时展开，结束后自动收起", async () => {
+    const liveMessage: ChatMessage = {
+      id: "tool-only-live",
+      role: "assistant",
+      complete: false,
+      parts: [message.parts[2]],
+    };
+    const { rerender } = render(
+      <ThemeProvider><MessageItem message={liveMessage} streaming /></ThemeProvider>,
+    );
+    expect(screen.getByRole("button", { name: /正在分析任务/ }))
+      .toHaveAttribute("aria-expanded", "true");
+
+    rerender(
+      <ThemeProvider><MessageItem message={{ ...liveMessage, complete: true }} streaming={false} /></ThemeProvider>,
+    );
+    await waitFor(() => expect(screen.getByRole("button", { name: /已完成执行过程/ }))
+      .toHaveAttribute("aria-expanded", "false"));
+  });
+
+  it("切换任务后保留每条执行过程的手动折叠状态", () => {
+    const liveMessage: ChatMessage = {
+      id: "manual-process-a",
+      role: "assistant",
+      complete: false,
+      parts: [message.parts[2]],
+    };
+    const otherMessage: ChatMessage = { ...liveMessage, id: "manual-process-b" };
+    const view = (sessionId: string, item: ChatMessage) => (
+      <ThemeProvider>
+        <MessageItem key={`${sessionId}:${item.id}`} sessionId={sessionId} message={item} streaming />
+      </ThemeProvider>
+    );
+    const { rerender } = render(view("task-a", liveMessage));
+    const first = screen.getByRole("button", { name: /正在分析任务/ });
+    expect(first).toHaveAttribute("aria-expanded", "true");
+    fireEvent.click(first);
+    expect(first).toHaveAttribute("aria-expanded", "false");
+
+    rerender(view("task-b", otherMessage));
+    expect(screen.getByRole("button", { name: /正在分析任务/ }))
+      .toHaveAttribute("aria-expanded", "true");
+    rerender(view("task-a", liveMessage));
+    expect(screen.getByRole("button", { name: /正在分析任务/ }))
+      .toHaveAttribute("aria-expanded", "false");
+
+    fireEvent.click(screen.getByRole("button", { name: /正在分析任务/ }));
+    rerender(view("task-b", otherMessage));
+    rerender(view("task-a", liveMessage));
+    expect(screen.getByRole("button", { name: /正在分析任务/ }))
+      .toHaveAttribute("aria-expanded", "true");
+  });
+
+  it("历史轮次被手动展开后，切换任务回来仍保持展开", () => {
+    const historical: ChatMessage = {
+      id: "manual-history-a",
+      role: "assistant",
+      complete: true,
+      parts: [message.parts[2]],
+    };
+    const other: ChatMessage = { ...historical, id: "manual-history-b" };
+    const view = (sessionId: string, item: ChatMessage) => (
+      <ThemeProvider>
+        <MessageItem key={`${sessionId}:${item.id}`} sessionId={sessionId} message={item} streaming={false} />
+      </ThemeProvider>
+    );
+    const { rerender } = render(view("history-a", historical));
+    const process = screen.getByRole("button", { name: /已完成执行过程/ });
+    expect(process).toHaveAttribute("aria-expanded", "false");
+    fireEvent.click(process);
+    rerender(view("history-b", other));
+    expect(screen.getByRole("button", { name: /已完成执行过程/ }))
+      .toHaveAttribute("aria-expanded", "false");
+    rerender(view("history-a", historical));
+    expect(screen.getByRole("button", { name: /已完成执行过程/ }))
+      .toHaveAttribute("aria-expanded", "true");
+  });
+
   it("将模型混在同一文本块的思考折叠，只直接显示答案", () => {
     render(
       <ThemeProvider>
@@ -168,7 +266,7 @@ describe("assistant execution process", () => {
       .toHaveAttribute("aria-expanded", "true"));
   });
 
-  it("没有回复文本的失败仍显示终止原因，不提供空复制", () => {
+  it("没有回复文本的失败保留异常提示和可展开的终止原因，不提供空复制", () => {
     render(
       <ThemeProvider>
         <MessageItem
@@ -187,13 +285,14 @@ describe("assistant execution process", () => {
 
     expect(screen.getByRole("button", { name: /执行未正常完成/ })).toHaveAttribute(
       "aria-expanded",
-      "true",
+      "false",
     );
     expect(screen.queryByRole("button", { name: "复制纯文本" })).toBeNull();
+    fireEvent.click(screen.getByRole("button", { name: /执行未正常完成/ }));
     expect(screen.getByRole("alert")).toHaveTextContent("provider disconnected");
   });
 
-  it("已有部分答案时失败过程仍默认展开，避免隐藏异常", () => {
+  it("已有答案的失败过程保持紧凑，异常状态和详情仍可查看", () => {
     render(
       <ThemeProvider>
         <MessageItem
@@ -211,8 +310,9 @@ describe("assistant execution process", () => {
     expect(screen.getByText("最终修复结果")).toBeInTheDocument();
     expect(screen.getByRole("button", { name: /执行未正常完成/ })).toHaveAttribute(
       "aria-expanded",
-      "true",
+      "false",
     );
+    fireEvent.click(screen.getByRole("button", { name: /执行未正常完成/ }));
     expect(screen.getByRole("alert")).toHaveTextContent("upstream timeout");
   });
 
