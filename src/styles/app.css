@@ -15131,6 +15131,13 @@ body:has([aria-modal="true"]) .global-tooltip:not(.global-tooltip--dialog) {
   .org-document-submissions { padding: 17px 16px; }
 }
 
+/* Organization experience */
+.org-memory-library__toolbar { flex-direction: row; align-items: center; gap: 16px; padding: 14px 20px; }
+.org-memory-library__summary { display: inline-flex; align-items: center; gap: 8px; white-space: nowrap; }
+.org-memory-library__summary strong { color: var(--echo-text-strong); font-size: .8125rem; }
+.org-memory-library__summary span { color: var(--echo-text-light); font-size: .6875rem; font-variant-numeric: tabular-nums; }
+.org-memory-library__toolbar > .org-memory__primary { flex: none; margin-left: auto; white-space: nowrap; }
+
 /* Organization Skills */
 .org-skill-library__toolbar { align-items: center; gap: 16px; padding: 14px 20px; }
 .org-skill-library__summary { display: inline-flex; align-items: center; gap: 8px; white-space: nowrap; }

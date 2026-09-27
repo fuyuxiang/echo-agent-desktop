@@ -864,9 +864,9 @@ export function OrganizationMemoryPanel({
           </section>}
 
       {tab === "memories" && (
-        <section className="org-library">
-          <div className="org-library__toolbar">
-            <div><h2>组织经验</h2><p>决策、规范、操作手册和踩坑记录会在 Agent 执行相关任务前自动召回；每条都保留来源、时效和审核状态。</p></div>
+        <section className="org-library org-memory-library">
+          <div className="org-library__toolbar org-memory-library__toolbar">
+            <div className="org-memory-library__summary"><strong>已发布</strong><span>{visibleMemories.length}</span></div>
             <button className="org-memory__primary" onClick={() => {
               setMemoryWorkspace((value) => value || cwd || "");
               setShowMemoryForm((value) => !value);
