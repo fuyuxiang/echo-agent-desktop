@@ -25,10 +25,12 @@ interface Props {
   /** Navigate back to the home page (after summoning an expert). */
   onGoHome?: () => void;
   onToast?: (message: string) => void;
+  createExpertRequested?: boolean;
+  onCreateExpertRequestHandled?: () => void;
 }
 
-export function ExpertsTab({ pills, onGoHome, onToast }: Props) {
-  const [view, setView] = useState<"center" | "my">("center");
+export function ExpertsTab({ pills, onGoHome, onToast, createExpertRequested, onCreateExpertRequestHandled }: Props) {
+  const [view, setView] = useState<"center" | "my">(createExpertRequested ? "my" : "center");
   const [listTab, setListTab] = useState<ListTab>("expert");
   const [sort, setSort] = useState<Sort>("popular");
   const [cat, setCat] = useState<string | null>(null);
@@ -41,6 +43,10 @@ export function ExpertsTab({ pills, onGoHome, onToast }: Props) {
   const [catalog, setCatalog] = useState<ExpertCatalog | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
+
+  useEffect(() => {
+    if (createExpertRequested) setView("my");
+  }, [createExpertRequested]);
 
   const loadCatalog = useCallback(async (r: string): Promise<boolean> => {
     setLoading(true); setError("");
@@ -251,7 +257,7 @@ export function ExpertsTab({ pills, onGoHome, onToast }: Props) {
           </div>
         </header>}
         <div className="um-scroll">
-          <AssistantsPanel embedded onUseAssistant={handleUseLocal} onToast={onToast} />
+          <AssistantsPanel embedded onUseAssistant={handleUseLocal} onToast={onToast} createExpertRequested={createExpertRequested} onCreateExpertRequestHandled={onCreateExpertRequestHandled} />
         </div>
       </div>
     );

@@ -12,12 +12,14 @@ interface Props {
   initialTab?: MarketTab;
   /** The capability page owns navigation; standalone callers retain pills. */
   hideNavigation?: boolean;
+  createExpertRequested?: boolean;
+  onCreateExpertRequestHandled?: () => void;
 }
 
 /** 专家·技能·连接器 — EchoAgent-style unified market page.
  *  The pill group is rendered once here and passed into each tab's topbar
  *  left slot, mirroring EchoAgent's `headerLeft` pattern. */
-export function ExpertsPanel({ onGoHome, onToast, initialTab = "experts", hideNavigation = false }: Props) {
+export function ExpertsPanel({ onGoHome, onToast, initialTab = "experts", hideNavigation = false, createExpertRequested, onCreateExpertRequestHandled }: Props) {
   const [tab, setTab] = useState<MarketTab>(initialTab);
 
   useEffect(() => setTab(initialTab), [initialTab]);
@@ -27,7 +29,7 @@ export function ExpertsPanel({ onGoHome, onToast, initialTab = "experts", hideNa
   return (
     <div className={`um-market${hideNavigation ? " um-market--embedded" : ""}`}>
       {tab === "experts" && (
-        <ExpertsTab pills={pills} onGoHome={onGoHome} onToast={onToast} />
+        <ExpertsTab pills={pills} onGoHome={onGoHome} onToast={onToast} createExpertRequested={createExpertRequested} onCreateExpertRequestHandled={onCreateExpertRequestHandled} />
       )}
       {tab === "skills" && <SkillsTab pills={pills} onToast={onToast} />}
       {tab === "connectors" && <ConnectorsTab pills={pills} onToast={onToast} />}

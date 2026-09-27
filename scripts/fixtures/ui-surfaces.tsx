@@ -9,6 +9,7 @@ import { WorkbenchIdentity } from "../../src/features/coding/shell/WorkbenchIden
 import { ProjectSwitcher } from "../../src/features/coding/shell/ProjectSwitcher";
 import { OrganizationMemoryPanel } from "../../src/components/OrganizationMemoryPanel";
 import { ChatView } from "../../src/components/ChatView";
+import { SecondarySidebar } from "../../src/components/SecondarySidebar";
 import { useSessionStore } from "../../src/stores/session-store";
 import "../../src/styles/global.css";
 import "../../src/styles/app.css";
@@ -100,8 +101,19 @@ Object.assign(window, {
 function Fixture() {
   const surface = query.get("surface") ?? "memory";
   const [label, setLabel] = useState("专家·技能·连接器");
+  const [createExpertRequested, setCreateExpertRequested] = useState(false);
+  const [expertPageOpen, setExpertPageOpen] = useState(false);
   const [cwd, setCwd] = useState("/review/EchoAgent");
   if (surface === "capabilities") return <PlaceholderPage label={label} onNavigate={setLabel} />;
+  if (surface === "expert-entry") return <>
+    {expertPageOpen ? (
+      <div style={{ height: "100%" }}>
+        <button type="button" onClick={() => setExpertPageOpen(false)}>返回对话</button>
+        <PlaceholderPage label={label} onNavigate={setLabel} createExpertRequested={createExpertRequested} onCreateExpertRequestHandled={() => setCreateExpertRequested(false)} />
+      </div>
+    ) : <div style={{ padding: 48, fontSize: 32, fontWeight: 700 }}>今天想完成什么？</div>}
+    <SecondarySidebar onCreateExpert={() => { setLabel("专家·技能·连接器"); setCreateExpertRequested(true); setExpertPageOpen(true); }} />
+  </>;
   if (surface === "conversation") return <div style={{ display: "flex", height: "100%" }}>
     <aside style={{ width: "min(250px, 22vw)", flex: "none", borderRight: "1px solid var(--echo-border-default)", background: "var(--echo-bg-secondary)", padding: "24px 16px", boxSizing: "border-box" }}>EchoAgent</aside>
     <ChatView onSend={() => {}} onCancel={() => {}} title="评审投影仪性能与内存泄漏" />

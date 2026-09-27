@@ -116,6 +116,49 @@ describe("SecondarySidebar", () => {
     expect(document.querySelector(".secondary-sidebar__preview")).toHaveTextContent("小玄子");
   });
 
+  it("空列表提供创建入口，重新打开后读取新创建的专家", async () => {
+    const onCreateExpert = vi.fn();
+    vi.mocked(agentsList).mockResolvedValueOnce([]).mockResolvedValueOnce(mockAgents);
+    render(<SecondarySidebar onCreateExpert={onCreateExpert} />);
+
+    const trigger = document.querySelector(".secondary-sidebar__trigger") as HTMLElement;
+    fireEvent.mouseEnter(trigger);
+    await settle();
+    expect(screen.getByText("还没有可选专家")).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "创建专家" }));
+    expect(onCreateExpert).toHaveBeenCalledOnce();
+    expect(document.querySelector(".secondary-sidebar__floating")).toBeNull();
+
+    fireEvent.mouseEnter(trigger);
+    await settle();
+    expect(screen.getByRole("button", { name: /小圆子/ })).toBeInTheDocument();
+    expect(agentsList).toHaveBeenCalledTimes(2);
+  });
+
+  it("键盘聚焦右侧入口也能打开并使用创建按钮", async () => {
+    vi.mocked(agentsList).mockResolvedValueOnce([]);
+    const onCreateExpert = vi.fn();
+    render(<SecondarySidebar onCreateExpert={onCreateExpert} />);
+    const trigger = screen.getByRole("button", { name: "快速选择专家" });
+    fireEvent.focus(trigger);
+    await settle();
+    expect(trigger).toHaveAttribute("aria-expanded", "true");
+    fireEvent.click(screen.getByRole("button", { name: "创建专家" }));
+    expect(onCreateExpert).toHaveBeenCalledOnce();
+  });
+
+  it("加载失败时显示重试，不误报专家为空", async () => {
+    vi.mocked(agentsList).mockRejectedValueOnce(new Error("网络错误")).mockResolvedValueOnce([]);
+    render(<SecondarySidebar onCreateExpert={vi.fn()} />);
+    fireEvent.mouseEnter(document.querySelector(".secondary-sidebar__trigger") as HTMLElement);
+    await settle();
+    expect(screen.getByText("专家加载失败")).toBeInTheDocument();
+    expect(screen.queryByText("还没有可选专家")).toBeNull();
+    fireEvent.click(screen.getByRole("button", { name: "重试" }));
+    await settle();
+    expect(screen.getByText("还没有可选专家")).toBeInTheDocument();
+  });
+
   it("弹窗打开时移除全局悬浮入口和面板，关闭后不恢复旧 hover 状态", async () => {
     render(<ModalHarness />);
     await settle();

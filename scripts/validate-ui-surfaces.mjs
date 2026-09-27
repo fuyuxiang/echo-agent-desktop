@@ -109,8 +109,8 @@ try {
         assert.ok(Math.max(...fields) - Math.min(...fields) < 1, "permission controls have inconsistent heights");
       }
       if (surface === "capabilities") {
-        assert.equal(await page.getByRole("navigation", { name: "能力管理" }).count(), 1);
-        assert.equal(await page.getByRole("tablist", { name: "专家·技能·连接器" }).count(), 0);
+        assert.equal(await page.getByRole("navigation", { name: "扩展管理" }).count(), 1);
+        assert.equal(await page.getByRole("tablist", { name: "扩展分类" }).count(), 0);
         const template = await page.getByText("推荐模板", { exact: true }).boundingBox();
         assert.ok(template && template.y < height - 100, "templates pushed below first screen");
         assert.equal(await page.locator(".colleagues-panel-shell").evaluate(element => getComputedStyle(element).overflowY), "visible");
@@ -166,10 +166,30 @@ try {
   await page.getByRole("dialog", { name: "创建专家" }).getByRole("button", { name: "创建", exact: true }).click();
   await page.getByRole("button", { name: "查看专家 评审专家 详情" }).waitFor();
   for (const label of ["技能", "连接器", "插件", "浏览市场", "专家"]) {
-    await page.getByRole("navigation", { name: "能力管理" }).getByRole("button", { name: label, exact: true }).click();
+    await page.getByRole("navigation", { name: "扩展管理" }).getByRole("button", { name: label, exact: true }).click();
     await page.waitForFunction(() => !document.querySelector(".placeholder-page[role='status']"));
   }
   await page.getByRole("heading", { name: "我的专家" }).waitFor();
+
+  await page.setViewportSize({ width: 1440, height: 900 });
+  await page.goto("http://127.0.0.1:1439/__ui-review?surface=expert-entry");
+  await page.addStyleTag({ content: "*,*::before,*::after{animation:none!important;transition:none!important}" });
+  await page.locator(".secondary-sidebar__trigger").hover();
+  await page.getByText("还没有可选专家").waitFor();
+  const createEntry = await page.getByRole("button", { name: "创建专家" }).boundingBox();
+  assert.ok(createEntry && createEntry.x >= 0 && createEntry.x + createEntry.width <= 1440, "expert creation entry clips viewport");
+  await page.screenshot({ path: join(output, "expert-entry-empty-1440.png") });
+  await page.getByRole("button", { name: "创建专家" }).click();
+  const createDialog = page.getByRole("dialog", { name: "创建专家" });
+  await createDialog.waitFor();
+  assert.equal(await page.getByRole("navigation", { name: "扩展管理" }).count(), 1);
+  await createDialog.getByRole("textbox", { name: "专家名称" }).fill("入口验证专家");
+  await createDialog.getByRole("textbox", { name: "专家 System Prompt" }).fill("帮助验证专家创建入口。");
+  await createDialog.getByRole("button", { name: "创建", exact: true }).click();
+  await page.getByRole("button", { name: "查看专家 入口验证专家 详情" }).waitFor();
+  await page.getByRole("button", { name: "返回对话" }).click();
+  await page.locator(".secondary-sidebar__trigger").hover();
+  await page.locator(".secondary-sidebar__item-btn", { hasText: "入口验证专家" }).waitFor();
 
   await page.setViewportSize({ width: 1024, height: 768 });
   await page.goto("http://127.0.0.1:1439/__ui-review?surface=memory");
@@ -188,7 +208,7 @@ try {
   await page.keyboard.press("Escape");
   assert.equal(await page.getByRole("menu", { name: "项目列表" }).count(), 0);
   assert.deepEqual(errors, [], "browser runtime errors");
-  console.log(JSON.stringify({ passed: true, screenshots: output, layouts, interactions: ["organization document preview", "conversation question navigation", "memory", "notification", "storage", "expert creation", "capability navigation", "font scaling", "project keyboard navigation"] }, null, 2));
+  console.log(JSON.stringify({ passed: true, screenshots: output, layouts, interactions: ["organization document preview", "conversation question navigation", "memory", "notification", "storage", "expert creation", "expert entry and refresh", "extension navigation", "font scaling", "project keyboard navigation"] }, null, 2));
 } finally {
   await browser?.close();
   await server.close();

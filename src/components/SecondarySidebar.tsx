@@ -55,6 +55,13 @@ function useHoverPeek(disabled: boolean) {
     }, ENTER_DELAY_MS);
   }, [clearEnterTimer, clearLeaveTimer, disabled]);
 
+  const openPeek = useCallback(() => {
+    if (disabled) return;
+    clearEnterTimer();
+    clearLeaveTimer();
+    setHoverPeek(true);
+  }, [clearEnterTimer, clearLeaveTimer, disabled]);
+
   const handleFloatingEnter = useCallback(() => {
     if (disabled) return;
     clearEnterTimer();
@@ -108,11 +115,11 @@ function useHoverPeek(disabled: boolean) {
     hoverPeek,
     closePeek,
     triggerBindings: useMemo(
-      () => ({ onMouseEnter: handleTriggerEnter, onMouseLeave: handleTriggerLeave }),
-      [handleTriggerEnter, handleTriggerLeave],
+      () => ({ onMouseEnter: handleTriggerEnter, onMouseLeave: handleTriggerLeave, onFocus: openPeek, onClick: openPeek }),
+      [handleTriggerEnter, handleTriggerLeave, openPeek],
     ),
     floatingBindings: useMemo(
-      () => ({ onMouseEnter: handleFloatingEnter, onMouseLeave: handleFloatingLeave }),
+      () => ({ onMouseEnter: handleFloatingEnter, onMouseLeave: handleFloatingLeave, onFocusCapture: handleFloatingEnter }),
       [handleFloatingEnter, handleFloatingLeave],
     ),
   };
@@ -121,25 +128,31 @@ function useHoverPeek(disabled: boolean) {
 interface SecondarySidebarProps {
   /** Start a new session guided by the selected agent. */
   onSelectExpert?: (agent: AgentEntry) => void;
+  onCreateExpert?: () => void;
   onToast?: (msg: string) => void;
 }
 
-export function SecondarySidebar({ onSelectExpert, onToast }: SecondarySidebarProps) {
+export function SecondarySidebar({ onSelectExpert, onCreateExpert, onToast }: SecondarySidebarProps) {
   const [agents, setAgents] = useState<AgentEntry[]>([]);
   const [loading, setLoading] = useState(true);
+  const [loadError, setLoadError] = useState(false);
+  const [refreshKey, setRefreshKey] = useState(0);
   const [previewAgent, setPreviewAgent] = useState<AgentEntry | null>(null);
   const modalOpen = useModalPresence();
   const { hoverPeek, triggerBindings, floatingBindings, closePeek } = useHoverPeek(modalOpen);
-  const displayedPreview = previewAgent ?? agents[0] ?? null;
+  const displayedPreview = agents.find((agent) => agent.path === previewAgent?.path) ?? agents[0] ?? null;
 
   useEffect(() => {
+    if (!hoverPeek) return;
     let cancelled = false;
+    setLoading(true);
+    setLoadError(false);
     (async () => {
       try {
         const list = await agentsList();
         if (!cancelled) setAgents(list);
       } catch {
-        if (!cancelled) setAgents([]);
+        if (!cancelled) setLoadError(true);
       } finally {
         if (!cancelled) setLoading(false);
       }
@@ -147,7 +160,7 @@ export function SecondarySidebar({ onSelectExpert, onToast }: SecondarySidebarPr
     return () => {
       cancelled = true;
     };
-  }, []);
+  }, [hoverPeek, refreshKey]);
 
   const handlePick = useCallback(
     (agent: AgentEntry) => {
@@ -158,6 +171,11 @@ export function SecondarySidebar({ onSelectExpert, onToast }: SecondarySidebarPr
     [onSelectExpert, onToast, closePeek],
   );
 
+  const handleCreate = useCallback(() => {
+    closePeek();
+    onCreateExpert?.();
+  }, [closePeek, onCreateExpert]);
+
   // A global hover surface must never sit above a modal scrim or retain a
   // stale open state that reappears when the dialog closes.
   if (modalOpen) return null;
@@ -165,33 +183,43 @@ export function SecondarySidebar({ onSelectExpert, onToast }: SecondarySidebarPr
   return (
     <>
       {/* Trigger rail — always visible on the right edge */}
-      <div className="secondary-sidebar__trigger" {...triggerBindings}>
+      <button type="button" className="secondary-sidebar__trigger" aria-label="快速选择专家" aria-expanded={hoverPeek} aria-controls="expert-quick-select" {...triggerBindings}>
         <div className="secondary-sidebar__trigger-icon">
           <EchoAssistantNavIcon size="md" />
         </div>
         <div className="secondary-sidebar__trigger-label">专家</div>
         <ChevronRightIcon size="sm" className="secondary-sidebar__trigger-chevron" />
-      </div>
+      </button>
 
       {/* Floating peek panel */}
       {hoverPeek && (
-        <div className="secondary-sidebar__floating" {...floatingBindings}>
+        <div id="expert-quick-select" className="secondary-sidebar__floating" {...floatingBindings}
+          onBlurCapture={(event) => { if (!event.currentTarget.contains(event.relatedTarget as Node | null)) closePeek(); }}>
           <div className="secondary-sidebar__header">
             <span className="secondary-sidebar__title">快速选择专家</span>
           </div>
 
           {loading && <div className="secondary-sidebar__loading">加载中…</div>}
 
-          {!loading && agents.length === 0 && (
+          {!loading && loadError && (
             <div className="secondary-sidebar__empty">
-              暂无自定义专家
-              <span className="secondary-sidebar__empty-hint">
-                在「专家·技能·连接器」中创建
-              </span>
+              专家加载失败
+              <button type="button" className="secondary-sidebar__empty-action" onClick={() => setRefreshKey((key) => key + 1)}>重试</button>
             </div>
           )}
 
-          <ul className="secondary-sidebar__list">
+          {!loading && !loadError && agents.length === 0 && (
+            <div className="secondary-sidebar__empty">
+              还没有可选专家
+              {onCreateExpert ? (
+                <button type="button" className="secondary-sidebar__empty-action" onClick={handleCreate}>创建专家</button>
+              ) : (
+                <span className="secondary-sidebar__empty-hint">前往「扩展」→「专家」创建</span>
+              )}
+            </div>
+          )}
+
+          {!loading && !loadError && <ul className="secondary-sidebar__list">
             {agents.map((agent) => (
               <li key={agent.name} className="secondary-sidebar__item">
                 <button
@@ -217,10 +245,10 @@ export function SecondarySidebar({ onSelectExpert, onToast }: SecondarySidebarPr
                 </button>
               </li>
             ))}
-          </ul>
+          </ul>}
 
           {/* Hover preview card */}
-          {displayedPreview && (
+          {!loading && !loadError && displayedPreview && (
             <div className="secondary-sidebar__preview">
               <div className="secondary-sidebar__preview-name">{displayedPreview.name}</div>
               {displayedPreview.description && (

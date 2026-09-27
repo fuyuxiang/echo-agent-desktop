@@ -49,8 +49,8 @@ const CodingWorkbench = lazy(() =>
 
 function PanelNavigation({ active, onNavigate }: { active: string; onNavigate?: (label: string) => void }) {
   const tabs = CAPABILITY_NAV_ITEMS.map(({ route, title }) => [route, title]);
-  return <nav className="panel-navigation panel-navigation--capabilities" aria-label="能力管理">
-    <strong>能力</strong>
+  return <nav className="panel-navigation panel-navigation--capabilities" aria-label="扩展管理">
+    <strong>扩展</strong>
     <div className="panel-navigation__links">{tabs.map(([route, title]) => <button key={route} type="button" aria-current={route === active ? "page" : undefined}
       onClick={() => onNavigate?.(route)}>{title}</button>)}</div>
     <button className="panel-navigation__market" type="button" aria-current={active === "插件市场" ? "page" : undefined} onClick={() => onNavigate?.("插件市场")}>浏览市场</button>
@@ -79,6 +79,9 @@ interface PlaceholderPageProps {
   onOpenSession?: (sessionId: string, cwd?: string) => void;
   /** Navigate to the home page (used after expert summon). */
   onGoHome?: () => void;
+  /** Open the custom expert editor after navigating from the conversation rail. */
+  createExpertRequested?: boolean;
+  onCreateExpertRequestHandled?: () => void;
   /** Start a new task with organization knowledge selected once. */
   onStartOrganizationConversation?: () => void;
   /** Surface transient feedback (errors, success toasts). */
@@ -150,6 +153,8 @@ export function PlaceholderPage({
   onNavigate,
   onOpenSession,
   onGoHome,
+  createExpertRequested,
+  onCreateExpertRequestHandled,
   onStartOrganizationConversation,
   onToast,
   cwd,
@@ -220,7 +225,7 @@ export function PlaceholderPage({
     const initialTab = label === "技能" ? "skills" : label === "连接器" ? "connectors" : "experts";
     return (
       <DeferredPanel>
-        <div className="panel-section panel-section--capabilities"><PanelNavigation active={label} onNavigate={onNavigate} /><ExpertsPanel onGoHome={onGoHome} onToast={onToast} initialTab={initialTab} hideNavigation /></div>
+        <div className="panel-section panel-section--capabilities"><PanelNavigation active={label} onNavigate={onNavigate} /><ExpertsPanel onGoHome={onGoHome} onToast={onToast} initialTab={initialTab} hideNavigation createExpertRequested={createExpertRequested} onCreateExpertRequestHandled={onCreateExpertRequestHandled} /></div>
       </DeferredPanel>
     );
   }

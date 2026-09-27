@@ -119,9 +119,16 @@ interface AssistantsPanelProps {
   onToast?: (message: string) => void;
   onPlaceholder?: (label: string) => void;
   embedded?: boolean;
+  createExpertRequested?: boolean;
+  onCreateExpertRequestHandled?: () => void;
 }
 
-export function AssistantsPanel({ onUseAssistant, onToast, embedded = false }: AssistantsPanelProps) {
+const blankExpertDraft = (): EditorDraft => ({
+  id: "", path: "", name: "", description: "",
+  systemPrompt: "", avatar: 1, modelTags: ["default"], isNew: true,
+});
+
+export function AssistantsPanel({ onUseAssistant, onToast, embedded = false, createExpertRequested, onCreateExpertRequestHandled }: AssistantsPanelProps) {
   const [searchQuery, setSearchQuery] = useState("");
   const [userAssistants, setUserAssistants] = useState<AgentEntry[]>([]);
   const [loading, setLoading] = useState(false);
@@ -155,6 +162,14 @@ export function AssistantsPanel({ onUseAssistant, onToast, embedded = false }: A
       reloadGeneration.current += 1;
     };
   }, [reload]);
+
+  useEffect(() => {
+    if (!createExpertRequested) return;
+    setProfileAgent(null);
+    setSearchQuery("");
+    setEditing(blankExpertDraft());
+    onCreateExpertRequestHandled?.();
+  }, [createExpertRequested, onCreateExpertRequestHandled]);
 
   const openFromTemplate = useCallback((tpl: (typeof ASSISTANT_TEMPLATES)[number]) => {
     setEditing({
@@ -274,10 +289,7 @@ export function AssistantsPanel({ onUseAssistant, onToast, embedded = false }: A
               </div>
               <button
                 className="colleagues-panel-create-btn"
-                onClick={() => setEditing({
-                  id: "", path: "", name: "", description: "",
-                  systemPrompt: "", avatar: 1, modelTags: ["default"], isNew: true,
-                })}
+                onClick={() => setEditing(blankExpertDraft())}
               >
                 <AddCircleIcon size="sm" />
                 <span>创建专家</span>

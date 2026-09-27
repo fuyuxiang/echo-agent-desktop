@@ -19,7 +19,7 @@ export function MarketPills({
   onChange: (t: MarketTab) => void;
 }) {
   return (
-    <div className="um-pills" role="tablist" aria-label="专家·技能·连接器">
+    <div className="um-pills" role="tablist" aria-label="扩展分类">
       {TABS.map(({ key, label, Icon }) => (
         <button
           key={key}

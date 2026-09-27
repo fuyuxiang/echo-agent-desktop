@@ -11007,7 +11007,12 @@ button.diff__path {
   border-radius: 10px 0 0 10px;
   box-shadow: var(--echo-shadow-lg, 0 10px 40px rgba(0, 0, 0, 0.15));
   cursor: pointer;
+  font: inherit;
   transition: transform 0.2s ease, box-shadow 0.2s ease;
+}
+.secondary-sidebar__trigger:focus-visible {
+  outline: 2px solid var(--echo-brand);
+  outline-offset: 2px;
 }
 .secondary-sidebar__trigger:hover {
   transform: translateY(-50%) translateX(-2px);
@@ -11093,6 +11098,25 @@ body:has([aria-modal="true"]) .global-tooltip:not(.global-tooltip--dialog) {
   font-size: 0.6875rem;
   color: var(--echo-text-weak);
   opacity: 0.7;
+}
+.secondary-sidebar__empty-action {
+  align-self: center;
+  margin-top: 4px;
+  padding: 6px 12px;
+  border: 1px solid var(--echo-border-default);
+  border-radius: 8px;
+  background: var(--echo-bg-primary);
+  color: var(--echo-brand);
+  font: inherit;
+  font-weight: 600;
+  cursor: pointer;
+}
+.secondary-sidebar__empty-action:hover {
+  background: var(--echo-bg-hover);
+}
+.secondary-sidebar__empty-action:focus-visible {
+  outline: 2px solid var(--echo-brand);
+  outline-offset: 2px;
 }
 .secondary-sidebar__list {
   list-style: none;

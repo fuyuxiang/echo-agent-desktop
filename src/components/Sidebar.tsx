@@ -39,7 +39,7 @@ const logoMarkUrl = "/app-icon.png";
 const NAV = [
   { label: "项目", icon: EchoProjectNavIcon },
   { label: "组织", icon: BuildingIcon },
-  { label: "专家·技能·连接器", display: "能力", icon: EchoExpertNavIcon },
+  { label: "专家·技能·连接器", display: "扩展", icon: EchoExpertNavIcon },
   { label: "代码开发", icon: Code2Icon },
 ];
 

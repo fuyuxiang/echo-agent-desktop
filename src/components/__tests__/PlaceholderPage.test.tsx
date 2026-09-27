@@ -63,7 +63,7 @@ describe("PlaceholderPage", () => {
     expect(screen.queryByText("个人记忆")).toBeNull();
   });
 
-  it("能力页面保持单层导航，可往返所有类别和市场", async () => {
+  it("扩展页面保持单层导航，可往返所有类别和市场", async () => {
     function Page() {
       const [label, setLabel] = useState("专家·技能·连接器");
       return <PlaceholderPage label={label} onNavigate={setLabel} />;
@@ -72,8 +72,8 @@ describe("PlaceholderPage", () => {
     const panel = await screen.findByTestId("experts-panel");
     expect(panel).toHaveAttribute("data-embedded", "true");
     expect(screen.queryByText("专家、技能与连接器")).toBeNull();
-    expect(screen.getAllByRole("navigation", { name: "能力管理" })).toHaveLength(1);
-    const nav = screen.getByRole("navigation", { name: "能力管理" });
+    expect(screen.getAllByRole("navigation", { name: "扩展管理" })).toHaveLength(1);
+    const nav = screen.getByRole("navigation", { name: "扩展管理" });
     for (const [label, content] of [["技能", "skills"], ["连接器", "connectors"], ["专家", "experts"]]) {
       fireEvent.click(within(nav).getByRole("button", { name: label }));
       expect(await screen.findByTestId("experts-panel")).toHaveTextContent(content);

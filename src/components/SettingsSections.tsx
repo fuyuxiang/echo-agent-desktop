@@ -1105,7 +1105,7 @@ export function AgentSettingsPanel() {
   return (
     <SectionShell
       title="智能体设置"
-      desc="调整子代理和 Web 搜索的运行方式。技能、连接器与命令请在左侧“能力”中管理。"
+      desc="调整子代理和 Web 搜索的运行方式。技能、连接器与插件请在左侧「扩展」中管理。"
       actions={(
         <button className="settings-btn" onClick={reload} disabled={loading}>
           <RefreshCw size={15} /> {loading ? "加载中…" : "刷新状态"}
