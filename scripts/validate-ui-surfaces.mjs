@@ -28,12 +28,31 @@ try {
   const errors = [];
   let layouts = 0;
   page.on("pageerror", error => errors.push(error.message));
-  const surfaces = ["memory", "security", "cloud-storage", "notify-channels", "capabilities", "coding", "organization"];
+  const surfaces = ["memory", "security", "cloud-storage", "notify-channels", "capabilities", "coding", "organization", "conversation"];
   for (const [width, height, theme] of [[1440, 900, "light"], [1024, 768, "dark"], [768, 720, "light"]]) {
     await page.setViewportSize({ width, height });
     for (const surface of surfaces) {
       await page.goto(`http://127.0.0.1:1439/__ui-review?surface=${surface}&theme=${theme}`);
       await page.addStyleTag({ content: "*,*::before,*::after{animation:none!important;transition:none!important}" });
+      if (surface === "conversation") {
+        await page.getByRole("button", { name: "历史提问" }).click();
+        const dialog = page.getByRole("dialog", { name: "历史提问" });
+        await dialog.getByRole("searchbox", { name: "筛选历史提问" }).waitFor();
+        const box = await dialog.boundingBox();
+        const toolbar = await page.locator(".chatview__utility-bar").boundingBox();
+        assert.ok(box && toolbar && box.x >= 0 && box.x + box.width <= width && box.y >= toolbar.y + toolbar.height && box.y + box.height <= height, "question navigator clips or overlaps toolbar");
+        assert.equal(await dialog.locator(".question-history__item").count(), 7);
+        assert.ok(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth + 1), "conversation: horizontal page overflow");
+        await page.screenshot({ path: join(output, `${surface}-questions-${width}-${theme}.png`) });
+        layouts += 1;
+        await dialog.getByRole("searchbox", { name: "筛选历史提问" }).fill("蓝牙遥控器");
+        assert.equal(await dialog.locator(".question-history__item").count(), 1);
+        await dialog.locator(".question-history__item").click();
+        await page.locator(".msg-wrap--jump-target", { hasText: "检查蓝牙遥控器" }).waitFor();
+        assert.equal(await dialog.count(), 0);
+        await page.getByRole("button", { name: "回到最新消息并恢复自动跟随" }).click();
+        continue;
+      }
       if (surface === "organization") {
         await page.locator(".org-memory__nav button", { hasText: "文档" }).click();
         await page.getByRole("heading", { name: /共享文档/ }).waitFor();
@@ -169,7 +188,7 @@ try {
   await page.keyboard.press("Escape");
   assert.equal(await page.getByRole("menu", { name: "项目列表" }).count(), 0);
   assert.deepEqual(errors, [], "browser runtime errors");
-  console.log(JSON.stringify({ passed: true, screenshots: output, layouts, interactions: ["organization document preview", "memory", "notification", "storage", "expert creation", "capability navigation", "font scaling", "project keyboard navigation"] }, null, 2));
+  console.log(JSON.stringify({ passed: true, screenshots: output, layouts, interactions: ["organization document preview", "conversation question navigation", "memory", "notification", "storage", "expert creation", "capability navigation", "font scaling", "project keyboard navigation"] }, null, 2));
 } finally {
   await browser?.close();
   await server.close();

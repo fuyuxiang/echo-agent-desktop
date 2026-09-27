@@ -8,6 +8,8 @@ import { PlaceholderPage } from "../../src/components/PlaceholderPage";
 import { WorkbenchIdentity } from "../../src/features/coding/shell/WorkbenchIdentity";
 import { ProjectSwitcher } from "../../src/features/coding/shell/ProjectSwitcher";
 import { OrganizationMemoryPanel } from "../../src/components/OrganizationMemoryPanel";
+import { ChatView } from "../../src/components/ChatView";
+import { useSessionStore } from "../../src/stores/session-store";
 import "../../src/styles/global.css";
 import "../../src/styles/app.css";
 import "../../src/styles/automation-echo.css";
@@ -34,6 +36,22 @@ const orgDocuments = [
   { id: "review-xlsx", title: "指标体系模型设计模板.xlsx", sourceType: "xlsx", status: "ready", byteSize: 379494, scopeId: "team", scopeKind: "team", scopeName: "产品研发团队", ownerId: "another-user", chunkCount: 1899, tags: [], updatedAt: 1 },
   { id: "review-pptx", title: "指标体系构建方法论.pptx", sourceType: "pptx", status: "ready", byteSize: 1572864, scopeId: "team", scopeKind: "team", scopeName: "产品研发团队", ownerId: "another-user", chunkCount: 2, tags: [], updatedAt: 1 },
 ];
+if (query.get("surface") === "conversation") {
+  const chat = useSessionStore.getState();
+  chat.setSession("review-conversation");
+  for (const prompt of [
+    "评审投影仪性能与内存泄漏，先看一下实现结构。",
+    "这个服务端的启动方式是什么？",
+    "手机扫码连接投影 IP 时，局域网发现怎么实现？",
+    "检查蓝牙遥控器和手机端的控制逻辑。",
+    "APK 打包后怎样验证 WebView 与原生服务的通信？",
+    "梳理当前功能的主要风险和下一步计划。",
+    "把重要结论整理成一份简短的评审记录。",
+  ]) {
+    chat.pushUser(prompt, [], "review-conversation");
+    chat.pushAssistant("已检查相关实现，并记录了需要继续确认的细节。\n\n下一步可以针对这个问题继续深入。 ".repeat(3));
+  }
+}
 const callbacks = new Map();
 Object.assign(window, {
   __TAURI_INTERNALS__: {
@@ -84,6 +102,10 @@ function Fixture() {
   const [label, setLabel] = useState("专家·技能·连接器");
   const [cwd, setCwd] = useState("/review/EchoAgent");
   if (surface === "capabilities") return <PlaceholderPage label={label} onNavigate={setLabel} />;
+  if (surface === "conversation") return <div style={{ display: "flex", height: "100%" }}>
+    <aside style={{ width: "min(250px, 22vw)", flex: "none", borderRight: "1px solid var(--echo-border-default)", background: "var(--echo-bg-secondary)", padding: "24px 16px", boxSizing: "border-box" }}>EchoAgent</aside>
+    <ChatView onSend={() => {}} onCancel={() => {}} title="评审投影仪性能与内存泄漏" />
+  </div>;
   if (surface === "organization") return <div style={{ height: "100%", overflow: "auto" }}><OrganizationMemoryPanel /></div>;
   if (surface === "coding") return <div className="app--macos" style={{ height: "100%" }}><div className="coding-workbench coding-workbench--theia">
     <header className="coding-workbench__topbar"><WorkbenchIdentity onExit={() => {}}>

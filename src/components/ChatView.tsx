@@ -1,4 +1,5 @@
 import { useEffect, useLayoutEffect, useMemo, useRef, useState, useCallback } from "react";
+import { History } from "lucide-react";
 import { PauseIcon } from "@/foundation/components/Icon/icons";
 import { useSessionStore, type ToolCallView } from "@/stores/session-store";
 import { useSessionsStore } from "@/stores/sessions-store";
@@ -17,6 +18,7 @@ import { PermissionInlineCard } from "./PermissionDialog";
 import { QuestionInlineCard } from "./QuestionInlineCard";
 import { ToolSidePanel, type ToolSidePanelMode } from "./ToolSidePanel";
 import { FindBar, isFindHit, type FindOccurrence } from "./FindBar";
+import { buildQuestionHistory, QuestionHistoryPopover } from "./QuestionHistoryPopover";
 import { FileChangesPanel } from "./FileChangesPanel";
 import { SubagentPanel } from "./SubagentPanel";
 import { TeamStatusView } from "./TeamStatusView";
@@ -149,10 +151,41 @@ export function ChatView({
   const [findQuery, setFindQuery] = useState("");
   const [findOccurrences, setFindOccurrences] = useState<FindOccurrence[]>([]);
   const [findActive, setFindActive] = useState<FindOccurrence | null>(null);
+  const [questionHistoryOpen, setQuestionHistoryOpen] = useState(false);
+  const [jumpTargetId, setJumpTargetId] = useState<string | null>(null);
+  const questionHistoryTriggerRef = useRef<HTMLButtonElement>(null);
+  const jumpHighlightTimerRef = useRef<number | null>(null);
+  const questions = useMemo(() => buildQuestionHistory(messages), [messages]);
+  const closeFind = useCallback(() => {
+    setFindOpen(false);
+    setFindQuery("");
+    setFindOccurrences([]);
+    setFindActive(null);
+  }, []);
+  const closeQuestionHistory = useCallback(() => setQuestionHistoryOpen(false), []);
+  const openFind = useCallback(() => {
+    closeQuestionHistory();
+    setFindOpen(true);
+  }, [closeQuestionHistory]);
   const findHitIds = useMemo(
     () => [...new Set(findOccurrences.map((occurrence) => occurrence.messageId))],
     [findOccurrences],
   );
+  useLayoutEffect(() => {
+    closeFind();
+    closeQuestionHistory();
+    setJumpTargetId(null);
+    if (jumpHighlightTimerRef.current !== null) {
+      window.clearTimeout(jumpHighlightTimerRef.current);
+      jumpHighlightTimerRef.current = null;
+    }
+  }, [sessionId, closeFind, closeQuestionHistory]);
+  useEffect(() => {
+    if (questions.length === 0) closeQuestionHistory();
+  }, [questions.length, closeQuestionHistory]);
+  useEffect(() => () => {
+    if (jumpHighlightTimerRef.current !== null) window.clearTimeout(jumpHighlightTimerRef.current);
+  }, []);
   // 文件变更聚合面板(对齐 EchoAgent file-changes-panel)。
   const [fileChangesOpen, setFileChangesOpen] = useState(false);
   // 子代理运行时面板(对齐 EchoAgent team-runtime)。
@@ -460,6 +493,22 @@ export function ChatView({
     sessionId,
   });
 
+  const jumpToQuestion = useCallback((messageId: string) => {
+    const row = Array.from(scrollRef.current?.querySelectorAll<HTMLElement>("[data-msg-id]") ?? [])
+      .find((node) => node.dataset.msgId === messageId);
+    closeQuestionHistory();
+    if (!row) return;
+    pauseFollowing();
+    if (jumpHighlightTimerRef.current !== null) window.clearTimeout(jumpHighlightTimerRef.current);
+    setJumpTargetId(messageId);
+    row.focus({ preventScroll: true });
+    row.scrollIntoView?.({ behavior: "smooth", block: "center" });
+    jumpHighlightTimerRef.current = window.setTimeout(() => {
+      setJumpTargetId(null);
+      jumpHighlightTimerRef.current = null;
+    }, 2200);
+  }, [closeQuestionHistory, pauseFollowing, scrollRef]);
+
   const restoredSequenceRef = useRef<number | null>(null);
   const restoreSubagentRow = useCallback((key: string) => {
     if (!subagentScrollRestore || subagentScrollRestore.parentSessionId !== sessionId
@@ -510,13 +559,13 @@ export function ChatView({
         if (isGlobalShortcutBlocked()) return;
         if (messages.length > 0) {
           e.preventDefault();
-          setFindOpen(true);
+          openFind();
         }
       }
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
-  }, [messages.length]);
+  }, [messages.length, openFind]);
   // Markdown 和用户消息都完成渲染后，从实际 mark 收集唯一可信的命中顺序。
   useLayoutEffect(() => {
     if (!findOpen || !findQuery) {
@@ -638,10 +687,34 @@ export function ChatView({
                   "chatview__artifacts-toggle" +
                   (findOpen ? " chatview__artifacts-toggle--active" : "")
                 }
-                onClick={() => setFindOpen((v) => !v)}
+                onClick={() => {
+                  if (findOpen) closeFind();
+                  else {
+                    openFind();
+                  }
+                }}
                 title="在当前对话中查找 (Ctrl/Cmd+F)"
               >
                 查找
+              </button>
+            )}
+
+            {questions.length > 0 && (
+              <button
+                ref={questionHistoryTriggerRef}
+                type="button"
+                className={"chatview__artifacts-toggle" + (questionHistoryOpen ? " chatview__artifacts-toggle--active" : "")}
+                onClick={() => {
+                  if (!questionHistoryOpen) closeFind();
+                  setQuestionHistoryOpen((open) => !open);
+                }}
+                aria-label="历史提问"
+                aria-expanded={questionHistoryOpen}
+                aria-controls={questionHistoryOpen ? "question-history-popover" : undefined}
+                title="查看本会话的历史提问"
+              >
+                <History size={14} aria-hidden="true" />
+                提问
               </button>
             )}
 
@@ -735,6 +808,15 @@ export function ChatView({
               <ShareMenu messages={messages} title={title} onDone={onToast} />
             )}
           </div>
+          {questionHistoryOpen && (
+            <QuestionHistoryPopover
+              items={questions}
+              triggerRef={questionHistoryTriggerRef}
+              onSelect={jumpToQuestion}
+              onClose={closeQuestionHistory}
+              onFind={openFind}
+            />
+          )}
         </div>
 
         {plan && plan.entries.length > 0 && planOpen && (
@@ -757,12 +839,7 @@ export function ChatView({
             // the new set of marks before FindBar publishes its first hit.
             setFindActive(null);
           }}
-          onClose={() => {
-            setFindOpen(false);
-            setFindQuery("");
-            setFindOccurrences([]);
-            setFindActive(null);
-          }}
+          onClose={closeFind}
           onActiveChange={setFindActive}
         />
 
@@ -813,7 +890,7 @@ export function ChatView({
                     : " msg-wrap--find-hit"
                   : "";
                 return (
-                  <div key={m.id} className={"msg-wrap" + findCls} data-msg-id={m.id}>
+                  <div key={m.id} className={"msg-wrap" + findCls + (m.id === jumpTargetId ? " msg-wrap--jump-target" : "")} data-msg-id={m.id} tabIndex={-1}>
                     <MessageItem
                       message={m}
                       streaming={streaming && m.id === streamingMessageId}
@@ -837,7 +914,7 @@ export function ChatView({
               })}
             </div>
           </div>
-          {streaming && !following && (
+          {!following && messages.length > 0 && (
             <button
               type="button"
               className="chatview__jump-latest"

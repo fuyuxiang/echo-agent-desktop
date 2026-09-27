@@ -276,6 +276,52 @@ describe("ChatView pause/yield/resume 闭环", () => {
     });
   });
 
+  it("从历史提问跳转时暂停自动跟随，并可回到最新消息", async () => {
+    setStore({
+      messages: [
+        { id: "u1", role: "user", complete: true, parts: [{ kind: "text", text: "最初的问题" }] },
+        { id: "a1", role: "assistant", complete: true, parts: [{ kind: "text", text: "已回答" }] },
+        { id: "u2", role: "user", complete: true, parts: [{ kind: "text", text: "后来的问题" }] },
+        { id: "a2", role: "assistant", complete: false, parts: [{ kind: "text", text: "正在回答" }] },
+      ],
+      streaming: true,
+      streamingMessageId: "a2",
+    });
+    renderChat();
+
+    fireEvent.click(screen.getByRole("button", { name: "历史提问" }));
+    const dialog = screen.getByRole("dialog", { name: "历史提问" });
+    expect(within(dialog).getAllByRole("button").map((button) => button.textContent)).toEqual([
+      "", "2后来的问题", "1最初的问题",
+    ]);
+    fireEvent.click(within(dialog).getByRole("button", { name: /最初的问题/ }));
+
+    expect(screen.queryByRole("dialog", { name: "历史提问" })).toBeNull();
+    expect(scrollIntoViewMock).toHaveBeenCalledWith({ behavior: "smooth", block: "center" });
+    expect(screen.getByText("最初的问题").closest("[data-msg-id]")).toHaveClass("msg-wrap--jump-target");
+    const jumpButton = screen.getByRole("button", { name: "回到最新消息并恢复自动跟随" });
+    fireEvent.click(jumpButton);
+    await waitFor(() => expect(screen.queryByRole("button", { name: "回到最新消息并恢复自动跟随" })).toBeNull());
+  });
+
+  it("切换会话后清空历史提问浮层和旧查询", async () => {
+    const { rerender } = renderChat();
+    fireEvent.click(screen.getByRole("button", { name: "历史提问" }));
+    fireEvent.change(screen.getByRole("searchbox", { name: "筛选历史提问" }), { target: { value: "hi" } });
+
+    setStore({
+      sessionId: "s2",
+      messages: [{ id: "u-next", role: "user", complete: true, parts: [{ kind: "text", text: "新会话的问题" }] }],
+    });
+    rerender(<ThemeProvider><ChatView {...baseProps} /></ThemeProvider>);
+    await waitFor(() => expect(screen.queryByRole("dialog", { name: "历史提问" })).toBeNull());
+    fireEvent.click(screen.getByRole("button", { name: "历史提问" }));
+    const dialog = screen.getByRole("dialog", { name: "历史提问" });
+    expect(within(dialog).getByRole("searchbox", { name: "筛选历史提问" })).toHaveValue("");
+    expect(within(dialog).getByRole("button", { name: /新会话的问题/ })).toBeInTheDocument();
+    expect(within(dialog).queryByRole("button", { name: /hi/ })).toBeNull();
+  });
+
   it("流式时显示「暂停」按钮,点击触发 onCancel", () => {
     setStore({ streaming: true, streamingMessageId: "a1" });
     renderChat();
