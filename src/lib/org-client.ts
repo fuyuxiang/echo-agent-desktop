@@ -9,6 +9,7 @@ export interface OrgScope {
   name: string;
   groupId?: string | null;
   ownerUserId?: string | null;
+  canPublishDocuments?: boolean;
 }
 
 export interface OrgUser {
@@ -51,6 +52,7 @@ export interface OrgDocument {
   scopeKind: OrgScopeKind;
   scopeName: string;
   ownerName?: string | null;
+  ownerId?: string | null;
   chunkCount: number;
   tags: string[];
   updatedAt: number;
@@ -80,6 +82,9 @@ export interface Submission {
     findings: Array<{ code: string; severity: string; message: string; path?: string }>;
   } | null;
   resultDocumentId?: string | null;
+  sourceType?: string;
+  byteSize?: number;
+  canDeletePublished?: number | boolean;
   createdAt: number;
 }
 
@@ -159,8 +164,8 @@ export const orgLogin = (serverUrl: string, username: string, password: string) 
   invoke<OrgSession>("org_login", { serverUrl, username, password });
 export const orgLogout = () => invoke<void>("org_logout");
 export const orgListScopes = () => invoke<OrgScope[]>("org_list_scopes");
-export const orgListDocuments = (scopeId?: string, query?: string) =>
-  invoke<DocumentPage>("org_list_documents", { scopeId: scopeId ?? null, query: query ?? null });
+export const orgListDocuments = (scopeId?: string, query?: string, page = 1, size = 20) =>
+  invoke<DocumentPage>("org_list_documents", { scopeId: scopeId ?? null, query: query ?? null, page, size });
 export const orgListMemories = (scopeId?: string, kind?: OrgMemoryKind, query?: string) =>
   invoke<OrgMemory[]>("org_list_memories", {
     scopeId: scopeId ?? null,
@@ -193,10 +198,21 @@ export const orgSubmitDocument = (filePath: string, scopeId: string, title?: str
   );
 export const orgDocumentSubmissionsMine = () =>
   invoke<Submission[]>("org_document_submissions_mine");
-export const orgFetchDocument = (docId: string, page?: number | null) =>
+export const orgDocumentSubmissionsMinePage = (page = 1, size = 20) =>
+  invoke<{ items: Submission[]; total: number; page: number; size: number }>("org_document_submissions_mine_page", { page, size });
+export const orgRemoveOwnSubmission = (submissionId: string) =>
+  invoke<{ removed: boolean }>("org_remove_own_submission", { submissionId });
+export const orgPreviewDocument = (resourceId: string, submission: boolean, sourceType: string, fileName: string) =>
+  invoke<{ kind: "text" | "binary"; content: string }>("org_preview_document", { resourceId, submission, sourceType, fileName });
+export const orgDownloadDocument = (resourceId: string, submission: boolean, suggestedName: string) =>
+  invoke<string | null>("org_download_document", { resourceId, submission, suggestedName });
+export interface OrgFolderFile { path: string; relativePath: string; size: number }
+export const orgScanDocumentFolder = (folderPath: string) =>
+  invoke<{ items: OrgFolderFile[]; skipped: number; totalBytes: number }>("org_scan_document_folder", { folderPath });
+export const orgFetchDocument = (docId: string, page?: number | null, range?: string) =>
   invoke<{ docId: string; text: string; chunks: Array<{ seq: number; text: string; heading?: string; locPage?: number }> }>(
     "org_fetch_document",
-    { docId, page: page ?? null },
+    { docId, page: page ?? null, range: range ?? null },
   );
 export const orgArchiveDocument = (docId: string) =>
   invoke<{ archived: boolean }>("org_archive_document", { docId });

@@ -78,7 +78,7 @@ describe("FilePreview", () => {
   it("docx 无 docExtractor 时显示降级占位", () => {
     render(<FilePreview filename="report.docx" content="binary" />);
     expect(screen.getByText("Word")).toBeInTheDocument();
-    expect(screen.getByText(/需要文档解析器/)).toBeInTheDocument();
+    expect(screen.getByText(/请下载原件后在本地打开/)).toBeInTheDocument();
   });
 
   it("docx 有 docExtractor 时渲染提取的段落文本", () => {

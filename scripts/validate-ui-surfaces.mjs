@@ -28,12 +28,42 @@ try {
   const errors = [];
   let layouts = 0;
   page.on("pageerror", error => errors.push(error.message));
-  const surfaces = ["memory", "security", "cloud-storage", "notify-channels", "capabilities", "coding"];
+  const surfaces = ["memory", "security", "cloud-storage", "notify-channels", "capabilities", "coding", "organization"];
   for (const [width, height, theme] of [[1440, 900, "light"], [1024, 768, "dark"], [768, 720, "light"]]) {
     await page.setViewportSize({ width, height });
     for (const surface of surfaces) {
       await page.goto(`http://127.0.0.1:1439/__ui-review?surface=${surface}&theme=${theme}`);
       await page.addStyleTag({ content: "*,*::before,*::after{animation:none!important;transition:none!important}" });
+      if (surface === "organization") {
+        await page.locator(".org-memory__nav button", { hasText: "文档" }).click();
+        await page.getByRole("heading", { name: /共享文档/ }).waitFor();
+        const geometry = await page.evaluate(() => {
+          const rect = (selector) => {
+            const box = document.querySelector(selector).getBoundingClientRect();
+            return { left: box.left, right: box.right, top: box.top, bottom: box.bottom };
+          };
+          return {
+            title: rect(".org-memory__page-header > div:first-child"),
+            actions: rect(".org-document-library__upload-actions"),
+            sectionTitle: rect(".org-document-library__heading h2"),
+            filter: rect(".org-document-library__filter"),
+          };
+        });
+        assert.ok(geometry.title.right <= geometry.actions.left + 1 || geometry.title.bottom <= geometry.actions.top + 1, "document upload actions overlap heading");
+        assert.ok(geometry.sectionTitle.right <= geometry.filter.left + 1 || geometry.sectionTitle.bottom <= geometry.filter.top + 1, "document scope filter overlaps section title");
+        assert.ok(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth + 1), "organization: horizontal page overflow");
+        await page.screenshot({ path: join(output, `${surface}-${width}-${theme}.png`) });
+        layouts += 1;
+        await page.getByRole("button", { name: "上传文档" }).click();
+        const uploadDialog = page.getByRole("dialog", { name: "选择上传位置" });
+        const uploadBox = await uploadDialog.locator(".org-document-modal__confirm").boundingBox();
+        assert.ok(uploadBox && uploadBox.x >= 0 && uploadBox.y >= 0 && uploadBox.x + uploadBox.width <= width && uploadBox.y + uploadBox.height <= height, "document upload dialog clips at viewport edge");
+        await uploadDialog.getByRole("combobox", { name: "文档上传范围" }).waitFor();
+        await page.screenshot({ path: join(output, `${surface}-upload-${width}-${theme}.png`) });
+        layouts += 1;
+        await uploadDialog.getByRole("button", { name: "取消" }).click();
+        continue;
+      }
       if (surface === "capabilities") await page.getByRole("heading", { name: "我的专家" }).waitFor();
       else if (surface === "coding") await page.getByRole("button", { name: "切换项目" }).waitFor();
       else await page.getByRole("dialog", { name: "设置" }).waitFor();
@@ -72,6 +102,13 @@ try {
     }
   }
   await page.setViewportSize({ width: 1440, height: 900 });
+  await page.goto("http://127.0.0.1:1439/__ui-review?surface=organization");
+  await page.locator(".org-memory__nav button", { hasText: "文档" }).click();
+  await page.locator(".org-document-library__row", { hasText: "指标体系模型设计模板.xlsx" }).getByRole("button", { name: "查看" }).click();
+  await page.getByText("指标=活跃用户", { exact: false }).waitFor();
+  assert.equal(await page.getByText(/预览需要文档解析器/).count(), 0);
+  await page.screenshot({ path: join(output, "organization-xlsx-preview.png") });
+
   await page.goto("http://127.0.0.1:1439/__ui-review?surface=memory");
   await page.getByRole("combobox", { name: "记忆检索方式" }).selectOption("configured");
   await page.getByText("记忆配置已保存，重启 Agent 后对新会话生效。").waitFor();
@@ -121,7 +158,7 @@ try {
   await page.keyboard.press("Escape");
   assert.equal(await page.getByRole("menu", { name: "项目列表" }).count(), 0);
   assert.deepEqual(errors, [], "browser runtime errors");
-  console.log(JSON.stringify({ passed: true, screenshots: output, layouts, interactions: ["memory", "notification", "storage", "expert creation", "capability navigation", "font scaling", "project keyboard navigation"] }, null, 2));
+  console.log(JSON.stringify({ passed: true, screenshots: output, layouts, interactions: ["organization document preview", "memory", "notification", "storage", "expert creation", "capability navigation", "font scaling", "project keyboard navigation"] }, null, 2));
 } finally {
   await browser?.close();
   await server.close();

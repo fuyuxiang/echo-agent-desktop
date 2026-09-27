@@ -265,7 +265,7 @@ function DocPreview({
         <div className="file-preview__placeholder">
           <span className="file-preview__placeholder-icon">📄</span>
           <span className="file-preview__placeholder-text">
-            {previewKindLabel(kind)} 预览需要文档解析器(注入 docExtractor)。当前未提供,请用本地应用打开。
+            暂时无法读取此文件的内容，请下载原件后在本地打开。
           </span>
         </div>
       ) : kind === "sheet" && sheets && sheets.length > 0 ? (

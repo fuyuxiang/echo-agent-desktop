@@ -1,28 +1,30 @@
-import { act, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { act, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 const api = vi.hoisted(() => ({
   orgSession: vi.fn(), orgLogin: vi.fn(), orgLogout: vi.fn(),
   orgMemoryPromotionsMine: vi.fn(), orgListScopes: vi.fn(), orgListDocuments: vi.fn(),
-  orgListMemories: vi.fn(), orgListSkills: vi.fn(), orgDocumentSubmissionsMine: vi.fn(),
+  orgListMemories: vi.fn(), orgListSkills: vi.fn(), orgDocumentSubmissionsMinePage: vi.fn(),
   orgSkillSubmissionsMine: vi.fn(), orgSubmitDocument: vi.fn(), orgSubmitMemoryCandidate: vi.fn(),
   orgArchiveDocument: vi.fn(), orgNewDocumentVersion: vi.fn(), orgPublishDocument: vi.fn(),
   orgSetSkillPreference: vi.fn(), orgPublishSkill: vi.fn(), orgSubmitSkill: vi.fn(), orgSyncSkills: vi.fn(),
+  orgDownloadDocument: vi.fn(), orgFetchDocument: vi.fn(), orgPreviewDocument: vi.fn(),
+  orgRemoveOwnSubmission: vi.fn(), orgScanDocumentFolder: vi.fn(),
 }));
 vi.mock("@/lib/org-client", () => api);
-const agentClientMocks = vi.hoisted(() => ({ filesystemPickFiles: vi.fn(async () => []) }));
+const agentClientMocks = vi.hoisted(() => ({ filesystemPickFiles: vi.fn(async () => []), filesystemPickDirectory: vi.fn(async () => null) }));
 vi.mock("@/lib/agent-client", () => agentClientMocks);
 
 import { OrganizationMemoryPanel } from "../OrganizationMemoryPanel";
 import { resetOrgSessionMirror, useOrgSessionStore } from "@/stores/org-session-store";
-import { filesystemPickFiles } from "@/lib/agent-client";
+import { filesystemPickDirectory, filesystemPickFiles } from "@/lib/agent-client";
 
 const personalScope = { id: "personal-scope", kind: "personal" as const, name: "我的空间" };
 const teamScope = { id: "team-scope", kind: "team" as const, name: "研发团队" };
 
 function document(id: string, title: string, scopeId: string, scopeName: string) {
   return {
-    id, title, sourceType: "md", status: "ready" as const, byteSize: 128, scopeId,
+    id, title, sourceType: "md", status: "ready" as const, byteSize: 128, scopeId, ownerId: "u1",
     scopeKind: scopeId === personalScope.id ? "personal" as const : "team" as const,
     scopeName, chunkCount: 1, tags: [], updatedAt: 1,
   };
@@ -39,14 +41,15 @@ function mockWorkspace() {
     },
   });
   api.orgListScopes.mockResolvedValue([personalScope, teamScope]);
-  api.orgListDocuments.mockResolvedValue({
-    items: [document("d1", "个人文档", personalScope.id, personalScope.name), document("d2", "团队文档", teamScope.id, teamScope.name)],
-    total: 2, page: 1, size: 50,
+  api.orgListDocuments.mockImplementation(async (scopeId?: string) => {
+    const items = [document("d1", "个人文档", personalScope.id, personalScope.name), document("d2", "团队文档", teamScope.id, teamScope.name)]
+      .filter((item) => !scopeId || item.scopeId === scopeId);
+    return { items, total: items.length, page: 1, size: 20 };
   });
   api.orgListSkills.mockResolvedValue([]);
   api.orgListMemories.mockResolvedValue([]);
   api.orgMemoryPromotionsMine.mockResolvedValue([]);
-  api.orgDocumentSubmissionsMine.mockResolvedValue([]);
+  api.orgDocumentSubmissionsMinePage.mockResolvedValue({ items: [], total: 0, page: 1, size: 20 });
   api.orgSkillSubmissionsMine.mockResolvedValue([]);
   api.orgLogout.mockResolvedValue(undefined);
   api.orgSubmitMemoryCandidate.mockResolvedValue({ promotionId: "p1", state: "pending" });
@@ -58,6 +61,7 @@ describe("OrganizationMemoryPanel", () => {
     for (const mock of Object.values(api)) mock.mockReset();
     for (const mock of Object.values(agentClientMocks)) mock.mockReset();
     agentClientMocks.filesystemPickFiles.mockResolvedValue([]);
+    agentClientMocks.filesystemPickDirectory.mockResolvedValue(null);
     mockWorkspace();
   });
 
@@ -112,18 +116,57 @@ describe("OrganizationMemoryPanel", () => {
     expect(screen.getByText("个人文档")).toBeInTheDocument();
     expect(screen.getByText("团队文档")).toBeInTheDocument();
     fireEvent.change(screen.getByLabelText("查看范围"), { target: { value: teamScope.id } });
+    await waitFor(() => expect(screen.queryByText("个人文档")).not.toBeInTheDocument());
     expect(screen.getByText("团队文档")).toBeInTheDocument();
-    expect(screen.queryByText("个人文档")).not.toBeInTheDocument();
   });
 
   it("写入范围为团队时仍可为个人文档选择副本发布目标", async () => {
+    api.orgPublishDocument.mockResolvedValue({ state: "approved" });
     render(<OrganizationMemoryPanel />);
     await screen.findByText("Alice · https://memory.example.com");
     fireEvent.click(screen.getByRole("button", { name: /^文档/ }));
-    fireEvent.change(screen.getByLabelText("文档上传范围"), { target: { value: teamScope.id } });
+    fireEvent.click(screen.getByRole("button", { name: "上传文档" }));
+    const uploadDialog = screen.getByRole("dialog", { name: "选择上传位置" });
+    fireEvent.change(within(uploadDialog).getByLabelText("文档上传范围"), { target: { value: teamScope.id } });
+    fireEvent.click(within(uploadDialog).getByRole("button", { name: "取消" }));
 
-    expect(screen.getByLabelText("文档副本发布目标")).toBeInTheDocument();
-    expect(screen.getByRole("button", { name: "发布副本" })).toBeEnabled();
+    fireEvent.click(screen.getByRole("button", { name: "发布副本" }));
+    const dialog = screen.getByRole("dialog", { name: "发布文档副本" });
+    expect(within(dialog).getByLabelText("文档副本发布目标")).toHaveValue(teamScope.id);
+    fireEvent.click(within(dialog).getByRole("button", { name: "确认发布" }));
+    await waitFor(() => expect(api.orgPublishDocument).toHaveBeenCalledWith("d1", teamScope.id));
+  });
+
+  it.each(["docx", "xlsx", "pptx"])("%s 文档优先显示服务端解析内容", async (sourceType) => {
+    api.orgListDocuments.mockResolvedValue({
+      items: [{ ...document("office-1", `示例.${sourceType}`, teamScope.id, teamScope.name), sourceType }],
+      total: 1, page: 1, size: 20,
+    });
+    api.orgFetchDocument.mockResolvedValue({ docId: "office-1", text: "文档中的实际内容", chunks: [{ seq: 0, text: "文档中的实际内容" }] });
+    render(<OrganizationMemoryPanel />);
+    await screen.findByText("Alice · https://memory.example.com");
+    fireEvent.click(screen.getByRole("button", { name: /^文档/ }));
+    fireEvent.click(screen.getByRole("button", { name: "查看" }));
+    expect(await screen.findByText("文档中的实际内容")).toBeInTheDocument();
+    expect(api.orgFetchDocument).toHaveBeenCalledWith("office-1", null, "0:199");
+    expect(api.orgPreviewDocument).not.toHaveBeenCalled();
+    expect(screen.getByRole("button", { name: "下载原件" })).toBeInTheDocument();
+  });
+
+  it("Office 文档尚未解析时在预览窗口提供下载", async () => {
+    api.orgListDocuments.mockResolvedValue({
+      items: [{ ...document("office-2", "待解析.docx", teamScope.id, teamScope.name), sourceType: "docx" }],
+      total: 1, page: 1, size: 20,
+    });
+    api.orgFetchDocument.mockResolvedValue({ docId: "office-2", text: "", chunks: [] });
+    render(<OrganizationMemoryPanel />);
+    await screen.findByText("Alice · https://memory.example.com");
+    fireEvent.click(screen.getByRole("button", { name: /^文档/ }));
+    fireEvent.click(screen.getByRole("button", { name: "查看" }));
+    const dialog = await screen.findByRole("dialog", { name: "查看文档 待解析.docx" });
+    expect(within(dialog).getByText("暂时无法在线预览")).toBeInTheDocument();
+    expect(within(dialog).getByRole("button", { name: "下载原件" })).toBeInTheDocument();
+    expect(api.orgPreviewDocument).not.toHaveBeenCalled();
   });
 
   it("组织上下文不可用时禁用发起对话但保留管理页", async () => {
@@ -163,7 +206,7 @@ describe("OrganizationMemoryPanel", () => {
       scopeKind: teamScope.kind,
       createdAt: 1,
     }]);
-    api.orgDocumentSubmissionsMine.mockResolvedValue([{
+    api.orgDocumentSubmissionsMinePage.mockResolvedValue({ items: [{
       id: "document-pending",
       title: "发布手册",
       state: "pending",
@@ -171,7 +214,7 @@ describe("OrganizationMemoryPanel", () => {
       scopeName: teamScope.name,
       scopeKind: teamScope.kind,
       createdAt: 1,
-    }]);
+    }], total: 1, page: 1, size: 20 });
     api.orgSkillSubmissionsMine.mockResolvedValue([{
       id: "skill-pending",
       name: "release-check",
@@ -184,7 +227,7 @@ describe("OrganizationMemoryPanel", () => {
 
     render(<OrganizationMemoryPanel />);
     expect(await screen.findByText("1 条经验待审核")).toBeInTheDocument();
-    expect(screen.getByText("1 项文档正在审核、扫描或建立索引")).toBeInTheDocument();
+    expect(screen.getByText("1 项文档正在扫描或建立索引")).toBeInTheDocument();
     expect(screen.getByText("1 个 Skill 正在审核或扫描")).toBeInTheDocument();
 
     fireEvent.click(screen.getByRole("button", { name: "查看经验" }));
@@ -257,10 +300,61 @@ describe("OrganizationMemoryPanel", () => {
     await screen.findByText("Alice · https://memory.example.com");
     fireEvent.click(screen.getByRole("button", { name: /^文档/ }));
     fireEvent.click(screen.getByRole("button", { name: "上传文档" }));
+    fireEvent.click(within(screen.getByRole("dialog", { name: "选择上传位置" })).getByRole("button", { name: "选择文件" }));
     await waitFor(() => expect(api.orgSubmitDocument).toHaveBeenCalledTimes(3));
     expect(peak).toBe(3);
     await act(async () => release?.());
     await waitFor(() => expect(api.orgSubmitDocument).toHaveBeenCalledTimes(5));
     expect(peak).toBeLessThanOrEqual(3);
+  });
+
+  it("已提交文档可预览、下载并由本人确认移除", async () => {
+    api.orgDocumentSubmissionsMinePage.mockResolvedValue({
+      items: [{ id: "submission-1", title: "报告", sourceType: "md", byteSize: 128,
+        scopeId: teamScope.id, scopeName: teamScope.name, scopeKind: teamScope.kind,
+        state: "approved", scanStatus: "passed", resultDocumentId: "d2", createdAt: 1 }],
+      total: 1, page: 1, size: 20,
+    });
+    api.orgPreviewDocument.mockResolvedValue({ kind: "text", content: "# 原件内容" });
+    api.orgDownloadDocument.mockResolvedValue("/tmp/report.md");
+    api.orgRemoveOwnSubmission.mockResolvedValue({ removed: true });
+    render(<OrganizationMemoryPanel />);
+    await screen.findByText("Alice · https://memory.example.com");
+    fireEvent.click(screen.getByRole("button", { name: /^文档/ }));
+    const row = screen.getByText("报告").closest(".org-document-submissions__row") as HTMLElement;
+    fireEvent.click(within(row).getByRole("button", { name: "查看" }));
+    expect(await screen.findByRole("dialog", { name: "查看文档 报告.md" })).toBeInTheDocument();
+    expect(api.orgPreviewDocument).toHaveBeenCalledWith("submission-1", true, "md", "报告.md");
+    fireEvent.click(screen.getByRole("button", { name: "关闭预览" }));
+    fireEvent.click(within(row).getByRole("button", { name: "下载" }));
+    await waitFor(() => expect(api.orgDownloadDocument).toHaveBeenCalledWith("submission-1", true, "报告.md"));
+    fireEvent.click(within(row).getByRole("button", { name: "删除" }));
+    fireEvent.click(screen.getByRole("button", { name: "确认移除" }));
+    await waitFor(() => expect(api.orgRemoveOwnSubmission).toHaveBeenCalledWith("submission-1"));
+  });
+
+  it("文件夹上传先展示文件清单，保留相对路径作为文档名", async () => {
+    vi.mocked(filesystemPickDirectory).mockResolvedValue("/workspace/docs");
+    api.orgScanDocumentFolder.mockResolvedValue({
+      items: [
+        { path: "/workspace/docs/a.md", relativePath: "a.md", size: 10 },
+        { path: "/workspace/docs/nested/b.txt", relativePath: "nested/b.txt", size: 20 },
+      ], skipped: 1, totalBytes: 30,
+    });
+    api.orgSubmitDocument.mockResolvedValue({ state: "approved" });
+    render(<OrganizationMemoryPanel />);
+    await screen.findByText("Alice · https://memory.example.com");
+    fireEvent.click(screen.getByRole("button", { name: /^文档/ }));
+    fireEvent.click(screen.getByRole("button", { name: "上传文件夹" }));
+    const uploadDialog = screen.getByRole("dialog", { name: "选择上传位置" });
+    fireEvent.change(within(uploadDialog).getByLabelText("文档上传范围"), { target: { value: teamScope.id } });
+    fireEvent.click(within(uploadDialog).getByRole("button", { name: "选择文件夹" }));
+    expect(await screen.findByText("准备上传 2 个文档")).toBeInTheDocument();
+    expect(screen.getByText(/目标：研发团队/)).toBeInTheDocument();
+    expect(api.orgSubmitDocument).not.toHaveBeenCalled();
+    fireEvent.click(screen.getByRole("button", { name: "开始上传" }));
+    await waitFor(() => expect(api.orgSubmitDocument).toHaveBeenCalledWith(
+      "/workspace/docs/nested/b.txt", teamScope.id, "nested/b.txt",
+    ));
   });
 });
