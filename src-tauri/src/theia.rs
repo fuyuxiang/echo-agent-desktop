@@ -92,7 +92,7 @@ fn browser_app_dir(app: &AppHandle) -> Result<PathBuf, String> {
     Err("Theia 尚未构建。请先运行 pnpm ide:build。".into())
 }
 
-fn node_executable(app: &AppHandle) -> PathBuf {
+pub(crate) fn node_executable(app: &AppHandle) -> PathBuf {
     if let Ok(explicit) = std::env::var("ECHO_THEIA_NODE") {
         return PathBuf::from(explicit);
     }
@@ -123,7 +123,7 @@ fn node_executable(app: &AppHandle) -> PathBuf {
 /// Tauri's Windows resource directory can inherit a `\\?\` prefix from
 /// `current_exe()`. Node.js 22/24 fails while resolving its main script from
 /// that path (EISDIR on the bare drive letter), before Theia can start.
-fn node_compatible_path(path: &Path) -> Result<PathBuf, String> {
+pub(crate) fn node_compatible_path(path: &Path) -> Result<PathBuf, String> {
     #[cfg(windows)]
     {
         let simplified = dunce::simplified(path);

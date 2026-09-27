@@ -1068,7 +1068,7 @@ fn export_text(record: &MeetingRecord, kind: &str) -> Result<(String, String, St
     }
 }
 
-async fn choose_save_path(
+pub(crate) async fn choose_save_path(
     app: &tauri::AppHandle,
     title: &str,
     file_name: &str,
@@ -1102,6 +1102,24 @@ pub async fn meeting_export(
     kind: String,
 ) -> Result<Option<String>, String> {
     let record = read_meeting(&meeting_id)?;
+    if kind == "minutes_docx" || kind == "minutes_pdf" {
+        let format = if kind == "minutes_docx" {
+            "docx"
+        } else {
+            "pdf"
+        };
+        let markdown = record.minutes.clone().ok_or("尚未生成会议纪要")?;
+        let result = crate::document_export::export(
+            &app,
+            crate::document_export::DocumentExportRequest {
+                title: format!("{}-会议纪要", record.title),
+                markdown,
+                format: format.to_string(),
+            },
+        )
+        .await?;
+        return Ok(result.map(|receipt| receipt.path));
+    }
     if kind == "audio" {
         let name = format!(
             "{}-录音.wav",

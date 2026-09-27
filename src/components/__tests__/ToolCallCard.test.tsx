@@ -19,6 +19,38 @@ const base: ToolCallView = {
 };
 
 describe("ToolCallCard", () => {
+  it("以文档成果展示内置 Office 调用", () => {
+    const onOpenPath = vi.fn();
+    const officeCall: ToolCallView = {
+      toolCallId: "office-1",
+      title: "echoagent-office__office_create",
+      kind: "mcp_tool",
+      status: "completed",
+      rawInput: { title: "季度报告", format: "docx" },
+      officeReceipt: {
+        path: "/work/EchoAgent成果/季度报告.docx",
+        format: "docx",
+        byteSize: 1024,
+        sha256: "a".repeat(64),
+      },
+      content: [{ type: "text", text: JSON.stringify({
+        path: "/work/EchoAgent成果/季度报告.docx",
+        format: "docx",
+        byteSize: 1024,
+        sha256: "a".repeat(64),
+      }) }],
+    };
+    render(<>
+      <ToolCallCard tc={officeCall} />
+      <ToolCallDetailBody tc={officeCall} onOpenPath={onOpenPath} />
+    </>);
+    expect(screen.getAllByText("文档")).toHaveLength(2);
+    expect(screen.getByText("生成 季度报告")).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "/work/EchoAgent成果/季度报告.docx" }));
+    expect(onOpenPath).toHaveBeenCalledWith("/work/EchoAgent成果/季度报告.docx");
+    expect(screen.queryByText(/sha256/)).not.toBeInTheDocument();
+  });
+
   beforeEach(() => {
     orgApi.orgFetchDocument.mockReset();
     orgApi.orgFetchDocument.mockResolvedValue({ text: "完整原文内容" });

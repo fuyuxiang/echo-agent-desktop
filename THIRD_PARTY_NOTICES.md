@@ -42,6 +42,10 @@ example application into the Echo Code IDE. The Theia platform source retains
 upstream copyright and license headers. Coding Agent operations use EchoAgent's
 existing task and Agent runtime; Theia supplies the IDE surface.
 
+The JSON Schema catalog at
+`vendor/theia-platform/packages/core/src/browser/catalog.json` comes from the
+official `@theia/core@1.74.0` npm package, matching the vendored source tag.
+
 ## Node.js runtime
 
 - Source: https://nodejs.org/
@@ -75,3 +79,17 @@ reference input are intentionally excluded.
 
 The vendored source contains the `nucleo` and `nucleo-matcher` crates used by
 the embedded Runtime. The upstream license and source form are retained.
+
+## Noto Sans CJK SC
+
+- Source: https://github.com/notofonts/noto-cjk
+- Integration: `src-tauri/resources/office/fonts/NotoSansCJKsc-Regular.otf` is
+  bundled for offline Chinese PDF export.
+- License: SIL Open Font License 1.1
+- Local license copy: `src-tauri/resources/office/fonts/LICENSE`
+
+The bundled Office worker uses the npm packages `docx`, `exceljs`, `pptxgenjs`,
+`pdf-lib`, `@pdf-lib/fontkit`, and `marked`. The published license files are
+staged into `office/licenses/` in the app resources during the build; remaining
+MIT license metadata for `@pdf-lib/fontkit` is staged there from its published
+package manifest. Exact package versions are pinned in `pnpm-lock.yaml`.

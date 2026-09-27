@@ -1,5 +1,6 @@
 import { describe, it, expect, beforeEach } from "vitest";
 import { useSessionStore } from "../session-store";
+import { collectSessionArtifacts } from "@/lib/session-artifacts";
 
 /**
  * Per-session transcript store. The whole point of this refactor is that
@@ -76,6 +77,37 @@ const userMessageTextForTest = (m: ReturnType<typeof useSessionStore.getState>["
 
 describe("session-store transcripts", () => {
   beforeEach(resetStore);
+
+  it("把 Runtime 的 Office MCP rawOutput 转成可打开的任务成果", () => {
+    const store = useSessionStore.getState();
+    store.setSession("A");
+    store.applyUpdate({
+      sessionUpdate: "tool_call",
+      toolCallId: "office-1",
+      title: "echoagent-office__office_create",
+      kind: "mcp_tool",
+      status: "in_progress",
+      content: [],
+      __sessionId: "A",
+    } as never);
+    store.applyUpdate({
+      sessionUpdate: "tool_call_update",
+      toolCallId: "office-1",
+      status: "completed",
+      rawOutput: {
+        type: "MCP",
+        server_name: "echoagent-office",
+        tool_name: "echoagent-office__office_create",
+        output: { OkayOutput: JSON.stringify({
+          path: "/work/EchoAgent成果/report.pdf", format: "pdf",
+          byteSize: 4096, sha256: "a".repeat(64),
+        }) },
+      },
+      __sessionId: "A",
+    } as never);
+    expect(collectSessionArtifacts(useSessionStore.getState().messages).map((artifact) => artifact.path))
+      .toEqual(["/work/EchoAgent成果/report.pdf"]);
+  });
 
   it("暂停建立会话屏障，切换任务后仍保留且迟到增量不能复活", () => {
     const store = useSessionStore.getState();

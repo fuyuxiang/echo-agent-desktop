@@ -22,6 +22,7 @@ import {
   type SessionControlAction,
 } from "@/lib/session-control";
 import { terminalSessionStatus } from "@/lib/turn-status";
+import { officeReceiptFromRawOutput, type DocumentExportReceipt } from "@/lib/document-export";
 
 /**
  * A single chat message in the transcript the UI renders.
@@ -72,6 +73,8 @@ export interface ToolCallView {
   status: "in_progress" | "completed" | "failed";
   content: ToolCallUpdate["content"];
   rawInput?: unknown;
+  /** Native Office receipt derived from the Runtime's trusted MCP rawOutput. */
+  officeReceipt?: DocumentExportReceipt;
 }
 
 interface Usage {
@@ -1442,6 +1445,7 @@ export const useSessionStore = create<SessionState>((set, get) => {
             // ACP omits `kind` when it's "other" and `status` when it's
             // "pending" (the defaults). Provide sensible fallbacks.
             const status = (raw.status as string) || "in_progress";
+            const officeReceipt = officeReceiptFromRawOutput(raw.rawOutput ?? raw.raw_output);
             const view: ToolCallView = {
               toolCallId:
                 boundedString(raw.toolCallId ?? raw.tool_call_id, 4_096),
@@ -1450,8 +1454,12 @@ export const useSessionStore = create<SessionState>((set, get) => {
               status: status === "completed" || status === "failed"
                 ? status
                 : "in_progress",
-              content: normalizeToolCallContent(raw.content),
+              content: [
+                ...normalizeToolCallContent(raw.content),
+                ...(officeReceipt ? [{ type: "text" as const, text: JSON.stringify(officeReceipt) }] : []),
+              ],
               rawInput: boundedRawInput(raw.rawInput ?? raw.raw_input),
+              officeReceipt: officeReceipt ?? undefined,
             };
             messages[idx] = upsertToolCall(messages[idx], view, streamId);
             return {
@@ -1484,6 +1492,14 @@ export const useSessionStore = create<SessionState>((set, get) => {
               deltaFields.content = normalizeToolCallContent(
                 deltaFields.content
               );
+            }
+            const officeReceipt = officeReceiptFromRawOutput(raw.rawOutput ?? raw.raw_output);
+            if (officeReceipt) {
+              deltaFields.officeReceipt = officeReceipt;
+              deltaFields.content = [
+                ...((deltaFields.content as ToolCallContent[] | undefined) ?? []),
+                { type: "text", text: JSON.stringify(officeReceipt) },
+              ];
             }
             // Patch the matching tool card across the transcript (not only the
             // streaming message — a late update may target an older turn).

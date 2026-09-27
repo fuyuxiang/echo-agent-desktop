@@ -6,8 +6,8 @@
   "build": {
     "frontendDist": "../dist",
     "devUrl": "http://localhost:1420",
-    "beforeDevCommand": "pnpm ide:prepare && pnpm dev",
-    "beforeBuildCommand": "pnpm ide:prepare && pnpm build"
+    "beforeDevCommand": "pnpm ide:prepare && pnpm office:build && pnpm dev",
+    "beforeBuildCommand": "pnpm ide:prepare && pnpm office:build && pnpm build"
   },
   "app": {
     "windows": [
@@ -51,7 +51,8 @@
       "../vendor/theia-platform/LICENSE-GPL-2.0-ONLY-CLASSPATH-EXCEPTION": "licenses/theia/LICENSE-GPL-2.0-ONLY-CLASSPATH-EXCEPTION",
       "../vendor/theia-platform/NOTICE.md": "licenses/theia/NOTICE.md",
       "resources/theia/browser": "theia/browser",
-      "resources/theia/node": "theia/node"
+      "resources/theia/node": "theia/node",
+      "resources/office": "office"
     }
   },
   "plugins": {

@@ -1,5 +1,6 @@
 import type { ChatMessage, ToolCallView } from "@/stores/session-store";
 import type { DiffContent } from "@/lib/types";
+import { isOfficeCreateTool, officeReceiptFromToolCall } from "@/lib/document-export";
 
 /** A file produced by a successful tool call in the current transcript. */
 export interface SessionArtifact {
@@ -62,6 +63,14 @@ export function collectSessionArtifacts(messages: ChatMessage[]): SessionArtifac
 
 function extractPathsFromToolCall(tc: ToolCallView): string[] {
   const out = new Set<string>();
+
+  // The bundled Office tool returns a structured receipt after the native
+  // worker has validated and committed the file. Its input has no path.
+  if (isOfficeCreateTool(tc)) {
+    const receipt = officeReceiptFromToolCall(tc);
+    if (receipt && looksLikePath(receipt.path)) out.add(receipt.path);
+    return [...out];
+  }
 
   // A declared read/delete operation is never a viewable output, even if a
   // buggy provider happens to attach diff-shaped diagnostic content.

@@ -283,7 +283,7 @@ export function MeetingMinutesPanel({
     }
   };
 
-  const doExport = async (kind: "audio" | "minutes" | "transcript" | "srt") => {
+  const doExport = async (kind: "audio" | "minutes" | "minutes_docx" | "minutes_pdf" | "transcript" | "srt") => {
     if (!selected) return;
     try {
       const path = await meetingExport(selected.id, kind);
@@ -436,6 +436,8 @@ export function MeetingMinutesPanel({
                     <div className="meeting-minutes">
                       <div className="meeting-content-toolbar">
                         <button type="button" onClick={() => void navigator.clipboard.writeText(selected.minutes!)}><Copy size={14} />复制</button>
+                        <button type="button" onClick={() => void doExport("minutes_docx")}><Download size={14} />导出 Word</button>
+                        <button type="button" onClick={() => void doExport("minutes_pdf")}><Download size={14} />导出 PDF</button>
                         <button type="button" onClick={() => void doExport("minutes")}><Download size={14} />导出 Markdown</button>
                         <button type="button" onClick={() => void regenerate()} disabled={busy !== null}><RefreshCw size={14} />重新生成</button>
                       </div>

@@ -27,6 +27,8 @@ release
 /src-tauri/resources/theia/node/*
 !/src-tauri/resources/theia/node/.keep
 /src-tauri/resources/theia/runtime-platform.json
+/src-tauri/resources/office/worker.mjs
+/src-tauri/resources/office/licenses/
 
 # 本机环境与 Cargo 工具路径
 .env

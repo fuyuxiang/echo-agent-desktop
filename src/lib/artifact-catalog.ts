@@ -2,6 +2,7 @@ import { invoke } from "@tauri-apps/api/core";
 import { isTauriAvailable } from "./tauri-kb-reader";
 import { collectSessionArtifacts, type SessionArtifact } from "@/lib/session-artifacts";
 import type { ChatMessage, SessionTranscript } from "@/stores/session-store";
+import type { DocumentExportReceipt } from "@/lib/document-export";
 
 export interface TaskArtifact extends SessionArtifact {
   sessionId: string;
@@ -62,6 +63,8 @@ export function indexTaskArtifacts(
   messages: ChatMessage[],
 ): TaskArtifact[] {
   const retained = loadTaskArtifacts().filter((item) => item.sessionId !== sessionId);
+  retained.push(...loadTaskArtifacts().filter((item) =>
+    item.sessionId === sessionId && item.toolCallId.startsWith("document-export:")));
   const next = mergeTaskArtifacts(
     taskArtifactsFromMessages(sessionId, sessionTitle, cwd, messages),
     retained,
@@ -76,6 +79,36 @@ export function indexTaskArtifacts(
   }
   if (isTauriAvailable()) void resolveArtifactPaths(sessionId, next.filter((item) => item.sessionId === sessionId));
   return next;
+}
+
+/** Register a verified native export independently of transcript tool heuristics. */
+export function registerDocumentArtifact(
+  receipt: DocumentExportReceipt,
+  sessionId: string,
+  sessionTitle: string,
+  cwd: string,
+): TaskArtifact {
+  const artifact: TaskArtifact = {
+    id: `document-export:${receipt.sha256}:${receipt.path}`,
+    path: receipt.path,
+    kind: "document_export",
+    title: `导出 ${receipt.format.toUpperCase()}`,
+    toolCallId: `document-export:${receipt.sha256}`,
+    status: "completed",
+    verifiedOutput: true,
+    sessionId,
+    sessionTitle,
+    cwd,
+    updatedAt: Date.now(),
+  };
+  const next = mergeTaskArtifacts([artifact], loadTaskArtifacts());
+  if (typeof window !== "undefined") {
+    try {
+      window.localStorage.setItem(STORAGE_KEY, JSON.stringify(next));
+      window.dispatchEvent(new CustomEvent(ARTIFACT_CATALOG_EVENT));
+    } catch { /* Export succeeded; local catalog persistence is optional. */ }
+  }
+  return artifact;
 }
 
 export function artifactsFromTranscripts(

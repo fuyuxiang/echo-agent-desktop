@@ -106,6 +106,19 @@ describe("assistant message actions", () => {
     expect(trigger).toHaveFocus();
   });
 
+  it("导出格式菜单支持键盘导航与 Escape 返回", () => {
+    renderMessage();
+    const trigger = screen.getByRole("button", { name: "导出回复为办公文件" });
+    fireEvent.keyDown(trigger, { key: "ArrowDown" });
+    const word = screen.getByRole("menuitem", { name: "Word" });
+    expect(word).toHaveFocus();
+    fireEvent.keyDown(word, { key: "ArrowDown" });
+    expect(screen.getByRole("menuitem", { name: "PDF" })).toHaveFocus();
+    fireEvent.keyDown(document, { key: "Escape" });
+    expect(screen.queryByRole("menu", { name: "选择导出格式" })).toBeNull();
+    expect(trigger).toHaveFocus();
+  });
+
   it("根据终态区分重新生成和重新执行", () => {
     const onRetry = vi.fn();
     const { rerender } = renderMessage(completedMessage, { onRetry });

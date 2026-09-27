@@ -3,6 +3,7 @@ import {
   Check,
   ChevronDown,
   Copy,
+  Download,
   FileCode2,
   RefreshCw,
   Square,
@@ -27,6 +28,8 @@ import {
 import { friendlyAttachmentError } from "@/lib/attachment-errors";
 import { highlightSegments } from "@/lib/extract-text";
 import { copyShareText } from "@/lib/share";
+import { exportOfficeDocument, type OfficeFormat } from "@/lib/document-export";
+import { registerDocumentArtifact } from "@/lib/artifact-catalog";
 import { partitionAssistantParts } from "@/lib/execution-process";
 import {
   messageRetryKind,
@@ -121,6 +124,8 @@ export const MessageItem = memo(function MessageItem({
   const [speaking, setSpeaking] = useState(false);
   const [copiedKind, setCopiedKind] = useState<"plain" | "markdown" | null>(null);
   const [copyMenuOpen, setCopyMenuOpen] = useState(false);
+  const [exportMenuOpen, setExportMenuOpen] = useState(false);
+  const [exporting, setExporting] = useState<OfficeFormat | null>(null);
   const knowledgeTrace = useKnowledgeStore((state) => (
     sessionId && message.promptId
       ? state.turnTraces[sessionId]?.[message.promptId]
@@ -131,6 +136,9 @@ export const MessageItem = memo(function MessageItem({
   const copyMenuRef = useRef<HTMLDivElement>(null);
   const copyMenuTriggerRef = useRef<HTMLButtonElement>(null);
   const copyMenuListRef = useRef<HTMLDivElement>(null);
+  const exportMenuRef = useRef<HTMLDivElement>(null);
+  const exportMenuTriggerRef = useRef<HTMLButtonElement>(null);
+  const exportMenuListRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => () => {
     stopSpeakingRef.current?.();
@@ -161,6 +169,27 @@ export const MessageItem = memo(function MessageItem({
       document.removeEventListener("keydown", closeOnEscape);
     };
   }, [closeCopyMenu, copyMenuOpen]);
+
+  useEffect(() => {
+    if (!exportMenuOpen) return;
+    exportMenuListRef.current?.querySelector<HTMLButtonElement>('[role="menuitem"]')?.focus();
+    const closeOnOutside = (event: PointerEvent) => {
+      if (!exportMenuRef.current?.contains(event.target as Node)) setExportMenuOpen(false);
+    };
+    const closeOnEscape = (event: KeyboardEvent) => {
+      if (event.key === "Escape") {
+        event.preventDefault();
+        setExportMenuOpen(false);
+        exportMenuTriggerRef.current?.focus();
+      }
+    };
+    document.addEventListener("pointerdown", closeOnOutside);
+    document.addEventListener("keydown", closeOnEscape);
+    return () => {
+      document.removeEventListener("pointerdown", closeOnOutside);
+      document.removeEventListener("keydown", closeOnEscape);
+    };
+  }, [exportMenuOpen]);
 
   const markCopied = useCallback((kind: "plain" | "markdown") => {
     setCopiedKind(kind);
@@ -256,6 +285,25 @@ export const MessageItem = memo(function MessageItem({
       },
     });
   }, [onToast, plainText, speaking]);
+
+  const exportAnswer = async (format: OfficeFormat) => {
+    setExportMenuOpen(false);
+    setExporting(format);
+    try {
+      const title = markdownText.match(/^#\s+(.+)$/m)?.[1]?.trim()
+        || markdownText.split("\n").find((line) => line.trim())?.replace(/^#+\s*/, "").slice(0, 80)
+        || "EchoAgent 报告";
+      const receipt = await exportOfficeDocument(title, markdownText, format);
+      if (receipt) {
+        if (sessionId) registerDocumentArtifact(receipt, sessionId, title, cwd ?? "");
+        onToast?.(`已导出到 ${receipt.path}`);
+      }
+    } catch (error) {
+      onToast?.(`导出失败：${String(error).replace(/^Error:\s*/, "")}`);
+    } finally {
+      setExporting(null);
+    }
+  };
 
   if (message.role === "user") {
     const attachments = message.attachments ?? [];
@@ -505,6 +553,59 @@ export const MessageItem = memo(function MessageItem({
                     {speaking ? <Square size={13} /> : <Volume2 size={14} />}
                     <span>{speaking ? "停止" : "朗读"}</span>
                   </button>
+                  <div className="msg__copy-split" ref={exportMenuRef}
+                    onBlur={(event) => {
+                      if (!event.currentTarget.contains(event.relatedTarget)) setExportMenuOpen(false);
+                    }}>
+                    <button
+                      type="button"
+                      className="msg__action-btn"
+                      ref={exportMenuTriggerRef}
+                      aria-haspopup="menu"
+                      aria-expanded={exportMenuOpen}
+                      aria-label={exporting ? `正在导出 ${exporting.toUpperCase()}` : "导出回复为办公文件"}
+                      title="导出回复为办公文件"
+                      disabled={exporting !== null}
+                      onClick={() => setExportMenuOpen((open) => !open)}
+                      onKeyDown={(event) => {
+                        if (event.key === "ArrowDown" || event.key === "ArrowUp") {
+                          event.preventDefault();
+                          setExportMenuOpen(true);
+                        }
+                      }}
+                    >
+                      <Download size={14} />
+                      <span>{exporting ? "导出中…" : "导出"}</span>
+                      <ChevronDown size={13} />
+                    </button>
+                    {exportMenuOpen && (
+                      <div className="msg__copy-menu" role="menu" aria-label="选择导出格式"
+                        ref={exportMenuListRef}
+                        onKeyDown={(event) => {
+                          const items = Array.from(exportMenuListRef.current?.querySelectorAll<HTMLButtonElement>('[role="menuitem"]') ?? []);
+                          const index = items.indexOf(document.activeElement as HTMLButtonElement);
+                          if (event.key === "ArrowDown" || event.key === "ArrowUp") {
+                            event.preventDefault();
+                            const delta = event.key === "ArrowDown" ? 1 : -1;
+                            items[(index + delta + items.length) % items.length]?.focus();
+                          } else if (event.key === "Home" || event.key === "End") {
+                            event.preventDefault();
+                            items[event.key === "Home" ? 0 : items.length - 1]?.focus();
+                          }
+                        }}>
+                        {(["docx", "pdf", "xlsx", "pptx"] as const).map((format) => (
+                          <button
+                            type="button"
+                            role="menuitem"
+                            key={format}
+                            onClick={() => void exportAnswer(format)}
+                          >
+                            <span>{format === "docx" ? "Word" : format === "xlsx" ? "Excel" : format === "pptx" ? "PPT" : "PDF"}</span>
+                          </button>
+                        ))}
+                      </div>
+                    )}
+                  </div>
                 </>
               )}
               {onRetry && (

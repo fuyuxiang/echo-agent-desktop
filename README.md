@@ -133,6 +133,7 @@ name = "My Model"
 | **代码开发工作台** | 内嵌 Eclipse Theia IDE（文件资源管理器、编辑器、搜索、终端、Git、预览和扩展），旁边保留 EchoAgent 的任务、对话、变更审阅、验证与交付 |
 | **浏览器与电脑操作** | 任务隔离的 Browser Use、基于屏幕快照的 Computer Use、实时能力检测、暂停/接管/恢复、逐项高风险确认与任务级数据清理 |
 | **工作空间** | 目录级会话、全文检索、文件树与安全文件操作、常见文档预览、变更跟踪、Unified Diff 与交付资产 |
+| **办公文档** | 在任务中读取并整理本地 Office/PDF；[离线生成 Word、PDF、Excel、PPT](docs/office-documents.md)，支持回复导出与会议纪要导出，无需额外办公服务账号 |
 | **模型接入** | OpenAI、Anthropic、DeepSeek、通义千问预设，多 Provider、多模型，以及 OpenAI/Anthropic 兼容 Endpoint |
 | **能力扩展** | MCP stdio/Streamable HTTP/SSE、MCP OAuth、Skills（含 [可执行能力契约](docs/skill-capability-manifest.md)）、Plugins、CLI 连接器、可复用专家与本地能力市场 |
 | **长期上下文** | 项目指令、任务与计划、个人记忆、会话摘要、本地 Markdown/文本/Office 文件的混合检索索引，以及可选组织知识服务 |

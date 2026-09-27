@@ -468,6 +468,17 @@ pub async fn new_session_with_options(
     ) {
         servers.push(authenticated_automation_mcp_server(url, authorization));
     }
+    if let (Some(url), Some(authorization)) = (
+        crate::office_mcp::server_url(),
+        crate::office_mcp::authorization_header(),
+    ) {
+        servers.push(acp::McpServer::Http(
+            acp::McpServerHttp::new(crate::office_mcp::MCP_SERVER_NAME, url).headers(vec![
+                acp::HttpHeader::new("Authorization", authorization),
+                acp::HttpHeader::new(crate::office_mcp::SESSION_HEADER, "${session_id}"),
+            ]),
+        ));
+    }
     let mut req = acp::NewSessionRequest::new(cwd.to_path_buf()).mcp_servers(servers);
     let permission_mode = permission_mode_override
         .map(str::to_string)

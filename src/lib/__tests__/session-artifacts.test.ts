@@ -6,6 +6,22 @@ import {
 import type { ChatMessage } from "@/stores/session-store";
 
 describe("session-artifacts", () => {
+  it("registers only validated Office tool receipts as output files", () => {
+    const good = toolMessage("mcp_tool", "office_create", "completed");
+    const bad = toolMessage("mcp_tool", "office_create", "completed");
+    const validPath = "/work/EchoAgent成果/report.docx";
+    const goodPart = good.parts[0];
+    if (goodPart.kind === "tool_call") goodPart.toolCall.officeReceipt = {
+      path: validPath, format: "docx", sha256: "a".repeat(64), byteSize: 1024,
+    };
+    const badPart = bad.parts[0];
+    if (badPart.kind === "tool_call") badPart.toolCall.content = [{
+      type: "text",
+      text: JSON.stringify({ path: "/work/reference.pdf", format: "pdf", sha256: "a".repeat(64), byteSize: 1024 }),
+    }];
+    expect(collectSessionArtifacts([good, bad]).map((item) => item.path)).toEqual([validPath]);
+  });
+
   it("collects unique paths from diffs and titles", () => {
     const messages: ChatMessage[] = [
       {

@@ -1,5 +1,6 @@
 import { useState } from "react";
 import type { ToolCallView } from "@/stores/session-store";
+import { isOfficeCreateTool, officeReceiptFromToolCall } from "@/lib/document-export";
 import type { DiffContent, CommandOutputContent, ImageToolContent } from "@/lib/types";
 import { checkCommandRisk, riskLabel } from "@/lib/command-risk";
 import { precheckCommand } from "@/lib/sandbox-guard";
@@ -75,25 +76,29 @@ export function ToolCallCard({ tc, onOpen }: ToolCallCardProps) {
       "…"
     );
 
-  const shortTitle = shortenTitle(tc.title, tc.kind);
+  const officeTool = isOfficeCreateTool(tc);
+  const officeInput = tc.rawInput && typeof tc.rawInput === "object"
+    ? tc.rawInput as Record<string, unknown> : null;
+  const officeTitle = typeof officeInput?.title === "string" ? officeInput.title : "办公文档";
+  const shortTitle = officeTool ? `生成 ${officeTitle}` : shortenTitle(tc.title, tc.kind);
 
   // 专用渲染器(对齐 EchoAgent tools/renderers):非 default/unknown 时用图标 +
   // 渲染器标签 + 摘要替代通用 kind 文案。
   const renderer = detectToolRenderer(tc.kind);
   const specialized =
     renderer !== "default" && renderer !== "unknown";
-  const kindLabel = specialized
+  const kindLabel = officeTool ? "文档" : specialized
     ? `${rendererIcon(renderer)} ${rendererLabel(renderer)}`
     : prettyKind(tc.kind);
-  const summary = specialized ? summarizeTool(tc, renderer) : shortTitle;
+  const summary = officeTool ? shortTitle : specialized ? summarizeTool(tc, renderer) : shortTitle;
 
   return (
     <button
       type="button"
       className={"toolcall toolcall--compact " + statusCls}
       onClick={() => onOpen?.(tc)}
-      title={`${tc.kind}: ${tc.title}（${statusLabel}，点击查看详情）`}
-      aria-label={`${tc.kind} ${summary} ${statusLabel}`}
+      title={`${officeTool ? "办公文档" : tc.kind}: ${officeTool ? officeTitle : tc.title}（${statusLabel}，点击查看详情）`}
+      aria-label={`${officeTool ? "办公文档" : tc.kind} ${summary} ${statusLabel}`}
     >
       <span className="toolcall__kind">{kindLabel}</span>
       <span className="toolcall__title">{summary}</span>
@@ -159,6 +164,8 @@ export function ToolCallDetailBody({
     type: "text";
     text: string;
   }>;
+  const officeTool = isOfficeCreateTool(tc);
+  const officeReceipt = officeReceiptFromToolCall(tc);
   const parsedOrganizationResult = isOrganizationKnowledgeTool(tc.kind)
     ? parseOrganizationResult(texts[0]?.text)
     : null;
@@ -173,7 +180,7 @@ export function ToolCallDetailBody({
   return (
     <div className="tool-detail">
       <div className="tool-detail__meta">
-        <span className="toolcall__kind">{prettyKind(tc.kind)}</span>
+        <span className="toolcall__kind">{officeTool ? "文档" : prettyKind(tc.kind)}</span>
         <span className={"tool-detail__status tool-detail__status--" + tc.status}>
           {tc.status === "completed"
             ? "已完成"
@@ -182,7 +189,18 @@ export function ToolCallDetailBody({
               : "运行中"}
         </span>
       </div>
-      <h3 className="tool-detail__title">{tc.title}</h3>
+      <h3 className="tool-detail__title">{officeTool ? "生成办公文档" : tc.title}</h3>
+
+      {officeReceipt && (
+        <div className="toolcall__text">
+          <p>已生成 {officeReceipt.format.toUpperCase()} 文件</p>
+          <button type="button" className="diff__path diff__path--clickable"
+            onClick={() => onOpenPath?.(officeReceipt.path)}
+            title={`打开：${officeReceipt.path}`}>
+            {officeReceipt.path}
+          </button>
+        </div>
+      )}
 
       {diff && (
         <DiffView
@@ -224,12 +242,12 @@ export function ToolCallDetailBody({
       )}
       {organizationResult && <OrganizationKnowledgeResult value={organizationResult} />}
       {personalResult && <PersonalKnowledgeResult value={personalResult} onOpenPath={onOpenPath} />}
-      {!organizationResult && !personalResult && texts.map((t, i) => (
+      {!officeReceipt && !organizationResult && !personalResult && texts.map((t, i) => (
         <pre key={i} className="toolcall__text">
           {t.text}
         </pre>
       ))}
-      {!diff && !cmd && images.length === 0 && texts.length === 0 && tc.rawInput != null && (
+      {!officeTool && !diff && !cmd && images.length === 0 && texts.length === 0 && tc.rawInput != null && (
         <pre className="toolcall__text toolcall__raw-input">
           {typeof tc.rawInput === "string"
             ? tc.rawInput

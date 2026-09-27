@@ -104,7 +104,7 @@ export function meetingJobActive(meetingId: string): Promise<boolean> {
   return invoke("meeting_job_active", { meetingId });
 }
 
-export function meetingExport(meetingId: string, kind: "audio" | "minutes" | "transcript" | "srt"): Promise<string | null> {
+export function meetingExport(meetingId: string, kind: "audio" | "minutes" | "minutes_docx" | "minutes_pdf" | "transcript" | "srt"): Promise<string | null> {
   return invoke("meeting_export", { meetingId, kind });
 }
 

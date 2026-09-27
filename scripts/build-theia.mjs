@@ -1,4 +1,4 @@
-import { existsSync } from "node:fs";
+import { copyFileSync, existsSync } from "node:fs";
 import { resolve, join } from "node:path";
 import { spawnSync } from "node:child_process";
 
@@ -19,7 +19,16 @@ function run(args) {
 }
 
 if (!existsSync(join(sourceRoot, "node_modules"))) run(["ci"]);
+// The source snapshot omits generated @theia/core/shared re-export shims.
+// Filesystem and other packages import these during TypeScript compilation.
+run(["exec", "--", "theia-re-exports", "generate", "@theia/core"]);
 run(["run", "compile"]);
+// The vendored source keeps the pinned JSON Schema catalog as a static asset;
+// TypeScript does not copy JSON inputs to lib/. The browser bundle requires it.
+copyFileSync(
+  join(sourceRoot, "packages/core/src/browser/catalog.json"),
+  join(sourceRoot, "packages/core/lib/browser/catalog.json"),
+);
 run(["run", "build:production", "--workspace", "@echoagent/theia-browser"]);
 
 if (!existsSync(join(sourceRoot, "examples/browser/lib/backend/main.js"))) {
