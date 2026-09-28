@@ -3,7 +3,9 @@
 <plist version="1.0">
 <dict>
   <key>NSMicrophoneUsageDescription</key>
-  <string>EchoAgent 使用麦克风将你的语音转换为输入文字。</string>
+  <string>EchoAgent 使用麦克风进行语音输入，以及录音转写时记录你的发言。</string>
+  <key>NSAudioCaptureUsageDescription</key>
+  <string>EchoAgent 在录音转写时采集电脑播放的声音，并可与麦克风声音合并保存。</string>
   <key>NSSpeechRecognitionUsageDescription</key>
   <string>EchoAgent 使用系统语音识别服务将语音转换为输入文字。</string>
 </dict>

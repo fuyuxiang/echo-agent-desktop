@@ -28,7 +28,7 @@ try {
   const errors = [];
   let layouts = 0;
   page.on("pageerror", error => errors.push(error.message));
-  const surfaces = ["memory", "security", "cloud-storage", "notify-channels", "capabilities", "coding", "organization", "conversation"];
+  const surfaces = ["memory", "security", "cloud-storage", "notify-channels", "capabilities", "coding", "organization", "conversation", "meeting"];
   for (const [width, height, theme] of [[1440, 900, "light"], [1024, 768, "dark"], [768, 720, "light"]]) {
     await page.setViewportSize({ width, height });
     for (const surface of surfaces) {
@@ -51,6 +51,21 @@ try {
         await page.locator(".msg-wrap--jump-target", { hasText: "检查蓝牙遥控器" }).waitFor();
         assert.equal(await dialog.count(), 0);
         await page.getByRole("button", { name: "回到最新消息并恢复自动跟随" }).click();
+        continue;
+      }
+      if (surface === "meeting") {
+        await page.getByRole("button", { name: /两者都录/ }).waitFor();
+        await page.getByRole("button", { name: /两者都录/ }).click();
+        assert.equal(await page.getByRole("button", { name: /两者都录/ }).getAttribute("aria-pressed"), "true");
+        assert.ok(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth + 1), "meeting: horizontal page overflow");
+        const cards = await page.locator(".meeting-source__option").evaluateAll(elements => elements.map(element => {
+          const box = element.getBoundingClientRect();
+          return { left: box.left, right: box.right, width: box.width };
+        }));
+        assert.equal(cards.length, 3);
+        assert.ok(cards.every(card => card.left >= 0 && card.right <= width && card.width >= 120), "meeting: source choices clip");
+        await page.screenshot({ path: join(output, `${surface}-${width}-${theme}.png`) });
+        layouts += 1;
         continue;
       }
       if (surface === "organization") {
@@ -225,7 +240,7 @@ try {
   await page.keyboard.press("Escape");
   assert.equal(await page.getByRole("menu", { name: "项目列表" }).count(), 0);
   assert.deepEqual(errors, [], "browser runtime errors");
-  console.log(JSON.stringify({ passed: true, screenshots: output, layouts, interactions: ["organization document preview", "conversation question navigation", "memory", "notification", "storage", "expert creation", "expert entry and refresh", "extension navigation", "font scaling", "project keyboard navigation"] }, null, 2));
+  console.log(JSON.stringify({ passed: true, screenshots: output, layouts, interactions: ["meeting source selection", "organization document preview", "conversation question navigation", "memory", "notification", "storage", "expert creation", "expert entry and refresh", "extension navigation", "font scaling", "project keyboard navigation"] }, null, 2));
 } finally {
   await browser?.close();
   await server.close();

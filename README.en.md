@@ -133,12 +133,15 @@ Restart EchoAgent after editing the file manually. The settings UI is recommende
 | **Coding workbench** | Monaco multi-tab editing, global search and replace, integrated terminal, cross-file symbol index, definition/reference/impact analysis, task DAGs, verification and diagnostics, diff review, checkpoint rollback, and evidence-backed delivery reports |
 | **Browser and computer control** | Task-isolated Browser Use, screenshot-driven Computer Use, live capability detection, pause/takeover/resume controls, per-action risk confirmation, and task-level data cleanup |
 | **Workspace** | Directory-scoped sessions, full-text search, file trees and safe file operations, common-document previews, change tracking, unified diffs, and deliverable assets |
+| **Meeting transcription** | Record the microphone, system audio, or both; save audio locally, then transcribe with a configured MiniMax speech endpoint and generate meeting minutes. Pause, import, edit, and export are supported |
 | **Models** | OpenAI, Anthropic, DeepSeek, and Qwen presets; multiple providers and models; OpenAI- and Anthropic-compatible endpoints |
 | **Extensions** | MCP over stdio, Streamable HTTP, or SSE; MCP OAuth; skills; plugins; CLI connectors; reusable experts; and local capability marketplaces |
 | **Long-term context** | Project instructions, tasks and plans, personal memory, session summaries, hybrid retrieval over local Markdown/text/Office files, and an optional organization knowledge service |
 | **Scheduled work and notifications** | One-time or hourly/daily/weekly/monthly/yearly schedules, run history, task-level model and permission settings, desktop notifications, Slack, Discord, and webhooks |
 | **Projects and cloud storage** | Persisted project metadata and assets, task-artifact catalogs, local file browsing, and WebDAV browsing, transfers, and remote file management |
 | **Content experience** | File and image attachments, drag and drop, voice input, GFM, syntax highlighting, KaTeX, Mermaid, and tool-result previews |
+
+System audio capture is supported on Windows and macOS 14.6 or later. macOS asks for system audio recording permission on first use. Headphones are recommended when recording both sources to avoid capturing speaker output twice.
 
 ## Execution surfaces
 

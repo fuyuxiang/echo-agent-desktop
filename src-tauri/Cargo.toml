@@ -105,6 +105,10 @@ zip = { version = "3", default-features = false, features = ["deflate"] }
 # Decode imported meeting audio locally before bounded 16 kHz WAV chunking.
 symphonia = { version = "0.5", features = ["all"] }
 
+[target.'cfg(any(target_os = "macos", target_os = "windows"))'.dependencies]
+# Native input and output-loopback capture for meeting transcription.
+cpal = { path = "../vendor/cpal-loopback" }
+
 [target.'cfg(any(target_os = "macos", target_os = "windows", target_os = "linux"))'.dependencies]
 tauri-plugin-autostart = "2"
 # Keep automation/tray launches and ordinary launches in one process. This is

@@ -103,6 +103,8 @@ pub struct MeetingRecord {
     pub recorded_samples: u64,
     pub audio_path: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub capture_source: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub original_file_name: Option<String>,
     #[serde(default)]
     pub transcript: Vec<TranscriptSegment>,
@@ -235,6 +237,7 @@ pub fn meeting_create(
     title: String,
     model_id: String,
     provider_id: String,
+    capture_source: Option<String>,
 ) -> Result<MeetingRecord, String> {
     if model_id.trim().is_empty() || provider_id.trim().is_empty() {
         return Err("请先选择可用的会议模型".into());
@@ -266,6 +269,9 @@ pub fn meeting_create(
         duration_seconds: 0.0,
         recorded_samples: 0,
         audio_path: audio_path.to_string_lossy().into_owned(),
+        capture_source: capture_source.filter(|source| {
+            matches!(source.as_str(), "microphone" | "system" | "both" | "imported")
+        }),
         original_file_name: None,
         transcript: Vec::new(),
         transcript_text: None,
@@ -436,7 +442,7 @@ pub async fn meeting_import_audio(
     if metadata.len() > MAX_IMPORT_BYTES {
         return Err("导入音频不能超过 2GB".into());
     }
-    let mut record = meeting_create(title, model_id, provider_id)?;
+    let mut record = meeting_create(title, model_id, provider_id, Some("imported".into()))?;
     record.status = "importing".into();
     record.original_file_name = source
         .file_name()

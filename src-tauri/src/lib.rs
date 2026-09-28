@@ -28,6 +28,7 @@ mod ext;
 mod logging;
 mod mcp;
 mod meeting_minutes;
+mod meeting_capture;
 mod meta;
 mod notifications;
 mod office_mcp;
@@ -564,6 +565,11 @@ pub fn run() {
             attachment_blob::discard_attachment_blob,
             // Durable long-form recording, MiniMax ASR, minutes and exports.
             meeting_minutes::meeting_create,
+            meeting_capture::meeting_capture_support,
+            meeting_capture::meeting_capture_start,
+            meeting_capture::meeting_capture_status,
+            meeting_capture::meeting_capture_pause,
+            meeting_capture::meeting_capture_stop,
             meeting_minutes::meeting_check_connection,
             meeting_minutes::meeting_append_pcm,
             meeting_minutes::meeting_set_paused,

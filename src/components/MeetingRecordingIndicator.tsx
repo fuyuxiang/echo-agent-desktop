@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import { CircleStop, Mic, Pause, Play } from "lucide-react";
+import { CircleStop, Mic, MonitorPlay, Pause, Play } from "lucide-react";
 import { formatMeetingDuration, meetingRecorder } from "@/lib/meeting-minutes";
 
 export function MeetingRecordingIndicator({
@@ -11,7 +11,11 @@ export function MeetingRecordingIndicator({
 }) {
   const [snapshot, setSnapshot] = useState(meetingRecorder.current());
   const [pending, setPending] = useState(false);
-  useEffect(() => meetingRecorder.subscribe(setSnapshot), []);
+  useEffect(() => {
+    const unsubscribe = meetingRecorder.subscribe(setSnapshot);
+    void meetingRecorder.syncNative().catch(() => undefined);
+    return unsubscribe;
+  }, []);
   if (!snapshot.active || !snapshot.meeting) return null;
 
   const toggle = async () => {
@@ -40,10 +44,10 @@ export function MeetingRecordingIndicator({
   return (
     <div className="meeting-global-recorder" role="status" aria-live="polite">
       <button className="meeting-global-recorder__main" type="button" onClick={() => onOpen(snapshot.meeting?.modelId)} title="打开录音转写工作台">
-        <span className="meeting-global-recorder__dot"><Mic size={14} /></span>
-        <span><strong>{snapshot.paused ? "录音已暂停" : "正在录音"}</strong><small>{formatMeetingDuration(snapshot.meeting.durationSeconds)}</small></span>
+        <span className="meeting-global-recorder__dot">{snapshot.source === "microphone" ? <Mic size={14} /> : <MonitorPlay size={14} />}</span>
+        <span><strong>{snapshot.error ? "录音需要处理" : snapshot.paused ? "录音已暂停" : "正在录音"}</strong><small>{snapshot.source === "both" ? "双方声音" : snapshot.source === "system" ? "系统声音" : "麦克风"} · {formatMeetingDuration(snapshot.meeting.durationSeconds)}</small></span>
       </button>
-      <button type="button" onClick={() => void toggle()} disabled={pending} aria-label={snapshot.paused ? "继续录音" : "暂停录音"}>{snapshot.paused ? <Play size={14} /> : <Pause size={14} />}</button>
+      <button type="button" onClick={() => void toggle()} disabled={pending || Boolean(snapshot.error)} aria-label={snapshot.paused ? "继续录音" : "暂停录音"}>{snapshot.paused ? <Play size={14} /> : <Pause size={14} />}</button>
       <button type="button" onClick={() => void stop()} disabled={pending} aria-label="结束并保存录音"><CircleStop size={14} /></button>
     </div>
   );

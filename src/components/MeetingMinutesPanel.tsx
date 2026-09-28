@@ -6,8 +6,10 @@ import {
   Download,
   FileAudio,
   FileText,
+  Headphones,
   Loader2,
   Mic,
+  MonitorPlay,
   Pause,
   Play,
   RefreshCw,
@@ -18,6 +20,7 @@ import {
 import { filesystemPickFiles } from "@/lib/agent-client";
 import {
   formatMeetingDuration,
+  meetingCaptureSupport,
   meetingDelete,
   isMiniMaxMeetingModel,
   meetingExport,
@@ -31,6 +34,8 @@ import {
   meetingRegenerateMinutes,
   meetingUpdate,
   type MeetingRecord,
+  type RecordingSource,
+  type CaptureSupport,
   type TranscriptSegment,
 } from "@/lib/meeting-minutes";
 import { useMeetingTranscriptionCapability } from "@/lib/use-meeting-transcription-capability";
@@ -60,6 +65,17 @@ const STATUS_LABELS: Record<string, string> = {
 };
 
 const NATIVE_JOB_STATUSES = ["importing", "transcribing", "summarizing"];
+
+const SOURCE_LABELS: Record<RecordingSource, string> = {
+  microphone: "麦克风",
+  system: "系统声音",
+  both: "麦克风 + 系统声音",
+};
+const SOURCE_SHORT_LABELS: Record<RecordingSource, string> = {
+  microphone: "麦克风",
+  system: "系统音",
+  both: "混合录音",
+};
 
 function errorText(error: unknown): string {
   return String(error).replace(/^Error:\s*/, "");
@@ -101,6 +117,14 @@ export function MeetingMinutesPanel({
   const [draftTranscript, setDraftTranscript] = useState<TranscriptSegment[]>([]);
   const [recorder, setRecorder] = useState(meetingRecorder.current());
   const [activeJobs, setActiveJobs] = useState<Record<string, boolean | undefined>>({});
+  const [recordingSource, setRecordingSource] = useState<RecordingSource>("microphone");
+  const [captureSupport, setCaptureSupport] = useState<CaptureSupport | null>(null);
+  const [captureError, setCaptureError] = useState<string | null>(null);
+
+  useEffect(() => {
+    void meetingCaptureSupport().then(setCaptureSupport).catch(() => setCaptureSupport({ systemAudio: false, detail: "无法检测系统声音采集能力" }));
+    void meetingRecorder.syncNative().catch(() => undefined);
+  }, []);
 
   const refreshJobState = useCallback(async (record: MeetingRecord) => {
     if (!NATIVE_JOB_STATUSES.includes(record.status)) {
@@ -195,13 +219,15 @@ export function MeetingMinutesPanel({
     const provider = requireProvider();
     if (!provider) return;
     setBusy("start");
+    setCaptureError(null);
     try {
-      const record = await meetingRecorder.start(title, provider.modelId, provider.providerId);
+      const record = await meetingRecorder.start(title, provider.modelId, provider.providerId, recordingSource);
       await refreshList(record.id);
       setTab("audio");
       onToast?.("录音已开始；离开此页面也会继续保存");
     } catch (error) {
       await refreshList(null);
+      setCaptureError(errorText(error));
       onToast?.(`开始录音失败：${errorText(error)}`);
     } finally {
       setBusy(null);
@@ -242,6 +268,17 @@ export function MeetingMinutesPanel({
       onToast?.("录音已保存，可以开始转写");
     } catch (error) {
       onToast?.(`结束录音失败：${errorText(error)}`);
+    } finally {
+      setBusy(null);
+    }
+  };
+
+  const togglePause = async () => {
+    setBusy("pause");
+    try {
+      await meetingRecorder.setPaused(!recorder.paused);
+    } catch (error) {
+      onToast?.(`切换录音状态失败：${errorText(error)}`);
     } finally {
       setBusy(null);
     }
@@ -355,6 +392,29 @@ export function MeetingMinutesPanel({
       </header>
 
       <section className="meeting-panel__create">
+        <div className="meeting-source" aria-label="录音来源">
+          <div className="meeting-source__heading"><strong>录制哪些声音</strong><span>选择这次会议需要保留的音频</span></div>
+          <div className="meeting-source__options" role="group" aria-label="录音来源">
+            {([
+              { id: "microphone" as const, title: "麦克风", detail: "记录你说的话", Icon: Mic },
+              { id: "system" as const, title: "系统声音", detail: "记录电脑播放的声音", Icon: MonitorPlay },
+              { id: "both" as const, title: "两者都录", detail: "同时记录双方声音", Icon: Headphones },
+            ]).map(({ id, title: label, detail, Icon }) => (
+              <button key={id} className={`meeting-source__option${recordingSource === id ? " is-selected" : ""}`} type="button"
+                aria-pressed={recordingSource === id} onClick={() => { setRecordingSource(id); setCaptureError(null); }}
+                disabled={recorder.active || busy !== null || (id !== "microphone" && !captureSupport?.systemAudio)}>
+                <span className="meeting-source__icon"><Icon size={19} strokeWidth={1.8} /></span>
+                <span className="meeting-source__copy"><strong>{label}</strong><small>{detail}</small></span>
+                <span className="meeting-source__check" aria-hidden="true" />
+              </button>
+            ))}
+          </div>
+          <p className="meeting-source__hint">
+            {recordingSource === "both" ? "建议佩戴耳机，避免扬声器声音再次被麦克风收录。" : recordingSource === "system" ? "录制当前默认播放设备的声音；切换扬声器后请重新开始录音。" : "只录制麦克风，适合面对面会议或个人口述。"}
+            {recordingSource !== "microphone" && captureSupport?.detail && ` ${captureSupport.detail}。`}
+            {!captureSupport?.systemAudio && captureSupport?.detail && ` ${captureSupport.detail}。`}
+          </p>
+        </div>
         <label>
           <span>会议模型</span>
           <select aria-label="会议模型" value={selectedModel?.id ?? ""} onChange={(event) => setChosenModelId(event.target.value)} disabled={recorder.active || busy !== null}>
@@ -367,13 +427,14 @@ export function MeetingMinutesPanel({
           <input value={title} maxLength={100} onChange={(event) => setTitle(event.target.value)} disabled={recorder.active} />
         </label>
         <button className="meeting-primary" type="button" onClick={() => void startRecording()} disabled={!capable || recorder.active || busy !== null}>
-          {busy === "start" ? <Loader2 className="meeting-spin" size={17} /> : <Mic size={17} />}
+          {busy === "start" ? <Loader2 className="meeting-spin" size={17} /> : recordingSource === "microphone" ? <Mic size={17} /> : <MonitorPlay size={17} />}
           开始录音
         </button>
         <button className="meeting-secondary" type="button" onClick={() => void importAudio()} disabled={!capable || recorder.active || busy !== null}>
           {busy === "import" ? <Loader2 className="meeting-spin" size={17} /> : <Upload size={17} />}
           导入录音
         </button>
+        {captureError && <small className="meeting-panel__connection-error" role="alert">录音未开始：{captureError}</small>}
         {connection.state === "unavailable" && <small className="meeting-panel__connection-error" role="alert">{connection.error}</small>}
         <small className={`meeting-panel__privacy${selectedModel?.insecureHttp ? " is-insecure" : ""}`}>
           录音默认仅保存在本机；开始前请确认已获得参会者同意。转写时向所选服务上传不超过 7 分钟的分片。
@@ -383,13 +444,13 @@ export function MeetingMinutesPanel({
 
       {recorder.active && recorder.meeting && (
         <section className="meeting-recorder" aria-live="polite">
-          <div className="meeting-recorder__pulse" style={{ transform: `scale(${0.8 + recorder.level * 0.5})` }}><Mic size={20} /></div>
+          <div className="meeting-recorder__pulse" style={{ transform: `scale(${0.8 + recorder.level * 0.5})` }}>{recorder.source === "microphone" ? <Mic size={20} /> : <MonitorPlay size={20} />}</div>
           <div className="meeting-recorder__main">
             <strong>{recorder.paused ? "录音已暂停" : "正在录音并自动保存"}</strong>
-            <span>{recorder.meeting.title} · {formatMeetingDuration(recorder.meeting.durationSeconds)}</span>
+            <span>{recorder.meeting.title} · {recorder.source ? SOURCE_LABELS[recorder.source] : "录音"} · {formatMeetingDuration(recorder.meeting.durationSeconds)}</span>
             {recorder.error && <em>{recorder.error}</em>}
           </div>
-          <button className="meeting-secondary" type="button" onClick={() => void meetingRecorder.setPaused(!recorder.paused)} disabled={busy !== null}>
+          <button className="meeting-secondary" type="button" onClick={() => void togglePause()} disabled={busy !== null || Boolean(recorder.error)}>
             {recorder.paused ? <Play size={16} /> : <Pause size={16} />}{recorder.paused ? "继续" : "暂停"}
           </button>
           <button className="meeting-danger" type="button" onClick={() => void stopRecording()} disabled={busy !== null}>
@@ -406,7 +467,7 @@ export function MeetingMinutesPanel({
           {records.map((record) => (
             <button key={record.id} type="button" className={`meeting-list__item${selectedId === record.id ? " is-active" : ""}`} onClick={() => void chooseRecord(record)}>
               <span className="meeting-list__title">{record.title}</span>
-              <span className="meeting-list__meta"><Clock3 size={12} />{formatMeetingDuration(record.durationSeconds)} · {STATUS_LABELS[record.status] ?? record.status}</span>
+              <span className="meeting-list__meta"><Clock3 size={12} />{formatMeetingDuration(record.durationSeconds)} · {STATUS_LABELS[record.status] ?? record.status}{record.captureSource && record.captureSource !== "imported" ? ` · ${SOURCE_SHORT_LABELS[record.captureSource]}` : ""}</span>
               {record.status === "recording" && <i />}
             </button>
           ))}
@@ -419,7 +480,7 @@ export function MeetingMinutesPanel({
               <header className="meeting-detail__header">
                 <div>
                   <h2>{selected.title}</h2>
-                  <p>{new Date(selected.createdAt).toLocaleString("zh-CN")} · {formatMeetingDuration(selected.durationSeconds)} · {STATUS_LABELS[selected.status] ?? selected.status}</p>
+                  <p>{new Date(selected.createdAt).toLocaleString("zh-CN")} · {formatMeetingDuration(selected.durationSeconds)} · {STATUS_LABELS[selected.status] ?? selected.status}{selected.captureSource && selected.captureSource !== "imported" ? ` · ${SOURCE_LABELS[selected.captureSource]}` : ""}</p>
                 </div>
                 <div className="meeting-detail__actions">
                   <button type="button" onClick={() => void meetingOpenAudio(selected.id)}><Play size={14} />系统播放器</button>

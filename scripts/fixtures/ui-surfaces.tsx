@@ -10,6 +10,7 @@ import { ProjectSwitcher } from "../../src/features/coding/shell/ProjectSwitcher
 import { OrganizationMemoryPanel } from "../../src/components/OrganizationMemoryPanel";
 import { ChatView } from "../../src/components/ChatView";
 import { SecondarySidebar } from "../../src/components/SecondarySidebar";
+import { MeetingMinutesPanel } from "../../src/components/MeetingMinutesPanel";
 import { useSessionStore } from "../../src/stores/session-store";
 import "../../src/styles/global.css";
 import "../../src/styles/app.css";
@@ -105,6 +106,10 @@ Object.assign(window, {
         case "org_fetch_document": return { docId: args.docId, text: "Sheet: 模型设计\n列(2): 指标 | 口径\n第1行: 指标=活跃用户, 口径=当日登录人数", chunks: [{ seq: 0, text: "Sheet: 模型设计\n列(2): 指标 | 口径\n第1行: 指标=活跃用户, 口径=当日登录人数" }] };
         case "plugin:event|listen": return callbacks.size;
         case "plugin:event|unlisten": return;
+        case "meeting_list": return [];
+        case "meeting_capture_status": return null;
+        case "meeting_capture_support": return { systemAudio: true, detail: "首次使用需允许系统音频录制" };
+        case "meeting_check_connection": return;
         default: return [];
       }
     },
@@ -133,6 +138,7 @@ function Fixture() {
     <ChatView onSend={() => {}} onCancel={() => {}} title="评审投影仪性能与内存泄漏" />
   </div>;
   if (surface === "organization") return <div style={{ height: "100%", overflow: "auto" }}><OrganizationMemoryPanel /></div>;
+  if (surface === "meeting") return <MeetingMinutesPanel modelId="review/MiniMax-M3" models={[{ id: "review/MiniMax-M3", label: "MiniMax M3", providerId: "review", providerKind: "custom", source: "personal" }]} />;
   if (surface === "coding") return <div className="app--macos" style={{ height: "100%" }}><div className="coding-workbench coding-workbench--theia">
     <header className="coding-workbench__topbar"><WorkbenchIdentity onExit={() => {}}>
       <ProjectSwitcher activeCwd={cwd} projects={[{ cwd: "/review/EchoAgent" }, { cwd: "/review/一个名称很长但仍然可以完整查看路径的项目" }]} onSelect={setCwd} onRemove={() => {}} onOpenFolder={() => {}} />

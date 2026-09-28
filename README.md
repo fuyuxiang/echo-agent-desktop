@@ -134,12 +134,15 @@ name = "My Model"
 | **浏览器与电脑操作** | 任务隔离的 Browser Use、基于屏幕快照的 Computer Use、实时能力检测、暂停/接管/恢复、逐项高风险确认与任务级数据清理 |
 | **工作空间** | 目录级会话、全文检索、文件树与安全文件操作、常见文档预览、变更跟踪、Unified Diff 与交付资产 |
 | **办公文档** | 在任务中读取并整理本地 Office/PDF；[离线生成 Word、PDF、Excel、PPT](docs/office-documents.md)，支持回复导出与会议纪要导出，无需额外办公服务账号 |
+| **录音转写** | 选择麦克风、系统声音或两者混合录音，本地保存后通过已配置的 MiniMax 语音接口转写并生成会议纪要；支持暂停、导入、校对和导出 |
 | **模型接入** | OpenAI、Anthropic、DeepSeek、通义千问预设，多 Provider、多模型，以及 OpenAI/Anthropic 兼容 Endpoint |
 | **能力扩展** | MCP stdio/Streamable HTTP/SSE、MCP OAuth、Skills（含 [可执行能力契约](docs/skill-capability-manifest.md)）、Plugins、CLI 连接器、可复用专家与本地能力市场 |
 | **长期上下文** | 项目指令、任务与计划、个人记忆、会话摘要、本地 Markdown/文本/Office 文件的混合检索索引，以及可选组织知识服务 |
 | **定时任务与通知** | 单次或按小时/日/周/月/年周期调度、运行记录、任务级模型与权限、桌面通知、Slack、Discord 与 Webhook |
 | **项目与云存储** | 持久化项目元数据和资产、任务产物归档、本地文件浏览，以及 WebDAV 存储源的浏览、上下传和远程文件管理 |
 | **内容体验** | 文件与图片附件、拖拽、语音输入、GFM、语法高亮、KaTeX、Mermaid 和工具结果预览 |
+
+系统声音录制支持 Windows 和 macOS 14.6 及以上版本。macOS 首次使用时需在系统的隐私设置中允许系统音频录制；混合录音建议佩戴耳机，避免扬声器声音被麦克风重复收录。
 
 ## 执行界面
 
