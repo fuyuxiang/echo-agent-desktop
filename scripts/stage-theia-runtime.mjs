@@ -10,6 +10,36 @@ const appRoot = join(sourceRoot, "examples/browser");
 const resourcesRoot = join(projectRoot, "src-tauri/resources/theia");
 const runtimeRoot = join(resourcesRoot, "browser");
 const app = JSON.parse(readFileSync(join(appRoot, "package.json"), "utf8"));
+const languagePlugins = [
+  ...Object.entries(app.theiaPlugins ?? {}).map(([id, url]) => ({
+    id, source: join(sourceRoot, "plugins", id),
+    manifestDir: "extension",
+    version: url.match(/\/file\/[^/]+-([0-9][^-]+)\.vsix$/)?.[1],
+  })),
+  {
+    id: "echoagent.toml-basics",
+    source: join(projectRoot, "vendor/theia-language-plugins/echoagent.toml-basics"),
+    manifestDir: "",
+    version: "1.0.0",
+  },
+].map(({ id, source, manifestDir, version }) => {
+  const manifestRoot = join(source, manifestDir);
+  let manifest;
+  try { manifest = JSON.parse(readFileSync(join(manifestRoot, "package.json"), "utf8")); } catch {
+    throw new Error(`Language plugin ${id} is missing. Run pnpm ide:build first.`);
+  }
+  if (`${manifest.publisher}.${manifest.name}`.toLowerCase() !== id.toLowerCase()
+      || manifest.version !== version
+      || !manifest.contributes?.languages?.length || !manifest.contributes?.grammars?.length) {
+    throw new Error(`Language plugin ${id} is incomplete or has the wrong version.`);
+  }
+  for (const grammar of manifest.contributes.grammars) {
+    if (!existsSync(join(manifestRoot, grammar.path))) {
+      throw new Error(`Language plugin ${id} is missing grammar ${grammar.path}.`);
+    }
+  }
+  return { id, source };
+});
 const runtimeFile = (path) => !path.endsWith(".map") && !path.endsWith(".d.ts") && !path.endsWith(".tsbuildinfo");
 const copyUnlessSameFile = (source, target) => {
   if (existsSync(target) && realpathSync(source) === realpathSync(target)) return;
@@ -50,6 +80,11 @@ rmSync(runtimeRoot, { recursive: true, force: true });
 mkdirSync(runtimeRoot, { recursive: true });
 writeFileSync(join(runtimeRoot, ".keep"), "");
 cpSync(join(appRoot, "lib"), join(runtimeRoot, "lib"), { recursive: true, filter: runtimeFile });
+const pluginsTarget = join(runtimeRoot, "plugins");
+mkdirSync(pluginsTarget, { recursive: true });
+for (const { id, source } of languagePlugins) {
+  cpSync(source, join(pluginsTarget, id), { recursive: true, filter: runtimeFile });
+}
 
 const stagedManifest = {
   ...app,
@@ -116,4 +151,4 @@ writeFileSync(join(resourcesRoot, "runtime-platform.json"), JSON.stringify({
   sourceMtimeMs: latestTheiaSourceMtime(sourceRoot),
 }, null, 2));
 
-console.log(`Staged ${needed.size} local Theia packages and Node.js ${process.version} for ${process.platform}/${process.arch}.`);
+console.log(`Staged ${needed.size} local Theia packages, ${languagePlugins.length} language plugins, and Node.js ${process.version} for ${process.platform}/${process.arch}.`);

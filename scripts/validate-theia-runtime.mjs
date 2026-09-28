@@ -16,7 +16,7 @@ if (process.platform === "win32" && workspace.length <= 260) throw new Error("Lo
 const token = randomBytes(32).toString("hex");
 const url = "http://127.0.0.1:31235";
 const env = { ...process.env, ECHO_THEIA_EMBED_TOKEN: token, THEIA_CONFIG_DIR: join(temporary, "config") };
-const backend = spawn(node, [entry, "--port=31235", "--hostname=127.0.0.1"], { cwd: join(root, "browser"), env, stdio: "inherit" });
+const backend = spawn(node, [entry, "--port=31235", "--hostname=127.0.0.1", "--plugins=local-dir:plugins"], { cwd: join(root, "browser"), env, stdio: "inherit" });
 let spawnError;
 backend.once("error", error => { spawnError = error; });
 const exited = new Promise(resolve => { backend.once("exit", resolve); backend.once("error", resolve); });
@@ -33,8 +33,8 @@ try {
   }
   if (!ready) throw new Error("Theia did not become ready within 60 seconds");
   const result = await new Promise((resolve, reject) => {
-    const child = spawn(process.execPath, [resolvePath("smoke-theia.mjs")], { stdio: "inherit", env: { ...env, THEIA_URL: url, THEIA_WORKSPACE: workspace, ECHO_SMOKE_EDIT: "1", ECHO_SMOKE_PREVIEW: "1" } });
-    const timer = setTimeout(() => { child.kill(); reject(new Error("IDE interaction smoke exceeded 90 seconds")); }, 90_000);
+    const child = spawn(process.execPath, [resolvePath("smoke-theia.mjs")], { stdio: "inherit", env: { ...env, THEIA_URL: url, THEIA_WORKSPACE: workspace, ECHO_SMOKE_EDIT: "1", ECHO_SMOKE_PREVIEW: "1", ECHO_SMOKE_LANGUAGES: "1" } });
+    const timer = setTimeout(() => { child.kill(); reject(new Error("IDE interaction smoke exceeded 180 seconds")); }, 180_000);
     child.once("error", error => { clearTimeout(timer); reject(error); }); child.once("exit", code => { clearTimeout(timer); resolve(code); });
   });
   if (result !== 0) throw new Error("IDE interaction smoke failed");

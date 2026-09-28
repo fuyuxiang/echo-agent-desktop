@@ -29,6 +29,19 @@
     }
   },
   "theiaPluginsDir": "../../plugins",
+  "theiaPlugins": {
+    "vscode.javascript": "https://open-vsx.org/api/vscode/javascript/1.95.3/file/vscode.javascript-1.95.3.vsix",
+    "vscode.typescript": "https://open-vsx.org/api/vscode/typescript/1.95.3/file/vscode.typescript-1.95.3.vsix",
+    "vscode.rust": "https://open-vsx.org/api/vscode/rust/1.95.3/file/vscode.rust-1.95.3.vsix",
+    "vscode.python": "https://open-vsx.org/api/vscode/python/1.95.3/file/vscode.python-1.95.3.vsix",
+    "vscode.java": "https://open-vsx.org/api/vscode/java/1.95.3/file/vscode.java-1.95.3.vsix",
+    "vscode.json": "https://open-vsx.org/api/vscode/json/1.95.3/file/vscode.json-1.95.3.vsix",
+    "vscode.yaml": "https://open-vsx.org/api/vscode/yaml/1.95.3/file/vscode.yaml-1.95.3.vsix",
+    "vscode.html": "https://open-vsx.org/api/vscode/html/1.95.3/file/vscode.html-1.95.3.vsix",
+    "vscode.css": "https://open-vsx.org/api/vscode/css/1.95.3/file/vscode.css-1.95.3.vsix",
+    "vscode.markdown": "https://open-vsx.org/api/vscode/markdown/1.95.3/file/vscode.markdown-1.95.3.vsix",
+    "vscode.shellscript": "https://open-vsx.org/api/vscode/shellscript/1.95.3/file/vscode.shellscript-1.95.3.vsix"
+  },
   "dependencies": {
     "@echoagent/theia-bridge": "1.74.0",
     "@theia/bulk-edit": "1.74.0",
@@ -69,6 +82,7 @@
   },
   "scripts": {
     "clean": "theiaext clean",
+    "download:plugins": "theia download:plugins",
     "build": "theiaext build && npm run -s bundle",
     "build:production": "theiaext build && npm run -s bundle:production",
     "bundle": "npm run rebuild && theia build --mode development",

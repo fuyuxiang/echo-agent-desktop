@@ -9,6 +9,30 @@ const embedToken = process.env.ECHO_THEIA_EMBED_TOKEN;
 const workspace = process.env.THEIA_WORKSPACE ?? join(tmpdir(), "echo-theia-workspace");
 const testFile = join(workspace, "echo-bridge-smoke.ts");
 const priorFile = existsSync(testFile) ? readFileSync(testFile, "utf8") : null;
+const languageSamples = [
+  ["js", "const label = \"EchoSyntax\"; // JavaScript\n"],
+  ["jsx", "export const Label = () => <span>EchoSyntax</span>;\n"],
+  ["ts", "export const label: string = \"EchoSyntax\";\n"],
+  ["tsx", "export const Label = () => <span>EchoSyntax</span>;\n"],
+  ["rs", "fn main() { let label = \"EchoSyntax\"; println!(\"{label}\"); }\n"],
+  ["py", "def label():\n    return \"EchoSyntax\"\n"],
+  ["java", "class EchoSyntax { String label = \"hello\"; }\n"],
+  ["json", "{ \"label\": \"EchoSyntax\", \"count\": 2 }\n"],
+  ["yaml", "label: EchoSyntax\ncount: 2\n"],
+  ["toml", "[sample]\nlabel = \"EchoSyntax\"\ncount = 2\n"],
+  ["html", "<div class=\"EchoSyntax\">hello</div>\n"],
+  ["css", ".EchoSyntax { color: #123456; }\n"],
+  ["md", "# EchoSyntax\n**bold** text\n"],
+  ["sh", "#!/bin/sh\nlabel=\"EchoSyntax\"\necho \"$label\"\n"],
+];
+const priorLanguageFiles = new Map();
+if (process.env.ECHO_SMOKE_LANGUAGES === "1") {
+  for (const [extension, source] of languageSamples) {
+    const path = join(workspace, `echo-language-smoke.${extension}`);
+    priorLanguageFiles.set(path, existsSync(path) ? readFileSync(path, "utf8") : null);
+    writeFileSync(path, source);
+  }
+}
 // Keep the file much larger than the edit so Monaco takes its incremental
 // update path instead of the full writeFile fallback.
 if (process.env.ECHO_SMOKE_EDIT === "1") writeFileSync(testFile, `export const smoke = 1;\n// ${"x".repeat(500)}\n`);
@@ -163,6 +187,65 @@ browser = await chromium.launch({
     }
     console.log("Editor save passed through Echo preflight and postflight messages.");
   }
+  if (process.env.ECHO_SMOKE_LANGUAGES === "1") {
+    const ideFrame = page.frames().find(frame => frame.url().startsWith(new URL(backend).origin));
+    if (!ideFrame) throw new Error("Theia frame unavailable for language smoke test");
+    for (const theme of ["light", "dark"]) {
+      await page.evaluate(({ theme, origin }) => {
+        document.querySelector("#ide").contentWindow.postMessage({
+          type: "echo/set-theme", token: "smoke-bridge-token", theme,
+        }, origin);
+      }, { theme, origin: new URL(backend).origin });
+      await ide.locator(`body.theia-${theme}`).waitFor({ timeout: 15_000 });
+      for (const [extension] of languageSamples) {
+        const path = join(workspace, `echo-language-smoke.${extension}`);
+        await page.evaluate(({ path, origin }) => {
+          document.querySelector("#ide").contentWindow.postMessage({
+            type: "echo/open-file", token: "smoke-bridge-token", path,
+          }, origin);
+        }, { path: path.replaceAll("\\", "/"), origin: new URL(backend).origin });
+        await page.waitForFunction(path => {
+          const comparable = value => value?.replaceAll("\\", "/").replace(/^\/\/\?\//, "").toLowerCase();
+          return comparable(window.echoActiveFile) === comparable(path);
+        }, path, { timeout: 15_000 });
+        try {
+          await ideFrame.waitForFunction(() => {
+            const editors = [...document.querySelectorAll(".monaco-editor")].filter(editor => {
+              const rect = editor.getBoundingClientRect();
+              return rect.width > 0 && rect.height > 0;
+            });
+            const lines = editors.at(-1)?.querySelector(".view-lines");
+            if (!lines?.textContent?.includes("EchoSyntax")) return false;
+            const colors = new Set([...lines.querySelectorAll("span[class*='mtk']")]
+              .map(span => getComputedStyle(span).color));
+            return colors.size > 1;
+          }, undefined, { timeout: 15_000 });
+        } catch (error) {
+          const detail = await ideFrame.evaluate(() => ({
+            status: document.querySelector("#theia-statusBar")?.textContent,
+            visibleEditors: [...document.querySelectorAll(".monaco-editor")].filter(editor => {
+              const rect = editor.getBoundingClientRect();
+              return rect.width > 0 && rect.height > 0;
+            }).map(editor => ({
+              text: editor.querySelector(".view-lines")?.textContent?.slice(0, 160),
+              colors: [...new Set([...editor.querySelectorAll(".view-lines span[class*='mtk']")]
+                .map(span => getComputedStyle(span).color))],
+            })),
+          }));
+          throw new Error(`No syntax coloring for .${extension} in ${theme} theme: ${JSON.stringify(detail)}; ${error}`);
+        }
+        const status = await ide.locator("#theia-statusBar").innerText();
+        if (/纯文本|Plain Text/i.test(status)) {
+          throw new Error(`.${extension} is still identified as plain text in ${theme} theme: ${status}`);
+        }
+        console.log(`Syntax highlighting works for .${extension} in ${theme} theme.`);
+      }
+      const status = await ide.locator("#theia-statusBar").innerText();
+      if (status.includes("Activating Even Better TOML")) {
+        throw new Error("TOML syntax highlighting left a language service activation in the status bar");
+      }
+    }
+  }
   if (process.env.ECHO_SMOKE_PREVIEW === "1") {
     await page.evaluate(({ url, origin }) => {
       document.querySelector("#ide").contentWindow.postMessage({
@@ -182,5 +265,9 @@ browser = await chromium.launch({
   if (process.env.ECHO_SMOKE_EDIT === "1") {
     if (priorFile === null) unlinkSync(testFile);
     else writeFileSync(testFile, priorFile);
+  }
+  for (const [path, prior] of priorLanguageFiles) {
+    if (prior === null) unlinkSync(path);
+    else writeFileSync(path, prior);
   }
 }
