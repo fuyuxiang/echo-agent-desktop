@@ -13,7 +13,8 @@ export type ToolRenderer =
   | "command" // run_terminal_command / bash
   | "edit" // edit / write
   | "read" // read_file / list_dir / grep
-  | "search" // web_search / web_fetch
+  | "search" // web_search / web_fetch / built-in search_web
+  | "weather" // built-in weather_forecast
   | "task" // task / 子代理派发（EchoAgent 原生子代理工具 kind=task）
   | "defer-execute" // 延迟/批量执行(defer)
   | "send-message" // 发消息/通知(IM/邮件)
@@ -32,7 +33,8 @@ const RENDERER_MAP: Array<{ test: RegExp; renderer: ToolRenderer }> = [
   { test: /^(run_terminal_command|bash|execute_command|shell|terminal)$/i, renderer: "command" },
   { test: /^(edit|write|write_file|edit_file|multi_edit)$/i, renderer: "edit" },
   { test: /^(read_file|read|list_dir|ls|grep|glob)$/i, renderer: "read" },
-  { test: /^(web_search|web_fetch|search)$/i, renderer: "search" },
+  { test: /^(web_search|web_fetch|search|echoagent-live-info__search_web)$/i, renderer: "search" },
+  { test: /^echoagent-live-info__weather_forecast$/i, renderer: "weather" },
   // EchoAgent 原生子代理派发工具 kind="task"、id="task"。优先级高于 defer-execute
   // 的 /task/ 子串匹配，放在 defer 之前。
   { test: /^task$/i, renderer: "task" },
@@ -72,6 +74,8 @@ export function rendererLabel(renderer: ToolRenderer): string {
       return "文件读取";
     case "search":
       return "网络搜索";
+    case "weather":
+      return "天气查询";
     case "task":
       return "子代理";
     case "defer-execute":
@@ -114,6 +118,8 @@ export function rendererIcon(renderer: ToolRenderer): string {
       return "📖";
     case "search":
       return "🔍";
+    case "weather":
+      return "🌤️";
     case "task":
       return "🤖";
     case "defer-execute":
@@ -153,6 +159,9 @@ export function rendererIcon(renderer: ToolRenderer): string {
  */
 export function summarizeTool(tc: ToolCallView, renderer: ToolRenderer): string {
   const raw = tc.rawInput as Record<string, unknown> | undefined;
+  const liveInfoArgs = raw?.tool_input && typeof raw.tool_input === "object"
+    ? raw.tool_input as Record<string, unknown>
+    : raw;
   switch (renderer) {
     case "send-message": {
       const msg = raw?.message ?? raw?.text ?? raw?.content;
@@ -185,6 +194,14 @@ export function summarizeTool(tc: ToolCallView, renderer: ToolRenderer): string 
     case "personal-knowledge": {
       const query = raw?.task ?? raw?.query ?? raw?.question ?? raw?.topic;
       return typeof query === "string" ? query.slice(0, 80) : tc.title;
+    }
+    case "search": {
+      const query = liveInfoArgs?.query;
+      return typeof query === "string" ? query.slice(0, 80) : tc.title;
+    }
+    case "weather": {
+      const location = liveInfoArgs?.location;
+      return typeof location === "string" ? location.slice(0, 80) : tc.title;
     }
     default:
       return tc.title;

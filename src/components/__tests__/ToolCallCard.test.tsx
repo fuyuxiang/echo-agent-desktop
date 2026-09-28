@@ -84,6 +84,17 @@ describe("ToolCallCard", () => {
     expect(screen.getByText("你好,这是一条通知")).toBeInTheDocument();
   });
 
+  it("内置天气和间接搜索调用显示地点与搜索词", () => {
+    render(<>
+      <ToolCallCard tc={{ ...base, toolCallId: "weather-1", kind: "mcp_tool", title: "echoagent-live-info__weather_forecast", rawInput: { location: "北京" } }} />
+      <ToolCallCard tc={{ ...base, toolCallId: "search-1", kind: "use_tool", title: "echoagent-live-info__search_web", rawInput: { tool_input: { query: "最新新闻" } } }} />
+    </>);
+    expect(screen.getByText("🌤️ 天气查询")).toBeInTheDocument();
+    expect(screen.getByText("北京")).toBeInTheDocument();
+    expect(screen.getByText("🔍 网络搜索")).toBeInTheDocument();
+    expect(screen.getByText("最新新闻")).toBeInTheDocument();
+  });
+
   it("shows running status mark while in progress", () => {
     render(
       <ToolCallCard

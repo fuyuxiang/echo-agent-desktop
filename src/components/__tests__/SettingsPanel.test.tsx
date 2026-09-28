@@ -427,7 +427,6 @@ describe("SettingsPanel", () => {
 
   it("运行时配置分项读取失败时不使用默认值且禁止保存", async () => {
     vi.mocked(subagentsConfigGet).mockRejectedValueOnce(new Error("子代理配置损坏"));
-    vi.mocked(webSearchConfigGet).mockRejectedValueOnce(new Error("Web 配置不可读"));
     const { container } = render(
       <ThemeProvider>
         <SettingsPanel open initialSection="agent-settings" onClose={() => {}} />
@@ -435,48 +434,24 @@ describe("SettingsPanel", () => {
     );
 
     const alert = await screen.findByRole("alert");
-    expect(alert).toHaveTextContent("子代理配置：子代理配置损坏");
-    expect(alert).toHaveTextContent("Web 搜索配置：Web 配置不可读");
+    expect(alert).toHaveTextContent("子代理配置读取失败：子代理配置损坏");
     const depth = container.querySelector<HTMLInputElement>('input[type="number"]');
-    const webModel = screen.getByPlaceholderText("搜索模型 ID，如 search-model");
     expect(depth).toBeDisabled();
     expect(depth).toHaveValue(null);
-    expect(webModel).toBeDisabled();
     expect(subagentsConfigSave).not.toHaveBeenCalled();
-    expect(webSearchConfigSave).not.toHaveBeenCalled();
 
     fireEvent.click(screen.getByRole("button", { name: "重试" }));
     await waitFor(() => expect(screen.queryByRole("alert")).not.toBeInTheDocument());
     expect(depth).toBeEnabled();
     expect(depth).toHaveValue(1);
-    expect(webModel).toBeEnabled();
   });
 
-  it("Web 搜索已启用时可以直接保存新模型，不必先关闭", async () => {
-    vi.mocked(webSearchConfigGet).mockResolvedValueOnce({ enabled: true, model: "old-model" });
-    vi.mocked(webSearchConfigSave).mockClear();
+  it("天气和搜索作为默认能力，无需在设置里指定搜索模型", async () => {
     render(<ThemeProvider><SettingsPanel open initialSection="agent-settings" onClose={() => {}} /></ThemeProvider>);
-    const model = await screen.findByRole("textbox", { name: "Web 搜索模型 ID" });
-    expect(model).toHaveValue("old-model");
-    const save = screen.getByRole("button", { name: "保存模型" });
-    expect(save).toBeDisabled();
-    fireEvent.change(model, { target: { value: "new-model" } });
-    fireEvent.click(save);
-    await waitFor(() => expect(webSearchConfigSave).toHaveBeenCalledWith(true, "new-model"));
-    expect(screen.getByText(/当前：new-model/)).toBeInTheDocument();
-  });
-
-  it("关闭 Web 搜索时保留已保存的模型 ID，重新启用可直接复用", async () => {
-    vi.mocked(webSearchConfigGet).mockResolvedValueOnce({ enabled: true, model: "saved-model" });
-    vi.mocked(webSearchConfigSave).mockClear();
-    render(<ThemeProvider><SettingsPanel open initialSection="agent-settings" onClose={() => {}} /></ThemeProvider>);
-    const model = await screen.findByRole("textbox", { name: "Web 搜索模型 ID" });
-    expect(model).toHaveValue("saved-model");
-    fireEvent.click(screen.getByRole("button", { name: "关闭" }));
-    await waitFor(() => expect(webSearchConfigSave).toHaveBeenCalledWith(false, "saved-model"));
-    expect(model).toHaveValue("saved-model");
-    fireEvent.click(screen.getByRole("button", { name: "启用" }));
-    await waitFor(() => expect(webSearchConfigSave).toHaveBeenCalledWith(true, "saved-model"));
+    expect(await screen.findByText("子代理嵌套深度")).toBeInTheDocument();
+    expect(screen.queryByRole("textbox", { name: "Web 搜索模型 ID" })).not.toBeInTheDocument();
+    expect(webSearchConfigGet).not.toHaveBeenCalled();
+    expect(webSearchConfigSave).not.toHaveBeenCalled();
   });
 
   it("权限规则加载失败时不伪装空列表或允许覆盖，重试后恢复", async () => {

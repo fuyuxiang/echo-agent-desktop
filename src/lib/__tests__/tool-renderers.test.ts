@@ -23,6 +23,8 @@ describe("detectToolRenderer", () => {
     expect(detectToolRenderer("read_file")).toBe("read");
     expect(detectToolRenderer("grep")).toBe("read");
     expect(detectToolRenderer("web_search")).toBe("search");
+    expect(detectToolRenderer("echoagent-live-info__search_web")).toBe("search");
+    expect(detectToolRenderer("echoagent-live-info__weather_forecast")).toBe("weather");
   });
   it("专用渲染器", () => {
     expect(detectToolRenderer("defer_execute")).toBe("defer-execute");
@@ -57,6 +59,7 @@ describe("rendererLabel / rendererIcon", () => {
     expect(rendererLabel("image-gen")).toBe("图像生成");
     expect(rendererLabel("team-create")).toBe("创建团队");
     expect(rendererLabel("personal-knowledge")).toBe("个人知识");
+    expect(rendererLabel("weather")).toBe("天气查询");
     expect(rendererLabel("default")).toBe("工具");
     expect(rendererLabel("unknown")).toBe("未知工具");
     expect(typeof rendererIcon("image-gen")).toBe("string");
@@ -68,6 +71,11 @@ describe("summarizeTool", () => {
   it("send-message 提取 message", () => {
     const s = summarizeTool(tc("send_message", { message: "你好,这是通知" }), "send-message");
     expect(s).toContain("你好");
+  });
+  it("内置天气与搜索展示用户输入", () => {
+    expect(summarizeTool(tc("echoagent-live-info__weather_forecast", { location: "北京" }), "weather")).toBe("北京");
+    expect(summarizeTool(tc("echoagent-live-info__search_web", { query: "最新新闻" }), "search")).toBe("最新新闻");
+    expect(summarizeTool(tc("use_tool", { tool_input: { query: "最新新闻" } }), "search")).toBe("最新新闻");
   });
   it("image-gen 提取 prompt", () => {
     const s = summarizeTool(tc("image_gen", { prompt: "一只猫" }), "image-gen");

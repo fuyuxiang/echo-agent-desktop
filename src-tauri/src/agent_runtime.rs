@@ -479,6 +479,15 @@ pub async fn new_session_with_options(
             ]),
         ));
     }
+    if let (Some(url), Some(authorization)) = (
+        crate::live_info_mcp::server_url(),
+        crate::live_info_mcp::authorization_header(),
+    ) {
+        servers.push(acp::McpServer::Http(
+            acp::McpServerHttp::new(crate::live_info_mcp::MCP_SERVER_NAME, url)
+                .headers(vec![acp::HttpHeader::new("Authorization", authorization)]),
+        ));
+    }
     let mut req = acp::NewSessionRequest::new(cwd.to_path_buf()).mcp_servers(servers);
     let permission_mode = permission_mode_override
         .map(str::to_string)

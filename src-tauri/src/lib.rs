@@ -25,6 +25,7 @@ mod desktop_validation;
 mod document_export;
 mod experts;
 mod ext;
+mod live_info_mcp;
 mod logging;
 mod mcp;
 mod meeting_capture;
@@ -377,6 +378,9 @@ pub fn run() {
             }
             if let Err(error) = office_mcp::serve(app.handle().clone()) {
                 tracing::error!(%error, "office MCP server failed to start");
+            }
+            if let Err(error) = live_info_mcp::serve() {
+                tracing::error!(%error, "live information MCP server failed to start");
             }
             org_mcp::serve(app.handle().clone());
             org::start_background_sync(app.handle().clone());

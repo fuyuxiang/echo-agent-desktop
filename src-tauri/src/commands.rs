@@ -1171,6 +1171,7 @@ pub async fn agent_new_session(
         crate::team_mcp::persist_registration(&tx, &session_id);
         crate::automation::persist_registration(&tx, &session_id);
         crate::office_mcp::persist_registration(&tx, &session_id);
+        crate::live_info_mcp::persist_registration(&tx, &session_id);
         crate::org_mcp::reconcile_registration(&tx, &session_id);
         return Ok(session_id);
     }
@@ -1228,6 +1229,7 @@ pub async fn agent_new_session(
                 crate::team_mcp::persist_registration(&task_tx, &session_id);
                 crate::automation::persist_registration(&task_tx, &session_id);
                 crate::office_mcp::persist_registration(&task_tx, &session_id);
+                crate::live_info_mcp::persist_registration(&task_tx, &session_id);
                 crate::org_mcp::reconcile_registration(&task_tx, &session_id);
                 if crate::policy::locked_permission_mode().is_none() {
                     if let Err(error) =
@@ -1311,6 +1313,7 @@ pub async fn agent_new_session(
     crate::team_mcp::persist_registration(&tx, &session_id);
     crate::automation::persist_registration(&tx, &session_id);
     crate::office_mcp::persist_registration(&tx, &session_id);
+    crate::live_info_mcp::persist_registration(&tx, &session_id);
     crate::org_mcp::reconcile_registration(&tx, &session_id);
     Ok(session_id)
 }
@@ -1362,6 +1365,7 @@ pub async fn agent_load_session(
     crate::team_mcp::persist_registration(&tx, &session_id);
     crate::automation::persist_registration(&tx, &session_id);
     crate::office_mcp::persist_registration(&tx, &session_id);
+    crate::live_info_mcp::persist_registration(&tx, &session_id);
     crate::org_mcp::reconcile_registration(&tx, &session_id);
     let agent_mode = crate::meta::agent_mode(&session_id).unwrap_or_else(|| "default".into());
     if agent_mode != "default" {

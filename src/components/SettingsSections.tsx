@@ -50,8 +50,6 @@ import {
   permissionSave,
   subagentsConfigGet,
   subagentsConfigSave,
-  webSearchConfigGet,
-  webSearchConfigSave,
   echoAgentDataDir,
   desktopPreferencesGet,
   desktopPreferencesSave,
@@ -1002,49 +1000,25 @@ export function GeneralSettingsPanel() {
 export function AgentSettingsPanel() {
   const [subagentDepth, setSubagentDepth] = useState<number | null>(null);
   const [subagentDraft, setSubagentDraft] = useState<string>("");
-  const [webSearchEnabled, setWebSearchEnabled] = useState<boolean | null>(null);
-  const [webSearchModel, setWebSearchModel] = useState<string>("");
-  const [webSearchDraftModel, setWebSearchDraftModel] = useState<string>("");
   const [savingRuntime, setSavingRuntime] = useState(false);
   const [runtimeMsg, setRuntimeMsg] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
-  const [loadErrors, setLoadErrors] = useState<Partial<Record<
-    "subagents" | "webSearch",
-    string
-  >>>({});
+  const [loadError, setLoadError] = useState<string | null>(null);
 
   const reload = useCallback(async () => {
     setLoading(true);
-    setLoadErrors({});
-    const [sa, ws] = await Promise.allSettled([
-      subagentsConfigGet(),
-      webSearchConfigGet(),
-    ]);
-    const failures: Partial<Record<
-      "subagents" | "webSearch",
-      string
-    >> = {};
-    const failureText = (reason: unknown) => String(reason).replace(/^Error:\s*/, "");
-    if (sa.status === "fulfilled") {
-      setSubagentDepth(sa.value.maxDepth);
-      setSubagentDraft(String(sa.value.maxDepth));
-    } else {
+    setLoadError(null);
+    try {
+      const config = await subagentsConfigGet();
+      setSubagentDepth(config.maxDepth);
+      setSubagentDraft(String(config.maxDepth));
+    } catch (error) {
       setSubagentDepth(null);
       setSubagentDraft("");
-      failures.subagents = failureText(sa.reason);
+      setLoadError(String(error).replace(/^Error:\s*/, ""));
+    } finally {
+      setLoading(false);
     }
-    if (ws.status === "fulfilled") {
-      setWebSearchEnabled(ws.value.enabled);
-      setWebSearchModel(ws.value.model);
-      setWebSearchDraftModel(ws.value.model);
-    } else {
-      setWebSearchEnabled(null);
-      setWebSearchModel("");
-      setWebSearchDraftModel("");
-      failures.webSearch = failureText(ws.reason);
-    }
-    setLoadErrors(failures);
-    setLoading(false);
   }, []);
 
   useEffect(() => {
@@ -1053,7 +1027,7 @@ export function AgentSettingsPanel() {
 
   /** Save subagent max_depth. Clamped to ≥1 on the backend. */
   const saveSubagentDepth = useCallback(async () => {
-    if (subagentDepth === null || loadErrors.subagents) return;
+    if (subagentDepth === null || loadError) return;
     const requestedDepth = Number(subagentDraft);
     if (!Number.isInteger(requestedDepth) || requestedDepth < 1 || requestedDepth > 10) {
       setRuntimeMsg("子代理嵌套深度须为 1 到 10 的整数");
@@ -1071,65 +1045,28 @@ export function AgentSettingsPanel() {
     } finally {
       setSavingRuntime(false);
     }
-  }, [loadErrors.subagents, subagentDepth, subagentDraft]);
-
-  /** Save web search state and its model independently. */
-  const saveWebSearch = useCallback(
-    async (enable: boolean) => {
-      if (webSearchEnabled === null || loadErrors.webSearch) return;
-      setSavingRuntime(true);
-      setRuntimeMsg(null);
-      try {
-        if (enable && !webSearchDraftModel.trim()) {
-          setRuntimeMsg("启用 Web 搜索需要指定一个模型 ID");
-          setSavingRuntime(false);
-          return;
-        }
-        await webSearchConfigSave(enable, enable ? webSearchDraftModel.trim() : webSearchModel || undefined);
-        setWebSearchEnabled(enable);
-        setWebSearchModel(enable ? webSearchDraftModel.trim() : webSearchModel);
-        setRuntimeMsg(
-          enable
-            ? `Web 搜索已启用（模型 ${webSearchDraftModel.trim()}，重启 agent 后生效）`
-            : "Web 搜索已关闭（重启 agent 后生效）",
-        );
-      } catch (e) {
-        setRuntimeMsg(`保存失败：${String(e).replace(/^Error:\s*/, "")}`);
-      } finally {
-        setSavingRuntime(false);
-      }
-    },
-    [loadErrors.webSearch, webSearchDraftModel, webSearchEnabled, webSearchModel],
-  );
+  }, [loadError, subagentDepth, subagentDraft]);
 
   return (
     <SectionShell
       title="智能体设置"
-      desc="调整子代理和 Web 搜索的运行方式。技能、连接器与插件请在左侧「扩展」中管理。"
+      desc="调整子代理的运行方式。技能、连接器与插件请在左侧「扩展」中管理。"
       actions={(
         <button className="settings-btn" onClick={reload} disabled={loading}>
           <RefreshCw size={15} /> {loading ? "加载中…" : "刷新状态"}
         </button>
       )}
     >
-      {Object.keys(loadErrors).length > 0 && (
+      {loadError && (
         <div className="settings-msg settings-msg--warn" role="alert">
-          <span>
-            部分智能体配置读取失败：
-            {Object.entries(loadErrors)
-              .map(([key, message]) => `${({
-                subagents: "子代理配置",
-                webSearch: "Web 搜索配置",
-              } as Record<string, string>)[key]}：${message}`)
-              .join("；")}
-          </span>{" "}
+          <span>子代理配置读取失败：{loadError}</span>{" "}
           <button type="button" className="settings-btn" onClick={() => void reload()} disabled={loading}>
             {loading ? "重试中…" : "重试"}
           </button>
         </div>
       )}
 
-      {/* 运行时配置：子代理深度 + Web 搜索 */}
+      {/* 运行时配置：子代理深度 */}
       <SettingsGroup title="运行时配置" desc="以下修改需要重启 Agent 后生效。">
           {/* 子代理嵌套深度 */}
           <div className="agent-runtime-row">
@@ -1150,7 +1087,7 @@ export function AgentSettingsPanel() {
                 className="settings-input settings-input--narrow"
                 value={subagentDraft}
                 onChange={(e) => setSubagentDraft(e.target.value)}
-                disabled={savingRuntime || loading || subagentDepth === null || !!loadErrors.subagents}
+                disabled={savingRuntime || loading || subagentDepth === null || !!loadError}
               />
               <button
                 className="settings-btn"
@@ -1159,72 +1096,12 @@ export function AgentSettingsPanel() {
                   savingRuntime ||
                   loading ||
                   subagentDepth === null ||
-                  !!loadErrors.subagents ||
+                  !!loadError ||
                   subagentDraft === String(subagentDepth)
                 }
               >
                 {savingRuntime ? "保存中…" : "保存"}
               </button>
-            </div>
-          </div>
-
-          {/* Web 搜索开关 */}
-          <div className="agent-runtime-row">
-            <div className="agent-runtime-row__label">
-              <span className="agent-runtime-row__name">Web 搜索</span>
-              <span className="agent-runtime-row__hint">
-                启用后 Agent 可以联网搜索。请指定搜索模型 ID
-                （{webSearchEnabled === null ? (
-                  <span>配置不可用</span>
-                ) : webSearchEnabled ? (
-                  <span>当前：{webSearchModel || "未设置"}</span>
-                ) : (
-                  <span>当前：关闭</span>
-                )}）。
-              </span>
-            </div>
-            <div className="agent-runtime-row__control">
-              <input
-                type="text"
-                aria-label="Web 搜索模型 ID"
-                className="settings-input"
-                placeholder="搜索模型 ID，如 search-model"
-                value={webSearchDraftModel}
-                onChange={(e) => setWebSearchDraftModel(e.target.value)}
-                disabled={savingRuntime || loading || webSearchEnabled === null || !!loadErrors.webSearch}
-              />
-              {webSearchEnabled === true ? (
-                <>
-                  <button
-                    className="settings-btn"
-                    onClick={() => saveWebSearch(true)}
-                    disabled={savingRuntime || loading || !!loadErrors.webSearch || !webSearchDraftModel.trim() || webSearchDraftModel.trim() === webSearchModel}
-                  >
-                    保存模型
-                  </button>
-                  <button
-                    className="settings-btn settings-btn--danger"
-                    onClick={() => saveWebSearch(false)}
-                    disabled={savingRuntime || loading || !!loadErrors.webSearch}
-                  >
-                    关闭
-                  </button>
-                </>
-              ) : (
-                <button
-                  className="settings-btn"
-                  onClick={() => saveWebSearch(true)}
-                  disabled={
-                    savingRuntime ||
-                    loading ||
-                    webSearchEnabled === null ||
-                    !!loadErrors.webSearch ||
-                    !webSearchDraftModel.trim()
-                  }
-                >
-                  启用
-                </button>
-              )}
             </div>
           </div>
 

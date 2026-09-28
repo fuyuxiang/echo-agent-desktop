@@ -147,6 +147,7 @@ name = "My Model"
 | **浏览器与电脑操作** | 任务隔离的 Browser Use、基于屏幕快照的 Computer Use、实时能力检测、暂停/接管/恢复、逐项高风险确认与任务级数据清理 |
 | **工作空间** | 目录级会话、全文检索、文件树与安全文件操作、常见文档预览、变更跟踪、Unified Diff 与交付资产 |
 | **办公文档** | 在任务中读取并整理本地 Office/PDF；[离线生成 Word、PDF、Excel、PPT](docs/office-documents.md)，支持回复导出与会议纪要导出，无需额外办公服务账号 |
+| **实时信息** | 在对话中直接询问[天气或搜索网页](docs/live-information.md)；无需另填天气密钥或搜索模型 ID |
 | **录音转写** | 选择麦克风、系统声音或两者混合录音，本地保存后通过已配置的 MiniMax 语音接口转写并生成会议纪要；支持暂停、导入、校对和导出 |
 | **模型接入** | OpenAI、Anthropic、DeepSeek、通义千问预设，多 Provider、多模型，以及 OpenAI/Anthropic 兼容 Endpoint |
 | **能力扩展** | MCP stdio/Streamable HTTP/SSE、MCP OAuth、Skills（含 [可执行能力契约](docs/skill-capability-manifest.md)）、Plugins、CLI 连接器、可复用专家与本地能力市场 |

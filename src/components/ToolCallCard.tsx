@@ -84,7 +84,10 @@ export function ToolCallCard({ tc, onOpen }: ToolCallCardProps) {
 
   // 专用渲染器(对齐 EchoAgent tools/renderers):非 default/unknown 时用图标 +
   // 渲染器标签 + 摘要替代通用 kind 文案。
-  const renderer = detectToolRenderer(tc.kind);
+  const titleRenderer = detectToolRenderer(tc.title);
+  const renderer = titleRenderer === "search" || titleRenderer === "weather"
+    ? titleRenderer
+    : detectToolRenderer(tc.kind);
   const specialized =
     renderer !== "default" && renderer !== "unknown";
   const kindLabel = officeTool ? "文档" : specialized

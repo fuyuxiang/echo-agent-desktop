@@ -1190,6 +1190,25 @@ async fn handle_client_message(
                 );
             }
 
+            // These two first-party MCP tools only query fixed public endpoints.
+            // The runtime still applies explicit deny rules before requesting
+            // permission; ordinary conversations should not require a click for
+            // each weather or search lookup.
+            if is_builtin_live_info_permission(&req.tool_call) {
+                if let Some(opt) = options.iter().find(|option| option.kind == "allow") {
+                    let response = acp::RequestPermissionResponse::new(
+                        acp::RequestPermissionOutcome::Selected(
+                            acp::SelectedPermissionOutcome::new(acp::PermissionOptionId::new(
+                                Arc::from(opt.option_id.as_str()),
+                            )),
+                        ),
+                    );
+                    tracing::info!(session_id = %session_id_str, "auto-approved built-in live information lookup");
+                    let _ = b.response_tx.send(Ok(response));
+                    return;
+                }
+            }
+
             // Extract tool metadata from the ACP ToolCallUpdate so the frontend
             // can display the tool kind, title, and raw input parameters.
             let tool_call_id = req.tool_call.tool_call_id.0.as_ref().to_string();
@@ -2258,6 +2277,38 @@ fn preferred_allow_option(
         .or_else(|| options.iter().find(|option| option.kind == "allow_always"))
 }
 
+fn is_builtin_live_info_permission(call: &acp::ToolCallUpdate) -> bool {
+    let Some(meta) = call
+        .meta
+        .as_ref()
+        .and_then(|meta| meta.get("echo.agent/tool"))
+    else {
+        return false;
+    };
+    let name = meta.get("name").and_then(serde_json::Value::as_str);
+    let target = call.fields.title.as_deref();
+    let is_live_info = target.is_some_and(|target| {
+        target
+            == format!(
+                "{}__weather_forecast",
+                crate::live_info_mcp::MCP_SERVER_NAME
+            )
+            || target == format!("{}__search_web", crate::live_info_mcp::MCP_SERVER_NAME)
+    });
+    if !is_live_info {
+        return false;
+    }
+    let namespace = meta.get("namespace").and_then(serde_json::Value::as_str);
+    let direct = namespace == Some("mcp") && name == target;
+    let wrapper = namespace == Some("echo_agent_build")
+        && name == Some("use_tool")
+        && call.fields.raw_input.as_ref().is_some_and(|raw| {
+            raw.get("variant").and_then(serde_json::Value::as_str) == Some("UseTool")
+                && raw.get("tool_name").and_then(serde_json::Value::as_str) == target
+        });
+    direct || wrapper
+}
+
 pub(crate) fn emit_permission_closed(app: &AppHandle, notice: PermissionClosedFrontend) {
     let _ = app.emit("agent://permission-closed", notice);
 }
@@ -2299,6 +2350,58 @@ mod tests {
             preferred_allow_option(&options).map(|option| option.option_id.as_str()),
             Some("once")
         );
+    }
+
+    #[test]
+    fn only_registered_live_information_tools_are_auto_approved() {
+        let make_call = |name: &str, namespace: &str| {
+            acp::ToolCallUpdate::new(
+                acp::ToolCallId::new(Arc::from("call-1")),
+                acp::ToolCallUpdateFields::new().title(Some(name.to_string())),
+            )
+            .meta(
+                serde_json::json!({
+                    "echo.agent/tool": { "name": name, "namespace": namespace }
+                })
+                .as_object()
+                .cloned(),
+            )
+        };
+        assert!(is_builtin_live_info_permission(&make_call(
+            "echoagent-live-info__weather_forecast",
+            "mcp"
+        )));
+        assert!(is_builtin_live_info_permission(&make_call(
+            "echoagent-live-info__search_web",
+            "mcp"
+        )));
+        assert!(!is_builtin_live_info_permission(&make_call(
+            "other-server__search_web",
+            "mcp"
+        )));
+        assert!(!is_builtin_live_info_permission(&make_call(
+            "echoagent-live-info__search_web",
+            "echo_agent_build"
+        )));
+
+        let wrapped = acp::ToolCallUpdate::new(
+            acp::ToolCallId::new(Arc::from("call-2")),
+            acp::ToolCallUpdateFields::new()
+                .title(Some("echoagent-live-info__search_web".to_string()))
+                .raw_input(Some(serde_json::json!({
+                    "variant": "UseTool",
+                    "tool_name": "echoagent-live-info__search_web",
+                    "tool_input": { "query": "天气" }
+                }))),
+        )
+        .meta(
+            serde_json::json!({
+                "echo.agent/tool": { "name": "use_tool", "namespace": "echo_agent_build" }
+            })
+            .as_object()
+            .cloned(),
+        );
+        assert!(is_builtin_live_info_permission(&wrapped));
     }
 
     #[tokio::test]

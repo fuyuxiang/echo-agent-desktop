@@ -262,13 +262,17 @@ pub async fn mcp_list(
     let mut entries = mcp_list_with_tx_cache(&tx, session_id, !refresh.unwrap_or(false)).await?;
     // Office generation is a first-party task capability, not a connector
     // that users need to install, configure, or toggle in the MCP panel.
-    entries.retain(|entry| entry.name != crate::office_mcp::MCP_SERVER_NAME);
+    entries.retain(|entry| !is_builtin_mcp(&entry.name));
     Ok(entries)
 }
 
-fn reject_builtin_office_mutation(name: &str) -> Result<(), String> {
-    if name == crate::office_mcp::MCP_SERVER_NAME {
-        Err("内置办公文档能力由应用管理，无需单独配置".into())
+fn is_builtin_mcp(name: &str) -> bool {
+    name == crate::office_mcp::MCP_SERVER_NAME || name == crate::live_info_mcp::MCP_SERVER_NAME
+}
+
+fn reject_builtin_mcp_mutation(name: &str) -> Result<(), String> {
+    if is_builtin_mcp(name) {
+        Err("内置能力由应用管理，无需单独配置".into())
     } else {
         Ok(())
     }
@@ -351,7 +355,7 @@ pub async fn mcp_upsert(
     server: McpUpsertRequest,
 ) -> Result<McpMutationResult, String> {
     let _mutation = acquire_mcp_mutation().await?;
-    reject_builtin_office_mutation(&server.name)?;
+    reject_builtin_mcp_mutation(&server.name)?;
     validate_upsert_request(&server)?;
     validate_optional_session(&state, session_id.as_deref())?;
     if stdio_change_requires_confirmation(&server, &read_user_config_requests()?) {
@@ -369,7 +373,7 @@ pub async fn mcp_delete(
     name: String,
 ) -> Result<McpMutationResult, String> {
     let _mutation = acquire_mcp_mutation().await?;
-    reject_builtin_office_mutation(&name)?;
+    reject_builtin_mcp_mutation(&name)?;
     validate_server_name(&name)?;
     validate_optional_session(&state, session_id.as_deref())?;
     let tx = state.tx.lock().unwrap().clone();
@@ -386,7 +390,7 @@ pub async fn mcp_toggle(
     enabled: bool,
 ) -> Result<McpMutationResult, String> {
     let _mutation = acquire_mcp_mutation().await?;
-    reject_builtin_office_mutation(&name)?;
+    reject_builtin_mcp_mutation(&name)?;
     validate_server_name(&name)?;
     validate_optional_session(&state, session_id.as_deref())?;
     if enabled {
@@ -412,7 +416,7 @@ pub async fn mcp_setup(
     name: String,
     values: HashMap<String, String>,
 ) -> Result<(), String> {
-    reject_builtin_office_mutation(&name)?;
+    reject_builtin_mcp_mutation(&name)?;
     validate_server_name(&name)?;
     validate_session_id(&session_id)?;
     validate_setup_values(&values)?;
@@ -443,7 +447,7 @@ pub async fn mcp_toggle_tool(
     tool_name: String,
     enabled: bool,
 ) -> Result<(), String> {
-    reject_builtin_office_mutation(&server_name)?;
+    reject_builtin_mcp_mutation(&server_name)?;
     validate_server_name(&server_name)?;
     validate_session_id(&session_id)?;
     validate_tool_name(&tool_name)?;
