@@ -254,6 +254,7 @@ function Shell() {
   const newSessionModelOverrideRef = useRef<string | undefined>(undefined);
   const recommendedModelIdRef = useRef<string | undefined>(undefined);
   const [models, setModels] = useState<ModelOption[]>([]);
+  const [modelCatalogLoading, setModelCatalogLoading] = useState(true);
   const [modelCatalogError, setModelCatalogError] = useState<string | null>(null);
   const [modelSwitching, setModelSwitching] = useState(false);
   const [loadingSession, setLoadingSession] = useState<{ sessionId: string; generation: number } | null>(null);
@@ -497,6 +498,7 @@ function Shell() {
    */
   const refreshModels = useCallback(async (preferredDefaultId?: string) => {
     const generation = ++modelCatalogGenerationRef.current;
+    setModelCatalogLoading(true);
     setModelCatalogError(null);
     try {
       // The status check may expire an organization model lease and remove its
@@ -550,6 +552,10 @@ function Shell() {
       if (modelCatalogGenerationRef.current !== generation) return;
       // Non-fatal — the picker keeps its previous list and exposes a retry.
       setModelCatalogError(friendlyError(error));
+    } finally {
+      if (modelCatalogGenerationRef.current === generation) {
+        setModelCatalogLoading(false);
+      }
     }
   }, [sessionsStore]);
 
@@ -2813,6 +2819,7 @@ function Shell() {
                   onSend={handleSendNew}
                   streaming={streaming}
                   apiReady={init.auth.ready && modelConfigured}
+                  modelLoading={modelCatalogLoading && models.length === 0}
                   setupHint={init.auth.reason}
                   creatingSession={creatingSession}
                   sendError={homeSendError}

@@ -5679,6 +5679,10 @@ button.diff__path {
   cursor: pointer;
   background: var(--echo-bg-hover);
 }
+.echo-composer--waiting,
+.echo-composer--waiting .echo-composer__setup-hint {
+  cursor: default;
+}
 .echo-composer__setup-hint {
   position: absolute;
   inset: 0;

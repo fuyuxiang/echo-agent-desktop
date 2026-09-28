@@ -1108,6 +1108,7 @@ export function Composer({
   const composerCls = [
     "echo-composer",
     !apiReady && "echo-composer--disabled",
+    !apiReady && !onOpenSettings && "echo-composer--waiting",
     showMeta && "echo-composer--home",
   ].filter(Boolean).join(" ");
 

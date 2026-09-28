@@ -8,13 +8,13 @@ import { usePendingExpertStore } from "@/stores/pending-expert-store";
 import type { SlashCommandInvocation } from "@/lib/slash-commands";
 import { useWorkspaceMentions } from "@/lib/use-workspace-mentions";
 import type { AutomationMode } from "@/lib/automation-client";
-import { CheckCircle2, FolderOpen, KeyRound, Cpu } from "lucide-react";
 
 /** EchoAgent 首页：单一任务入口。 */
 export function HomePage({
   onSend,
   streaming,
   apiReady,
+  modelLoading = false,
   setupHint,
   creatingSession,
   sendError,
@@ -39,6 +39,7 @@ export function HomePage({
   onSend: (text: string, attachments?: string[]) => boolean | void | Promise<boolean | void>;
   streaming: boolean;
   apiReady: boolean;
+  modelLoading?: boolean;
   setupHint?: string;
   creatingSession?: boolean;
   sendError?: string | null;
@@ -103,69 +104,6 @@ export function HomePage({
     setExternalTextNonce((n) => n + 1);
   };
 
-  const hasWorkspace = Boolean(cwd);
-
-  if (!apiReady) {
-    return (
-      <div className="home home--setup">
-        <div className="home__inner home__inner--setup">
-          <header className="home__header">
-            <h1 className="home__title">先把 EchoAgent 接到你的工作区</h1>
-          </header>
-          <section className="home-setup" aria-label="首次使用设置">
-            <div className="home-setup__steps">
-              <div className="home-setup__step home-setup__step--active">
-                <span className="home-setup__icon"><Cpu size={18} /></span>
-                <div>
-                  <strong>选择模型</strong>
-                  <span>添加一个可用的模型连接，之后任务都会使用它执行。</span>
-                </div>
-              </div>
-              <div className="home-setup__step home-setup__step--active">
-                <span className="home-setup__icon"><KeyRound size={18} /></span>
-                <div>
-                  <strong>{models?.length ? "检查当前连接" : "确认服务来源并测试"}</strong>
-                  <span>{setupHint || (models?.length ? "已有模型连接暂未就绪，请检查服务状态或切换可用模型。" : "可使用内置服务、组织连接或个人 API。个人连接按服务要求填写 API Key；发送前可查看数据会发往哪里。")}</span>
-                </div>
-              </div>
-              <div className={"home-setup__step" + (hasWorkspace ? " home-setup__step--done" : "")}>
-                <span className="home-setup__icon">
-                  {hasWorkspace ? <CheckCircle2 size={18} /> : <FolderOpen size={18} />}
-                </span>
-                <div>
-                  <strong>选择第一个工作目录</strong>
-                  <span>{hasWorkspace ? cwd : "选择 Agent 可以读取和修改的项目目录。"}</span>
-                </div>
-              </div>
-            </div>
-            <div className="home-setup__actions">
-              <button type="button" className="btn btn--primary" onClick={onOpenSettings}>
-                配置模型
-              </button>
-              {workspaces && workspaces.length > 0 && onSelectWorkspace && (
-                <select
-                  className="home-setup__workspace"
-                  value={cwd ?? ""}
-                  onChange={(event) => {
-                    if (event.target.value) onSelectWorkspace(event.target.value);
-                  }}
-                  aria-label="选择工作目录"
-                >
-                  <option value="">选择工作目录</option>
-                  {workspaces.map((workspace) => (
-                    <option key={workspace.cwd} value={workspace.cwd}>
-                      {workspace.cwd}
-                    </option>
-                  ))}
-                </select>
-              )}
-            </div>
-          </section>
-        </div>
-      </div>
-    );
-  }
-
   return (
     <div className="home">
       <div className="home__inner">
@@ -179,13 +117,15 @@ export function HomePage({
             onSend={onSend}
             onCancel={() => {}}
             apiReady={apiReady}
+            modelLoading={modelLoading}
             setupHint={
-              setupHint ?? (models?.length
-                ? undefined
-                : "请先在「设置 → 模型」配置模型"
-              )
+              modelLoading
+                ? "正在同步可用模型…"
+                : setupHint ?? (models?.length
+                  ? "当前模型暂不可用，请在「设置 → 模型」检查连接。"
+                  : "暂无可用模型，请在「设置 → 模型」检查连接。")
             }
-            onOpenSettings={onOpenSettings}
+            onOpenSettings={modelLoading ? undefined : onOpenSettings}
             onPlaceholder={onPlaceholder}
             externalText={externalText}
             externalTextNonce={externalTextNonce}

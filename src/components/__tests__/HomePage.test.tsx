@@ -26,6 +26,35 @@ describe("HomePage", () => {
     expect(document.querySelector(".home__brand-mark")).toBeNull();
   });
 
+  it("模型同步期间保持首页稳定，不显示首次设置页或引导打开设置", () => {
+    const onOpenSettings = vi.fn();
+    const { rerender } = render(
+      <HomePage {...base} apiReady={false} modelLoading onOpenSettings={onOpenSettings} />,
+    );
+
+    expect(screen.getByRole("heading", { name: "今天想完成什么？" })).toBeInTheDocument();
+    expect(screen.queryByText("先把 EchoAgent 接到你的工作区")).toBeNull();
+    expect(screen.getByRole("status")).toHaveTextContent("正在同步可用模型…");
+    expect(screen.getByRole("textbox")).toBeDisabled();
+    fireEvent.click(screen.getByText("正在同步可用模型…"));
+    expect(onOpenSettings).not.toHaveBeenCalled();
+
+    rerender(<HomePage {...base} apiReady onOpenSettings={onOpenSettings} />);
+    expect(screen.getByRole("heading", { name: "今天想完成什么？" })).toBeInTheDocument();
+    expect(screen.getByRole("textbox")).toBeEnabled();
+    expect(screen.queryByText("正在同步可用模型…")).toBeNull();
+  });
+
+  it("模型确实不可用时在首页提供可操作的连接提示", () => {
+    const onOpenSettings = vi.fn();
+    render(<HomePage {...base} apiReady={false} onOpenSettings={onOpenSettings} />);
+
+    expect(screen.getByRole("heading", { name: "今天想完成什么？" })).toBeInTheDocument();
+    expect(screen.getByRole("textbox")).toBeDisabled();
+    fireEvent.click(screen.getByRole("button", { name: /暂无可用模型/ }));
+    expect(onOpenSettings).toHaveBeenCalledOnce();
+  });
+
   it("不渲染内置场景、能力和 prompt 模板", () => {
     render(<HomePage {...base} />);
     expect(screen.queryByRole("tablist", { name: "场景" })).toBeNull();
