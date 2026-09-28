@@ -28,9 +28,9 @@ use std::sync::{
     Arc, Mutex, OnceLock,
 };
 use tauri::{AppHandle, Emitter, Manager, State};
-use tokio::sync::Mutex as AsyncMutex;
-use tokio::io::AsyncWriteExt;
 use tauri_plugin_dialog::DialogExt;
+use tokio::io::AsyncWriteExt;
+use tokio::sync::Mutex as AsyncMutex;
 use tokio_util::io::ReaderStream;
 use url::Url;
 use uuid::Uuid;
@@ -2394,21 +2394,19 @@ pub async fn org_fetch_document(
     range: Option<String>,
 ) -> Result<Value, String> {
     validate_resource_id(&doc_id, "organization document id")?;
-    if range.as_ref().is_some_and(|value| value.len() > 32 ||
-        !value.chars().all(|ch| ch.is_ascii_digit() || ch == ':' || ch == '-')) {
+    if range.as_ref().is_some_and(|value| {
+        value.len() > 32
+            || !value
+                .chars()
+                .all(|ch| ch.is_ascii_digit() || ch == ':' || ch == '-')
+    }) {
         return Err("invalid document range".into());
     }
     let mut body = document_fetch_body(doc_id, page);
     if let Some(range) = range {
         body["range"] = json!(range);
     }
-    authenticated_json(
-        &state.inner,
-        Method::POST,
-        "/api/v1/docs/fetch",
-        Some(body),
-    )
-    .await
+    authenticated_json(&state.inner, Method::POST, "/api/v1/docs/fetch", Some(body)).await
 }
 
 #[tauri::command]
@@ -2419,7 +2417,8 @@ pub async fn org_document_submissions_mine_page(
 ) -> Result<Value, String> {
     let path = format!(
         "/api/v1/document-submissions/mine/page?page={}&size={}",
-        page.unwrap_or(1).max(1), size.unwrap_or(20).clamp(1, 100)
+        page.unwrap_or(1).max(1),
+        size.unwrap_or(20).clamp(1, 100)
     );
     authenticated_json(&state.inner, Method::GET, &path, None).await
 }
@@ -2433,9 +2432,13 @@ pub async fn org_remove_own_submission(
     authenticated_json(
         &state.inner,
         Method::DELETE,
-        &format!("/api/v1/document-submissions/{}", urlencoding::encode(&submission_id)),
+        &format!(
+            "/api/v1/document-submissions/{}",
+            urlencoding::encode(&submission_id)
+        ),
         None,
-    ).await
+    )
+    .await
 }
 
 #[tauri::command]
@@ -2448,27 +2451,44 @@ pub async fn org_preview_document(
 ) -> Result<Value, String> {
     validate_resource_id(&resource_id, "organization document id")?;
     let path = if submission {
-        format!("/api/v1/document-submissions/{}/raw", urlencoding::encode(&resource_id))
+        format!(
+            "/api/v1/document-submissions/{}/raw",
+            urlencoding::encode(&resource_id)
+        )
     } else {
         format!("/api/v1/docs/{}/raw", urlencoding::encode(&resource_id))
     };
     let authenticated = authenticated_response(&state.inner, Method::GET, &path, None).await?;
     if !authenticated.response.status().is_success() {
-        return Err(response_data(authenticated.response).await.err()
+        return Err(response_data(authenticated.response)
+            .await
+            .err()
             .unwrap_or_else(|| "无法读取提交原件".into()));
     }
-    let bytes = read_response_bounded(authenticated.response, MAX_DOCUMENT_PREVIEW_BYTES, "document preview").await?;
+    let bytes = read_response_bounded(
+        authenticated.response,
+        MAX_DOCUMENT_PREVIEW_BYTES,
+        "document preview",
+    )
+    .await?;
     require_account_context(&state.inner, &authenticated.context).await?;
     if matches!(source_type.as_str(), "md" | "txt") {
         return Ok(json!({ "kind": "text", "content": String::from_utf8_lossy(&bytes) }));
     }
     let lower = file_name.to_ascii_lowercase();
-    let mime = if lower.ends_with(".png") { "image/png" }
-        else if lower.ends_with(".jpg") || lower.ends_with(".jpeg") { "image/jpeg" }
-        else if lower.ends_with(".gif") { "image/gif" }
-        else if lower.ends_with(".webp") { "image/webp" }
-        else if lower.ends_with(".pdf") { "application/pdf" }
-        else { "application/octet-stream" };
+    let mime = if lower.ends_with(".png") {
+        "image/png"
+    } else if lower.ends_with(".jpg") || lower.ends_with(".jpeg") {
+        "image/jpeg"
+    } else if lower.ends_with(".gif") {
+        "image/gif"
+    } else if lower.ends_with(".webp") {
+        "image/webp"
+    } else if lower.ends_with(".pdf") {
+        "application/pdf"
+    } else {
+        "application/octet-stream"
+    };
     Ok(json!({
         "kind": "binary",
         "content": format!("data:{mime};base64,{}", base64::engine::general_purpose::STANDARD.encode(bytes))
@@ -2485,60 +2505,108 @@ pub async fn org_download_document(
 ) -> Result<Option<String>, String> {
     validate_resource_id(&resource_id, "organization document id")?;
     let suggested_name = suggested_name.replace(['/', '\\'], "_");
-    let suggested_name = suggested_name.trim().chars().filter(|c| !c.is_control())
-        .take(240).collect::<String>();
-    let suggested_name = if suggested_name.is_empty() { "document".to_owned() } else { suggested_name };
+    let suggested_name = suggested_name
+        .trim()
+        .chars()
+        .filter(|c| !c.is_control())
+        .take(240)
+        .collect::<String>();
+    let suggested_name = if suggested_name.is_empty() {
+        "document".to_owned()
+    } else {
+        suggested_name
+    };
     let (sender, receiver) = tokio::sync::oneshot::channel();
-    app.dialog().file().set_title("保存组织文档").set_file_name(&suggested_name)
-        .save_file(move |selection| { let _ = sender.send(selection); });
-    let Some(selection) = receiver.await.map_err(|_| "保存对话框意外关闭".to_owned())? else {
+    app.dialog()
+        .file()
+        .set_title("保存组织文档")
+        .set_file_name(&suggested_name)
+        .save_file(move |selection| {
+            let _ = sender.send(selection);
+        });
+    let Some(selection) = receiver
+        .await
+        .map_err(|_| "保存对话框意外关闭".to_owned())?
+    else {
         return Ok(None);
     };
-    let destination = selection.into_path().map_err(|error| format!("保存位置无效：{error}"))?;
-    let parent = destination.parent().ok_or("保存位置缺少目录")?.canonicalize()
+    let destination = selection
+        .into_path()
+        .map_err(|error| format!("保存位置无效：{error}"))?;
+    let parent = destination
+        .parent()
+        .ok_or("保存位置缺少目录")?
+        .canonicalize()
         .map_err(|error| format!("无法访问保存目录：{error}"))?;
     let file_name = destination.file_name().ok_or("保存文件名无效")?;
     let destination = parent.join(file_name);
     let path = if submission {
-        format!("/api/v1/document-submissions/{}/raw", urlencoding::encode(&resource_id))
+        format!(
+            "/api/v1/document-submissions/{}/raw",
+            urlencoding::encode(&resource_id)
+        )
     } else {
         format!("/api/v1/docs/{}/raw", urlencoding::encode(&resource_id))
     };
     let authenticated = authenticated_response(&state.inner, Method::GET, &path, None).await?;
     if !authenticated.response.status().is_success() {
-        return Err(response_data(authenticated.response).await.err()
+        return Err(response_data(authenticated.response)
+            .await
+            .err()
             .unwrap_or_else(|| "文档下载失败".into()));
     }
-    if authenticated.response.content_length().is_some_and(|len| len > MAX_DOCUMENT_DOWNLOAD_BYTES) {
+    if authenticated
+        .response
+        .content_length()
+        .is_some_and(|len| len > MAX_DOCUMENT_DOWNLOAD_BYTES)
+    {
         return Err("文档超过下载大小上限".into());
     }
     let temporary = parent.join(format!(".echo-download-{}.tmp", Uuid::new_v4()));
     let result = async {
-        let mut file = tokio::fs::OpenOptions::new().write(true).create_new(true)
-            .open(&temporary).await.map_err(|error| format!("创建下载文件失败：{error}"))?;
+        let mut file = tokio::fs::OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .open(&temporary)
+            .await
+            .map_err(|error| format!("创建下载文件失败：{error}"))?;
         let mut stream = authenticated.response.bytes_stream();
         let mut total = 0_u64;
         while let Some(chunk) = stream.next().await {
             let chunk = chunk.map_err(|error| format!("文档下载中断：{error}"))?;
             total = total.saturating_add(chunk.len() as u64);
-            if total > MAX_DOCUMENT_DOWNLOAD_BYTES { return Err("文档超过下载大小上限".into()); }
-            file.write_all(&chunk).await.map_err(|error| format!("写入下载文件失败：{error}"))?;
+            if total > MAX_DOCUMENT_DOWNLOAD_BYTES {
+                return Err("文档超过下载大小上限".into());
+            }
+            file.write_all(&chunk)
+                .await
+                .map_err(|error| format!("写入下载文件失败：{error}"))?;
         }
-        file.flush().await.map_err(|error| format!("保存下载文件失败：{error}"))?;
+        file.flush()
+            .await
+            .map_err(|error| format!("保存下载文件失败：{error}"))?;
         drop(file);
         require_account_context(&state.inner, &authenticated.context).await?;
-        tokio::fs::rename(&temporary, &destination).await
+        tokio::fs::rename(&temporary, &destination)
+            .await
             .map_err(|error| format!("完成下载失败：{error}"))?;
         Ok::<(), String>(())
-    }.await;
-    if result.is_err() { let _ = tokio::fs::remove_file(&temporary).await; }
+    }
+    .await;
+    if result.is_err() {
+        let _ = tokio::fs::remove_file(&temporary).await;
+    }
     result?;
     Ok(Some(destination.to_string_lossy().into_owned()))
 }
 
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
-struct OrgFolderFile { path: String, relative_path: String, size: u64 }
+struct OrgFolderFile {
+    path: String,
+    relative_path: String,
+    size: u64,
+}
 
 #[tauri::command]
 pub async fn org_scan_document_folder(
@@ -2553,36 +2621,90 @@ pub async fn org_scan_document_folder(
         let mut skipped = 0_usize;
         let mut total_size = 0_u64;
         while let Some((directory, depth)) = queue.pop_front() {
-            if depth > 8 { skipped += 1; continue; }
-            let Ok(entries) = std::fs::read_dir(&directory) else { skipped += 1; continue; };
+            if depth > 8 {
+                skipped += 1;
+                continue;
+            }
+            let Ok(entries) = std::fs::read_dir(&directory) else {
+                skipped += 1;
+                continue;
+            };
             for entry in entries {
-                let Ok(entry) = entry else { skipped += 1; continue; };
+                let Ok(entry) = entry else {
+                    skipped += 1;
+                    continue;
+                };
                 scanned += 1;
-                if scanned > 10_000 { return Err("文件夹条目超过 10000 个，请缩小范围".into()); }
-                let path = entry.path();
-                let Ok(metadata) = std::fs::symlink_metadata(&path) else { skipped += 1; continue; };
-                if metadata.file_type().is_symlink() { skipped += 1; continue; }
-                let Ok(canonical) = path.canonicalize() else { skipped += 1; continue; };
-                if !canonical.starts_with(&root) { skipped += 1; continue; }
-                if metadata.is_dir() { queue.push_back((canonical, depth + 1)); continue; }
-                let extension = path.extension().and_then(|ext| ext.to_str())
-                    .unwrap_or("").to_ascii_lowercase();
-                if !metadata.is_file() || !matches!(extension.as_str(),
-                    "md" | "txt" | "pdf" | "docx" | "xlsx" | "pptx" | "png" | "jpg" | "jpeg") {
-                    skipped += 1; continue;
+                if scanned > 10_000 {
+                    return Err("文件夹条目超过 10000 个，请缩小范围".into());
                 }
-                if metadata.len() > MAX_DOCUMENT_UPLOAD_BYTES { skipped += 1; continue; }
-                let relative_path = canonical.strip_prefix(&root).unwrap().to_string_lossy().replace('\\', "/");
-                if relative_path.chars().count() > 500 { skipped += 1; continue; }
+                let path = entry.path();
+                let Ok(metadata) = std::fs::symlink_metadata(&path) else {
+                    skipped += 1;
+                    continue;
+                };
+                if metadata.file_type().is_symlink() {
+                    skipped += 1;
+                    continue;
+                }
+                let Ok(canonical) = path.canonicalize() else {
+                    skipped += 1;
+                    continue;
+                };
+                if !canonical.starts_with(&root) {
+                    skipped += 1;
+                    continue;
+                }
+                if metadata.is_dir() {
+                    queue.push_back((canonical, depth + 1));
+                    continue;
+                }
+                let extension = path
+                    .extension()
+                    .and_then(|ext| ext.to_str())
+                    .unwrap_or("")
+                    .to_ascii_lowercase();
+                if !metadata.is_file()
+                    || !matches!(
+                        extension.as_str(),
+                        "md" | "txt" | "pdf" | "docx" | "xlsx" | "pptx" | "png" | "jpg" | "jpeg"
+                    )
+                {
+                    skipped += 1;
+                    continue;
+                }
+                if metadata.len() > MAX_DOCUMENT_UPLOAD_BYTES {
+                    skipped += 1;
+                    continue;
+                }
+                let relative_path = canonical
+                    .strip_prefix(&root)
+                    .unwrap()
+                    .to_string_lossy()
+                    .replace('\\', "/");
+                if relative_path.chars().count() > 500 {
+                    skipped += 1;
+                    continue;
+                }
                 total_size = total_size.saturating_add(metadata.len());
-                if total_size > 1024 * 1024 * 1024 { return Err("文件夹可上传内容超过 1 GiB".into()); }
-                items.push(OrgFolderFile { path: canonical.to_string_lossy().into_owned(), relative_path, size: metadata.len() });
-                if items.len() > 500 { return Err("可上传文件超过 500 个，请分批上传".into()); }
+                if total_size > 1024 * 1024 * 1024 {
+                    return Err("文件夹可上传内容超过 1 GiB".into());
+                }
+                items.push(OrgFolderFile {
+                    path: canonical.to_string_lossy().into_owned(),
+                    relative_path,
+                    size: metadata.len(),
+                });
+                if items.len() > 500 {
+                    return Err("可上传文件超过 500 个，请分批上传".into());
+                }
             }
         }
         items.sort_by(|a, b| a.relative_path.cmp(&b.relative_path));
         Ok::<Value, String>(json!({ "items": items, "skipped": skipped, "totalBytes": total_size }))
-    }).await.map_err(|error| format!("扫描文件夹失败：{error}"))?
+    })
+    .await
+    .map_err(|error| format!("扫描文件夹失败：{error}"))?
 }
 
 #[tauri::command]

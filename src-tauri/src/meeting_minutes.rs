@@ -270,7 +270,10 @@ pub fn meeting_create(
         recorded_samples: 0,
         audio_path: audio_path.to_string_lossy().into_owned(),
         capture_source: capture_source.filter(|source| {
-            matches!(source.as_str(), "microphone" | "system" | "both" | "imported")
+            matches!(
+                source.as_str(),
+                "microphone" | "system" | "both" | "imported"
+            )
         }),
         original_file_name: None,
         transcript: Vec::new(),
