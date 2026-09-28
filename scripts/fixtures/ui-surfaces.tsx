@@ -78,7 +78,21 @@ Object.assign(window, {
           const entry = { ...JSON.parse(args.raw), name: args.name, path: `/review/${args.name}.md`, scope: "user", raw: args.raw };
           agents = [...agents, entry]; return entry;
         }
-        case "marketplace_list": return { sources: [], plugins: [] };
+        case "marketplace_list": return { sources: [{
+          sourceName: "插件目录",
+          sourceKind: "git",
+          sourceUrlOrPath: "https://example.test/plugins.git",
+          plugins: Array.from({ length: 324 }, (_, index) => ({
+            name: `示例插件 ${String(index + 1).padStart(2, "0")}`,
+            relativePath: `plugins/example-${index + 1}`,
+            description: "用于检查长列表的滚动行为",
+            skillCount: 0,
+            hasHooks: false,
+            hasAgents: false,
+            hasMcp: false,
+            installStatus: "available",
+          })),
+        }] };
         case "plugins_list": return { plugins: [] };
         case "org_session": return { loggedIn: true, organizationMemoryEnabled: true, serverUrl: "https://10.132.19.82:8787", user: orgUser, bootstrap: { apiVersion: 1, user: orgUser, scopes: orgScopes, policy: { allowPersonalCloud: true, allowSkillSubmission: true }, serverTime: 1 } };
         case "org_list_scopes": return orgScopes;

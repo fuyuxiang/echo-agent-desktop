@@ -13166,6 +13166,9 @@ body:has([aria-modal="true"]) .global-tooltip:not(.global-tooltip--dialog) {
   font-size: 0.8125rem;
 }
 .marketplace-source {
+  /* A source may contain hundreds of plugins. Keep its content height so the
+     marketplace panel, rather than this clipped card, gets the scroll range. */
+  flex-shrink: 0;
   border: 1px solid var(--echo-border-default);
   border-radius: 10px;
   background: var(--echo-bg-primary);

@@ -168,6 +168,23 @@ try {
   for (const label of ["技能", "连接器", "插件", "浏览市场", "专家"]) {
     await page.getByRole("navigation", { name: "扩展管理" }).getByRole("button", { name: label, exact: true }).click();
     await page.waitForFunction(() => !document.querySelector(".placeholder-page[role='status']"));
+    if (label === "浏览市场") {
+      await page.getByText("示例插件 324").waitFor();
+      await page.locator(".marketplace-source__plugins .mp-plugin").first().hover();
+      await page.mouse.wheel(0, 600);
+      await page.waitForFunction(() => document.querySelector(".marketplace-panel")?.scrollTop > 0);
+      const scroll = await page.locator(".marketplace-panel").evaluate(async panel => {
+        const last = panel.querySelector(".mp-plugin:last-child");
+        const scrollRange = panel.scrollHeight - panel.clientHeight;
+        panel.scrollTop = scrollRange;
+        await new Promise(resolve => requestAnimationFrame(resolve));
+        const panelRect = panel.getBoundingClientRect();
+        const lastRect = last.getBoundingClientRect();
+        return { scrollRange, scrollTop: panel.scrollTop, lastTop: lastRect.top, lastBottom: lastRect.bottom, panelTop: panelRect.top, panelBottom: panelRect.bottom };
+      });
+      assert.ok(scroll.scrollRange > 0 && scroll.scrollTop > 0, "plugin marketplace has no vertical scroll range");
+      assert.ok(scroll.lastTop >= scroll.panelTop && scroll.lastBottom <= scroll.panelBottom + 1, "last marketplace plugin remains clipped after scrolling");
+    }
   }
   await page.getByRole("heading", { name: "我的专家" }).waitFor();
 
