@@ -273,7 +273,7 @@ pub(crate) async fn export_to_path(
     let output = temp.path().join(format!("output.{}", request.format));
     generate(app, &request, &output).await?;
     let (byte_size, sha256) = validate_output(&output, &request.format)?;
-    install_output(&output, &destination)?;
+    install_output(&output, destination)?;
     Ok(DocumentExportReceipt {
         path: destination.to_string_lossy().into_owned(),
         format: request.format,

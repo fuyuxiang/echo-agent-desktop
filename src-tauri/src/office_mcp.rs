@@ -251,7 +251,7 @@ async fn call_tool(app: &AppHandle, session_id: &str, params: &Value) -> Result<
         return Err("生成的文档路径已存在，请重试".into());
     }
     let receipt = crate::document_export::export_to_path(app, request, &destination).await?;
-    Ok(serde_json::to_value(receipt).map_err(|error| error.to_string())?)
+    serde_json::to_value(receipt).map_err(|error| error.to_string())
 }
 
 fn rpc_result(id: Value, result: Value) -> Response {
