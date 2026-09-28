@@ -13,7 +13,7 @@ DRY_RUN=0
 usage() {
   cat <<'EOF'
 Usage:
-  bash scripts/publish-all-updates.sh --artifacts-dir release/v0.3.10 \
+  bash scripts/publish-all-updates.sh --artifacts-dir release/v0.3.11 \
     [--notes-file FILE] [--mandatory] [--host user@host] [--dry-run]
 
 The directory must have been produced by prepare-update-artifacts.sh. All

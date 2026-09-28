@@ -53,6 +53,16 @@ While a task runs, you can edit the plan, approve or reject sensitive actions, c
 
 ## Quick start
 
+### Download and install
+
+Use the desktop download buttons on the [Echo Agent website](http://www.ojlab.com/) and choose the installer for your system: Windows x86_64 (`.exe`), macOS Apple Silicon (`.dmg`), or macOS Intel (`.dmg`). Run the Windows installer, or open the macOS disk image and drag EchoAgent into Applications.
+
+As of 2026-09-28, the website still shows version 0.3.10 download buttons, but their files have not been uploaded and the links return 404. The current source version is 0.3.11, and its installer is not yet available either. Ask the maintainer for an installer or wait for the site to publish one. [GitHub Releases](https://github.com/fuyuxiang/echo-agent-desktop/releases) has no public installer at this time. The in-app updater is for already installed clients, not first-time installation.
+
+After installation, you can select the built-in `chat-xc` model without an API key, or connect your own model below. The built-in model uses a remote service.
+
+### Run from source (developers)
+
 The repository includes the embedded Agent Runtime and pinned source snapshots of its dependencies. A normal clone is enough—no Git submodule initialization is required.
 
 <details>
@@ -60,7 +70,7 @@ The repository includes the embedded Agent Runtime and pinned source snapshots o
 
 | Dependency | Requirement |
 | --- | --- |
-| Node.js | 20 or newer; CI uses Node.js 22 |
+| Node.js | 22 or 24; these are the major versions validated by the Theia build |
 | pnpm | 10; the expected version is pinned in the repository |
 | Rust | Stable, minimum `1.92.0`, with `rustfmt` and `clippy` |
 | Protocol Buffers | A native `protoc` on `PATH`, or a `PROTOC` environment variable |
@@ -92,12 +102,11 @@ pnpm install --frozen-lockfile
 
 The first build compiles the complete Rust Runtime and takes longer than later incremental builds.
 
-### Connect your first model
+### Select or connect a model
 
-1. Start EchoAgent and open **Settings → Model**.
-2. Choose a provider and enter your API key. Custom services also need an endpoint and protocol.
-3. Add at least one model and optionally test the connection.
-4. Return home, select a workspace, model, and permission mode, then send your first task.
+1. Start EchoAgent and select the built-in `chat-xc` model, or open **Settings → Model** to connect your own provider.
+2. For a personal provider, enter your API key. Custom services also need an endpoint and protocol; add a model and test the connection.
+3. Return home, select a workspace, model, and permission mode, then send your first task.
 
 <details>
 <summary><strong>Configure with TOML</strong></summary>
@@ -130,12 +139,13 @@ Restart EchoAgent after editing the file manually. The settings UI is recommende
 | Area | Capabilities |
 | --- | --- |
 | **Agent execution** | Streaming sessions, native plans and tasks, slash commands, queued sends, cancellation, rewind and fork, live sub-agent status, and teams |
-| **Coding workbench** | Monaco multi-tab editing, global search and replace, integrated terminal, cross-file symbol index, definition/reference/impact analysis, task DAGs, verification and diagnostics, diff review, checkpoint rollback, and evidence-backed delivery reports |
+| **Coding workbench** | Embedded Eclipse Theia IDE for files, editing, search, terminal, Git, and preview, alongside EchoAgent task execution, diff review, verification, and delivery |
+| **Office documents** | Read local Office/PDF files and [generate Word, PDF, Excel, or PowerPoint files offline](docs/office-documents.md); export replies and meeting minutes |
 | **Browser and computer control** | Task-isolated Browser Use, screenshot-driven Computer Use, live capability detection, pause/takeover/resume controls, per-action risk confirmation, and task-level data cleanup |
 | **Workspace** | Directory-scoped sessions, full-text search, file trees and safe file operations, common-document previews, change tracking, unified diffs, and deliverable assets |
 | **Meeting transcription** | Record the microphone, system audio, or both; save audio locally, then transcribe with a configured MiniMax speech endpoint and generate meeting minutes. Pause, import, edit, and export are supported |
 | **Models** | OpenAI, Anthropic, DeepSeek, and Qwen presets; multiple providers and models; OpenAI- and Anthropic-compatible endpoints |
-| **Extensions** | MCP over stdio, Streamable HTTP, or SSE; MCP OAuth; skills; plugins; CLI connectors; reusable experts; and local capability marketplaces |
+| **Extensions** | MCP over stdio, Streamable HTTP, or SSE; MCP OAuth; skills with an optional [executable capability manifest](docs/skill-capability-manifest.md); plugins; CLI connectors; reusable experts; and local capability marketplaces |
 | **Long-term context** | Project instructions, tasks and plans, personal memory, session summaries, hybrid retrieval over local Markdown/text/Office files, and an optional organization knowledge service |
 | **Scheduled work and notifications** | One-time or hourly/daily/weekly/monthly/yearly schedules, run history, task-level model and permission settings, desktop notifications, Slack, Discord, and webhooks |
 | **Projects and cloud storage** | Persisted project metadata and assets, task-artifact catalogs, local file browsing, and WebDAV browsing, transfers, and remote file management |
@@ -161,13 +171,15 @@ Browser Use permits only public `http/https` destinations by default. Top-level 
 
 ### Coding workbench
 
-Open **More → Code Development** for a dedicated surface that brings projects, development tasks, Agent sessions, and code operations together:
+Open **More → Code Development** for Echo Code. The embedded Eclipse Theia 1.74.0 IDE provides the editor, file explorer, search, terminal, Git, and web preview; the adjacent EchoAgent pane keeps Agent tasks, review, verification, and delivery in the same workspace:
 
 - **Understand the repository:** scan languages, modules, manifests, project instructions, and Git state; incrementally maintain a cross-file symbol index for workspace-symbol search, go to definition, find references, and impact analysis.
-- **Edit and operate:** use a multi-tab Monaco editor, file search and replace, create/rename/copy/move/trash actions, hot-exit draft recovery, and an integrated PTY terminal. Saves compare content hashes to detect concurrent edits from the Agent or another process.
+- **Edit and operate:** use Theia's Monaco editor, file explorer, search, command palette, and PTY terminal. The desktop bridge checks the task phase before IDE file mutations and refreshes the change set afterward. Preview a local development server inside Theia.
 - **Review task execution:** complex work becomes a DAG with dependencies, file scopes, contracts, acceptance criteria, and verification commands. The workbench advances phases from real diffs, process exit codes, and diagnostic fingerprints instead of accepting a model's completion claim as evidence.
 - **Verify and deliver:** detect checks that really exist in Node.js, Rust, Maven/Gradle, Python, Go, CMake, Bazel, and .NET projects; stream their output and retain structured results. Plan-authored commands require one-time user approval, while known destructive commands are rejected by the native layer.
 - **Protect changes:** Git repositories use HEAD plus the task-start state as a baseline; non-Git folders use a local filesystem checkpoint. You can review per-file diffs, discard one file, or roll back the task. Pre-existing dirty content is protected from automatic commits, and a delivery report becomes deliverable only after gates such as fresh verification, diff review, and acceptance evidence pass.
+
+See the [Echo Code Theia integration guide](docs/echo-code-theia.md) for build resources and the IDE bridge.
 
 ## How it works
 
@@ -176,6 +188,9 @@ EchoAgent is not a web wrapper around a command-line tool. The Agent Runtime run
 ```mermaid
 flowchart TB
     UI[React 18 UI<br/>Sessions · Code Development · Automation · Settings] <-->|Tauri Commands / Events| HOST[Tauri 2 + Rust host<br/>Storage · Policy · Scheduler · Workspace APIs]
+    UI <-->|Workspace and file-operation bridge| IDE[Eclipse Theia browser IDE<br/>Explorer · Editor · Terminal · Preview]
+    HOST -->|Starts local process| IDEBACK[Node.js + Theia backend<br/>127.0.0.1]
+    IDE <-->|Local WebSocket| IDEBACK
     HOST <-->|Typed ACP channels| RUNTIME[In-process Agent Runtime<br/>Sessions · Plans · Tools · Permissions · Sub-agents]
     RUNTIME --> MODELS[Model providers<br/>OpenAI · Anthropic · Compatible]
     RUNTIME --> TOOLS[Local files and commands<br/>MCP · Skills · Plugins]
@@ -191,13 +206,14 @@ The Rust host owns and evaluates coding-task state, file baselines, the symbol i
 
 ```text
 src/                       React UI, Zustand stores, and frontend domain logic
-src/features/coding/       Coding workbench, editor, and task UI
+src/features/coding/       Theia host, Coding Agent tasks, and review UI
 src-tauri/src/             Tauri commands, ACP bridge, policy, storage, coding and automation backends
+vendor/theia-platform/     Eclipse Theia 1.74.0 source and Echo bridge extension
 vendor/echo-agent-build/   Pinned source snapshot of the embedded Agent Runtime
 vendor/async-openai/       Pinned OpenAI-compatible Rust client source
 vendor/nucleo/             Pinned fuzzy-matching library source
 scripts/                   Setup, verification, build, and release scripts
-docs/                      Platform build and desktop-update documentation
+docs/                      Office, Skill, automation, and Theia integration guides
 ```
 
 ## Data and security boundaries

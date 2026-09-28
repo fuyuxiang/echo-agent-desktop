@@ -53,6 +53,20 @@
 
 ## 快速开始
 
+### 下载与安装（普通用户）
+
+普通用户从 [Echo Agent 网站](http://www.ojlab.com/) 进入桌面客户端下载入口，按系统和处理器架构选择安装包。**截至 2026-09-28，网站仍显示 0.3.10 下载按钮，但对应文件尚未上传，点击会返回 404；0.3.11 安装包也尚未提供**。目前需等待站点上传，或向维护者获取安装包。仓库的 [GitHub Releases](https://github.com/fuyuxiang/echo-agent-desktop/releases) 此时也没有公开安装包。应用内更新服务只供已安装客户端使用，不能代替首次安装包。
+
+| 系统 | 选择的安装包 | 安装方式 |
+| --- | --- | --- |
+| Windows x86_64 | Windows 桌面安装程序（`.exe`） | 运行安装程序，按提示完成安装 |
+| macOS Apple Silicon | macOS Apple Silicon 磁盘映像（`.dmg`） | 打开 DMG，将 EchoAgent 拖入「应用程序」 |
+| macOS Intel | macOS Intel 磁盘映像（`.dmg`） | 打开 DMG，将 EchoAgent 拖入「应用程序」 |
+
+选择与你的机器架构相符、由项目维护者提供的已签名安装包。当前仓库源码版本为 `0.3.11`；版本号不代表该版本的安装包已经上传。首次启动后可直接选择内置模型，或按下方步骤连接自己的模型。
+
+### 从源码运行（开发者）
+
 仓库已包含内嵌 Agent Runtime 及其锁定依赖的源码快照，正常克隆即可构建，无需初始化 Git Submodule。
 
 <details>
@@ -60,7 +74,7 @@
 
 | 依赖 | 要求 |
 | --- | --- |
-| Node.js | 22 或 24+；Theia 源码构建和桌面 IDE 服务需要该版本 |
+| Node.js | 22 或 24；Theia 源码构建和桌面 IDE 服务只验证了这两个主版本 |
 | pnpm | 10；仓库已固定期望版本 |
 | Rust | Stable，最低 `1.92.0`，包含 `rustfmt` 与 `clippy` |
 | Protocol Buffers | 系统 `PATH` 中可用的原生 `protoc`，或设置 `PROTOC` |
@@ -92,12 +106,11 @@ pnpm install --frozen-lockfile
 
 首次构建会编译完整的 Rust Runtime，因此会比后续增量构建耗时更长。
 
-### 连接你的模型
+### 选择或连接模型
 
-1. 启动 EchoAgent，打开「设置 → 模型」。
-2. 选择 Provider 并填写自己的 API Key；自定义服务还需配置 Endpoint 与协议。
-3. 添加至少一个模型，可先测试连接。
-4. 返回首页，选择工作目录、模型和权限模式，然后发送第一个任务。
+1. 启动 EchoAgent，可直接使用内置 `chat-xc` 模型；它不要求填写 API Key，但会连接项目配置的远端模型服务。
+2. 如果使用自己的模型，打开「设置 → 模型」，选择 Provider，填写 API Key；自定义服务还需配置 Endpoint 与协议，然后添加模型并测试连接。
+3. 返回首页，选择工作目录、模型和权限模式，然后发送第一个任务。
 
 <details>
 <summary><strong>使用 TOML 手动配置</strong></summary>
@@ -206,7 +219,7 @@ vendor/echo-agent-build/   内嵌 Agent Runtime 的锁定源码快照
 vendor/async-openai/       OpenAI 兼容 Rust 客户端源码快照
 vendor/nucleo/             模糊匹配库源码快照
 scripts/                   初始化、验证、构建与发布脚本
-docs/                      平台构建与桌面更新文档
+docs/                      办公文档、Skill、自动化与 Theia 集成说明
 ```
 
 ## 数据与安全边界
@@ -253,7 +266,7 @@ EchoAgent 默认将应用状态保存在 `~/.echo-agent/`；启动前设置 `ECH
 | 命令 | 用途 |
 | --- | --- |
 | `pnpm tauri dev` | 运行完整桌面应用 |
-| `pnpm ide:build` | 从仓库内源码编译 Theia IDE；需要 Node.js 22 或 24+ |
+| `pnpm ide:build` | 从仓库内源码编译 Theia IDE；需要 Node.js 22 或 24 |
 | `pnpm ide:stage` | 将 Theia 和当前平台 Node.js 运行时放入 Tauri 资源目录 |
 | `pnpm ide:prepare` | 首次构建并暂存 IDE；`pnpm tauri dev/build` 会自动调用 |
 | `pnpm dev` | 仅启动 Vite 前端；原生能力需要 Tauri 容器 |

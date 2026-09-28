@@ -16,9 +16,9 @@ Prepare EchoAgent desktop release artifacts from three existing installers.
 
 Usage:
   bash scripts/prepare-update-artifacts.sh \
-    --windows-exe /path/to/EchoAgent-v0.3.10-windows-x86_64-setup.exe \
-    --mac-arm64-dmg /path/to/EchoAgent-v0.3.10-darwin-aarch64.dmg \
-    --mac-x64-dmg /path/to/EchoAgent-v0.3.10-darwin-x86_64.dmg \
+    --windows-exe /path/to/EchoAgent-v0.3.11-windows-x86_64-setup.exe \
+    --mac-arm64-dmg /path/to/EchoAgent-v0.3.11-darwin-aarch64.dmg \
+    --mac-x64-dmg /path/to/EchoAgent-v0.3.11-darwin-x86_64.dmg \
     [--output-dir /path/to/output] [--unsigned] [--allow-unsigned-platform]
 
 Signing (required unless --unsigned is used):

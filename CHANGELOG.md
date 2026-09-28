@@ -1,24 +1,34 @@
 # 更新日志 (Changelog)
 
-> 打包说明：发版时给对应 tag 提取本文件中该版本的段落作为 GitHub Release
-> 的正文（见 `.github/workflows/release.yml` 的「Extract release notes」
-> 步骤）。新版本 = 在顶部加一节 `## vX.Y.Z（日期）`，用中文写面向用户的
-> 变更摘要；技术细节留在 commit message。
+> 此处记录仓库中的应用源码版本及面向用户的主要变化。当前版本由
+> `package.json`、`src-tauri/tauri.conf.json`、`src-tauri/Cargo.toml` 和
+> `src-tauri/Cargo.lock` 共同标识，并由 `scripts/release-version.mjs` 校验。
+> 版本号本身不表示安装包已经公开发布；是否可下载以实际分发页面为准。
+> 仓库目前没有自动创建 GitHub Release 的工作流，发布说明由维护者在发布时整理。
 
-## 未发布
+## v0.3.11（2026-09-28，当前源码版本）
 
-### 🧱 Runtime 源码统一管理
-- 将 `vendor/echo-agent-build` 从外部 Git Submodule 转为主仓库直接管理的固定源码快照；普通克隆即可获得完整 Agent Runtime，不再依赖上游仓库在线可用。
-- 将既有兼容性修改和 `echo.agent` 协议命名空间结果固化进源码，同时保留上游版本、许可证、NOTICE 与后续升级流程。
-- 将 `async-openai` 和 `nucleo` 的锁定 Git 源码纳入 `vendor/`，改用仓库内 Path 依赖，新环境构建不再访问这两个 Git 仓库。
-- 初始化、macOS/Windows 打包和 Windows CI 改为校验 Vendored Runtime 完整性，不再隐式修改依赖源码。
+- 将应用版本同步升级为 0.3.11；修复 README 的下载与首次使用说明，补齐办公文档、Skill、自动化和 Theia 集成文档。
 
-### ✨ EchoAgent 运行时命名与数据目录
-- 面向应用的命令、事件、模块和界面统一使用 EchoAgent / Agent Runtime 命名。
-- 用户配置、会话、记忆、Agents、Skills 等数据统一存放到 `~/.echo-agent/`。
-- 专家市场、连接器市场和内置技能目录统一跟随 `ECHO_AGENT_HOME`，并支持一键恢复默认来源。
-- 首次启动会从旧目录安全导入缺失文件：保留 `.echo-agent` 中已有内容、不删除旧目录，便于回滚。
-- 补充第三方许可说明，并在安装包中携带相关许可证文件。
+## v0.3.10（2026-09-28，历史源码版本）
+
+### 代码开发与自动化
+- 「代码开发」集成仓库内 Eclipse Theia 工作台，提供编辑器、文件树、搜索、终端、Git 和网页预览；Agent 任务保留变更审阅、验证记录与交付门禁。修复 Windows IDE 启动及中文、长路径兼容问题。
+- 新增任务隔离的 Browser Use 和基于屏幕快照的 Computer Use，支持暂停、手动接管和恢复；敏感点击、输入等操作由后端逐项要求确认。浏览器默认拦截内网目标，需按任务显式授权。
+
+### 文档、会议与扩展
+- 内置 Word、PDF、Excel、PPT 生成能力；Agent 可将文件写入当前工作区的成果目录，回复可通过系统对话框导出。新增会议录音、转写、纪要与导出，系统声音及混合录制按平台能力显示。
+- 扩展 Skill 安装检查与 `echo.skill.json` 可执行能力声明；完善专家、连接器和组织 Skill 的入口及状态展示。
+
+### 工作流与数据
+- 增强个人知识检索和可选组织知识服务；完善模型连接配置、任务级权限、会话历史导航、子 Agent 返回与运行状态展示。
+- 新增本机数据备份与恢复、任务变更集及回滚；恢复后的执行任务保持暂停。macOS 和 Windows 构建脚本统一生成标准命名的安装包，更新产物由受控发布流程签名。
+
+## v0.3.9（2026-09-02，历史源码版本）
+
+- 内嵌 Agent Runtime 随应用分发，统一 EchoAgent 命名与 `~/.echo-agent/` 数据目录；旧目录只导入缺失文件，不删除原数据。
+- 将 Agent Runtime、`async-openai` 与 `nucleo` 的锁定源码纳入仓库，普通克隆无需 Git Submodule；构建与 CI 校验源码完整性。
+- 加入签名桌面更新、记忆与组织模型同步，完善本地 Skill/MCP 工作流和 Windows 凭据保护；安装包携带第三方许可说明。
 
 ## v0.3.8（2026-08-25）
 
