@@ -193,7 +193,8 @@ async fn generate(
     let script = crate::theia::node_compatible_path(&script)?;
     let output = crate::theia::node_compatible_path(output)?;
     let font = crate::theia::node_compatible_path(&font)?;
-    let mut child = tokio::process::Command::new(executable)
+    let mut worker = tokio::process::Command::new(executable);
+    worker
         .arg("--max-old-space-size=512")
         .arg(script)
         .arg(output)
@@ -201,7 +202,10 @@ async fn generate(
         .stdin(Stdio::piped())
         .stdout(Stdio::null())
         .stderr(Stdio::piped())
-        .kill_on_drop(true)
+        .kill_on_drop(true);
+    #[cfg(windows)]
+    worker.creation_flags(crate::process_supervisor::CREATE_NO_WINDOW);
+    let mut child = worker
         .spawn()
         .map_err(|error| format!("无法启动内置文档处理程序：{error}"))?;
     let data = serde_json::to_vec(request).map_err(|error| error.to_string())?;

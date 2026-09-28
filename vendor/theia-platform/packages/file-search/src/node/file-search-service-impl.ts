@@ -134,7 +134,7 @@ export class FileSearchServiceImpl implements FileSearchService {
         return new Promise((resolve, reject) => {
             const cwd = FileUri.fsPath(rootUri);
             const args = this.getSearchArgs(options);
-            const ripgrep = cp.spawn(rgPath, args, { cwd });
+            const ripgrep = cp.spawn(rgPath, args, { cwd, windowsHide: isWindows });
             ripgrep.on('error', reject);
             ripgrep.on('exit', (code, signal) => {
                 if (typeof code === 'number' && code !== 0) {

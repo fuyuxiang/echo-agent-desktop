@@ -18,7 +18,7 @@ import { injectable, inject, named } from '@theia/core/shared/inversify';
 import { ProcessManager } from './process-manager';
 import { ILogger } from '@theia/core/lib/common';
 import { Process, ProcessType, ProcessOptions, ForkOptions, ProcessErrorEvent } from './process';
-import { ChildProcess, spawn, fork } from 'child_process';
+import { ChildProcess, spawn, fork, ForkOptions as NodeForkOptions, SpawnOptions } from 'child_process';
 import * as stream from 'stream';
 
 // The class was here before, exporting to not break anything.
@@ -84,16 +84,20 @@ export class RawProcess extends Process {
         // For now, we try to normalize that into always emitting an 'error'
         // event.
         try {
+            // Raw processes report through the IDE. Callers can opt into a
+            // native console explicitly when that is part of their workflow.
+            const childOptions = { windowsHide: process.platform === 'win32', ...options.options } as
+                NodeForkOptions & SpawnOptions & { windowsHide: boolean };
             if (this.isForkOptions(options)) {
                 this.process = fork(
                     options.modulePath,
                     options.args || [],
-                    options.options || {});
+                    childOptions);
             } else {
                 this.process = spawn(
                     options.command,
                     options.args || [],
-                    options.options || {});
+                    childOptions);
             }
 
             this.process.on('error', (error: NodeJS.ErrnoException) => {

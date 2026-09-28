@@ -78,9 +78,11 @@ export class IPCConnectionProvider {
     }
 
     protected fork(options: ResolvedIPCConnectionOptions): cp.ChildProcess {
-        const forkOptions: cp.ForkOptions = {
+        const forkOptions: cp.ForkOptions & { windowsHide: boolean } = {
             env: createIpcEnv(options),
             execArgv: [],
+            // Backend workers use IPC and pipes; a native console adds no UI.
+            windowsHide: process.platform === 'win32',
             // 5th element MUST be 'overlapped' for it to work properly on Windows.
             // 'overlapped' works just like 'pipe' on non-Windows platforms.
             // See: https://nodejs.org/docs/latest-v14.x/api/child_process.html#child_process_options_stdio

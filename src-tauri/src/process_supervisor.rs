@@ -26,6 +26,8 @@ impl Drop for SyncChild {
 }
 const GRACE: Duration = Duration::from_millis(500);
 const REAP: Duration = Duration::from_secs(2);
+#[cfg(windows)]
+pub(crate) const CREATE_NO_WINDOW: u32 = 0x0800_0000;
 
 pub fn spawn_async(command: tokio::process::Command) -> io::Result<AsyncChild> {
     use process_wrap::tokio::*;
@@ -35,7 +37,7 @@ pub fn spawn_async(command: tokio::process::Command) -> io::Result<AsyncChild> {
     #[cfg(windows)]
     {
         let mut flags = CreationFlags(Default::default());
-        flags.0 .0 = 0x08000000; // CREATE_NO_WINDOW; JobObject adds CREATE_SUSPENDED.
+        flags.0 .0 = CREATE_NO_WINDOW; // JobObject adds CREATE_SUSPENDED.
         wrapped.wrap(flags).wrap(JobObject);
     }
     wrapped.wrap(KillOnDrop).spawn()
@@ -49,7 +51,7 @@ pub fn spawn_sync(command: std::process::Command) -> io::Result<SyncChild> {
     #[cfg(windows)]
     {
         let mut flags = CreationFlags(Default::default());
-        flags.0 .0 = 0x08000000;
+        flags.0 .0 = CREATE_NO_WINDOW;
         wrapped.wrap(flags).wrap(JobObject);
     }
     wrapped.spawn().map(SyncChild)

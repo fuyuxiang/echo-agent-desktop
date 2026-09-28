@@ -111,7 +111,7 @@ export class NodeDebugAdapterCreator extends PluginDebugAdapterCreator {
 
     public startDebugAdapter(executable: DebugAdapterExecutable): DebugAdapter {
         // eslint-disable-next-line @typescript-eslint/no-explicit-any
-        const options: any = { stdio: ['pipe', 'pipe', 2] };
+        const options: any = { stdio: ['pipe', 'pipe', 2], windowsHide: isWindows };
 
         if (executable.options) {
             options.cwd = executable.options.cwd;
@@ -127,8 +127,9 @@ export class NodeDebugAdapterCreator extends PluginDebugAdapterCreator {
         const { command, args } = executable;
         if (command === 'node') {
             if (Array.isArray(args) && args.length > 0) {
-                const forkOptions: ForkOptions = {
+                const forkOptions: ForkOptions & { windowsHide: boolean } = {
                     env: options.env,
+                    windowsHide: isWindows,
                     // When running in Electron, fork will automatically add ELECTRON_RUN_AS_NODE=1 to the env,
                     // but this will cause issues when debugging Electron apps, so we'll remove it.
                     execArgv: isElectron()

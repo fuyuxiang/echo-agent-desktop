@@ -176,8 +176,14 @@ pub(crate) fn node_compatible_path(path: &Path) -> Result<PathBuf, String> {
 }
 
 fn check_node(node: &PathBuf) -> Result<(), String> {
-    let output = Command::new(node)
-        .arg("--version")
+    let mut command = Command::new(node);
+    command.arg("--version");
+    #[cfg(windows)]
+    {
+        use std::os::windows::process::CommandExt;
+        command.creation_flags(crate::process_supervisor::CREATE_NO_WINDOW);
+    }
+    let output = command
         .output()
         .map_err(|error| format!("无法启动 Theia 的 Node.js：{error}"))?;
     let version = String::from_utf8_lossy(&output.stdout);
@@ -314,6 +320,7 @@ pub async fn coding_theia_start(
             .arg(app_dir.join("lib/backend/main.js"))
             .arg(format!("--port={port}"))
             .arg("--hostname=127.0.0.1")
+            .arg("--plugins=local-dir:plugins")
             .env("THEIA_CONFIG_DIR", &config_dir)
             .env("ECHO_THEIA_EMBED_TOKEN", &embed_token)
             .current_dir(&app_dir)
