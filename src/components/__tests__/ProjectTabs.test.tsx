@@ -398,7 +398,7 @@ describe("项目计划/任务与 Agent 会话闭环", () => {
     await waitFor(() => expect(onDeleteSession).toHaveBeenCalledWith("existing", "/workspace"));
   });
 
-  it("移出项目仅解除当前项目引用，不删除对话历史", () => {
+  it("移出关联工作项的会话前说明影响，确认后保留对话历史", async () => {
     useProjectsStore.setState({
       projects: [{
         ...structuredClone(project),
@@ -410,6 +410,18 @@ describe("项目计划/任务与 Agent 会话闭环", () => {
     fireEvent.click(screen.getByRole("button", { name: "历史会话的会话操作" }));
     fireEvent.click(screen.getByRole("menuitem", { name: "移出项目" }));
 
+    const confirmation = screen.getByRole("dialog", { name: "将“历史会话”移出项目？" });
+    expect(confirmation).toHaveTextContent("完成发布检查");
+    expect(confirmation).toHaveTextContent("修复阻断问题");
+    expect(useProjectsStore.getState().projects[0].conversations).toHaveLength(1);
+    fireEvent.click(within(confirmation).getByRole("button", { name: "取消" }));
+    expect(useProjectsStore.getState().projects[0].tasks[0].sessionId).toBe("existing");
+
+    fireEvent.click(screen.getByRole("button", { name: "历史会话的会话操作" }));
+    fireEvent.click(screen.getByRole("menuitem", { name: "移出项目" }));
+    fireEvent.click(within(screen.getByRole("dialog", { name: "将“历史会话”移出项目？" })).getByRole("button", { name: "移出项目" }));
+
+    await waitFor(() => expect(useProjectsStore.getState().projects[0].conversations).toHaveLength(0));
     const updated = useProjectsStore.getState().projects[0];
     expect(updated.conversations).toHaveLength(0);
     expect(updated.plans[0].sessionId).toBeUndefined();

@@ -104,7 +104,7 @@ import {
   permissionModeStatusFromEvent,
   usePermissionModeStore,
 } from "./stores/permission-mode-store";
-import { buildProjectPrompt } from "./lib/project-context";
+import { buildProjectPrompt, projectPromptForTurn } from "./lib/project-context";
 import { migrateCatalogRootStorage } from "./lib/catalog-root-storage";
 import { parseRememberArguments, type SlashCommandInvocation } from "./lib/slash-commands";
 import { useUpdateStore } from "./stores/update-store";
@@ -1330,20 +1330,26 @@ function Shell() {
       const project = useProjectsStore.getState().projects.find((item) =>
         item.conversations.some((conversation) => conversation.sessionId === sessionId),
       );
+      const projectConversation = project?.conversations.find((conversation) => conversation.sessionId === sessionId);
       const isFirstUserTurn = !sessionStore.getState().messages.some(
         (message) => message.role === "user",
       );
-      const textForAgent = promptTextOverride ?? (project && isFirstUserTurn
-        ? buildProjectPrompt(project, sendText)
-        : sendText);
+      const promptBody = promptTextOverride ?? sendText;
+      const { promptText: textForAgent, consumedPendingContext } = projectPromptForTurn(
+        project, projectConversation, isFirstUserTurn, promptBody,
+      );
       const accepted = beginAgentTurn({
         sessionId,
         promptText: textForAgent,
         displayText: sendText,
         attachments: sendAttachments,
         promptId: queuePromptId,
-        onRejected: queuePromptId
+        onRejected: consumedPendingContext || queuePromptId
           ? () => {
+              if (consumedPendingContext && project) {
+                useProjectsStore.getState().setProjectContextPending(project.id, sessionId, true);
+              }
+              if (!queuePromptId) return;
               useMessageQueueStore.getState().settleSending(
                 sessionId,
                 "retry",
@@ -1362,6 +1368,9 @@ function Shell() {
         }
         showToast("当前会话已切换，请重新发送");
         return false;
+      }
+      if (consumedPendingContext && project) {
+        useProjectsStore.getState().setProjectContextPending(project.id, sessionId, false);
       }
       return true;
     } catch (e) {

@@ -33,6 +33,7 @@ import {
   Code2Icon,
 } from "@/foundation/components/Icon/icons";
 import { SessionContextMenu } from "./SessionContextMenu";
+import { MoveToProjectDialog } from "./MoveToProjectDialog";
 import { useAppDialog } from "./AppDialog";
 const logoMarkUrl = "/app-icon.png";
 
@@ -603,6 +604,9 @@ export function Sidebar({
     projectId?: string;
     returnFocus?: HTMLElement;
   } | null>(null);
+  const [moveDialog, setMoveDialog] = useState<{ session: SessionSummary; returnFocus?: HTMLElement } | null>(null);
+  const [focusMovedSessionId, setFocusMovedSessionId] = useState<string | null>(null);
+  const sidebarRef = useRef<HTMLElement>(null);
   const skipMenuFocusRestoreRef = useRef(false);
   const { requestConfirmation, dialog } = useAppDialog("sidebar-session-actions");
 
@@ -726,9 +730,58 @@ export function Sidebar({
   }, [allSessions, contextMenu, handleDelete, requestConfirmation]);
 
   const detachFromProject = useCallback((projectId: string, sessionId: string) => {
-    useProjectsStore.getState().detachSessionFromProject(projectId, sessionId);
-    onToast?.("已移出项目，对话历史仍可在“任务”中查看");
-  }, [onToast]);
+    const project = useProjectsStore.getState().projects.find((item) => item.id === projectId);
+    const session = allSessions.find((item) => item.sessionId === sessionId);
+    const linkedItems = [
+      ...(project?.plans.filter((item) => item.sessionId === sessionId).map((item) => item.title) ?? []),
+      ...(project?.tasks.filter((item) => item.sessionId === sessionId).map((item) => item.title) ?? []),
+    ];
+    const perform = async () => {
+      await useProjectsStore.getState().detachSessionFromProject(projectId, sessionId);
+      onToast?.(session?.archived
+        ? "已移出项目，该会话仍在归档管理中"
+        : "已移出项目，对话历史仍可在“任务”中查看");
+    };
+    if (linkedItems.length > 0) {
+      skipMenuFocusRestoreRef.current = true;
+      requestConfirmation({
+        title: `将“${session?.title || "未命名会话"}”移出项目？`,
+        description: `会话关联的工作项“${linkedItems.join("”、“")}”将解除关联。工作项和对话历史都会保留。`,
+        confirmLabel: "移出项目",
+        returnFocus: contextMenu?.returnFocus,
+        action: perform,
+      });
+      return;
+    }
+    void perform().catch((error) => onToast?.(`移出项目失败：${String(error).replace(/^Error:\s*/, "")}`));
+  }, [allSessions, contextMenu, onToast, requestConfirmation]);
+
+  const openMoveDialog = useCallback((sessionId: string) => {
+    const session = allSessions.find((item) => item.sessionId === sessionId);
+    if (!session) return;
+    skipMenuFocusRestoreRef.current = true;
+    setMoveDialog({ session, returnFocus: contextMenu?.returnFocus });
+  }, [allSessions, contextMenu]);
+
+  const moveToProject = useCallback(async (projectId: string) => {
+    if (!moveDialog) return;
+    const session = useSessionsStore.getState().independent.find((item) => item.sessionId === moveDialog.session.sessionId);
+    if (!session || session.hidden || session.archived) throw new Error("该会话已不在任务列表中，请刷新后重试");
+    await useProjectsStore.getState().moveSessionToProject(projectId, session);
+    setProjectsOpen(true);
+    setExpandedProjects((current) => ({ ...current, [projectId]: true }));
+    setFocusMovedSessionId(session.sessionId);
+    const projectName = useProjectsStore.getState().projects.find((item) => item.id === projectId)?.name;
+    onToast?.(`已移入项目“${projectName || "项目"}”，原会话工作目录保持不变`);
+  }, [moveDialog, onToast, setProjectsOpen]);
+
+  useEffect(() => {
+    if (!focusMovedSessionId || moveDialog || !projectsOpen) return;
+    const rows = sidebarRef.current?.querySelectorAll<HTMLElement>(".sidebar__conv[data-project-id]");
+    const row = Array.from(rows ?? []).find((item) => item.dataset.sessionId === focusMovedSessionId);
+    row?.querySelector<HTMLButtonElement>("button")?.focus();
+    setFocusMovedSessionId(null);
+  }, [focusMovedSessionId, moveDialog, projectsOpen, expandedProjects, projects]);
 
   // Open the row's context menu anchored to its 更多 hover button.
   const openMenuFromButton = useCallback((e: React.MouseEvent, sessionId: string, sessionTitle: string, isPinned: boolean, isArchived: boolean, projectId?: string) => {
@@ -754,6 +807,8 @@ export function Sidebar({
   const renderConv = (s: SessionSummary, projectId?: string) => (
     <div
       key={s.sessionId}
+      data-session-id={s.sessionId}
+      data-project-id={projectId}
       className={
         "sidebar__conv" +
         (s.sessionId === currentSessionId ? " sidebar__conv--active" : "") +
@@ -846,7 +901,7 @@ export function Sidebar({
   const scopedIndependentCount = taskSessions.filter((session) => !session.archived).length;
 
   return (
-    <aside className="sidebar">
+    <aside ref={sidebarRef} className="sidebar">
       {/* macOS Overlay 标题栏:红绿灯悬浮在 logo 行左上,整行作为拖拽区
           (Windows 的窗口拖拽由自绘 TitleBar 负责,故仅在 mac 加属性)。 */}
       <div className="sidebar__logo-row" {...(IS_MACOS ? { "data-tauri-drag-region": true } : {})}>
@@ -1139,6 +1194,18 @@ export function Sidebar({
           onDetach={contextMenu.projectId
             ? (sessionId) => detachFromProject(contextMenu.projectId!, sessionId)
             : undefined}
+          onMoveToProject={!contextMenu.projectId ? openMoveDialog : undefined}
+        />
+      )}
+      {moveDialog && (
+        <MoveToProjectDialog
+          sessionTitle={moveDialog.session.title || "未命名会话"}
+          sessionCwd={moveDialog.session.cwd}
+          projects={projects}
+          returnFocus={moveDialog.returnFocus}
+          onMove={moveToProject}
+          onCreateProject={() => { setMoveDialog(null); onNavigate("项目"); }}
+          onClose={() => setMoveDialog(null)}
         />
       )}
       {dialog}

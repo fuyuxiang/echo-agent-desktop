@@ -237,6 +237,46 @@ describe("Sidebar", () => {
     expect(screen.getByRole("button", { name: /^\u4efb\u52a1/ })).toHaveTextContent("任务 (0)");
   });
 
+  it("任务会话可选择项目移入，保留原工作目录和会话记录", async () => {
+    useSessionsStore.getState().setIndependent([
+      { sessionId: "task-session", title: "需求探索", cwd: "/original", currentModelId: "model-a" },
+    ]);
+    useProjectsStore.setState({
+      projects: [{
+        id: "project-1", name: "客户项目", cwd: "/project", createdAt: "2026-09-05T00:00:00.000Z",
+        connectors: [], experts: [], skills: [], plans: [], tasks: [], assets: [], members: [], conversations: [],
+      }],
+    });
+    render(<Sidebar {...base} />);
+    fireEvent.click(screen.getByRole("button", { name: "需求探索的会话操作" }));
+    fireEvent.click(screen.getByRole("menuitem", { name: "移入项目…" }));
+
+    const dialog = screen.getByRole("dialog", { name: "移入项目" });
+    fireEvent.click(within(dialog).getByRole("radio", { name: "客户项目" }));
+    expect(dialog).toHaveTextContent("仍在原工作目录运行");
+    fireEvent.click(within(dialog).getByRole("button", { name: "移入项目" }));
+
+    await waitFor(() => expect(screen.queryByRole("dialog", { name: "移入项目" })).toBeNull());
+    expect(screen.getByRole("button", { name: /^\u4efb\u52a1/ })).toHaveTextContent("任务 (0)");
+    expect(screen.getByText("需求探索")).toBeInTheDocument();
+    expect(screen.getByText("需求探索").closest(".sidebar__conv")?.querySelector("button")).toHaveFocus();
+    expect(useSessionsStore.getState().independent[0].cwd).toBe("/original");
+    expect(useProjectsStore.getState().projects[0].conversations[0]).toMatchObject({
+      sessionId: "task-session", modelId: "model-a", pendingProjectContext: true,
+    });
+  });
+
+  it("没有项目时从移入弹窗前往项目页创建", () => {
+    useSessionsStore.getState().setIndependent([{ sessionId: "s1", title: "待整理", cwd: "/workspace" }]);
+    const onNavigate = vi.fn();
+    render(<Sidebar {...base} onNavigate={onNavigate} />);
+    fireEvent.click(screen.getByRole("button", { name: "待整理的会话操作" }));
+    fireEvent.click(screen.getByRole("menuitem", { name: "移入项目…" }));
+    fireEvent.click(screen.getByRole("button", { name: "前往项目页创建" }));
+    expect(onNavigate).toHaveBeenCalledWith("项目");
+    expect(screen.queryByRole("dialog", { name: "移入项目" })).toBeNull();
+  });
+
   it("侧栏项目对话提供移出、归档和经确认的永久删除", async () => {
     useSessionsStore.setState({
       independent: [{ sessionId: "project-session", title: "过期对话", cwd: "/workspace" }],

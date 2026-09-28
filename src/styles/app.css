@@ -4558,6 +4558,15 @@ button.diff__path {
 .app-dialog__button--primary { border-color: var(--echo-brand, #10b981); background: var(--echo-brand, #10b981); color: #fff; }
 .app-dialog__button--danger { border-color: var(--echo-status-error, #d92d20); background: var(--echo-status-error, #d92d20); color: #fff; }
 .app-dialog__button:hover:not(:disabled) { filter: brightness(0.96); }
+.project-move-dialog__search { margin-top: 18px; }
+.project-move-dialog__list { display: flex; flex-direction: column; gap: 6px; max-height: 260px; overflow: auto; margin-top: 12px; padding: 2px; }
+.project-move-dialog__option { display: flex; align-items: center; gap: 10px; padding: 10px 12px; border: 1px solid var(--echo-border-default); border-radius: 8px; color: var(--echo-text-strong); cursor: pointer; font-size: 0.8125rem; }
+.project-move-dialog__option:hover { background: var(--echo-bg-hover); }
+.project-move-dialog__option--selected { border-color: var(--echo-brand, #10b981); background: color-mix(in srgb, var(--echo-brand, #10b981) 8%, var(--echo-bg-primary)); }
+.project-move-dialog__option input { accent-color: var(--echo-brand, #10b981); }
+.project-move-dialog__empty { margin: 4px 0; padding: 14px; color: var(--echo-text-muted); font-size: 0.8125rem; text-align: center; }
+.project-move-dialog__empty p { margin: 0 0 10px; }
+.project-move-dialog__notice { margin: 14px 0 0; padding: 10px 12px; border-radius: 8px; background: var(--echo-bg-secondary); color: var(--echo-text-muted); font-size: 0.8125rem; line-height: 1.6; }
 .panel-inline-error {
   display: flex;
   align-items: center;

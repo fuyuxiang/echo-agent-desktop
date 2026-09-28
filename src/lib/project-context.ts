@@ -1,4 +1,4 @@
-import type { ProjectMeta, RefItem } from "@/stores/projects-store";
+import type { ProjectMeta, ProjectConversation, RefItem } from "@/stores/projects-store";
 
 function names(items: RefItem[]): string {
   return items.map((item) => `${item.name} (id: ${item.id})`).join("、");
@@ -27,4 +27,21 @@ export function buildProjectPrompt(project: ProjectMeta, userMessage: string): s
   }
   context.push(`\n如果所需能力当前不可用，必须明确说明阻塞，不得宣称已执行。`, `</system-reminder>`);
   return `${context.join("\n")}\n\n${userMessage}`;
+}
+
+/** Empty project chats and newly imported task chats each need one contract turn. */
+export function projectPromptForTurn(
+  project: ProjectMeta | undefined,
+  conversation: ProjectConversation | undefined,
+  isFirstUserTurn: boolean,
+  promptBody: string,
+): { promptText: string; consumedPendingContext: boolean } {
+  if (!project || !conversation) return { promptText: promptBody, consumedPendingContext: false };
+  const consumedPendingContext = !!conversation.pendingProjectContext;
+  return {
+    promptText: isFirstUserTurn || consumedPendingContext
+      ? buildProjectPrompt(project, promptBody)
+      : promptBody,
+    consumedPendingContext,
+  };
 }

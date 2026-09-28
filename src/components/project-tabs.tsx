@@ -353,8 +353,34 @@ export function ActivityTab({
   };
 
   const detachFromProject = (sessionId: string) => {
-    useProjectsStore.getState().detachSessionFromProject(projectId, sessionId);
-    onToast?.("已移出项目，对话历史仍可在“任务”中查看");
+    const currentProject = useProjectsStore.getState().projects.find((item) => item.id === projectId);
+    const linkedItems = [
+      ...(currentProject?.plans.filter((item) => item.sessionId === sessionId).map((item) => item.title) ?? []),
+      ...(currentProject?.tasks.filter((item) => item.sessionId === sessionId).map((item) => item.title) ?? []),
+    ];
+    const archived = effectiveSessionArchived(
+      sessionId,
+      currentProject?.conversations.find((item) => item.sessionId === sessionId)?.archived,
+      summaryById,
+    );
+    const perform = async () => {
+      await useProjectsStore.getState().detachSessionFromProject(projectId, sessionId);
+      onToast?.(archived
+        ? "已移出项目，该会话仍在归档管理中"
+        : "已移出项目，对话历史仍可在“任务”中查看");
+    };
+    if (linkedItems.length > 0) {
+      skipMenuFocusRestoreRef.current = true;
+      requestConfirmation({
+        title: `将“${menu?.title || "未命名会话"}”移出项目？`,
+        description: `会话关联的工作项“${linkedItems.join("”、“")}”将解除关联。工作项和对话历史都会保留。`,
+        confirmLabel: "移出项目",
+        returnFocus: menu?.returnFocus,
+        action: perform,
+      });
+      return;
+    }
+    void perform().catch((error) => onToast?.(`移出项目失败：${String(error).replace(/^Error:\s*/, "")}`));
   };
 
   const requestDelete = (sessionId: string) => {

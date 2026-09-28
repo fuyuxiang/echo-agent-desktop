@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { buildProjectPrompt } from "../project-context";
+import { buildProjectPrompt, projectPromptForTurn } from "../project-context";
 import type { ProjectMeta } from "@/stores/projects-store";
 
 const project: ProjectMeta = {
@@ -27,5 +27,16 @@ describe("buildProjectPrompt", () => {
     const result = buildProjectPrompt({ ...project, connectors: [], experts: [], skills: [] }, "hello");
     expect(result).not.toContain("[项目 MCP]");
     expect(result).not.toContain("[项目 Skill]");
+  });
+
+  it("移入的旧会话在下一轮补入项目契约，之后不重复补入", () => {
+    const conversation = { sessionId: "old", title: "探索", createdAt: "2026-01-01", pendingProjectContext: true };
+    const first = projectPromptForTurn(project, conversation, false, "继续讨论");
+    expect(first.promptText).toContain("先验收再发布");
+    expect(first.promptText.endsWith("继续讨论")).toBe(true);
+    expect(first.consumedPendingContext).toBe(true);
+
+    const later = projectPromptForTurn(project, { ...conversation, pendingProjectContext: false }, false, "下一步");
+    expect(later).toEqual({ promptText: "下一步", consumedPendingContext: false });
   });
 });

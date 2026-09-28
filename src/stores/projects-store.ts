@@ -22,6 +22,8 @@ export interface ProjectConversation {
   modelId?: string;
   /** Mirrors the session sidecar flag so project links never open a hidden row. */
   archived?: boolean;
+  /** An existing task moved into this project receives its project contract on its next turn. */
+  pendingProjectContext?: boolean;
 }
 
 export type PlanStatus = "pending" | "in_progress" | "paused" | "completed";
@@ -159,7 +161,7 @@ function saveLocal(list: ProjectMeta[]) {
   }
 }
 
-function persist(list: ProjectMeta[]): void {
+function persist(list: ProjectMeta[]): Promise<void> {
   saveLocal(list);
   try { window.localStorage.setItem(DIRTY_KEY, "1"); } catch { /* cache unavailable */ }
   const revision = ++persistRevision;
@@ -179,6 +181,7 @@ function persist(list: ProjectMeta[]): void {
       persistError: String(error).replace(/^Error:\s*/, ""),
     });
   });
+  return persistChain;
 }
 
 const uid = (p: string) => `${p}_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
@@ -218,8 +221,11 @@ interface ProjectsState {
   addMember: (id: string, name: string) => void;
   addConversation: (id: string, conv: ProjectConversation) => void;
   removeConversation: (id: string, sessionId: string) => void;
+  /** Move a catalog task into one project without changing the runtime session. */
+  moveSessionToProject: (id: string, session: SessionSummary) => Promise<void>;
   /** Remove a session from one project without deleting the underlying history. */
-  detachSessionFromProject: (id: string, sessionId: string) => void;
+  detachSessionFromProject: (id: string, sessionId: string) => Promise<void>;
+  setProjectContextPending: (id: string, sessionId: string, pending: boolean) => void;
   updateConversationTitle: (id: string, sessionId: string, title: string) => void;
   /** Mirror archive state into every project reference to this session. */
   setSessionArchived: (sessionId: string, archived: boolean) => void;
@@ -236,6 +242,21 @@ export const useProjectsStore = create<ProjectsState>((set, get) => {
     const next = get().projects.map((p) => (p.id === id ? fn(p) : p));
     set({ projects: next });
     persist(next);
+  };
+  const commitMembership = async (next: ProjectMeta[]): Promise<void> => {
+    const previous = get().projects;
+    set({ projects: next });
+    try {
+      await persist(next);
+    } catch (error) {
+      // A later edit may already contain this move. Only roll back the exact
+      // snapshot we submitted; otherwise keep the dirty cache for retry.
+      if (get().projects === next) {
+        set({ projects: previous });
+        saveLocal(previous);
+      }
+      throw error;
+    }
   };
   return {
     projects: load(),
@@ -354,8 +375,42 @@ export const useProjectsStore = create<ProjectsState>((set, get) => {
         ...p,
         conversations: p.conversations.filter((c) => c.sessionId !== sessionId),
       })),
-    detachSessionFromProject: (id, sessionId) =>
-      patch(id, (project) => {
+    moveSessionToProject: async (id, session) => {
+      if (!session.sessionId || session.hidden || session.sessionKind === "subagent") {
+        throw new Error("该会话不能移入项目");
+      }
+      const projects = get().projects;
+      const target = projects.find((project) => project.id === id);
+      if (!target) throw new Error("目标项目不存在");
+      if (projects.some((project) =>
+        project.conversations.some((item) => item.sessionId === session.sessionId)
+        || project.plans.some((item) => item.sessionId === session.sessionId)
+        || project.tasks.some((item) => item.sessionId === session.sessionId)
+      )) throw new Error("该会话已归属项目，请先移出原项目");
+      const now = new Date().toISOString();
+      const next = projects.map((project) => project.id === id ? {
+        ...project,
+        conversations: [{
+          sessionId: session.sessionId,
+          title: session.title || "未命名会话",
+          createdAt: now,
+          modelId: session.currentModelId,
+          archived: !!session.archived,
+          pendingProjectContext: true,
+        }, ...project.conversations],
+      } : project);
+      await commitMembership(next);
+    },
+    detachSessionFromProject: async (id, sessionId) => {
+      const projects = get().projects;
+      const project = projects.find((item) => item.id === id);
+      if (!project || !(
+        project.conversations.some((item) => item.sessionId === sessionId)
+        || project.plans.some((item) => item.sessionId === sessionId)
+        || project.tasks.some((item) => item.sessionId === sessionId)
+      )) throw new Error("会话已不在该项目中");
+      const next = projects.map((project) => {
+        if (project.id !== id) return project;
         const plans = project.plans.map((plan) => {
           if (plan.sessionId !== sessionId) return plan;
           const nextPlan: PlanCard = { ...plan };
@@ -378,7 +433,19 @@ export const useProjectsStore = create<ProjectsState>((set, get) => {
           plans,
           tasks,
         };
-      }),
+      });
+      await commitMembership(next);
+    },
+    setProjectContextPending: (id, sessionId, pending) => {
+      const project = get().projects.find((item) => item.id === id);
+      if (!project?.conversations.some((item) => item.sessionId === sessionId && !!item.pendingProjectContext !== pending)) return;
+      patch(id, (item) => ({
+        ...item,
+        conversations: item.conversations.map((conversation) => conversation.sessionId === sessionId
+          ? { ...conversation, pendingProjectContext: pending }
+          : conversation),
+      }));
+    },
     updateConversationTitle: (id, sessionId, title) =>
       patch(id, (p) => ({
         ...p,

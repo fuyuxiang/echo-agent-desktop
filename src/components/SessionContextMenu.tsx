@@ -58,6 +58,7 @@ export interface SessionContextMenuProps {
   onDelete?: (sessionId: string) => void;
   onPin?: (sessionId: string, pinned: boolean) => void | Promise<void>;
   onArchive?: (sessionId: string, archived: boolean) => void | Promise<void>;
+  onMoveToProject?: (sessionId: string) => void;
   /** Removes only this project's reference; the underlying conversation remains. */
   onDetach?: (sessionId: string) => void;
 }
@@ -78,6 +79,7 @@ export function SessionContextMenu({
   onDelete,
   onPin,
   onArchive,
+  onMoveToProject,
   onDetach,
 }: SessionContextMenuProps) {
   const [renaming, setRenaming] = useState(false);
@@ -192,6 +194,12 @@ export function SessionContextMenu({
             <button type="button" role="menuitem" className="context-menu__item" onClick={() => { onDetach(sessionId); onClose(); }}>
               <LinkIcon size="sm" />
               <span>移出项目</span>
+            </button>
+          )}
+          {onMoveToProject && (
+            <button type="button" role="menuitem" className="context-menu__item" onClick={() => { onMoveToProject(sessionId); onClose(); }}>
+              <LinkIcon size="sm" />
+              <span>移入项目…</span>
             </button>
           )}
           {onDelete && (
