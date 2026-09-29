@@ -169,6 +169,10 @@ if ($LASTEXITCODE -ne 0 -or $stagedNodeArch -ne "x64") {
     exit 1
 }
 Log-Ok "Vendored Theia IDE and Node runtime staged"
+Log-Step "Checking Windows IDE terminal lifecycle"
+& $stagedNode (Join-Path $ProjectRoot "scripts\validate-theia-pty.mjs") (Join-Path $ProjectRoot "src-tauri\resources\theia\browser")
+if ($LASTEXITCODE -ne 0) { throw "Theia Windows terminal validation failed" }
+Log-Ok "Windows IDE terminal lifecycle passed"
 
 # ---------------------------------------------------------------------------
 # 5. NSIS tool cache (work around GitHub download timeouts in CN).

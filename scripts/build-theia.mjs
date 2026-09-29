@@ -2,6 +2,7 @@ import { copyFileSync, existsSync, readFileSync, writeFileSync } from "node:fs";
 import { createHash } from "node:crypto";
 import { resolve, join } from "node:path";
 import { spawnSync } from "node:child_process";
+import { patchNodePtyConsoleHelper } from "./patch-theia-node-pty.mjs";
 
 const major = Number(process.versions.node.split(".")[0]);
 if (major !== 22 && major !== 24) {
@@ -32,6 +33,7 @@ if (!existsSync(nodeModules) || installedFingerprint !== installFingerprint) {
   run(["ci"]);
   writeFileSync(installMarker, `${installFingerprint}\n`);
 }
+patchNodePtyConsoleHelper(sourceRoot);
 const plugins = spawnSync(process.execPath, [join(import.meta.dirname, "manage-theia-vsix.mjs"), "stage"], {
   cwd: sourceRoot, env, stdio: "inherit",
 });

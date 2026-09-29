@@ -7,6 +7,7 @@
 - 开发机器使用 Node.js 22 或 24。`pnpm ide:build` 编译 [`vendor/theia-platform/`](../vendor/theia-platform/)，`pnpm ide:stage` 将 Theia 后端、生产依赖和当前平台的 Node.js 放入 Tauri 资源目录。
 - `pnpm tauri dev` 和 `pnpm tauri build` 的前置钩子会运行 `pnpm ide:prepare`；缺少资源、架构变化或源码更新时重新构建和暂存。安装包中的 IDE 使用随包分发的 Node.js，普通用户不需另装。
 - `pnpm ide:build` 会下载固定版本的基础语言扩展，`pnpm ide:stage` 将它们与仓库内的轻量 TOML 语法扩展一起放入安装包。运行时从本地 `plugins/` 加载，语法高亮不依赖用户联网或手动安装扩展。默认覆盖 JavaScript/JSX、TypeScript/TSX、Rust、Python、Java、JSON、YAML、TOML、HTML、CSS、Markdown 和 Shell Script。TOML 扩展只提供语法功能，避免为基础高亮启动额外语言服务。
+- `pnpm ide:build` 和 `pnpm ide:stage` 会给固定版本 `node-pty` 的 Windows ConPTY 清理 helper 加 `windowsHide: true`。暂存缓存和运行时验证会检查补丁；Windows 打包还会实际启动、使用并关闭一个 ConPTY 终端。升级 `node-pty` 时须先复核此补丁，构建会在版本或调用点变化时失败。
 - 如启动失败，先看应用数据目录中的 `theia.log`。开发者可以用 [`smoke-theia.mjs`](../scripts/smoke-theia.mjs) 检查内嵌页面与桥接。
 
 ## 运行与权限边界

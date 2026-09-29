@@ -3,6 +3,7 @@ import { dirname, join, resolve } from "node:path";
 import { spawnSync } from "node:child_process";
 import { latestTheiaSourceMtime } from "./theia-source-mtime.mjs";
 import { ensureTheiaNodeWritable } from "./ensure-theia-node-writable.mjs";
+import { patchNodePtyConsoleHelper } from "./patch-theia-node-pty.mjs";
 
 const projectRoot = resolve(import.meta.dirname, "..");
 const sourceRoot = join(projectRoot, "vendor/theia-platform");
@@ -122,6 +123,7 @@ const install = spawnSync(npm, ["ci", "--omit=dev", "--no-audit", "--no-fund"], 
   stdio: "inherit",
 });
 if (install.status !== 0) throw new Error("Theia runtime dependency staging failed");
+patchNodePtyConsoleHelper(runtimeRoot);
 
 const nodeTarget = process.platform === "win32"
   ? join(resourcesRoot, "node/node.exe")
