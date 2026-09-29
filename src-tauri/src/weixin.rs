@@ -343,11 +343,11 @@ fn decrypt_media(mut bytes: Vec<u8>, raw_key: &str, hex_key: bool) -> Result<Vec
     } else {
         decoded
     };
-    if key.len() != 16 || bytes.is_empty() || bytes.len() % 16 != 0 {
+    if key.len() != 16 || bytes.is_empty() || !bytes.len().is_multiple_of(16) {
         return Err("微信附件加密格式无效".into());
     }
     let cipher = aes::Aes128::new_from_slice(&key).map_err(|_| "微信附件密钥无效")?;
-    for block in bytes.chunks_exact_mut(16) {
+    for block in bytes.as_chunks_mut::<16>().0 {
         cipher.decrypt_block(aes::cipher::generic_array::GenericArray::from_mut_slice(
             block,
         ));
@@ -368,9 +368,9 @@ fn decrypt_media(mut bytes: Vec<u8>, raw_key: &str, hex_key: bool) -> Result<Vec
 #[allow(deprecated)]
 fn encrypt_media(mut bytes: Vec<u8>, key: &[u8; 16]) -> Result<Vec<u8>, String> {
     let padding = 16 - bytes.len() % 16;
-    bytes.extend(std::iter::repeat(padding as u8).take(padding));
+    bytes.extend(std::iter::repeat_n(padding as u8, padding));
     let cipher = aes::Aes128::new_from_slice(key).map_err(|_| "微信附件密钥无效")?;
-    for block in bytes.chunks_exact_mut(16) {
+    for block in bytes.as_chunks_mut::<16>().0 {
         cipher.encrypt_block(aes::cipher::generic_array::GenericArray::from_mut_slice(
             block,
         ));
@@ -1933,8 +1933,7 @@ async fn route_message(
             .and_then(|value| value.trim().parse::<usize>().ok())
             .filter(|page| *page > 0 && *page < 10_000)
     };
-    if attachments.is_empty() && page.is_some() {
-        let page = page.unwrap();
+    if let Some(page) = page.filter(|_| attachments.is_empty()) {
         let total_pages = sessions.len().div_ceil(12).max(1);
         if page > total_pages {
             return Err(format!("只有 {total_pages} 页任务"));
