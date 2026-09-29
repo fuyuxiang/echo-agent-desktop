@@ -52,6 +52,7 @@ mod skills_catalog;
 mod storage;
 mod team_mcp;
 mod theia;
+mod weixin;
 
 use bridge::{FolderTrusts, Permissions, PlanApprovals, Questions};
 use commands::AppState;
@@ -385,6 +386,7 @@ pub fn run() {
             org_mcp::serve(app.handle().clone());
             org::start_background_sync(app.handle().clone());
             personal_knowledge::start_background_index(app.handle().clone());
+            weixin::init(app.handle());
             #[cfg(any(target_os = "macos", target_os = "windows", target_os = "linux"))]
             setup_desktop_lifecycle(app)?;
             Ok(())
@@ -403,7 +405,14 @@ pub fn run() {
         .manage(theia::TheiaServer::default())
         .manage(coding::watcher::WatcherRegistry::default())
         .manage(org::shared_state())
+        .manage(weixin::WeixinState::default())
         .invoke_handler(tauri::generate_handler![
+            weixin::weixin_status,
+            weixin::weixin_qr_start,
+            weixin::weixin_qr_poll,
+            weixin::weixin_set_workspaces,
+            weixin::weixin_handoff,
+            weixin::weixin_disconnect,
             desktop_validation::desktop_validation_ready,
             desktop_preferences::desktop_notification_preview_save,
             notifications::notification_take_pending_opens,

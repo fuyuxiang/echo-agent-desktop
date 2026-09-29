@@ -59,6 +59,7 @@ export interface SessionContextMenuProps {
   onPin?: (sessionId: string, pinned: boolean) => void | Promise<void>;
   onArchive?: (sessionId: string, archived: boolean) => void | Promise<void>;
   onMoveToProject?: (sessionId: string) => void;
+  onWeixin?: (sessionId: string) => void | Promise<void>;
   /** Removes only this project's reference; the underlying conversation remains. */
   onDetach?: (sessionId: string) => void;
 }
@@ -80,6 +81,7 @@ export function SessionContextMenu({
   onPin,
   onArchive,
   onMoveToProject,
+  onWeixin,
   onDetach,
 }: SessionContextMenuProps) {
   const [renaming, setRenaming] = useState(false);
@@ -200,6 +202,12 @@ export function SessionContextMenu({
             <button type="button" role="menuitem" className="context-menu__item" onClick={() => { onMoveToProject(sessionId); onClose(); }}>
               <LinkIcon size="sm" />
               <span>移入项目…</span>
+            </button>
+          )}
+          {onWeixin && !isArchived && (
+            <button type="button" role="menuitem" className="context-menu__item" onClick={() => { void onWeixin(sessionId); onClose(); }}>
+              <LinkIcon size="sm" />
+              <span>在微信继续</span>
             </button>
           )}
           {onDelete && (

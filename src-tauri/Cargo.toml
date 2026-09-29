@@ -90,6 +90,11 @@ chrono = { version = "0.4", default-features = false, features = ["clock", "std"
 # Local avatar/chat-attachment thumbnails (PNG/JPEG/GIF/WebP decode + JPEG encode).
 image = { version = "0.25", default-features = false, features = ["png", "jpeg", "gif", "webp"] }
 base64 = "0.22"
+# Weixin CDN attachments use AES-128-ECB with PKCS#7 padding.
+aes = "0.8"
+hex = "0.4"
+md-5 = "0.11"
+getrandom = "0.3"
 # Open URLs / local paths with the OS default handler (markdown links & paths).
 open = "5"
 # Fetch available models from a provider's /models endpoint (multi-model setup).

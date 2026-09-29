@@ -29,6 +29,7 @@ import {
 import { UsageQuotaPanel } from "./UsageQuotaPanel";
 import { ModelConnectionsPanel } from "./ModelConnectionsPanel";
 import { NotifyChannelsPanel } from "./NotifyChannelsPanel";
+import { WeixinChannelPanel } from "./WeixinChannelPanel";
 import { CloudStoragePanel } from "./CloudStoragePanel";
 import { ArchivedSessionsSettingsPanel } from "./ArchivedSessionsSettingsPanel";
 import { ResourcesPanel } from "./ResourcesPanel";
@@ -50,6 +51,7 @@ import { useSessionsStore } from "@/stores/sessions-store";
 export type SettingsSectionId =
   | "agent-mail"
   | "notify-channels"
+  | "weixin-channel"
   | "general"
   | "agent-settings"
   | "shortcuts"
@@ -76,7 +78,7 @@ interface NavGroup {
 }
 
 const NOTIFICATION_VIEWS: Array<[SettingsSectionId, string]> = [
-  ["agent-mail", "事件收件箱"], ["notify-channels", "通知渠道"],
+  ["agent-mail", "事件收件箱"], ["notify-channels", "通知渠道"], ["weixin-channel", "微信远程对话"],
 ];
 const MEMORY_VIEWS: Array<[SettingsSectionId, string]> = [
   ["memory", "记忆行为"], ["personal-memory", "个人记忆"],
@@ -86,7 +88,7 @@ const DATA_VIEWS: Array<[SettingsSectionId, string]> = [
 ];
 
 function isActiveNavItem(active: SettingsSectionId, item: SettingsSectionId): boolean {
-  if (item === "agent-mail") return active === "agent-mail" || active === "notify-channels";
+  if (item === "agent-mail") return active === "agent-mail" || active === "notify-channels" || active === "weixin-channel";
   if (item === "memory") return active === "memory" || active === "personal-memory";
   if (item === "data") return active === "data" || active === "archived";
   return active === item;
@@ -328,6 +330,17 @@ export function SettingsPanel({
                 <div className="settings-section__body">
                   <NotifyChannelsPanel onToast={onToast} />
                 </div>
+              </div>
+            ) : active === "weixin-channel" ? (
+              <div className="settings-section settings-subview">
+                <SettingsViewTabs label="通知视图" items={NOTIFICATION_VIEWS} active={active} onSelect={setActive} />
+                <header className="settings-section__header">
+                  <div className="settings-section__heading">
+                    <h2 className="settings-section__title">微信远程对话</h2>
+                    <p className="settings-section__desc">绑定微信，随时接续已有任务。</p>
+                  </div>
+                </header>
+                <div className="settings-section__body"><WeixinChannelPanel onToast={onToast} /></div>
               </div>
             ) : active === "cloud-storage" ? (
               <div className="settings-section">

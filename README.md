@@ -153,6 +153,7 @@ name = "My Model"
 | **能力扩展** | MCP stdio/Streamable HTTP/SSE、MCP OAuth、Skills（含 [可执行能力契约](docs/skill-capability-manifest.md)）、Plugins、CLI 连接器、可复用专家与本地能力市场 |
 | **长期上下文** | 项目指令、任务与计划、个人记忆、会话摘要、本地 Markdown/文本/Office 文件的混合检索索引，以及可选组织知识服务 |
 | **定时任务与通知** | 单次或按小时/日/周/月/年周期调度、运行记录、任务级模型与权限、桌面通知、Slack、Discord 与 Webhook |
+| **微信远程对话** | [扫码绑定、继续已有会话、微信内切换任务、确认权限与收发附件](docs/weixin-remote.md)；桌面应用运行时处理指令 |
 | **项目与云存储** | 持久化项目元数据和资产、任务产物归档、本地文件浏览，以及 WebDAV 存储源的浏览、上下传和远程文件管理 |
 | **内容体验** | 文件与图片附件、拖拽、语音输入、GFM、语法高亮、KaTeX、Mermaid 和工具结果预览 |
 

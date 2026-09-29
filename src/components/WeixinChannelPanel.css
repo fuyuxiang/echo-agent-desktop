@@ -1,0 +1,15 @@
+.weixin-channel { display: grid; gap: 16px; max-width: 680px; }
+.weixin-channel__intro p, .weixin-channel__card p { color: var(--echo-text-medium); line-height: 1.55; margin: 7px 0 12px; }
+.weixin-channel__card { border: 1px solid var(--echo-border-default); border-radius: 12px; padding: 18px; }
+.weixin-channel__card h3 { font-size: 15px; margin: 0 0 8px; }
+.weixin-channel__card button, .weixin-channel__code button { border: 0; border-radius: 8px; background: var(--echo-brand); color: white; cursor: pointer; padding: 8px 13px; }
+.weixin-channel__card button:disabled { opacity: .5; cursor: default; }
+.weixin-channel__qr { width: 232px; height: 232px; display: block; margin: 16px 0; border: 1px solid #e6e6e6; }
+.weixin-channel__code { display: flex; gap: 8px; margin: 12px 0; }
+.weixin-channel__code input { min-width: 0; border: 1px solid var(--echo-border-default); border-radius: 8px; padding: 8px; background: var(--echo-bg-input); color: var(--echo-text-strong); }
+.weixin-channel__workspace { display: flex; align-items: center; gap: 9px; padding: 8px 0; }
+.weixin-channel__workspace span { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.weixin-channel__workspace small { margin-left: auto; flex-shrink: 0; opacity: .65; }
+.weixin-channel__commands { display: grid; grid-template-columns: max-content 1fr; gap: 7px 18px; font-size: 13px; }
+.weixin-channel__commands span:nth-child(odd) { font-weight: 600; }
+.weixin-channel__disconnect { justify-self: start; border: 0; background: none; color: #b53b3b; cursor: pointer; padding: 8px 0; }

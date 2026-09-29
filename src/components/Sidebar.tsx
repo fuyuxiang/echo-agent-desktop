@@ -33,6 +33,7 @@ import {
   Code2Icon,
 } from "@/foundation/components/Icon/icons";
 import { SessionContextMenu } from "./SessionContextMenu";
+import { weixinHandoff } from "@/lib/weixin-client";
 import { MoveToProjectDialog } from "./MoveToProjectDialog";
 import { useAppDialog } from "./AppDialog";
 const logoMarkUrl = "/app-icon.png";
@@ -1195,6 +1196,10 @@ export function Sidebar({
             ? (sessionId) => detachFromProject(contextMenu.projectId!, sessionId)
             : undefined}
           onMoveToProject={!contextMenu.projectId ? openMoveDialog : undefined}
+          onWeixin={async (sessionId) => {
+            try { onToast?.(await weixinHandoff(sessionId)); }
+            catch (error) { onToast?.(`微信交接失败：${String(error).replace(/^Error:\s*/, "")}`); }
+          }}
         />
       )}
       {moveDialog && (

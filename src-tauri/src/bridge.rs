@@ -83,7 +83,7 @@ struct PendingFolderTrust {
     response_tx: oneshot::Sender<FolderTrustOutcome>,
 }
 
-#[derive(Clone, Debug, Serialize)]
+#[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct QuestionFrontend {
     pub request_id: String,
@@ -161,7 +161,7 @@ pub struct QuestionAnnotation {
     pub notes: Option<String>,
 }
 
-#[derive(Clone, Debug, Serialize)]
+#[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct PermissionFrontend {
     pub request_id: String,
@@ -180,7 +180,7 @@ pub struct PermissionClosedFrontend {
     pub session_id: String,
 }
 
-#[derive(Clone, Debug, Serialize)]
+#[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct PermissionOptionFrontend {
     pub option_id: String,
@@ -193,7 +193,7 @@ pub enum PermissionOutcome {
     Cancelled,
 }
 
-#[derive(Clone, Debug, Serialize)]
+#[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct PlanApprovalFrontend {
     pub request_id: String,
@@ -910,7 +910,7 @@ pub struct UpdateEvent {
 }
 
 /// Payload emitted on `agent://complete`.
-#[derive(Clone, Debug, Serialize)]
+#[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct CompleteEvent {
     pub session_id: String,

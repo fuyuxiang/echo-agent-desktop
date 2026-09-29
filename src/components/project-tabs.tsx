@@ -12,6 +12,7 @@ import { filesystemPickFiles, openLocalPath, projectAssetMakeDir, projectAssetRe
 import { formatFileSize } from "@/lib/file-utils";
 import { useAppDialog } from "./AppDialog";
 import { SessionContextMenu } from "./SessionContextMenu";
+import { weixinHandoff } from "@/lib/weixin-client";
 import type { ModelOption } from "./ModelSelector";
 import { MoreDotsIcon } from "@/foundation/components/Icon/icons";
 import type { SessionStatus } from "@/lib/types";
@@ -573,6 +574,10 @@ export function ActivityTab({
           onArchive={onArchiveSession ? archiveSession : undefined}
           onDetach={detachFromProject}
           onDelete={onDeleteSession ? requestDelete : undefined}
+          onWeixin={async (sessionId) => {
+            try { onToast?.(await weixinHandoff(sessionId)); }
+            catch (error) { onToast?.(`微信交接失败：${String(error).replace(/^Error:\s*/, "")}`); }
+          }}
         />
       )}
       {dialog}

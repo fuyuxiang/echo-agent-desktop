@@ -25,6 +25,7 @@ import {
   LoadingIcon,
   MoreDotsIcon,
   PinFilledIcon,
+  LinkIcon,
 } from "@/foundation/components/Icon/icons";
 import { useSessionStore } from "@/stores/session-store";
 import {
@@ -34,6 +35,7 @@ import {
 } from "@/lib/agent-client";
 import { buildSessionMarkdown, sanitizeFilename } from "@/lib/export-markdown";
 import type { SessionSummary } from "@/lib/types";
+import { weixinHandoff } from "@/lib/weixin-client";
 
 interface TopbarActionsProps {
   sessionId: string;
@@ -245,6 +247,14 @@ export function TopbarActions({
     }
   }, [sessionId, onArchived, onToast, onSessionsChanged, closeMenu, restoreTriggerFocus]);
 
+  const handleWeixin = useCallback(async () => {
+    closeMenu();
+    setBusy(true);
+    try { onToast?.(await weixinHandoff(sessionId)); }
+    catch (error) { onToast?.(`微信交接失败：${String(error).replace(/^Error:\s*/, "")}`); }
+    finally { setBusy(false); restoreTriggerFocus(); }
+  }, [sessionId, onToast, closeMenu, restoreTriggerFocus]);
+
   const handleMenuKeyDown = (event: ReactKeyboardEvent<HTMLDivElement>) => {
     if (event.altKey || event.ctrlKey || event.metaKey) return;
     if (event.key === "Tab") {
@@ -327,6 +337,10 @@ export function TopbarActions({
           <button type="button" role="menuitem" className="topbar-actions__item" onClick={handleExport}>
             <FileTextIcon size="sm" />
             <span>导出为 Markdown</span>
+          </button>
+          <button type="button" role="menuitem" className="topbar-actions__item" onClick={() => void handleWeixin()}>
+            <LinkIcon size="sm" />
+            <span>在微信继续</span>
           </button>
           <button type="button" role="menuitem" className="topbar-actions__item" onClick={handleTogglePin}>
             <PinFilledIcon size="sm" />

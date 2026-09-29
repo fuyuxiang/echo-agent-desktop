@@ -28,7 +28,7 @@ try {
   const errors = [];
   let layouts = 0;
   page.on("pageerror", error => errors.push(error.message));
-  const surfaces = ["memory", "security", "cloud-storage", "notify-channels", "capabilities", "coding", "organization", "conversation", "meeting"];
+  const surfaces = ["memory", "security", "cloud-storage", "notify-channels", "weixin-connected", "weixin-unconnected", "capabilities", "coding", "organization", "conversation", "meeting"];
   for (const [width, height, theme] of [[1440, 900, "light"], [1024, 768, "dark"], [768, 720, "light"]]) {
     await page.setViewportSize({ width, height });
     for (const surface of surfaces) {
@@ -122,6 +122,14 @@ try {
         await page.locator(".permission-rule-builder").scrollIntoViewIfNeeded();
         const fields = await page.locator(".permission-rule-builder .form-control").evaluateAll(elements => elements.map(element => element.getBoundingClientRect().height));
         assert.ok(Math.max(...fields) - Math.min(...fields) < 1, "permission controls have inconsistent heights");
+      }
+      if (surface === "weixin-connected") {
+        await page.getByText("正在接收微信消息").waitFor();
+        assert.equal(await page.getByRole("checkbox").count(), 2);
+      }
+      if (surface === "weixin-unconnected") {
+        await page.getByRole("button", { name: "获取绑定二维码" }).click();
+        await page.getByRole("img", { name: "微信绑定二维码" }).waitFor();
       }
       if (surface === "capabilities") {
         assert.equal(await page.getByRole("navigation", { name: "扩展管理" }).count(), 1);

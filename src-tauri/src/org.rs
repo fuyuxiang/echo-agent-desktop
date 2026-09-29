@@ -765,12 +765,12 @@ fn legacy_keychain_cli_delete(account: &str) -> Result<(), String> {
 }
 
 #[cfg(target_os = "macos")]
-fn credential_write(account: &str, secret: &str) -> Result<(), String> {
+pub(crate) fn credential_write(account: &str, secret: &str) -> Result<(), String> {
     keychain_write(CREDENTIAL_SERVICE, account, secret)
 }
 
 #[cfg(target_os = "macos")]
-fn credential_read(account: &str) -> Result<Option<String>, String> {
+pub(crate) fn credential_read(account: &str) -> Result<Option<String>, String> {
     let (bytes, migrate) = match keychain_read(CREDENTIAL_SERVICE, account)? {
         Some(bytes) => (Some(bytes), false),
         None => match keychain_read(LEGACY_CREDENTIAL_SERVICE, account) {
@@ -803,7 +803,7 @@ fn credential_read(account: &str) -> Result<Option<String>, String> {
 }
 
 #[cfg(target_os = "macos")]
-fn credential_delete(account: &str) -> Result<(), String> {
+pub(crate) fn credential_delete(account: &str) -> Result<(), String> {
     let mut errors = Vec::new();
     match delete_generic_password(CREDENTIAL_SERVICE, account) {
         Ok(()) => {}
@@ -934,7 +934,7 @@ fn dpapi_unprotect(ciphertext: &[u8]) -> Result<Vec<u8>, String> {
 }
 
 #[cfg(target_os = "windows")]
-fn credential_write(account: &str, secret: &str) -> Result<(), String> {
+pub(crate) fn credential_write(account: &str, secret: &str) -> Result<(), String> {
     if secret.len() > MAX_TOKEN_BYTES {
         return Err("organization credential exceeds the safety limit".into());
     }
@@ -945,7 +945,7 @@ fn credential_write(account: &str, secret: &str) -> Result<(), String> {
 }
 
 #[cfg(target_os = "windows")]
-fn credential_read(account: &str) -> Result<Option<String>, String> {
+pub(crate) fn credential_read(account: &str) -> Result<Option<String>, String> {
     let path = crate::paths::echo_agent_home_dir().join(format!(".{account}.dpapi"));
     if !path.exists() {
         return Ok(None);
@@ -961,7 +961,7 @@ fn credential_read(account: &str) -> Result<Option<String>, String> {
 }
 
 #[cfg(target_os = "windows")]
-fn credential_delete(account: &str) -> Result<(), String> {
+pub(crate) fn credential_delete(account: &str) -> Result<(), String> {
     let path = crate::paths::echo_agent_home_dir().join(format!(".{account}.dpapi"));
     match std::fs::remove_file(path) {
         Ok(()) => Ok(()),
@@ -995,7 +995,7 @@ fn read_fallback_credentials() -> Result<HashMap<String, String>, String> {
 }
 
 #[cfg(not(any(target_os = "macos", target_os = "windows")))]
-fn credential_write(account: &str, secret: &str) -> Result<(), String> {
+pub(crate) fn credential_write(account: &str, secret: &str) -> Result<(), String> {
     if secret.len() > MAX_TOKEN_BYTES {
         return Err("organization credential exceeds the safety limit".into());
     }
@@ -1011,7 +1011,7 @@ fn credential_write(account: &str, secret: &str) -> Result<(), String> {
 }
 
 #[cfg(not(any(target_os = "macos", target_os = "windows")))]
-fn credential_read(account: &str) -> Result<Option<String>, String> {
+pub(crate) fn credential_read(account: &str) -> Result<Option<String>, String> {
     let _guard = fallback_credential_lock()
         .lock()
         .map_err(|_| "organization credential lock is poisoned".to_string())?;
@@ -1019,7 +1019,7 @@ fn credential_read(account: &str) -> Result<Option<String>, String> {
 }
 
 #[cfg(not(any(target_os = "macos", target_os = "windows")))]
-fn credential_delete(account: &str) -> Result<(), String> {
+pub(crate) fn credential_delete(account: &str) -> Result<(), String> {
     let _guard = fallback_credential_lock()
         .lock()
         .map_err(|_| "organization credential lock is poisoned".to_string())?;
