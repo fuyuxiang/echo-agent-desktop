@@ -493,20 +493,26 @@ export function ChatView({
     sessionId,
   });
   type RuntimePanelKey = "changes" | "subagents" | "teams";
-  const runtimeScrollRestore = useRef<Partial<Record<RuntimePanelKey, { top: number; following: boolean }>>>({});
-  const pendingRuntimeScroll = useRef<{ key: RuntimePanelKey; opening: boolean } | null>(null);
+  const runtimeScrollRestore = useRef<Partial<Record<RuntimePanelKey, { sessionId: string | null; top: number; following: boolean }>>>({});
+  const pendingRuntimeScroll = useRef<{ sessionId: string | null; key: RuntimePanelKey; opening: boolean } | null>(null);
+  useLayoutEffect(() => {
+    // ChatView stays mounted when selecting another conversation. Its old
+    // panel positions must never override the new conversation's follow state.
+    runtimeScrollRestore.current = {};
+    pendingRuntimeScroll.current = null;
+  }, [sessionId]);
   const toggleRuntimePanel = (key: RuntimePanelKey, open: boolean, setOpen: (value: boolean) => void) => {
     if (!open) {
-      runtimeScrollRestore.current[key] = { top: scrollRef.current?.scrollTop ?? 0, following };
+      runtimeScrollRestore.current[key] = { sessionId, top: scrollRef.current?.scrollTop ?? 0, following };
       pauseFollowing();
     }
-    pendingRuntimeScroll.current = { key, opening: !open };
+    pendingRuntimeScroll.current = { sessionId, key, opening: !open };
     setOpen(!open);
   };
   useLayoutEffect(() => {
     const pending = pendingRuntimeScroll.current;
     const viewport = scrollRef.current;
-    if (!pending || !viewport) return;
+    if (!pending || pending.sessionId !== sessionId || !viewport) return;
     pendingRuntimeScroll.current = null;
     if (pending.opening) {
       const anchor = viewport.querySelector<HTMLElement>(`[data-runtime-panel-anchor="${pending.key}"]`);
@@ -514,10 +520,19 @@ export function ChatView({
       return;
     }
     const restore = runtimeScrollRestore.current[pending.key];
-    if (!restore) return;
+    delete runtimeScrollRestore.current[pending.key];
+    if (!restore || restore.sessionId !== sessionId) {
+      // An inherited/automatically opened panel has no reading position to
+      // restore. Keep following instead of treating its removal as a scroll up.
+      if (following) scrollToBottom();
+      return;
+    }
     if (restore.following) scrollToBottom();
-    else viewport.scrollTop = restore.top;
-  }, [fileChangesOpen, subagentsOpen, teamsOpen, scrollRef, scrollToBottom]);
+    else {
+      pauseFollowing();
+      viewport.scrollTop = restore.top;
+    }
+  }, [sessionId, fileChangesOpen, subagentsOpen, teamsOpen, following, pauseFollowing, scrollRef, scrollToBottom]);
 
   const jumpToQuestion = useCallback((messageId: string) => {
     const row = Array.from(scrollRef.current?.querySelectorAll<HTMLElement>("[data-msg-id]") ?? [])
@@ -752,6 +767,7 @@ export function ChatView({
                   (fileChangesOpen ? " chatview__artifacts-toggle--active" : "")
                 }
                 onClick={() => toggleRuntimePanel("changes", fileChangesOpen, setFileChangesOpen)}
+                aria-expanded={fileChangesOpen}
                 title="本会话文件变更"
               >
                 变更
@@ -766,6 +782,7 @@ export function ChatView({
                   (subagentsOpen ? " chatview__artifacts-toggle--active" : "")
                 }
                 onClick={() => toggleRuntimePanel("subagents", subagentsOpen, setSubagentsOpen)}
+                aria-expanded={subagentsOpen}
                 title="子代理运行时"
               >
                 子代理
@@ -780,6 +797,7 @@ export function ChatView({
                   (teamsOpen ? " chatview__artifacts-toggle--active" : "")
                 }
                 onClick={() => toggleRuntimePanel("teams", teamsOpen, setTeamsOpen)}
+                aria-expanded={teamsOpen}
                 title="团队状态"
               >
                 团队

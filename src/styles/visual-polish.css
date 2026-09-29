@@ -996,6 +996,10 @@ button,
   color: var(--echo-text-strong);
 }
 
+.sidebar__conv {
+  min-height: 44px;
+}
+
 .sidebar__conv--active {
   background: var(--ui-brand-soft);
   color: var(--echo-text-strong);

@@ -8029,7 +8029,8 @@ button.diff__path {
   /* EchoAgent CDP conversation-agent-card: gap=0, w=240px */
   gap: 0;
   width: 100%;
-  height: 44px;
+  min-height: 44px;
+  height: auto;
   /* EchoAgent: no leading icon — text aligns with the 任务/空间 section label text */
   padding: 4px 12px;
   box-sizing: border-box;
@@ -8047,6 +8048,23 @@ button.diff__path {
 .sidebar__conv--active {
   background: var(--echo-palette-gray-5);
 }
+.sidebar__conv-select {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto auto;
+  grid-template-rows: auto auto;
+  row-gap: 2px;
+  align-items: center;
+  flex: 1;
+  min-width: 0;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  line-height: 1.4;
+  text-align: left;
+  cursor: pointer;
+}
 .sidebar__conv-title {
   grid-column: 1 / -1;
   grid-row: 1;
@@ -8054,23 +8072,6 @@ button.diff__path {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
-}
-/* Hover action group (更多/归档/置顶) — replaces the time/pin tail on hover,
- * mirroring EchoAgent's conversation-agent-card hover toolbar. */
-.sidebar__conv-actions {
-  display: none;
-  align-items: center;
-  gap: 2px;
-  flex: none;
-  margin-left: 6px;
-}
-.sidebar__conv:hover .sidebar__conv-actions {
-  display: inline-flex;
-}
-.sidebar__conv:hover .sidebar__conv-time,
-.sidebar__conv:hover .sidebar__conv-pin,
-.sidebar__conv:hover .sidebar__conv-status {
-  display: none;
 }
 .sidebar__conv-action {
   display: inline-flex;
@@ -8667,8 +8668,15 @@ button.diff__path {
   color: var(--echo-text-tertiary);
   font-size: 0.625rem;
   white-space: nowrap;
+  min-width: 0;
+  overflow: hidden;
+}
+.sidebar__conv-status-label {
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 .sidebar__conv-status-dot {
+  flex: none;
   width: 6px;
   height: 6px;
   border-radius: 50%;

@@ -20,6 +20,14 @@ export interface AppUpdateProgress {
   total?: number | null;
 }
 
+export type AppUpdateErrorStage = "check" | "download" | "install";
+
+/** Native install errors include a stage even if progress events arrive late. */
+export function appUpdateErrorStage(error: unknown, fallback: AppUpdateErrorStage): AppUpdateErrorStage {
+  const stage = error && typeof error === "object" && "stage" in error ? error.stage : undefined;
+  return stage === "check" || stage === "download" || stage === "install" ? stage : fallback;
+}
+
 export function appUpdaterAvailable(): boolean {
   return isTauri();
 }
@@ -50,7 +58,8 @@ export async function installAppUpdate(
 }
 
 export function friendlyUpdateError(error: unknown): string {
-  const raw = error instanceof Error ? error.message : String(error);
+  const raw = error && typeof error === "object" && "message" in error && typeof error.message === "string"
+    ? error.message : String(error);
   return raw
     .replace(/^Error:\s*/i, "")
     .replace(/^Command app_update_(?:check|install) not found$/i, "当前安装包不支持在线更新");

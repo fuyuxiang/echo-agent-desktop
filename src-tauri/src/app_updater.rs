@@ -5,13 +5,7 @@
 //! default JavaScript plugin commands so every request uses the organization
 //! CA bundled with the application.
 
-use std::{
-    sync::{
-        atomic::{AtomicU64, Ordering},
-        Arc,
-    },
-    time::Duration,
-};
+use std::time::Duration;
 
 use serde::Serialize;
 use tauri::{AppHandle, Emitter};
@@ -44,6 +38,33 @@ struct AppUpdateProgress {
     event: &'static str,
     downloaded: u64,
     total: Option<u64>,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "lowercase")]
+pub enum AppUpdateErrorStage {
+    Check,
+    Download,
+    Install,
+}
+
+#[derive(Debug, Serialize)]
+pub struct AppUpdateInstallError {
+    stage: AppUpdateErrorStage,
+    message: String,
+}
+
+impl AppUpdateInstallError {
+    fn new(stage: AppUpdateErrorStage, message: impl Into<String>) -> Self {
+        Self {
+            stage,
+            message: message.into(),
+        }
+    }
+
+    fn check(message: impl Into<String>) -> Self {
+        Self::new(AppUpdateErrorStage::Check, message)
+    }
 }
 
 fn build_updater(app: &AppHandle) -> Result<Updater, String> {
@@ -103,49 +124,54 @@ pub async fn app_update_check(app: AppHandle) -> Result<AppUpdateCheck, String> 
 /// different release than the one the user accepted. The official updater then
 /// downloads, verifies the minisign signature, installs, and restarts.
 #[tauri::command]
-pub async fn app_update_install(app: AppHandle, expected_version: String) -> Result<(), String> {
-    let updater = build_updater(&app)?;
+pub async fn app_update_install(
+    app: AppHandle,
+    expected_version: String,
+) -> Result<(), AppUpdateInstallError> {
+    let updater = build_updater(&app).map_err(AppUpdateInstallError::check)?;
     let update = updater
         .check()
         .await
-        .map_err(|error| format!("安装前检查更新失败：{error}"))?
-        .ok_or_else(|| "更新已撤回或当前版本已经是最新版".to_string())?;
+        .map_err(|error| AppUpdateInstallError::check(format!("安装前检查更新失败：{error}")))?
+        .ok_or_else(|| AppUpdateInstallError::check("更新已撤回或当前版本已经是最新版"))?;
 
     if update.version != expected_version {
-        return Err(format!(
+        return Err(AppUpdateInstallError::check(format!(
             "服务器版本已从 {expected_version} 变更为 {}，请重新确认更新",
             update.version
-        ));
+        )));
     }
 
-    let downloaded = Arc::new(AtomicU64::new(0));
-    let progress_app = app.clone();
-    let progress_downloaded = downloaded.clone();
-    let finished_app = app.clone();
-    let finished_downloaded = downloaded.clone();
+    let mut downloaded = 0;
 
     emit_progress(&app, "started", 0, None);
-    update
-        .download_and_install(
-            move |chunk_length, content_length| {
-                let total_downloaded = progress_downloaded
-                    .fetch_add(chunk_length as u64, Ordering::Relaxed)
-                    + chunk_length as u64;
-                emit_progress(&progress_app, "progress", total_downloaded, content_length);
+    let bytes = update
+        .download(
+            |chunk_length, content_length| {
+                downloaded += chunk_length as u64;
+                emit_progress(&app, "progress", downloaded, content_length);
             },
-            move || {
-                emit_progress(
-                    &finished_app,
-                    "downloaded",
-                    finished_downloaded.load(Ordering::Relaxed),
-                    None,
-                );
-            },
+            || {},
         )
         .await
-        .map_err(|error| format!("更新下载、签名校验或安装失败：{error}"))?;
+        .map_err(|error| {
+            AppUpdateInstallError::new(
+                AppUpdateErrorStage::Download,
+                format!("更新下载或签名校验失败：{error}"),
+            )
+        })?;
 
-    emit_progress(&app, "installed", downloaded.load(Ordering::Relaxed), None);
+    // `download` verifies the signature before returning. Publish the install
+    // phase only after that succeeds, and return authoritative error stages.
+    emit_progress(&app, "downloaded", downloaded, None);
+    update.install(bytes).map_err(|error| {
+        AppUpdateInstallError::new(
+            AppUpdateErrorStage::Install,
+            format!("更新安装失败：{error}"),
+        )
+    })?;
+
+    emit_progress(&app, "installed", downloaded, None);
 
     // On Windows the updater exits after starting the installer and never
     // reaches this line. macOS/Linux replace the bundle in-place and need an

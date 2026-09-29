@@ -135,6 +135,24 @@ describe("useStickToBottom", () => {
     expect(scroller.scrollTop).toBe(1_000);
   });
 
+  it("keeps following when reflow clamps scrolling to a smaller bottom before ResizeObserver", () => {
+    const { getByTestId } = render(<Harness version={1} />);
+    const scroller = getByTestId("scroll");
+    setScrollMetrics(scroller, { scrollHeight: 1600, clientHeight: 400, scrollTop: 1200 });
+    fireEvent.click(getByTestId("resume"));
+    act(flushAnimationFrames);
+    setScrollMetrics(scroller, { scrollHeight: 1000, clientHeight: 400, scrollTop: 600 });
+    fireEvent.scroll(scroller);
+    expect(getByTestId("following")).toHaveTextContent("true");
+    Object.defineProperty(scroller, "scrollHeight", { configurable: true, value: 1300 });
+    act(() => resizeObservers[0].trigger());
+    expect(scroller.scrollTop).toBe(900);
+    // A real one-pixel upward scrollbar move must still stop following.
+    scroller.scrollTop = 899;
+    fireEvent.scroll(scroller);
+    expect(getByTestId("following")).toHaveTextContent("false");
+  });
+
   it("tracks viewport changes caused by a resizing composer", () => {
     const { getByTestId } = render(<Harness version={1} />);
     const scroller = getByTestId("scroll");

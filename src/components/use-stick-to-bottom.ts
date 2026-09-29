@@ -65,6 +65,7 @@ export function useStickToBottom({
   const [following, setFollowing] = useState(true);
   const frameRef = useRef<number | null>(null);
   const lastScrollTopRef = useRef(0);
+  const lastScrollRangeRef = useRef(0);
   const touchYRef = useRef<number | null>(null);
   const previousSessionRef = useRef(sessionId);
   const streamingRef = useRef(streaming);
@@ -102,6 +103,7 @@ export function useStickToBottom({
         element.scrollHeight - element.clientHeight,
       );
       lastScrollTopRef.current = element.scrollTop;
+      lastScrollRangeRef.current = Math.max(0, element.scrollHeight - element.clientHeight);
       cancelScheduledAlignment();
       frameRef.current = window.requestAnimationFrame(() => {
         frameRef.current = null;
@@ -111,6 +113,7 @@ export function useStickToBottom({
           element.scrollHeight - element.clientHeight,
         );
         lastScrollTopRef.current = element.scrollTop;
+        lastScrollRangeRef.current = Math.max(0, element.scrollHeight - element.clientHeight);
       });
     },
     [cancelScheduledAlignment, updateFollowing],
@@ -136,18 +139,27 @@ export function useStickToBottom({
     if (!scrollElement || !contentElement) return;
 
     lastScrollTopRef.current = scrollElement.scrollTop;
+    lastScrollRangeRef.current = Math.max(0, scrollElement.scrollHeight - scrollElement.clientHeight);
 
     const handleScroll = () => {
       const nextScrollTop = scrollElement.scrollTop;
+      const scrollRange = Math.max(0, scrollElement.scrollHeight - scrollElement.clientHeight);
+      // Reflow can shrink the scroll range and clamp the viewport to its new
+      // bottom before ResizeObserver runs. That is not a request to stop
+      // following. Wheel/touch intent still pauses immediately, even here.
+      const clampedToBottom = followRef.current
+        && scrollRange < lastScrollRangeRef.current
+        && nextScrollTop >= scrollRange - 0.5;
       // A decrease is an unambiguous attempt to inspect earlier content. Stop
       // following immediately, including for tiny scrollbar/trackpad moves.
-      if (nextScrollTop < lastScrollTopRef.current - 0.5) {
+      if (nextScrollTop < lastScrollTopRef.current - 0.5 && !clampedToBottom) {
         pauseFollowing();
       } else if (isNearScrollBottom(scrollElement, threshold)) {
         // Following resumes naturally only after the user reaches the bottom.
         updateFollowing(true);
       }
       lastScrollTopRef.current = nextScrollTop;
+      lastScrollRangeRef.current = scrollRange;
     };
     const handleWheel = (event: WheelEvent) => {
       if (event.deltaY < 0 && scrollElement.scrollTop > 0) pauseFollowing();

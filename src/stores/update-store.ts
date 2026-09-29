@@ -3,7 +3,9 @@ import {
   checkAppUpdate,
   installAppUpdate,
   friendlyUpdateError,
+  appUpdateErrorStage,
   type AppUpdateInfo,
+  type AppUpdateErrorStage,
 } from "@/lib/app-updater";
 
 export type UpdateStatus =
@@ -14,7 +16,7 @@ export type UpdateStatus =
   | "downloading"
   | "installing"
   | "error";
-export type UpdateErrorStage = "check" | "download" | "install";
+export type UpdateErrorStage = AppUpdateErrorStage;
 
 interface UpdateStore {
   status: UpdateStatus;
@@ -68,6 +70,7 @@ export const useUpdateStore = create<UpdateStore>((set, get) => ({
 
   install: async () => {
     if (installInFlight) return installInFlight;
+    if (checkInFlight) return checkInFlight;
     const update = get().update;
     if (!update) {
       set({ status: "error", error: "没有可安装的更新，请重新检查", errorStage: "check" });
@@ -75,13 +78,16 @@ export const useUpdateStore = create<UpdateStore>((set, get) => ({
     }
 
     installInFlight = (async () => {
-      set({ status: "downloading", downloaded: 0, total: undefined, error: undefined, errorStage: undefined });
+      let stage: UpdateErrorStage = "check";
+      set({ status: "checking", downloaded: 0, total: undefined, error: undefined, errorStage: undefined });
       try {
         await installAppUpdate(update.version, (progress) => {
           if (progress.event === "downloaded" || progress.event === "installed") {
+            stage = "install";
             set({ status: "installing", downloaded: progress.downloaded });
             return;
           }
+          stage = "download";
           set({
             status: "downloading",
             downloaded: progress.downloaded,
@@ -89,7 +95,7 @@ export const useUpdateStore = create<UpdateStore>((set, get) => ({
           });
         });
       } catch (error) {
-        set({ status: "error", error: friendlyUpdateError(error), errorStage: get().status === "installing" ? "install" : "download" });
+        set({ status: "error", error: friendlyUpdateError(error), errorStage: appUpdateErrorStage(error, stage) });
       } finally {
         installInFlight = null;
       }
@@ -99,7 +105,7 @@ export const useUpdateStore = create<UpdateStore>((set, get) => ({
 
   resetResult: () => {
     const status = get().status;
-    if (status === "downloading" || status === "installing") return;
+    if (status === "checking" || status === "downloading" || status === "installing") return;
     set({ status: "idle", error: undefined, errorStage: undefined });
   },
 }));

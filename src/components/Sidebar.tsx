@@ -83,7 +83,7 @@ function SessionStatusBadge({ status }: { status?: SessionStatus }) {
   return (
     <span className={`sidebar__conv-status sidebar__conv-status--${meta.className}`}>
       <span className="sidebar__conv-status-dot" aria-hidden="true" />
-      {meta.label}
+      <span className="sidebar__conv-status-label">{meta.label}</span>
     </span>
   );
 }
@@ -808,22 +808,7 @@ export function Sidebar({
         onClick={() => onSelect(s.sessionId, s.cwd)}
         title={s.title}
         aria-current={s.sessionId === currentSessionId ? "page" : undefined}
-        style={{
-          display: "grid",
-          gridTemplateColumns: "minmax(0, 1fr) auto auto",
-          gridTemplateRows: "minmax(0, 1fr) auto",
-          alignItems: "center",
-          flex: 1,
-          minWidth: 0,
-          height: "100%",
-          padding: 0,
-          border: 0,
-          background: "transparent",
-          color: "inherit",
-          font: "inherit",
-          textAlign: "left",
-          cursor: "pointer",
-        }}
+        className="sidebar__conv-select"
       >
         <span className="sidebar__conv-title">{s.title || "未命名会话"}</span>
         {s.pinned && <PinFilledIcon size="sm" className="sidebar__conv-pin" />}

@@ -77,7 +77,7 @@ vi.mock("@/lib/agent-client", async () => {
     "agentCancel", "agentLoadSession", "agentListAllSessions", "agentListSessions", "agentListWorkspaces",
     "agentRenameSession", "agentSetModel", "agentSetSessionExpert", "agentAuthStatus",
     "providersList", "flattenModels", "notificationAppend", "subscribeAgentEvents",
-    "commandsList", "promptHistory", "tasksList", "taskKill", "permissionList",
+    "commandsList", "promptHistory", "tasksList", "taskKill", "teamSnapshot", "permissionList",
     "permissionSave", "permissionModeGet", "permissionModeSet", "memoryList",
     "memoryGet", "memorySave", "memoryAppend", "memoryDelete", "memoryClearSessionSummaries", "memoryRewrite", "memoryFlush", "memoryDream",
     "memoryConfigGet", "memoryConfigSave",
@@ -192,6 +192,45 @@ describe("ChatView pause/yield/resume 闭环", () => {
     for (const label of ["查找", "变更", "子代理", "团队", "浏览器", "分享"]) {
       expect(toolbar).toContainElement(screen.getByRole("button", { name: label }));
     }
+  });
+
+  it.each(["变更", "团队"])("跨会话关闭%s面板不会恢复旧会话的位置或停止跟随", (label) => {
+    const { container, rerender } = renderChat();
+    const viewport = container.querySelector<HTMLElement>(".chatview__scroll")!;
+    Object.defineProperty(viewport, "scrollHeight", { configurable: true, value: 2000 });
+    Object.defineProperty(viewport, "clientHeight", { configurable: true, value: 400 });
+    // User reads an older message in session A before opening the panel.
+    viewport.scrollTop = 600;
+    fireEvent.wheel(viewport, { deltaY: -1 });
+    fireEvent.scroll(viewport);
+    fireEvent.click(screen.getByRole("button", { name: label }));
+    setStore({ sessionId: "s2", messages: [...storeState.messages] });
+    rerender(<ThemeProvider><ChatView {...baseProps} /></ThemeProvider>);
+    expect(viewport.scrollTop).toBe(1600);
+    fireEvent.click(screen.getByRole("button", { name: label }));
+    fireEvent.scroll(viewport);
+    expect(viewport.scrollTop).toBe(1600);
+    expect(screen.queryByRole("button", { name: "回到最新消息并恢复自动跟随" })).toBeNull();
+    Object.defineProperty(viewport, "scrollHeight", { configurable: true, value: 2200 });
+    setStore({ messages: [...storeState.messages], streaming: true });
+    rerender(<ThemeProvider><ChatView {...baseProps} /></ThemeProvider>);
+    expect(viewport.scrollTop).toBe(1800);
+  });
+
+  it("在同一会话关闭面板会恢复历史阅读位置", () => {
+    const { container } = renderChat();
+    const viewport = container.querySelector<HTMLElement>(".chatview__scroll")!;
+    Object.defineProperty(viewport, "scrollHeight", { configurable: true, value: 2000 });
+    Object.defineProperty(viewport, "clientHeight", { configurable: true, value: 400 });
+    viewport.scrollTop = 600;
+    fireEvent.wheel(viewport, { deltaY: -1 });
+    fireEvent.scroll(viewport);
+    fireEvent.click(screen.getByRole("button", { name: "变更" }));
+    viewport.scrollTop = 0;
+    fireEvent.scroll(viewport);
+    fireEvent.click(screen.getByRole("button", { name: "变更" }));
+    expect(viewport.scrollTop).toBe(600);
+    expect(screen.getByRole("button", { name: "回到最新消息并恢复自动跟随" })).toBeInTheDocument();
   });
 
   it("从子代理返回后恢复展开条目和原阅读位置", async () => {

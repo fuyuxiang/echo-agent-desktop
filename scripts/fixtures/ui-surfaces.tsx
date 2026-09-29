@@ -11,9 +11,12 @@ import { TaskSwitcher } from "../../src/features/coding/shell/TaskSwitcher";
 import { OrganizationMemoryPanel } from "../../src/components/OrganizationMemoryPanel";
 import { ChatView } from "../../src/components/ChatView";
 import { SecondarySidebar } from "../../src/components/SecondarySidebar";
+import { Sidebar } from "../../src/components/Sidebar";
+import { TasksPanel } from "../../src/components/TasksPanel";
 import { MeetingMinutesPanel } from "../../src/components/MeetingMinutesPanel";
 import { PermissionPicker } from "../../src/components/PermissionPicker";
 import { useSessionStore } from "../../src/stores/session-store";
+import { useSessionsStore } from "../../src/stores/sessions-store";
 import "../../src/styles/global.css";
 import "../../src/styles/app.css";
 import "../../src/styles/automation-echo.css";
@@ -40,7 +43,7 @@ const orgDocuments = [
   { id: "review-xlsx", title: "指标体系模型设计模板.xlsx", sourceType: "xlsx", status: "ready", byteSize: 379494, scopeId: "team", scopeKind: "team", scopeName: "产品研发团队", ownerId: "another-user", chunkCount: 1899, tags: [], updatedAt: 1 },
   { id: "review-pptx", title: "指标体系构建方法论.pptx", sourceType: "pptx", status: "ready", byteSize: 1572864, scopeId: "team", scopeKind: "team", scopeName: "产品研发团队", ownerId: "another-user", chunkCount: 2, tags: [], updatedAt: 1 },
 ];
-if (query.get("surface") === "conversation") {
+if (["conversation", "conversation-layout"].includes(query.get("surface") ?? "")) {
   const chat = useSessionStore.getState();
   chat.setSession("review-conversation");
   for (const prompt of [
@@ -55,6 +58,15 @@ if (query.get("surface") === "conversation") {
     chat.pushUser(prompt, [], "review-conversation");
     chat.pushAssistant("已检查相关实现，并记录了需要继续确认的细节。\n\n下一步可以针对这个问题继续深入。 ".repeat(3));
   }
+  const messages = useSessionStore.getState().messages;
+  chat.setSession("review-other");
+  chat.setMessages(messages.map((message) => ({ ...message, id: `other-${message.id}` })));
+  chat.setSession("review-conversation");
+  useSessionsStore.setState({ independent: [
+    { sessionId: "review-conversation", title: "请检查最新任务和运行状态", cwd: "", status: "working", pinned: true, updatedAt: new Date().toISOString() },
+    { sessionId: "review-other", title: "等待授权的另外一个任务", cwd: "", status: "awaiting_permission", updatedAt: new Date().toISOString() },
+    { sessionId: "review-done", title: "最近完成的历史任务", cwd: "", status: "completed", updatedAt: new Date().toISOString() },
+  ], tasksOpen: true, loading: false, currentSessionId: "review-conversation" });
 }
 const callbacks = new Map();
 Object.assign(window, {
@@ -111,6 +123,7 @@ Object.assign(window, {
           })),
         }] };
         case "plugins_list": return { plugins: [] };
+        case "tasks_list": return [{ id: "review-task", source: "task", description: "执行代码验证和生成报告", status: "running", sessionId: args.sessionId }];
         case "org_session": return { loggedIn: true, organizationMemoryEnabled: true, serverUrl: "https://10.132.19.82:8787", user: orgUser, bootstrap: { apiVersion: 1, user: orgUser, scopes: orgScopes, policy: { allowPersonalCloud: true, allowSkillSubmission: true }, serverTime: 1 } };
         case "org_list_scopes": return orgScopes;
         case "org_list_documents": {
@@ -133,12 +146,28 @@ Object.assign(window, {
   __TAURI_EVENT_PLUGIN_INTERNALS__: { unregisterListener: () => {} },
 });
 
+function ConversationLayoutFixture() {
+  const sessionId = useSessionStore((state) => state.sessionId);
+  const [collapsed, setCollapsed] = useState(false);
+  return <div style={{ display: "flex", height: "100%" }}>
+    {collapsed ? <button type="button" onClick={() => setCollapsed(false)}>展开侧边栏</button> : <Sidebar
+      activeNav="新建任务" onNewSession={() => {}} onNavigate={() => {}} onOpenSettings={() => {}} onOpenSearch={() => {}}
+      onToggleCollapse={() => setCollapsed(true)} onSelect={(id) => {
+        useSessionStore.getState().setSession(id);
+        useSessionsStore.setState({ currentSessionId: id });
+      }} />}
+    <ChatView onSend={() => {}} onCancel={() => {}} title="聊天布局回归" />
+    <TasksPanel sessionId={sessionId ?? undefined} />
+  </div>;
+}
+
 function Fixture() {
   const surface = query.get("surface") ?? "memory";
   const [label, setLabel] = useState("专家·技能·连接器");
   const [createExpertRequested, setCreateExpertRequested] = useState(false);
   const [expertPageOpen, setExpertPageOpen] = useState(false);
   const [cwd, setCwd] = useState("/review/EchoAgent");
+  if (surface === "conversation-layout") return <ConversationLayoutFixture />;
   if (surface === "capabilities") return <PlaceholderPage label={label} onNavigate={setLabel} />;
   if (surface === "expert-entry") return <>
     {expertPageOpen ? (

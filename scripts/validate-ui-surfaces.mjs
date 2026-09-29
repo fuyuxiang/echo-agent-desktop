@@ -7,6 +7,7 @@ import { mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import assert from "node:assert/strict";
+import { validateConversationLayout } from "./validate-conversation-layout.mjs";
 
 const output = mkdtempSync(join(tmpdir(), "echo-ui-surfaces-"));
 console.log(`UI screenshots: ${output}`);
@@ -331,8 +332,9 @@ try {
   await page.getByRole("menu", { name: "项目列表" }).waitFor();
   await page.keyboard.press("Escape");
   assert.equal(await page.getByRole("menu", { name: "项目列表" }).count(), 0);
+  layouts += await validateConversationLayout(page, output);
   assert.deepEqual(errors, [], "browser runtime errors");
-  console.log(JSON.stringify({ passed: true, screenshots: output, layouts, interactions: ["meeting source selection", "organization document preview", "conversation question navigation", "memory", "notification", "storage", "expert creation", "expert entry and refresh", "extension navigation", "font scaling", "project keyboard navigation"] }, null, 2));
+  console.log(JSON.stringify({ passed: true, screenshots: output, layouts, interactions: ["meeting source selection", "organization document preview", "conversation question navigation", "memory", "notification", "storage", "expert creation", "expert entry and refresh", "extension navigation", "font scaling", "project keyboard navigation", "cross-session scroll restoration", "task panel docking", "sidebar font scaling and hover"] }, null, 2));
 } finally {
   await browser?.close();
   await server.close();

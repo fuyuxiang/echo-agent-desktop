@@ -47,12 +47,16 @@ export function TasksPanel({ sessionId, refreshSignal, onToast }: TasksPanelProp
     const place = () => {
       if (!composer) return;
       const rect = composer.getBoundingClientRect();
-      setDockStyle({
+      const nextStyle = {
         bottom: Math.max(16, window.innerHeight - rect.top + 12),
         right: Math.max(16, window.innerWidth - rect.right),
         width: Math.min(320, Math.max(220, rect.width - 24)),
         maxHeight: Math.max(96, Math.min(480, rect.top - 112)),
-      });
+      };
+      setDockStyle((current) => current
+        && current.bottom === nextStyle.bottom && current.right === nextStyle.right
+        && current.width === nextStyle.width && current.maxHeight === nextStyle.maxHeight
+        ? current : nextStyle);
     };
     const watchComposer = () => {
       const next = document.querySelector<HTMLElement>(".chatview .echo-composer");
@@ -62,6 +66,11 @@ export function TasksPanel({ sessionId, refreshSignal, onToast }: TasksPanelProp
       if (composer && typeof ResizeObserver !== "undefined") {
         resizeObserver = new ResizeObserver(place);
         resizeObserver.observe(composer);
+        // A centered, max-width composer can move without changing size when
+        // the sidebar or tool pane opens. Follow its layout containers too.
+        for (let parent = composer.parentElement; parent && parent !== document.body; parent = parent.parentElement) {
+          resizeObserver.observe(parent);
+        }
       }
       if (composer) place();
       else setDockStyle(undefined);
