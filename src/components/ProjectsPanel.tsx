@@ -228,7 +228,7 @@ export function ProjectsPanel({
         {filtered.length === 0 ? (
           <div className="project-grid-empty">
             {projects.length === 0
-              ? "还没有项目，点击「新建项目」或从下方模版创建。"
+              ? "还没有项目，点击「新建项目」或从下方模板创建。"
               : "没有匹配的项目。"}
           </div>
         ) : (
@@ -249,7 +249,7 @@ export function ProjectsPanel({
 
       <section className="project-section">
         <div className="project-section__head">
-          <h3 className="project-section__title">从模版创建</h3>
+          <h3 className="project-section__title">从模板创建</h3>
         </div>
         <div className="project-grid">
           {FROM_TEMPLATES.map((t) => (
@@ -714,7 +714,7 @@ function CreateProjectDialog({
         </div>
 
         <div className="create-colleague-footer create-project-footer">
-          <span className="proj-version-note">切换模版会覆盖当前编辑内容</span>
+          <span className="proj-version-note">切换模板将替换指令及连接器、专家和技能配置。</span>
           <button className="btn btn--ghost" onClick={onCancel}>取消</button>
           <button className="btn btn--primary" onClick={submit} disabled={!name.trim()}>确定</button>
         </div>

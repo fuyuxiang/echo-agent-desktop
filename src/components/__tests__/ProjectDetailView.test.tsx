@@ -60,12 +60,11 @@ describe("ProjectDetailView 项目 composer 接入首页 Composer", () => {
     );
     const header = screen.getByRole("status", { name: /项目「发布项目」/ });
     expect(header.textContent).toContain("发布项目");
-    // 无 experts / skills / connectors / instructions 时降级为「无」。
-    expect(header.textContent).toContain("无");
+    expect(header.textContent).toContain("未配置项目上下文");
     expect(header.querySelector(".pd-composer-header__count--active")).toBeNull();
   });
 
-  it("header chip 在含项目指令但无 Agent/Skill/MCP 时显示「仅指令」", () => {
+  it("header chip 在含项目指令但无 Agent/Skill/MCP 时显示「项目指令」", () => {
     resetStores({ ...baseProject, instructions: "只在完成时保存" });
     render(
       <ProjectDetailView
@@ -77,8 +76,8 @@ describe("ProjectDetailView 项目 composer 接入首页 Composer", () => {
         picker={picker}
       />,
     );
-    const header = screen.getByRole("status", { name: /注入项目指令/ });
-    expect(header.textContent).toContain("仅指令");
+    const header = screen.getByRole("status", { name: /本次使用项目指令/ });
+    expect(header.textContent).toContain("项目指令");
     expect(header.textContent).not.toContain("Agent");
     expect(header.textContent).not.toContain("Skill");
     expect(header.textContent).not.toContain("MCP");
@@ -112,7 +111,7 @@ describe("ProjectDetailView 项目 composer 接入首页 Composer", () => {
         picker={picker}
       />,
     );
-    const header = screen.getByRole("status", { name: /注入 1 个 Agent、2 个 Skill、0 个 MCP/ });
+    const header = screen.getByRole("status", { name: /本次使用 1 个 Agent、2 个 Skill、0 个 MCP/ });
     expect(header.textContent).toContain("1 Agent");
     expect(header.textContent).toContain("2 Skill");
     expect(header.textContent).toContain("0 MCP");

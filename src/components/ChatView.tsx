@@ -492,6 +492,32 @@ export function ChatView({
     streaming,
     sessionId,
   });
+  type RuntimePanelKey = "changes" | "subagents" | "teams";
+  const runtimeScrollRestore = useRef<Partial<Record<RuntimePanelKey, { top: number; following: boolean }>>>({});
+  const pendingRuntimeScroll = useRef<{ key: RuntimePanelKey; opening: boolean } | null>(null);
+  const toggleRuntimePanel = (key: RuntimePanelKey, open: boolean, setOpen: (value: boolean) => void) => {
+    if (!open) {
+      runtimeScrollRestore.current[key] = { top: scrollRef.current?.scrollTop ?? 0, following };
+      pauseFollowing();
+    }
+    pendingRuntimeScroll.current = { key, opening: !open };
+    setOpen(!open);
+  };
+  useLayoutEffect(() => {
+    const pending = pendingRuntimeScroll.current;
+    const viewport = scrollRef.current;
+    if (!pending || !viewport) return;
+    pendingRuntimeScroll.current = null;
+    if (pending.opening) {
+      const anchor = viewport.querySelector<HTMLElement>(`[data-runtime-panel-anchor="${pending.key}"]`);
+      if (anchor) viewport.scrollTop += anchor.getBoundingClientRect().top - viewport.getBoundingClientRect().top - 8;
+      return;
+    }
+    const restore = runtimeScrollRestore.current[pending.key];
+    if (!restore) return;
+    if (restore.following) scrollToBottom();
+    else viewport.scrollTop = restore.top;
+  }, [fileChangesOpen, subagentsOpen, teamsOpen, scrollRef, scrollToBottom]);
 
   const jumpToQuestion = useCallback((messageId: string) => {
     const row = Array.from(scrollRef.current?.querySelectorAll<HTMLElement>("[data-msg-id]") ?? [])
@@ -620,7 +646,7 @@ export function ChatView({
             <button
               className="chatview__error-close"
               onClick={() => useSessionStore.getState().setError(null)}
-              aria-label="dismiss"
+              aria-label="关闭错误提示"
             >
               ×
             </button>
@@ -725,7 +751,7 @@ export function ChatView({
                   "chatview__artifacts-toggle" +
                   (fileChangesOpen ? " chatview__artifacts-toggle--active" : "")
                 }
-                onClick={() => setFileChangesOpen((v) => !v)}
+                onClick={() => toggleRuntimePanel("changes", fileChangesOpen, setFileChangesOpen)}
                 title="本会话文件变更"
               >
                 变更
@@ -739,7 +765,7 @@ export function ChatView({
                   "chatview__artifacts-toggle" +
                   (subagentsOpen ? " chatview__artifacts-toggle--active" : "")
                 }
-                onClick={() => setSubagentsOpen((v) => !v)}
+                onClick={() => toggleRuntimePanel("subagents", subagentsOpen, setSubagentsOpen)}
                 title="子代理运行时"
               >
                 子代理
@@ -753,7 +779,7 @@ export function ChatView({
                   "chatview__artifacts-toggle" +
                   (teamsOpen ? " chatview__artifacts-toggle--active" : "")
                 }
-                onClick={() => setTeamsOpen((v) => !v)}
+                onClick={() => toggleRuntimePanel("teams", teamsOpen, setTeamsOpen)}
                 title="团队状态"
               >
                 团队
@@ -847,19 +873,19 @@ export function ChatView({
           <div className="chatview__scroll" ref={scrollRef}>
             <div className="chatview__inner" ref={contentRef}>
               {fileChangesOpen && (
-                <FileChangesPanel messages={messages} />
+                <><div data-runtime-panel-anchor="changes" /><FileChangesPanel messages={messages} /></>
               )}
               {subagentsOpen && (
-                <SubagentPanel
+                <><div data-runtime-panel-anchor="subagents" /><SubagentPanel
                   messages={messages}
                   cwd={cwd}
                   onOpenSession={onOpenSubagentSession ? openSubagentSession : undefined}
                   restorePoint={subagentScrollRestore}
                   onRestoreReady={restoreSubagentRow}
-                />
+                /></>
               )}
               {teamsOpen && (
-                <TeamStatusView messages={messages} />
+                <><div data-runtime-panel-anchor="teams" /><TeamStatusView messages={messages} /></>
               )}
               {timeline.map((node) => {
                 // 时间线分隔符(对齐 EchoAgent message-timeline):日期/模型切换分隔。

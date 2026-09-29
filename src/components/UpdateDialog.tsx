@@ -15,6 +15,7 @@ export function UpdateDialog({ open, onClose }: { open: boolean; onClose: () => 
   const downloaded = useUpdateStore((state) => state.downloaded);
   const total = useUpdateStore((state) => state.total);
   const error = useUpdateStore((state) => state.error);
+  const errorStage = useUpdateStore((state) => state.errorStage);
   const check = useUpdateStore((state) => state.check);
   const install = useUpdateStore((state) => state.install);
   const busy = status === "checking" || status === "downloading" || status === "installing";
@@ -65,7 +66,7 @@ export function UpdateDialog({ open, onClose }: { open: boolean; onClose: () => 
               {status === "downloading" && `正在下载 ${update?.version ?? "更新"}`}
               {status === "installing" && "正在安装更新"}
               {status === "up-to-date" && "已是最新版本"}
-              {status === "error" && "检查更新失败"}
+              {status === "error" && (errorStage === "install" ? "安装更新失败" : errorStage === "download" ? "下载更新失败" : "检查更新失败")}
               {status === "idle" && "EchoAgent 版本更新"}
             </h2>
             <p>当前版本 v{currentVersion ?? APP_VERSION}</p>

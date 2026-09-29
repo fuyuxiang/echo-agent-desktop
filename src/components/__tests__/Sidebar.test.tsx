@@ -310,10 +310,12 @@ describe("Sidebar", () => {
     await waitFor(() => expect(onDeleteSession).toHaveBeenCalledWith("project-session", "/workspace"));
   });
 
-  it("hover「更多」只展示知识库和定时任务", () => {
+  it("悬停后点击「更多」才展开，且只展示知识库和定时任务", () => {
     const onNavigate = vi.fn();
     render(<Sidebar {...base} onNavigate={onNavigate} />);
     fireEvent.mouseEnter(screen.getByText("更多").closest(".sidebar__more-wrap")!);
+    expect(screen.queryByRole("menu")).toBeNull();
+    fireEvent.click(screen.getByRole("button", { name: /更多/ }));
     const menu = screen.getByRole("menu");
     expect(menu).toBeInTheDocument();
     expect(within(menu).getByText("知识库")).toBeInTheDocument();
@@ -337,7 +339,7 @@ describe("Sidebar", () => {
     const onNavigate = vi.fn();
     const user = userEvent.setup();
     render(<Sidebar {...base} onNavigate={onNavigate} onToast={vi.fn()} />);
-    await user.hover(screen.getByText("更多"));
+    await user.click(screen.getByRole("button", { name: /更多/ }));
     const menu = await screen.findByRole("menu");
     expect(menu).toBeInTheDocument();
     fireEvent.click(screen.getByText("知识库"));

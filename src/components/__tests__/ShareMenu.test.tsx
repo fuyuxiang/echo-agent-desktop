@@ -77,4 +77,16 @@ describe("ShareMenu", () => {
     fireEvent.mouseDown(screen.getByText("外部"));
     expect(screen.queryByText("导出 Markdown")).toBeNull();
   });
+
+  it("Escape 关闭菜单并将焦点还给分享按钮", () => {
+    render(<ShareMenu messages={messages} />);
+    const trigger = screen.getByRole("button", { name: "分享" });
+    fireEvent.click(trigger);
+    expect(trigger).toHaveAttribute("aria-expanded", "true");
+    expect(screen.getByRole("group", { name: "分享选项" })).toBeInTheDocument();
+    fireEvent.keyDown(document, { key: "Escape" });
+    expect(screen.queryByRole("group", { name: "分享选项" })).toBeNull();
+    expect(trigger).toHaveFocus();
+    expect(trigger).toHaveAttribute("aria-expanded", "false");
+  });
 });

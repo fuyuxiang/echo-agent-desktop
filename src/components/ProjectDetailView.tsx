@@ -181,8 +181,7 @@ export function ProjectDetailView({
     }
   };
 
-  // header chip 文案：项目契约注入摘要。0 项降级为「仅指令」（含项目说明）
-  // 或「无」；指令是项目核心契约，即使无 Agent/Skill/MCP 也应显示。
+  // 即使没有 Agent/Skill/MCP，已有项目指令仍需要显示。
   const hasInstructionsOnly = live.experts.length === 0
     && live.skills.length === 0
     && live.connectors.length === 0
@@ -193,10 +192,10 @@ export function ProjectDetailView({
     && live.connectors.length === 0
     && !hasInstructionsOnly;
   const projectHeaderAria = hasInstructionsOnly
-    ? `项目「${live.name}」当前会话将注入项目指令`
+    ? `项目「${live.name}」本次使用项目指令`
     : hasNoContract
-      ? `项目「${live.name}」当前会话未配置任何 Agent、Skill 或 MCP`
-      : `项目「${live.name}」当前会话将注入 ${live.experts.length} 个 Agent、${live.skills.length} 个 Skill、${live.connectors.length} 个 MCP`;
+      ? `项目「${live.name}」本次未配置项目上下文`
+      : `项目「${live.name}」本次使用 ${live.experts.length} 个 Agent、${live.skills.length} 个 Skill、${live.connectors.length} 个 MCP`;
 
   return (
     <div className="pd-page">
@@ -279,15 +278,15 @@ export function ProjectDetailView({
               title={projectHeaderAria}
             >
               <span className="pd-composer-header__icon" aria-hidden="true">
-                <FolderIcon size="xs" />
+                <FolderIcon size="sm" />
               </span>
               <span className="pd-composer-header__name">{live.name}</span>
               <span className="pd-composer-header__sep" aria-hidden="true">·</span>
-              <span className="pd-composer-header__label">注入：</span>
+              <span className="pd-composer-header__label">本次使用：</span>
               {hasInstructionsOnly ? (
-                <span className="pd-composer-header__count pd-composer-header__count--active">仅指令</span>
+                <span className="pd-composer-header__count pd-composer-header__count--active">项目指令</span>
               ) : hasNoContract ? (
-                <span className="pd-composer-header__count">无</span>
+                <span className="pd-composer-header__count">未配置项目上下文</span>
               ) : (
                 <>
                   <span className={`pd-composer-header__count${live.experts.length > 0 ? " pd-composer-header__count--active" : ""}`}>

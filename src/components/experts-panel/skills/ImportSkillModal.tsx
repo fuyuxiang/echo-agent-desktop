@@ -353,10 +353,14 @@ export function ImportSkillModal({
               <ul className="sk-import-req-list">
                 <li>验证 SKILL.md、文件数量、大小和目录安全</li>
                 <li>自动区分并列技能与技能内嵌套的参考文档</li>
-                <li>校验 echo.skill.json 执行入口、依赖、账号和产物契约</li>
+                <li>检查技能运行所需的程序、依赖、账号和输出要求</li>
                 <li>扫描脚本、敏感文件访问、网络和依赖安装风险</li>
-                <li>生成内容指纹，并支持后续原子更新和安全卸载</li>
+                <li>记录版本校验信息，便于安全更新和卸载</li>
               </ul>
+              <details className="sk-import-req-details">
+                <summary>查看开发者校验细节</summary>
+                <p>校验 echo.skill.json 的执行入口、依赖、账号和产物契约；生成内容指纹并支持原子更新。</p>
+              </details>
             </div>
           )}
         </div>

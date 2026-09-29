@@ -4,7 +4,8 @@
  * EchoAgent 本地导出(markdown/html/text 下载 + mailto 分享意图),不上传云端。
  * 由 ChatView 顶栏「分享」按钮触发。
  */
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useId, useLayoutEffect, useRef, useState } from "react";
+import { createPortal } from "react-dom";
 import {
   buildSharePayload,
   buildMailtoUrl,
@@ -28,14 +29,55 @@ export function ShareMenu({ messages, title, openUrl, onDone }: ShareMenuProps) 
   const [open, setOpen] = useState(false);
   const [includeProcess, setIncludeProcess] = useState(false);
   const ref = useRef<HTMLDivElement>(null);
+  const triggerRef = useRef<HTMLButtonElement>(null);
+  const popoverRef = useRef<HTMLDivElement>(null);
+  const popoverId = useId();
+  const [position, setPosition] = useState({ top: 0, left: 0 });
+
+  useLayoutEffect(() => {
+    if (!open) return;
+    const place = () => {
+      const trigger = triggerRef.current?.getBoundingClientRect();
+      const popover = popoverRef.current;
+      if (!trigger || !popover) return;
+      const width = popover.offsetWidth;
+      const height = popover.offsetHeight;
+      const left = Math.max(8, Math.min(trigger.right - width, window.innerWidth - width - 8));
+      const below = trigger.bottom + 6;
+      const above = trigger.top - height - 6;
+      const top = below + height <= window.innerHeight - 8
+        ? below
+        : above >= 8 ? above : Math.max(8, window.innerHeight - height - 8);
+      setPosition({ top, left });
+    };
+    place();
+    popoverRef.current?.querySelector<HTMLElement>('input, button')?.focus();
+    window.addEventListener("resize", place);
+    window.addEventListener("scroll", place, true);
+    return () => {
+      window.removeEventListener("resize", place);
+      window.removeEventListener("scroll", place, true);
+    };
+  }, [open]);
 
   useEffect(() => {
     if (!open) return;
     const onDown = (e: MouseEvent) => {
-      if (ref.current && !ref.current.contains(e.target as Node)) setOpen(false);
+      if (!ref.current?.contains(e.target as Node) && !popoverRef.current?.contains(e.target as Node)) setOpen(false);
+    };
+    const onKeyDown = (e: KeyboardEvent) => {
+      if (e.key !== "Escape") return;
+      e.preventDefault();
+      e.stopPropagation();
+      setOpen(false);
+      triggerRef.current?.focus();
     };
     document.addEventListener("mousedown", onDown);
-    return () => document.removeEventListener("mousedown", onDown);
+    document.addEventListener("keydown", onKeyDown, true);
+    return () => {
+      document.removeEventListener("mousedown", onDown);
+      document.removeEventListener("keydown", onKeyDown, true);
+    };
   }, [open]);
 
   const exportAs = (format: ShareFormat) => {
@@ -87,6 +129,7 @@ export function ShareMenu({ messages, title, openUrl, onDone }: ShareMenuProps) 
   return (
     <div className="share-menu" ref={ref}>
       <button
+        ref={triggerRef}
         type="button"
         className={
           "chatview__artifacts-toggle" +
@@ -97,11 +140,13 @@ export function ShareMenu({ messages, title, openUrl, onDone }: ShareMenuProps) 
           setOpen((v) => !v);
         }}
         title="导出 / 分享本会话"
+        aria-expanded={open}
+        aria-controls={open ? popoverId : undefined}
       >
         分享
       </button>
-      {open && (
-        <div className="share-menu__popover" onClick={(e) => e.stopPropagation()}>
+      {open && createPortal(
+        <div id={popoverId} ref={popoverRef} className="share-menu__popover" role="group" aria-label="分享选项" style={position} onClick={(e) => e.stopPropagation()}>
           <div className="share-menu__note">本地分享，不会自动上传会话</div>
           <label className="share-menu__option">
             <input
@@ -137,7 +182,8 @@ export function ShareMenu({ messages, title, openUrl, onDone }: ShareMenuProps) 
           <button type="button" className="share-menu__item" onClick={shareMail}>
             通过邮件分享
           </button>
-        </div>
+        </div>,
+        document.body,
       )}
     </div>
   );

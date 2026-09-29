@@ -3,7 +3,7 @@
  *
  * 列出已注册的 WebDAV 存储源，并提供浏览、读取、写入与删除操作。
  */
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useLayoutEffect, useRef, useState } from "react";
 import { open as openDialog, save as saveDialog } from "@tauri-apps/plugin-dialog";
 import {
   hydrateStorageProviders,
@@ -43,6 +43,13 @@ export function CloudStoragePanel({ onToast, onUnsavedChange }: {
     content: string;
     savedContent: string;
   } | null>(null);
+  const [readingPath, setReadingPath] = useState<string | null>(null);
+  const previewRef = useRef<HTMLDivElement>(null);
+  useLayoutEffect(() => {
+    if (!preview) return;
+    previewRef.current?.scrollIntoView?.({ block: "end" });
+    previewRef.current?.focus({ preventScroll: true });
+  }, [preview?.providerId, preview?.path]);
   const previewDirty = Boolean(preview && preview.content !== preview.savedContent);
 
   useEffect(() => {
@@ -172,6 +179,7 @@ export function CloudStoragePanel({ onToast, onUnsavedChange }: {
 
   const leavePreview = (action: () => void) => {
     previewReadGeneration.current += 1;
+    setReadingPath(null);
     if (preview && preview.content !== preview.savedContent) {
       requestConfirmation({
         title: "舍弃未保存的文件修改？",
@@ -242,6 +250,7 @@ export function CloudStoragePanel({ onToast, onUnsavedChange }: {
     if (!provider) return;
     leavePreview(() => {
       const generation = ++previewReadGeneration.current;
+      setReadingPath(entry.path);
       void (async () => {
         try {
           const content = await provider.readText(entry.path);
@@ -253,6 +262,8 @@ export function CloudStoragePanel({ onToast, onUnsavedChange }: {
           }
         } catch (error) {
           if (generation === previewReadGeneration.current) onToast?.(`读取失败：${String(error).replace(/^Error:\s*/, "")}`);
+        } finally {
+          if (generation === previewReadGeneration.current) setReadingPath(null);
         }
       })();
     });
@@ -475,7 +486,7 @@ export function CloudStoragePanel({ onToast, onUnsavedChange }: {
       ) : selectedProvider && entries.length > 0 ? (
         <ul className="storage-panel__list">
           {entries.map((e) => (
-            <li key={e.path} className={"storage-panel__entry" + (e.isDir ? " dir" : "")}>
+            <li key={e.path} className={"storage-panel__entry" + (e.isDir ? " dir" : "") + (preview?.providerId === selectedProvider && preview.path === e.path ? " storage-panel__entry--selected" : "")}>
               <span className="storage-panel__entry-icon">{e.isDir ? "📁" : "📄"}</span>
               {e.isDir ? (
                 <button
@@ -494,7 +505,7 @@ export function CloudStoragePanel({ onToast, onUnsavedChange }: {
               )}
               <div className="storage-panel__entry-actions">
                 {!e.isDir && (
-                  <button type="button" onClick={() => void readFile(e)} title="读取" aria-label={`读取 ${e.name}`}>👁</button>
+                  <button type="button" onClick={() => void readFile(e)} title={readingPath === e.path ? "读取中…" : "读取"} aria-label={readingPath === e.path ? `正在读取 ${e.name}` : `读取 ${e.name}`} disabled={readingPath === e.path}>{readingPath === e.path ? "读取中…" : "👁"}</button>
                 )}
                 {!e.isDir && (
                   <button type="button" onClick={() => void downloadFile(e)} title="下载" aria-label={`下载 ${e.name}`} disabled={!!busyAction}>↓</button>
@@ -508,7 +519,7 @@ export function CloudStoragePanel({ onToast, onUnsavedChange }: {
         <div className="storage-panel__empty">空目录</div>
       ) : null}
       {preview && (
-        <div className="storage-panel__preview">
+        <div ref={previewRef} className="storage-panel__preview" role="region" aria-label={`文件预览：${preview.name}`} tabIndex={-1}>
           <div>
             <strong>{preview.name}</strong>
             <span>

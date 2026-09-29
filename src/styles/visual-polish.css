@@ -581,9 +581,15 @@
 
 .model-connection-editor__test-note {
   margin: 0;
-  color: var(--echo-text-weak);
-  font-size: 0.625rem;
+  flex: 1 0 100%;
+  order: -1;
+  color: var(--echo-text-medium);
+  font-size: 0.6875rem;
   line-height: 1.5;
+}
+
+.model-connection-editor__footer {
+  flex-wrap: wrap;
 }
 
 .model-connection-editor__hint {
@@ -1460,6 +1466,23 @@ button,
   display: none;
 }
 
+.chatview .echo-composer__footer {
+  height: auto;
+  min-height: 32px;
+  flex-wrap: wrap;
+  row-gap: 4px;
+}
+
+.chatview .echo-composer__footer .permission-picker {
+  flex: none;
+  white-space: nowrap;
+}
+
+.chatview .echo-composer__footer .echo-composer__send {
+  margin-left: auto;
+  flex: none;
+}
+
 .chatview__utility-bar .chatview__workspace-bar,
 .chatview__utility-bar .chatview__artifacts-toggle,
 .chatview__utility-bar .chatview__plan-toggle {
@@ -1594,6 +1617,11 @@ button,
   max-width: 430px;
   color: var(--echo-text-medium);
   line-height: 1.6;
+}
+
+[data-theme="dark"] .project-hero__art {
+  mix-blend-mode: screen;
+  filter: invert(1) hue-rotate(180deg) brightness(1.6);
 }
 
 .project-hero__create {
@@ -3127,6 +3155,12 @@ button,
   width: min(100%, 850px);
   max-width: 850px;
   margin: 0 auto;
+}
+
+.settings-subview > .settings-section {
+  flex: 1 1 auto;
+  min-height: 0;
+  height: auto;
 }
 
 .settings-view-tabs {

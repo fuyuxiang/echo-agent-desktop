@@ -309,7 +309,7 @@ function handleMenuKeyDown(
 
 /**
  * "更多" 侧栏按钮的弹出菜单 — 对齐 EchoAgent：
- * - hover 打开，向右浮出（不向下盖住会话列表）
+ * - 点击打开，向右浮出（不向下盖住会话列表）
  * - 展示知识库和定时任务；个人记忆由设置管理。
  */
 function MoreDropdown({
@@ -324,25 +324,6 @@ function MoreDropdown({
   const triggerRef = useRef<HTMLButtonElement>(null);
   const menuRef = useRef<HTMLDivElement>(null);
   const pendingKeyboardFocus = useRef<"first" | "last" | null>(null);
-  const closeTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
-
-  const clearCloseTimer = () => {
-    if (closeTimer.current) {
-      clearTimeout(closeTimer.current);
-      closeTimer.current = null;
-    }
-  };
-
-  const scheduleClose = () => {
-    clearCloseTimer();
-    // Small grace so the cursor can move from trigger → popover without flicker.
-    closeTimer.current = setTimeout(() => setOpen(false), 120);
-  };
-
-  const openMenu = () => {
-    clearCloseTimer();
-    setOpen(true);
-  };
 
   useEffect(() => {
     if (!open) return;
@@ -352,7 +333,10 @@ function MoreDropdown({
       }
     };
     const handleEsc = (e: KeyboardEvent) => {
-      if (e.key === "Escape") setOpen(false);
+      if (e.key === "Escape") {
+        setOpen(false);
+        triggerRef.current?.focus();
+      }
     };
     document.addEventListener("mousedown", handleClick);
     document.addEventListener("keydown", handleEsc);
@@ -362,8 +346,6 @@ function MoreDropdown({
     };
   }, [open]);
 
-  useEffect(() => () => clearCloseTimer(), []);
-
   useEffect(() => {
     if (!open || !pendingKeyboardFocus.current) return;
     focusMenuEdge(menuRef.current, pendingKeyboardFocus.current);
@@ -371,7 +353,6 @@ function MoreDropdown({
   }, [open]);
 
   const openFromKeyboard = (edge: "first" | "last") => {
-    clearCloseTimer();
     if (open) {
       focusMenuEdge(menuRef.current, edge);
       return;
@@ -414,8 +395,6 @@ function MoreDropdown({
     <div
       className={"sidebar__more-wrap" + (open ? " sidebar__more-wrap--open" : "")}
       ref={containerRef}
-      onMouseEnter={openMenu}
-      onMouseLeave={scheduleClose}
     >
       <button
         ref={triggerRef}
@@ -830,7 +809,9 @@ export function Sidebar({
         title={s.title}
         aria-current={s.sessionId === currentSessionId ? "page" : undefined}
         style={{
-          display: "flex",
+          display: "grid",
+          gridTemplateColumns: "minmax(0, 1fr) auto auto",
+          gridTemplateRows: "minmax(0, 1fr) auto",
           alignItems: "center",
           flex: 1,
           minWidth: 0,

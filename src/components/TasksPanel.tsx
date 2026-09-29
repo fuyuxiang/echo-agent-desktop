@@ -7,7 +7,7 @@
  *
  * 这个面板嵌入到 ChatView 右侧或作为浮层。监听 `agent://task-update` 自动刷新。
  */
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useLayoutEffect, useRef, useState, type CSSProperties } from "react";
 import {
   TaskListIcon,
   DeleteIcon,
@@ -35,9 +35,47 @@ export function TasksPanel({ sessionId, refreshSignal, onToast }: TasksPanelProp
   const [collapsed, setCollapsed] = useState(false);
   const [dismissed, setDismissed] = useState(false);
   const [killingTaskKey, setKillingTaskKey] = useState<string | null>(null);
+  const [dockStyle, setDockStyle] = useState<CSSProperties>();
   const reloadGenerationRef = useRef(0);
   const lastRefreshSignalRef = useRef(refreshSignal);
   const onToastRef = useRef(onToast);
+
+  useLayoutEffect(() => {
+    if (!sessionId || tasksSessionId !== sessionId || dismissed || tasks.length === 0) return;
+    let composer: HTMLElement | null = null;
+    let resizeObserver: ResizeObserver | null = null;
+    const place = () => {
+      if (!composer) return;
+      const rect = composer.getBoundingClientRect();
+      setDockStyle({
+        bottom: Math.max(16, window.innerHeight - rect.top + 12),
+        right: Math.max(16, window.innerWidth - rect.right),
+        width: Math.min(320, Math.max(220, rect.width - 24)),
+        maxHeight: Math.max(96, Math.min(480, rect.top - 112)),
+      });
+    };
+    const watchComposer = () => {
+      const next = document.querySelector<HTMLElement>(".chatview .echo-composer");
+      if (next === composer) return;
+      resizeObserver?.disconnect();
+      composer = next;
+      if (composer && typeof ResizeObserver !== "undefined") {
+        resizeObserver = new ResizeObserver(place);
+        resizeObserver.observe(composer);
+      }
+      if (composer) place();
+      else setDockStyle(undefined);
+    };
+    const observer = new MutationObserver(watchComposer);
+    observer.observe(document.body, { childList: true, subtree: true });
+    watchComposer();
+    window.addEventListener("resize", place);
+    return () => {
+      observer.disconnect();
+      resizeObserver?.disconnect();
+      window.removeEventListener("resize", place);
+    };
+  }, [dismissed, sessionId, tasks.length, tasksSessionId]);
 
   useEffect(() => {
     onToastRef.current = onToast;
@@ -121,6 +159,7 @@ export function TasksPanel({ sessionId, refreshSignal, onToast }: TasksPanelProp
     <aside
       className={`tasks-panel${collapsed ? " tasks-panel--collapsed" : ""}`}
       aria-label="运行中任务"
+      style={dockStyle}
     >
       <div className="tasks-panel__header">
         <h3 className="tasks-panel__title">

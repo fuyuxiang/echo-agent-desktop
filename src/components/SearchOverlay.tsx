@@ -283,7 +283,7 @@ export function SearchOverlay({
             remoteHits.length === 0 &&
             query.trim().length === 0 && (
               <div className="conversation-search-modal__count">
-                输入关键词搜索会话内容（EchoAgent FTS5 全文索引）
+                输入关键词，搜索历史任务的标题和内容。
               </div>
             )}
         </div>

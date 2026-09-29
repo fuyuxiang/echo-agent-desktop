@@ -491,7 +491,7 @@ export function ActivityTab({
             ? "还没有已归档的项目对话。"
             : archivedCount > 0
               ? "当前项目对话均已归档，可切换到“已归档”查看或恢复。"
-              : "暂无真实运行记录，从下方输入框启动第一个项目对话。"}
+              : "还没有项目对话。在下方输入任务，开始第一次协作。"}
         </div>
       ) : conversations.length === 0 ? (
         <div className="pd-empty pd-empty--filtered">

@@ -190,7 +190,7 @@ export function McpModal({
             <span className="mcp-modal-glyph"><McpIcon size="md" /></span>
             <div>
               <div className="mcp-modal-title">MCP 服务管理</div>
-              <div className="mcp-modal-sub">配置可离线完成；有活动会话时自动热加载并显示实时健康状态</div>
+              <div className="mcp-modal-sub">配置可随时保存；有活动会话时立即应用，并显示连接状态。</div>
             </div>
           </div>
           <div className="mcp-modal-headright">

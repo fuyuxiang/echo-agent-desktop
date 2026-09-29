@@ -840,13 +840,19 @@ function ConnectionEditor({
     <div ref={dialogRef} className="models-settings-panel__editor-overlay" role="dialog" aria-modal="true" aria-label={original ? "编辑连接" : "添加个人连接"} tabIndex={-1}>
       <div className="model-connection-editor">
         <header className="models-settings-panel__editor-header">
-          <div><div className="models-settings-panel__editor-title">{original ? "编辑个人连接" : "添加个人连接"}</div><div className="models-settings-panel__editor-note">填写 Base URL 和 Model ID；需要鉴权的服务再填写 API Key</div></div>
+          <div><div className="models-settings-panel__editor-title">{original ? "编辑个人连接" : "添加个人连接"}</div><div className="models-settings-panel__editor-note">{isOjlabBaseUrl(draft.baseUrl)
+            ? "填写 Base URL 和 Model ID；此服务无需 API Key。"
+            : original?.credentialConfigured
+              ? "修改连接信息；API Key 留空则沿用已保存凭据。"
+              : original
+                ? "填写 Base URL 和 Model ID；如服务需要鉴权，请填写 API Key。"
+                : "填写 Base URL、Model ID 和 API Key。"}</div></div>
           <button className="echo-button echo-button--ghost echo-button--small echo-button--icon-only" onClick={onCancel} aria-label="关闭"><X size={14} /></button>
         </header>
 
         <div className="model-connection-editor__body">
           <section className="model-connection-editor__section">
-            <div className="model-connection-editor__section-title"><span>连接信息</span><small>{isOjlabBaseUrl(draft.baseUrl) ? "此服务无需 API Key" : original?.credentialConfigured ? "Base URL 必填 · API Key 可留空复用" : "Base URL 与 API Key 必填"}</small></div>
+            <div className="model-connection-editor__section-title"><span>连接信息</span><small>{isOjlabBaseUrl(draft.baseUrl) ? "此服务无需 API Key" : original?.credentialConfigured ? "Base URL 必填 · API Key 可留空复用" : original ? "Base URL 必填 · API Key 按服务要求填写" : "Base URL 与 API Key 必填"}</small></div>
             <div className="models-settings-panel__field">
               <label className="models-settings-panel__label" htmlFor="model-provider-kind">接口类型</label>
               <div className="models-settings-panel__select-shell">
@@ -913,10 +919,10 @@ function ConnectionEditor({
           {showAdvanced && (
             <div className="models-settings-panel__advanced">
               <div className="models-settings-panel__field-row">
-                <div className="models-settings-panel__field"><label className="models-settings-panel__label">请求协议</label><select className="models-settings-panel__select" value={draft.apiBackend} onChange={(event) => setDraft((current) => ({ ...current, apiBackend: event.target.value as ApiBackend }))} disabled={isOjlabBaseUrl(draft.baseUrl)}><option value="chat_completions">Chat Completions</option><option value="responses">Responses</option><option value="messages">Messages</option></select></div>
-                <div className="models-settings-panel__field"><label className="models-settings-panel__label">认证方式</label><select className="models-settings-panel__select" value={draft.authScheme} onChange={(event) => setDraft((current) => ({ ...current, authScheme: event.target.value as AuthScheme }))} disabled={isOjlabBaseUrl(draft.baseUrl)}><option value="bearer">Bearer Token</option><option value="x_api_key">X-API-Key</option></select></div>
+                <div className="models-settings-panel__field"><label className="models-settings-panel__label" htmlFor="model-api-backend">请求协议</label><select id="model-api-backend" className="models-settings-panel__select" value={draft.apiBackend} onChange={(event) => setDraft((current) => ({ ...current, apiBackend: event.target.value as ApiBackend }))} disabled={isOjlabBaseUrl(draft.baseUrl)}><option value="chat_completions">Chat Completions</option><option value="responses">Responses</option><option value="messages">Messages</option></select></div>
+                <div className="models-settings-panel__field"><label className="models-settings-panel__label" htmlFor="model-auth-scheme">认证方式</label><select id="model-auth-scheme" className="models-settings-panel__select" value={draft.authScheme} onChange={(event) => setDraft((current) => ({ ...current, authScheme: event.target.value as AuthScheme }))} disabled={isOjlabBaseUrl(draft.baseUrl)}><option value="bearer">Bearer Token</option><option value="x_api_key">X-API-Key</option></select></div>
               </div>
-              <div className="models-settings-panel__field"><label className="models-settings-panel__label">默认上下文窗口（可选）</label><input className="models-settings-panel__input" type="number" min={1} value={draft.contextWindow} onChange={(event) => setDraft((current) => ({ ...current, contextWindow: event.target.value }))} placeholder="例如 128000" /></div>
+              <div className="models-settings-panel__field"><label className="models-settings-panel__label" htmlFor="model-context-window">默认上下文窗口（可选）</label><input id="model-context-window" className="models-settings-panel__input" type="number" min={1} value={draft.contextWindow} onChange={(event) => setDraft((current) => ({ ...current, contextWindow: event.target.value }))} placeholder="例如 128000" /></div>
             </div>
           )}
 
@@ -942,10 +948,10 @@ function ConnectionEditor({
             </div>
           )}
           {error && <div className="models-settings-panel__editor-error">{error}</div>}
-          <p className="model-connection-editor__test-note">测试会向所选模型发送一条极短请求，可能产生少量 API 用量；直接保存不会发起请求。</p>
         </div>
 
-        <footer className="models-settings-panel__editor-footer">
+        <footer className="models-settings-panel__editor-footer model-connection-editor__footer">
+          <p className="model-connection-editor__test-note">测试会向所选模型发送一条极短请求，可能产生少量 API 用量；直接保存不会发起请求。</p>
           <button className="echo-button echo-button--secondary echo-button--medium" onClick={onCancel}>取消</button>
           <div className="model-connection-editor__footer-actions">
             <button className="echo-button echo-button--secondary echo-button--medium" onClick={() => void handleSave()} disabled={saving || testing}>{saving ? "保存中…" : "直接保存"}</button>

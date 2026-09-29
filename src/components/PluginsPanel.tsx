@@ -28,15 +28,19 @@ interface PluginsPanelProps {
 export function PluginsPanel({ sessionId, onToast, onBrowseMarket }: PluginsPanelProps) {
   const [plugins, setPlugins] = useState<PluginEntry[]>([]);
   const [loading, setLoading] = useState(false);
+  const [loadError, setLoadError] = useState<string | null>(null);
   const [busy, setBusy] = useState<string | null>(null);
 
   const reload = useCallback(async () => {
     setLoading(true);
+    setLoadError(null);
     try {
       const resp = await pluginsList(sessionId);
       setPlugins(resp.plugins ?? []);
     } catch (e) {
-      onToast?.(`加载插件失败：${String(e).replace(/^Error:\s*/, "")}`);
+      const message = String(e).replace(/^Error:\s*/, "");
+      setLoadError(message);
+      onToast?.(`加载插件失败：${message}`);
     } finally {
       setLoading(false);
     }
@@ -89,7 +93,9 @@ export function PluginsPanel({ sessionId, onToast, onBrowseMarket }: PluginsPane
       </div>
 
       <div className="plugins-panel__stats">
-        {plugins.length} 个插件 · {enabledCount} 启用 · {trustedCount} 受信任
+        {loadError && plugins.length === 0
+          ? "插件列表未加载"
+          : `${plugins.length} 个插件 · ${enabledCount} 启用 · ${trustedCount} 受信任`}
       </div>
 
       {!sessionId && (
@@ -99,7 +105,13 @@ export function PluginsPanel({ sessionId, onToast, onBrowseMarket }: PluginsPane
       )}
 
       <div className="plugins-panel__list">
-        {plugins.length === 0 && !loading && (
+        {loadError && (
+          <div className="plugins-panel__load-error" role="alert">
+            <span>插件列表加载失败：{loadError}{plugins.length > 0 ? "。下方保留上次加载的结果。" : ""}</span>
+            <button type="button" className="form-button" onClick={() => void reload()} disabled={loading}>重试</button>
+          </div>
+        )}
+        {plugins.length === 0 && !loading && !loadError && (
           <div className="plugins-panel__empty">
             <PuzzlePieceIcon size="xl" color="var(--echo-text-tertiary)" />
             <p>暂无插件。</p>

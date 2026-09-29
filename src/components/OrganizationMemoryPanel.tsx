@@ -64,6 +64,7 @@ import {
 import { useOrgSessionStore } from "@/stores/org-session-store";
 import { filesystemPickDirectory, filesystemPickFiles } from "@/lib/agent-client";
 import { FilePreview } from "./FilePreview";
+import { useModalFocus } from "@/lib/use-modal-focus";
 
 type Tab = "overview" | "memories" | "documents" | "skills";
 
@@ -192,6 +193,7 @@ export function OrganizationMemoryPanel({
   const [submissionPage, setSubmissionPage] = useState(1);
   const [folderBatch, setFolderBatch] = useState<{ folder: string; files: OrgFolderFile[]; skipped: number; totalBytes: number; scopeId: string; scopeName: string } | null>(null);
   const [uploadIntent, setUploadIntent] = useState<"files" | "folder" | null>(null);
+  const uploadDialogRef = useModalFocus<HTMLDivElement>(Boolean(uploadIntent), () => setUploadIntent(null));
   const [preview, setPreview] = useState<{ name: string; content: string; parsed: boolean; docId?: string; nextChunk?: number; more?: boolean; resourceId: string; submission: boolean; sourceType: string; unavailableReason?: string } | null>(null);
   const [previewLoading, setPreviewLoading] = useState(false);
   const [removeTarget, setRemoveTarget] = useState<{ id: string; name: string; submission: boolean } | null>(null);
@@ -976,8 +978,8 @@ export function OrganizationMemoryPanel({
           {publishDocumentTarget && <div className="org-document-modal" role="dialog" aria-modal="true" aria-label="发布文档副本">
             <div className="org-document-modal__confirm"><h3>发布文档副本</h3><p>将“{publishDocumentTarget.title}”发布到指定共享范围。原文档仍留在我的空间。</p><label className="org-document-publish__scope"><span>发布到</span><select aria-label="文档副本发布目标" value={publishScope} onChange={(event) => setPublishScope(event.target.value)}><option value="">选择共享范围</option>{scopes.filter((scope) => scope.kind !== "personal").map((scope) => <option key={scope.id} value={scope.id} disabled={scope.canPublishDocuments === false}>{scopeLabel(scope.kind)} · {scope.name}{scope.canPublishDocuments === false ? "（仅管理员可发布）" : ""}</option>)}</select></label><div><button onClick={() => setPublishDocumentTarget(null)} disabled={busy}>取消</button><button className="org-memory__primary" onClick={() => void publishDocument(publishDocumentTarget)} disabled={busy || !publishScope || scopes.find((scope) => scope.id === publishScope)?.canPublishDocuments === false}>{busy ? "发布中…" : "确认发布"}</button></div></div>
           </div>}
-          {uploadIntent && <div className="org-document-modal" role="dialog" aria-modal="true" aria-label="选择上传位置">
-            <div className="org-document-modal__confirm"><h3>{uploadIntent === "folder" ? "上传文件夹" : "上传文档"}</h3><p>选择文档的可访问范围。上传后会自动安全扫描并建立索引。</p><label className="org-document-publish__scope"><span>上传到</span><select aria-label="文档上传范围" value={writeScope} onChange={(event) => setWriteScope(event.target.value)}><option value="">选择上传范围</option>{availableDocumentScopes.map((scope) => <option key={scope.id} value={scope.id}>{scopeLabel(scope.kind)} · {scope.name}</option>)}</select></label><div><button onClick={() => setUploadIntent(null)}>取消</button><button className="org-memory__primary" onClick={() => void startDocumentUpload()} disabled={!allowDocumentUpload}>{uploadIntent === "folder" ? "选择文件夹" : "选择文件"}</button></div></div>
+          {uploadIntent && <div ref={uploadDialogRef} className="org-document-modal" role="dialog" aria-modal="true" aria-label="选择上传位置" tabIndex={-1}>
+            <div className="org-document-modal__confirm"><h3>{uploadIntent === "folder" ? "上传文件夹" : "上传文档"}</h3><p>选择文档的可访问范围。上传后会自动安全扫描并建立索引。</p><label className="org-document-publish__scope"><span>上传到</span><select aria-label="文档上传范围" data-modal-initial-focus value={writeScope} onChange={(event) => setWriteScope(event.target.value)}><option value="">选择上传范围</option>{availableDocumentScopes.map((scope) => <option key={scope.id} value={scope.id}>{scopeLabel(scope.kind)} · {scope.name}</option>)}</select></label><div><button onClick={() => setUploadIntent(null)}>取消</button><button className="org-memory__primary" onClick={() => void startDocumentUpload()} disabled={!allowDocumentUpload}>{uploadIntent === "folder" ? "选择文件夹" : "选择文件"}</button></div></div>
           </div>}
           {removeTarget && <div className="org-document-modal" role="alertdialog" aria-modal="true" aria-label="确认删除文档">
             <div className="org-document-modal__confirm"><h3>移除文档？</h3><p>“{removeTarget.name}”会从共享列表和 Agent 检索中移除。服务器会保留已上传的原始文件内容。</p><div><button onClick={() => setRemoveTarget(null)} disabled={busy}>取消</button><button className="org-memory__primary" onClick={() => void removeOwnDocument()} disabled={busy}>{busy ? "处理中…" : "确认移除"}</button></div></div>

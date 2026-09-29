@@ -120,6 +120,7 @@ export function MeetingMinutesPanel({
   const [recordingSource, setRecordingSource] = useState<RecordingSource>("microphone");
   const [captureSupport, setCaptureSupport] = useState<CaptureSupport | null>(null);
   const [captureError, setCaptureError] = useState<string | null>(null);
+  const [showCreate, setShowCreate] = useState(false);
 
   useEffect(() => {
     void meetingCaptureSupport().then(setCaptureSupport).catch(() => setCaptureSupport({ systemAudio: false, detail: "无法检测系统声音采集能力" }));
@@ -199,6 +200,7 @@ export function MeetingMinutesPanel({
   }, [activeJobs, busy, refreshJobState, selected, selectedId]);
 
   const chooseRecord = async (record: MeetingRecord) => {
+    setShowCreate(false);
     setSelectedId(record.id);
     setSelected(record);
     setDraftTranscript(record.transcript);
@@ -391,7 +393,16 @@ export function MeetingMinutesPanel({
         </div>
       </header>
 
-      <section className="meeting-panel__create">
+      {selected && !recorder.active && (
+        <div className="meeting-panel__create-compact">
+          <span>正在查看「{selected.title}」</span>
+          <button type="button" aria-expanded={showCreate} aria-controls={showCreate ? "meeting-create-form" : undefined} onClick={() => setShowCreate((value) => !value)}>
+            {showCreate ? "收起新建区" : "新建录音或导入文件"}
+          </button>
+        </div>
+      )}
+
+      {(!selected || recorder.active || showCreate) && <section id="meeting-create-form" className="meeting-panel__create">
         <div className="meeting-source" aria-label="录音来源">
           <div className="meeting-source__heading"><strong>录制哪些声音</strong><span>选择这次会议需要保留的音频</span></div>
           <div className="meeting-source__options" role="group" aria-label="录音来源">
@@ -440,7 +451,7 @@ export function MeetingMinutesPanel({
           录音默认仅保存在本机；开始前请确认已获得参会者同意。转写时向所选服务上传不超过 7 分钟的分片。
           {selectedModel?.insecureHttp && " 此连接使用 HTTP，录音和 API Key 将通过明文网络传输。"}
         </small>
-      </section>
+      </section>}
 
       {recorder.active && recorder.meeting && (
         <section className="meeting-recorder" aria-live="polite">

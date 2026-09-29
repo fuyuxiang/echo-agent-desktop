@@ -24,6 +24,7 @@ describe("update-store", () => {
       downloaded: 0,
       total: undefined,
       error: undefined,
+      errorStage: undefined,
     });
   });
 
@@ -52,6 +53,19 @@ describe("update-store", () => {
     expect(useUpdateStore.getState().error).toBe("VPN unavailable");
   });
 
+  it("手动检查失败记录检查阶段", async () => {
+    checkAppUpdate.mockRejectedValue(new Error("检查超时"));
+    await useUpdateStore.getState().check(true);
+    expect(useUpdateStore.getState()).toMatchObject({ status: "error", errorStage: "check" });
+  });
+
+  it("下载阶段失败与安装阶段失败分开记录", async () => {
+    useUpdateStore.setState({ status: "available", update: { version: "0.3.9", mandatory: false } });
+    installAppUpdate.mockRejectedValueOnce(new Error("下载中断"));
+    await useUpdateStore.getState().install();
+    expect(useUpdateStore.getState()).toMatchObject({ status: "error", errorStage: "download" });
+  });
+
   it("安装时更新下载进度", async () => {
     useUpdateStore.setState({
       status: "available",
@@ -71,6 +85,7 @@ describe("update-store", () => {
       downloaded: 100,
       total: 100,
       error: "restart prevented in test",
+      errorStage: "install",
     });
   });
 });

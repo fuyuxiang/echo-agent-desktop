@@ -1632,12 +1632,12 @@
   position: relative;
 }
 .share-menu__popover {
-  position: absolute;
-  top: 100%;
-  right: 0;
-  margin-top: 4px;
-  z-index: 20;
+  position: fixed;
+  z-index: var(--echo-layer-popover);
   min-width: 190px;
+  max-width: calc(100vw - 16px);
+  max-height: calc(100vh - 16px);
+  overflow-y: auto;
   background: var(--echo-bg-elevated, var(--echo-bg-primary));
   border: 1px solid var(--echo-border-default);
   border-radius: 10px;
@@ -4529,7 +4529,7 @@ button.diff__path {
 }
 .app-dialog--danger { border-color: color-mix(in srgb, var(--echo-status-error, #d92d20) 35%, var(--echo-border-default)); }
 .app-dialog__title { margin: 0; font-size: 1.0625rem; line-height: 1.45; }
-.app-dialog__description { margin-top: 8px; color: var(--echo-text-muted); font-size: 0.8125rem; line-height: 1.6; white-space: pre-wrap; }
+.app-dialog__description { margin-top: 8px; color: var(--echo-text-medium); font-size: 0.8125rem; line-height: 1.6; white-space: pre-wrap; }
 .retry-confirmation { display: grid; gap: 8px; }
 .retry-confirmation p { margin: 0; }
 .app-dialog__fields { display: flex; flex-direction: column; gap: 14px; margin-top: 18px; }
@@ -6357,6 +6357,37 @@ button.diff__path {
   border-radius: 14px;
   background: color-mix(in srgb, var(--echo-bg-secondary) 88%, transparent);
 }
+.meeting-panel__create-compact {
+  margin: 0 32px 14px;
+  min-height: 38px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  color: var(--echo-text-secondary);
+  font-size: 0.75rem;
+}
+.meeting-panel__create-compact span {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.meeting-panel__create-compact button {
+  flex: none;
+  min-height: 32px;
+  padding: 0 10px;
+  border: 1px solid var(--echo-border);
+  border-radius: 8px;
+  background: var(--echo-bg-secondary);
+  color: var(--echo-text-primary);
+  font: inherit;
+  cursor: pointer;
+}
+.meeting-panel__create-compact button:focus-visible {
+  outline: 2px solid var(--echo-accent);
+  outline-offset: 2px;
+}
 .meeting-source { flex-basis: 100%; min-width: 0; display: grid; gap: 10px; padding: 2px 2px 5px; }
 .meeting-source__heading { display: flex; align-items: baseline; gap: 10px; }
 .meeting-source__heading strong { font-size: .8125rem; letter-spacing: -.01em; }
@@ -6523,7 +6554,7 @@ button.diff__path {
 }
 @media (max-width: 640px) {
   .meeting-panel__header { padding: 20px 18px 16px; flex-wrap: wrap; gap: 12px; }
-  .meeting-panel__create,.meeting-recorder { margin-inline: 18px; }
+  .meeting-panel__create,.meeting-panel__create-compact,.meeting-recorder { margin-inline: 18px; }
   .meeting-source__options { grid-template-columns: 1fr; }
   .meeting-source__option { min-height: 55px; }
   .meeting-panel__body { grid-template-columns: 1fr; }
@@ -7998,7 +8029,7 @@ button.diff__path {
   /* EchoAgent CDP conversation-agent-card: gap=0, w=240px */
   gap: 0;
   width: 100%;
-  height: 30px;
+  height: 44px;
   /* EchoAgent: no leading icon — text aligns with the 任务/空间 section label text */
   padding: 4px 12px;
   box-sizing: border-box;
@@ -8017,7 +8048,9 @@ button.diff__path {
   background: var(--echo-palette-gray-5);
 }
 .sidebar__conv-title {
-  flex: 1;
+  grid-column: 1 / -1;
+  grid-row: 1;
+  min-width: 0;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -8566,8 +8599,10 @@ button.diff__path {
   font-weight: 500;
 }
 .sidebar__conv-pin {
+  grid-column: 2;
+  grid-row: 2;
   color: var(--echo-brand);
-  margin-left: auto;
+  margin-left: 4px;
 }
 
 /* ========================================================================
@@ -8613,17 +8648,22 @@ button.diff__path {
 }
 /* Relative-time tail on a session row (e.g. "3小时前"). */
 .sidebar__conv-time {
+  grid-column: 3;
+  grid-row: 2;
+  justify-self: end;
   flex: none;
   margin-left: 6px;
   font-size: 0.6875rem;
   color: var(--echo-text-tertiary);
 }
 .sidebar__conv-status {
+  grid-column: 1;
+  grid-row: 2;
   display: inline-flex;
   align-items: center;
   gap: 4px;
   flex: none;
-  margin-left: 6px;
+  margin-left: 0;
   color: var(--echo-text-tertiary);
   font-size: 0.625rem;
   white-space: nowrap;
@@ -13096,6 +13136,21 @@ body:has([aria-modal="true"]) .global-tooltip:not(.global-tooltip--dialog) {
   flex-direction: column;
   gap: 8px;
 }
+.plugins-panel__load-error {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  gap: 10px;
+  padding: 12px 14px;
+  border: 1px solid color-mix(in srgb, var(--echo-status-error) 35%, var(--echo-border-default));
+  border-radius: 10px;
+  background: var(--echo-bg-primary);
+  color: var(--echo-text-strong);
+  font-size: 0.8125rem;
+  line-height: 1.5;
+  overflow-wrap: anywhere;
+}
 .plugins-panel__item {
   display: flex;
   gap: 12px;
@@ -14244,6 +14299,9 @@ body:has([aria-modal="true"]) .global-tooltip:not(.global-tooltip--dialog) {
 .sk-import-check input { width: 15px; height: 15px; accent-color: var(--echo-brand); }
 .sk-import-req-title { font-size: 0.8125rem; font-weight: 600; color: var(--echo-text-strong); margin-bottom: 6px; }
 .sk-import-req-list { margin: 0; padding-left: 18px; font-size: 0.78125rem; line-height: 1.8; color: var(--echo-text-medium); }
+.sk-import-req-details { margin: 8px 0 0 18px; color: var(--echo-text-medium); font-size: 0.75rem; line-height: 1.6; }
+.sk-import-req-details summary { cursor: pointer; color: var(--echo-text-strong); }
+.sk-import-req-details p { margin: 6px 0 0; }
 .sk-install-error { padding: 9px 11px; border-radius: 8px; background: rgba(229,72,77,.09); color: #d33b40; font-size: 0.75rem; line-height: 1.5; }
 .sk-inspection { display: flex; flex-direction: column; gap: 12px; padding: 16px; border: 1px solid var(--echo-border-default); border-radius: 12px; background: var(--echo-bg-secondary); }
 .sk-inspection-head { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
@@ -15044,6 +15102,7 @@ body:has([aria-modal="true"]) .global-tooltip:not(.global-tooltip--dialog) {
 .storage-panel__list{list-style:none;margin:0;padding:4px 0}
 .storage-panel__entry{display:flex;align-items:center;gap:8px;padding:4px 14px}
 .storage-panel__entry:hover{background:var(--echo-bg-tertiary)}
+.storage-panel__entry--selected{background:color-mix(in srgb,var(--echo-brand) 8%,var(--echo-bg-primary));box-shadow:inset 2px 0 var(--echo-brand)}
 .storage-panel__entry-icon{flex:none}
 .storage-panel__entry-name{flex:1;min-width:0;color:var(--echo-text-strong);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .storage-panel__entry.dir .storage-panel__entry-name{cursor:pointer;font-weight:500}

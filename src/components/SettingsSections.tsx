@@ -454,6 +454,7 @@ export function HelpSettingsPanel() {
   const update = useUpdateStore((state) => state.update);
   const checkedAt = useUpdateStore((state) => state.checkedAt);
   const updateError = useUpdateStore((state) => state.error);
+  const updateErrorStage = useUpdateStore((state) => state.errorStage);
   const downloaded = useUpdateStore((state) => state.downloaded);
   const total = useUpdateStore((state) => state.total);
   const checkUpdate = useUpdateStore((state) => state.check);
@@ -483,7 +484,7 @@ export function HelpSettingsPanel() {
               {updateStatus === "downloading" && `正在下载 v${update?.version}`}
               {updateStatus === "installing" && "正在安装，完成后将重启"}
               {updateStatus === "up-to-date" && "当前已是最新版本"}
-              {updateStatus === "error" && "检查更新失败"}
+              {updateStatus === "error" && (updateErrorStage === "install" ? "安装更新失败" : updateErrorStage === "download" ? "下载更新失败" : "检查更新失败")}
               {updateStatus === "idle" && "检查 EchoAgent 更新"}
             </strong>
             <span>
@@ -538,7 +539,7 @@ export function HelpSettingsPanel() {
       {resourceError && <p className="settings-msg settings-msg--warn" role="alert">{resourceError}</p>}
       <SettingsGroup title="快速排查" desc="遇到模型不可用或智能体无法启动时，建议按顺序检查。">
         <ol className="settings-checklist">
-          <li><span>1</span><div><strong>确认模型配置</strong><p>在“模型”页面至少配置一个厂商、API Key 和模型。</p></div></li>
+          <li><span>1</span><div><strong>确认模型配置</strong><p>在“模型”中确认有可用模型；使用个人服务时，添加连接并填写所需凭据。</p></div></li>
           <li><span>2</span><div><strong>检查配置文件</strong><p>确认 <code>~/.echo-agent/config.toml</code> 可以正常读写。</p></div></li>
           <li><span>3</span><div><strong>重新加载或重启</strong><p>先在“系统设置”尝试热重载，仍无效时再重启应用。</p></div></li>
         </ol>

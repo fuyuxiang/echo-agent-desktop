@@ -85,7 +85,7 @@ describe("知识库端到端冒烟", () => {
     const onNavigate = vi.fn();
     const user = userEvent.setup();
     render(<Sidebar {...base} onNavigate={onNavigate} onToast={vi.fn()} />);
-    await user.hover(screen.getByText("更多"));
+    await user.click(screen.getByRole("button", { name: /更多/ }));
     const menu = await screen.findByRole("menu");
     expect(menu).toBeInTheDocument();
     fireEvent.click(screen.getByText("知识库"));
