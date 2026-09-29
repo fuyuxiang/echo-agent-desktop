@@ -22,7 +22,7 @@ const MAX_CONFIGURED_SKILL_SOURCES: usize = 512;
 pub(crate) const MAX_PICKED_FILES: usize = 100;
 const MAX_ATTACHMENT_COUNT: usize = 20;
 pub(crate) const MAX_ATTACHMENT_FILE_BYTES: u64 = 20 * 1024 * 1024;
-const MAX_ATTACHMENT_TOTAL_BYTES: u64 = 64 * 1024 * 1024;
+pub(crate) const MAX_ATTACHMENT_TOTAL_BYTES: u64 = 64 * 1024 * 1024;
 
 /// Native-side filesystem authority for custom Tauri commands.
 ///

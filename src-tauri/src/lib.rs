@@ -411,6 +411,7 @@ pub fn run() {
             weixin::weixin_qr_start,
             weixin::weixin_qr_poll,
             weixin::weixin_set_workspaces,
+            weixin::weixin_revoke_session,
             weixin::weixin_handoff,
             weixin::weixin_disconnect,
             desktop_validation::desktop_validation_ready,

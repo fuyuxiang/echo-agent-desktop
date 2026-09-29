@@ -10,6 +10,11 @@
 .weixin-channel__workspace { display: flex; align-items: center; gap: 9px; padding: 8px 0; }
 .weixin-channel__workspace span { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .weixin-channel__workspace small { margin-left: auto; flex-shrink: 0; opacity: .65; }
+.weixin-channel__shared { display: flex; align-items: center; justify-content: space-between; gap: 16px; padding: 10px 0; border-top: 1px solid var(--echo-border-default); }
+.weixin-channel__shared > div { min-width: 0; }
+.weixin-channel__shared strong, .weixin-channel__shared small { display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.weixin-channel__shared small { color: var(--echo-text-medium); margin-top: 3px; }
+.weixin-channel__shared button { flex-shrink: 0; border: 1px solid var(--echo-border-default); background: transparent; color: var(--echo-text-strong); }
 .weixin-channel__commands { display: grid; grid-template-columns: max-content 1fr; gap: 7px 18px; font-size: 13px; }
 .weixin-channel__commands span:nth-child(odd) { font-weight: 600; }
 .weixin-channel__disconnect { justify-self: start; border: 0; background: none; color: #b53b3b; cursor: pointer; padding: 8px 0; }

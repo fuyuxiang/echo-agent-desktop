@@ -28,7 +28,7 @@ try {
   const errors = [];
   let layouts = 0;
   page.on("pageerror", error => errors.push(error.message));
-  const surfaces = ["memory", "security", "cloud-storage", "notify-channels", "weixin-connected", "weixin-unconnected", "capabilities", "coding", "organization", "conversation", "meeting"];
+  const surfaces = ["memory", "security", "cloud-storage", "notify-channels", "weixin-connected", "weixin-offline", "weixin-unconnected", "capabilities", "coding", "organization", "conversation", "meeting"];
   for (const [width, height, theme] of [[1440, 900, "light"], [1024, 768, "dark"], [768, 720, "light"]]) {
     await page.setViewportSize({ width, height });
     for (const surface of surfaces) {
@@ -127,6 +127,9 @@ try {
         await page.getByText("正在接收微信消息").waitFor();
         assert.equal(await page.getByRole("checkbox").count(), 2);
       }
+      if (surface === "weixin-offline") {
+        await page.getByText("3 条文字回复待发送，连接恢复后自动重试。").waitFor();
+      }
       if (surface === "weixin-unconnected") {
         await page.getByRole("button", { name: "获取绑定二维码" }).click();
         await page.getByRole("img", { name: "微信绑定二维码" }).waitFor();
@@ -141,6 +144,15 @@ try {
       assert.ok(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth + 1), `${surface}: horizontal page overflow`);
       await page.screenshot({ path: join(output, `${surface}-${width}-${theme}.png`) });
       layouts += 1;
+      if (surface === "weixin-connected" || surface === "weixin-offline") {
+        await page.getByRole("heading", { name: "单独交接的任务" }).scrollIntoViewIfNeeded();
+        await page.screenshot({ path: join(output, `${surface}-shared-${width}-${theme}.png`) });
+        layouts += 1;
+      }
+      if (surface === "weixin-connected") {
+        await page.getByRole("button", { name: "撤销 准备发布说明 的微信授权" }).click();
+        await page.getByText("暂无单独交接的任务。").waitFor();
+      }
       if (surface === "cloud-storage") {
         await page.getByRole("button", { name: "添加存储源" }).click();
         const fields = await page.locator(".storage-panel__field .form-control").evaluateAll(elements => elements.map(element => {

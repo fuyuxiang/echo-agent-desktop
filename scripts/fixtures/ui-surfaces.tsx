@@ -72,9 +72,12 @@ Object.assign(window, {
         case "notify_channels_list": return channels;
         case "notify_channel_upsert": channels = [...channels, args.channel]; return;
         case "notify_channel_test": return { ok: true };
-        case "weixin_status": return query.get("surface") === "weixin-connected"
-          ? { connected: true, botId: "review-bot", activeSession: "review-session-12345678", allowedWorkspaces: ["/review/EchoAgent"], online: true }
-          : { connected: false, allowedWorkspaces: [], online: false };
+        case "weixin_status": return query.get("surface") === "weixin-offline"
+          ? { connected: true, botId: "review-bot", activeSession: "review-session-12345678", allowedWorkspaces: ["/review/EchoAgent"], sharedSessions: [{ sessionId: "review-session-12345678", title: "准备发布说明", cwd: "/review/EchoAgent" }], pendingReplies: 3, online: false, lastError: "微信连接超时" }
+          : query.get("surface") === "weixin-connected"
+          ? { connected: true, botId: "review-bot", activeSession: "review-session-12345678", allowedWorkspaces: ["/review/EchoAgent"], sharedSessions: [{ sessionId: "review-session-12345678", title: "准备发布说明", cwd: "/review/EchoAgent" }], pendingReplies: 0, online: true }
+          : { connected: false, allowedWorkspaces: [], sharedSessions: [], pendingReplies: 0, online: false };
+        case "weixin_revoke_session": return { connected: true, botId: "review-bot", allowedWorkspaces: ["/review/EchoAgent"], sharedSessions: [], pendingReplies: 0, online: true };
         case "agent_list_workspaces": return [{ cwd: "/review/EchoAgent", sessionCount: 3 }, { cwd: "/review/设计系统", sessionCount: 2 }];
         case "weixin_qr_start": return { qrUrl: "https://weixin.qq.com/x/review-qr" };
         case "weixin_qr_poll": return { status: "expired", connected: false };
@@ -150,6 +153,6 @@ function Fixture() {
       <ProjectSwitcher activeCwd={cwd} projects={[{ cwd: "/review/EchoAgent" }, { cwd: "/review/一个名称很长但仍然可以完整查看路径的项目" }]} onSelect={setCwd} onRemove={() => {}} onOpenFolder={() => {}} />
     </WorkbenchIdentity><div /></header>
   </div></div>;
-  return <SettingsPanel open initialSection={(surface === "weixin-connected" || surface === "weixin-unconnected" ? "weixin-channel" : surface) as SettingsSectionId} onClose={() => {}} />;
+  return <SettingsPanel open initialSection={(surface === "weixin-connected" || surface === "weixin-offline" || surface === "weixin-unconnected" ? "weixin-channel" : surface) as SettingsSectionId} onClose={() => {}} />;
 }
 createRoot(document.getElementById("root")!).render(<ThemeProvider><Fixture /></ThemeProvider>);
