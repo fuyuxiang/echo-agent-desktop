@@ -280,6 +280,8 @@ EchoAgent 默认将应用状态保存在 `~/.echo-agent/`；启动前设置 `ECH
 | `cargo fmt --manifest-path src-tauri/Cargo.toml --check` | 检查 Rust 格式 |
 | `cargo clippy --locked --manifest-path src-tauri/Cargo.toml --lib -- -D warnings` | 运行 Clippy |
 
+Windows、macOS 双架构的安装包构建与原子更新发布步骤见 [桌面发行说明](docs/desktop-release.md)。
+
 CI 会在 `main` 推送和 Pull Request 上执行前端类型检查、单元测试、生产构建，以及 Rust 格式、Clippy 和单元测试。自动化模块另在 macOS Intel/Apple Silicon、Windows 和 Linux X11 环境做原生编译或测试；需要真实 Chromium 和桌面会话的 Browser Use smoke test 保持为显式运行项。
 
 ## 路线图

@@ -6,6 +6,7 @@ import { afterEach, describe, expect, it } from "vitest";
 
 import { checkVersions, setVersion, validateVersion } from "./release-version.mjs";
 import { verifySignatureMetadata } from "./verify-updater-signature.mjs";
+import { checkInstallerVersion, readPeVersion } from "./inspect-windows-installer.mjs";
 
 const temporaryDirectories = [];
 
@@ -99,5 +100,54 @@ describe("updater signature metadata", () => {
     signatureLines[1] = wrongKeyPacket.toString("base64");
     fs.writeFileSync(`${artifact}.sig`, Buffer.from(signatureLines.join("\n")).toString("base64"));
     expect(() => verifySignatureMetadata(artifact, undefined, root)).toThrow(/密钥 ID/);
+  });
+});
+
+function peWithVersion(major, minor, patch) {
+  const bytes = Buffer.alloc(0x600);
+  bytes.writeUInt16LE(0x5a4d, 0);
+  bytes.writeUInt32LE(0x80, 0x3c);
+  bytes.writeUInt32LE(0x00004550, 0x80);
+  bytes.writeUInt16LE(1, 0x86); // One .rsrc section.
+  bytes.writeUInt16LE(0xe0, 0x94);
+  bytes.writeUInt16LE(0x10b, 0x98);
+  bytes.writeUInt32LE(0x1000, 0x98 + 96 + 16);
+  bytes.writeUInt32LE(0x400, 0x98 + 96 + 20);
+  const section = 0x98 + 0xe0;
+  bytes.write(".rsrc", section);
+  bytes.writeUInt32LE(0x400, section + 8);
+  bytes.writeUInt32LE(0x1000, section + 12);
+  bytes.writeUInt32LE(0x400, section + 16);
+  bytes.writeUInt32LE(0x200, section + 20);
+  bytes.writeUInt16LE(1, 0x200 + 14);
+  bytes.writeUInt32LE(16, 0x210);
+  bytes.writeUInt32LE(0x80000020, 0x214);
+  bytes.writeUInt16LE(1, 0x220 + 14);
+  bytes.writeUInt32LE(1, 0x230);
+  bytes.writeUInt32LE(0x80000040, 0x234);
+  bytes.writeUInt16LE(1, 0x240 + 14);
+  bytes.writeUInt32LE(1033, 0x250);
+  bytes.writeUInt32LE(0x60, 0x254);
+  bytes.writeUInt32LE(0x1100, 0x260);
+  bytes.writeUInt32LE(92, 0x264);
+  bytes.writeUInt16LE(92, 0x300);
+  bytes.writeUInt16LE(52, 0x302);
+  bytes.write("VS_VERSION_INFO\0", 0x306, "utf16le");
+  bytes.writeUInt32LE(0xfeef04bd, 0x328);
+  bytes.writeUInt32LE((major << 16) | minor, 0x330);
+  bytes.writeUInt32LE(patch << 16, 0x334);
+  return bytes;
+}
+
+describe("Windows installer version gate", () => {
+  it("reads VERSIONINFO and rejects a renamed older installer", () => {
+    const root = temporaryDirectory();
+    const installer = path.join(root, "EchoAgent-v1.2.4-windows-x86_64-setup.exe");
+    const bytes = peWithVersion(1, 2, 3);
+    expect(readPeVersion(bytes)).toEqual([1, 2, 3, 0]);
+    fs.writeFileSync(installer, bytes);
+    expect(() => checkInstallerVersion(installer, "1.2.4")).toThrow(/does not match/);
+    expect(checkInstallerVersion(installer, "1.2.3")).toBe("1.2.3.0");
+    expect(() => readPeVersion(bytes.subarray(0, 0x280))).toThrow(/truncated|outside/);
   });
 });

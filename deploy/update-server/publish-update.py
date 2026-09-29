@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Atomically publish one signed EchoAgent desktop updater artifact."""
+"""Publish signed desktop updates through one atomic manifest-generation switch."""
 
 from __future__ import annotations
 
@@ -12,6 +12,8 @@ import os
 from pathlib import Path
 import re
 import sys
+import tempfile
+import uuid
 from urllib.parse import quote
 
 SEMVER = re.compile(
@@ -31,9 +33,10 @@ TARGETS = {
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser()
     parser.add_argument("--version", required=True)
-    parser.add_argument("--target", choices=sorted(TARGETS), required=True)
-    parser.add_argument("--artifact", type=Path, required=True)
-    parser.add_argument("--signature", type=Path, required=True)
+    parser.add_argument("--target", choices=sorted(TARGETS))
+    parser.add_argument("--artifact", type=Path)
+    parser.add_argument("--signature", type=Path)
+    parser.add_argument("--batch-dir", type=Path)
     parser.add_argument("--notes-file", type=Path)
     parser.add_argument("--mandatory", action="store_true")
     parser.add_argument(
@@ -113,6 +116,71 @@ def sha256_file(path: Path) -> str:
     return digest.hexdigest()
 
 
+def artifact_name(version: str, target: str) -> str:
+    suffix = "-setup.exe" if target == "windows-x86_64" else ".app.tar.gz"
+    return f"EchoAgent-v{version}-{target}{suffix}"
+
+
+def read_signature(path: Path) -> str:
+    signature = path.read_text(encoding="utf-8").strip()
+    if len(signature) < 80 or any(char.isspace() for char in signature):
+        raise ValueError(f"invalid Tauri updater signature: {path}")
+    return signature
+
+
+def current_manifests(stable: Path) -> dict[str, dict[str, object]]:
+    current = stable / "current"
+    if not current.is_symlink():
+        raise ValueError("stable/current is missing; install the generation-aware server first")
+    generations = (stable / "generations").resolve()
+    resolved = current.resolve(strict=True)
+    if resolved.parent != generations:
+        raise ValueError("stable/current points outside the managed generations directory")
+    manifests = {}
+    for target in TARGETS:
+        path = resolved / f"{target}.json"
+        if path.exists():
+            manifests[target] = json.loads(path.read_text(encoding="utf-8"))
+    return manifests
+
+
+def publish_generation(stable: Path, manifests: dict[str, dict[str, object]]) -> None:
+    generations = stable / "generations"
+    generations.mkdir(mode=0o755, parents=True, exist_ok=True)
+    generation = Path(tempfile.mkdtemp(prefix="release-", dir=generations))
+    os.chmod(generation, 0o755)
+    for target, manifest in manifests.items():
+        atomic_json(manifest, generation / f"{target}.json")
+    temporary_link = stable / f".current.{uuid.uuid4().hex}.tmp"
+    try:
+        os.symlink(f"generations/{generation.name}", temporary_link)
+        os.replace(temporary_link, stable / "current")
+    finally:
+        temporary_link.unlink(missing_ok=True)
+
+
+def requested_artifacts(args: argparse.Namespace, version: str) -> dict[str, tuple[Path, Path]]:
+    if args.batch_dir:
+        if args.target or args.artifact or args.signature:
+            raise ValueError("--batch-dir cannot be combined with single-target arguments")
+        root = args.batch_dir.resolve()
+        if not root.is_dir():
+            raise ValueError(f"batch directory does not exist: {root}")
+        return {
+            target: (root / artifact_name(version, target), root / f"{artifact_name(version, target)}.sig")
+            for target in TARGETS
+        }
+    if not args.target or not args.artifact or not args.signature:
+        raise ValueError("provide --batch-dir or --target, --artifact and --signature")
+    artifact = args.artifact.resolve()
+    signature = args.signature.resolve()
+    if artifact.name != artifact_name(version, args.target):
+        raise ValueError(f"artifact name does not match version/target: {artifact.name}")
+    if signature.name != f"{artifact.name}.sig":
+        raise ValueError("signature filename must be <artifact>.sig")
+    return {args.target: (artifact, signature)}
+
+
 def main() -> int:
     args = parse_args()
     version = args.version.removeprefix("v")
@@ -122,102 +190,88 @@ def main() -> int:
         print(error, file=sys.stderr)
         return 2
 
-    artifact = args.artifact.resolve()
-    signature_path = args.signature.resolve()
-    if not artifact.is_file() or not signature_path.is_file():
-        print("artifact and signature must both be regular files", file=sys.stderr)
-        return 2
-    if not any(artifact.name.endswith(suffix) for suffix in TARGETS[args.target]):
-        print(f"artifact type does not match target {args.target}: {artifact.name}", file=sys.stderr)
-        return 2
-    expected_name = (
-        f"EchoAgent-v{version}-{args.target}-setup.exe"
-        if args.target == "windows-x86_64"
-        else f"EchoAgent-v{version}-{args.target}.app.tar.gz"
-    )
-    if artifact.name != expected_name:
-        print(
-            f"artifact name does not match version/target; expected {expected_name}",
-            file=sys.stderr,
-        )
-        return 2
-    if signature_path.name != f"{artifact.name}.sig":
-        print("signature filename must be <artifact>.sig", file=sys.stderr)
-        return 2
-
-    signature = signature_path.read_text(encoding="utf-8").strip()
-    if len(signature) < 80 or any(char.isspace() for char in signature):
-        print("signature does not look like a Tauri updater .sig payload", file=sys.stderr)
+    try:
+        requested = requested_artifacts(args, version)
+        signatures = {}
+        signature_hashes = {}
+        for artifact, signature_path in requested.values():
+            if not artifact.is_file() or not signature_path.is_file():
+                raise ValueError(f"artifact and signature must both be regular files: {artifact}")
+        for target, (_, signature_path) in requested.items():
+            signatures[target] = read_signature(signature_path)
+            signature_hashes[target] = sha256_file(signature_path)
+    except ValueError as error:
+        print(error, file=sys.stderr)
         return 2
 
     notes = ""
     if args.notes_file:
         notes = args.notes_file.read_text(encoding="utf-8").strip()
-    incoming_sha256 = sha256_file(artifact)
+    incoming_hashes = {target: sha256_file(artifact) for target, (artifact, _) in requested.items()}
 
     root = args.root.resolve()
     stable = root / "stable"
     version_dir = root / "releases" / version
     stable.mkdir(parents=True, exist_ok=True)
-    version_dir.mkdir(mode=0o755, parents=True, exist_ok=True)
 
     lock_path = stable / ".publish.lock"
     with lock_path.open("a", encoding="utf-8") as lock:
         fcntl.flock(lock.fileno(), fcntl.LOCK_EX)
-        manifest_path = stable / f"{args.target}.json"
-        existing: dict[str, object] | None = None
-        if manifest_path.exists():
-            existing = json.loads(manifest_path.read_text(encoding="utf-8"))
-            existing_version = str(existing.get("version", ""))
-            if existing_version == version:
-                if str(existing.get("sha256", "")) != incoming_sha256:
-                    print(
-                        "refusing to replace an existing version with different bytes",
-                        file=sys.stderr,
-                    )
-                    return 2
-            elif existing_version:
-                try:
-                    if incoming_key <= semver_key(existing_version):
-                        print(
-                            f"refusing non-forward publish: {version} <= {existing_version}",
-                            file=sys.stderr,
-                        )
-                        return 2
-                except ValueError:
-                    print("existing latest.json contains invalid SemVer", file=sys.stderr)
-                    return 2
-
-        destination = version_dir / artifact.name
         try:
-            sha256 = atomic_copy(artifact, destination, incoming_sha256)
-        except ValueError:
-            print("artifact changed while it was being published", file=sys.stderr)
+            manifests = current_manifests(stable)
+            for target, (artifact, signature_path) in requested.items():
+                existing = manifests.get(target)
+                existing_version = str(existing.get("version", "")) if existing else ""
+                incoming_sha256 = incoming_hashes[target]
+                if existing_version == version:
+                    if str(existing.get("sha256", "")) != incoming_sha256:
+                        raise ValueError("refusing to replace an existing version with different bytes")
+                    if str(existing.get("signature", "")) != signatures[target]:
+                        raise ValueError("refusing to replace an existing version with a different signature")
+                elif existing_version and incoming_key <= semver_key(existing_version):
+                    raise ValueError(f"refusing non-forward publish: {version} <= {existing_version}")
+                destination = version_dir / artifact.name
+                if destination.exists() and sha256_file(destination) != incoming_sha256:
+                    raise ValueError(f"refusing to replace immutable release bytes: {destination}")
+                destination_signature = version_dir / signature_path.name
+                if destination_signature.exists() and sha256_file(destination_signature) != signature_hashes[target]:
+                    raise ValueError(f"refusing to replace immutable release signature: {destination_signature}")
+        except (ValueError, OSError) as error:
+            print(error, file=sys.stderr)
             return 2
-        (version_dir / f"{artifact.name}.sha256").write_text(
-            f"{sha256}  {artifact.name}\n", encoding="utf-8"
-        )
-        os.chmod(version_dir / f"{artifact.name}.sha256", 0o644)
-        atomic_copy(signature_path, version_dir / f"{artifact.name}.sig")
 
-        if existing and existing.get("version") == version and not notes:
-            notes = str(existing.get("notes", ""))
+        version_dir.mkdir(mode=0o755, parents=True, exist_ok=True)
+        try:
+            for target, (artifact, signature_path) in requested.items():
+                sha256 = atomic_copy(artifact, version_dir / artifact.name, incoming_hashes[target])
+                atomic_copy(
+                    signature_path,
+                    version_dir / f"{artifact.name}.sig",
+                    signature_hashes[target],
+                )
+                checksum = version_dir / f"{artifact.name}.sha256"
+                checksum.write_text(f"{sha256}  {artifact.name}\n", encoding="utf-8")
+                os.chmod(checksum, 0o644)
+                existing = manifests.get(target)
+                target_notes = notes or (
+                    str(existing.get("notes", "")) if existing and existing.get("version") == version else ""
+                )
+                manifests[target] = {
+                    "version": version,
+                    "notes": target_notes or f"EchoAgent {version}",
+                    "pub_date": dt.datetime.now(dt.timezone.utc).isoformat().replace("+00:00", "Z"),
+                    "mandatory": bool(args.mandatory),
+                    "url": f"{args.base_url.rstrip('/')}/releases/{quote(version)}/{quote(artifact.name)}",
+                    "signature": signatures[target],
+                    "sha256": sha256,
+                }
+            publish_generation(stable, manifests)
+        except (OSError, ValueError) as error:
+            print(f"publication failed before manifest switch: {error}", file=sys.stderr)
+            return 2
 
-        base_url = args.base_url.rstrip("/")
-        manifest: dict[str, object] = {
-            "version": version,
-            "notes": notes or f"EchoAgent {version}",
-            "pub_date": dt.datetime.now(dt.timezone.utc).isoformat().replace("+00:00", "Z"),
-            "mandatory": bool(args.mandatory),
-            "url": f"{base_url}/releases/{quote(version)}/{quote(artifact.name)}",
-            "signature": signature,
-            "sha256": sha256,
-        }
-        atomic_json(manifest, manifest_path)
-
-    print(f"published EchoAgent {version} for {args.target}")
-    print(f"artifact: {destination}")
-    print(f"manifest: {manifest_path}")
+    print(f"published EchoAgent {version} for {', '.join(requested)}")
+    print(f"manifests: {stable / 'current'}")
     return 0
 
 

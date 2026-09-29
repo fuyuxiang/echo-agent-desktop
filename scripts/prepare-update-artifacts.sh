@@ -172,6 +172,9 @@ windows_file_info="$(file -b "$WINDOWS_EXE")"
 if [[ "$windows_file_info" != *"PE32"* || "$windows_file_info" != *"Nullsoft Installer"* ]]; then
   die "Windows input is not recognized as an NSIS installer: $windows_file_info"
 fi
+windows_embedded_version="$(node "$PROJECT_ROOT/scripts/inspect-windows-installer.mjs" "$WINDOWS_EXE" "$VERSION")" \
+  || die "Windows installer embedded FileVersion does not match $VERSION"
+log_ok "Verified Windows installer FileVersion $windows_embedded_version"
 
 WINDOWS_PLATFORM_SIGNING="valid"
 MAC_ARM64_PLATFORM_SIGNING="valid"

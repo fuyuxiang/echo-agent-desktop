@@ -261,6 +261,8 @@ All limits are in tokens. Maximum input equals the context window minus maximum 
 | `pnpm build` | Type-check TypeScript and build the frontend |
 | `pnpm dist:mac` | Build and validate a DMG on macOS |
 | `pnpm dist:win` | Build an NSIS installer on Windows |
+
+See the [desktop release guide](docs/desktop-release.en.md) for Windows and both macOS architectures, packaged validation, and atomic updater publishing.
 | `cargo test --locked --manifest-path src-tauri/Cargo.toml --lib -j 2` | Run Rust unit tests |
 | `cargo fmt --manifest-path src-tauri/Cargo.toml --check` | Check Rust formatting |
 | `cargo clippy --locked --manifest-path src-tauri/Cargo.toml --lib -- -D warnings` | Run Clippy |

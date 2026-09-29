@@ -5,8 +5,18 @@ import { latestTheiaSourceMtime } from "./theia-source-mtime.mjs";
 import { ensureTheiaNodeWritable } from "./ensure-theia-node-writable.mjs";
 
 const root = resolve(import.meta.dirname, "..");
+const major = Number(process.versions.node.split(".")[0]);
+if (major !== 22 && major !== 24) {
+  throw new Error("Echo Code IDE is validated with Node.js 22 or 24. Select one of those versions and retry.");
+}
 const resources = join(root, "src-tauri/resources/theia");
 const runtime = join(resources, "browser/lib/backend/main.js");
+const runtimeDependencies = [
+  "browser/package-lock.json",
+  "browser/node_modules/@theia/core/package.json",
+  "browser/node_modules/inversify/package.json",
+  "node/LICENSE",
+];
 const app = JSON.parse(readFileSync(join(root, "vendor/theia-platform/examples/browser/package.json"), "utf8"));
 const languagePluginIds = [...Object.keys(app.theiaPlugins ?? {}), "echoagent.toml-basics"];
 const languagePluginsReady = languagePluginIds.every(id => {
@@ -25,18 +35,20 @@ try {
 } catch {
   platform = null;
 }
+const stagedNodeVersion = existsSync(node)
+  ? spawnSync(node, ["--version"], { encoding: "utf8", timeout: 5000 })
+  : null;
 
-if (existsSync(runtime) && existsSync(node) && languagePluginsReady
+if (existsSync(runtime) && existsSync(node)
+    && runtimeDependencies.every(path => existsSync(join(resources, path)))
+    && languagePluginsReady
     && platform?.platform === process.platform && platform?.arch === process.arch
+    && platform?.node === process.version
+    && stagedNodeVersion?.status === 0 && stagedNodeVersion.stdout.trim() === process.version
     && platform?.sourceMtimeMs >= latestTheiaSourceMtime(join(root, "vendor/theia-platform"))) {
   ensureTheiaNodeWritable(root, node);
   console.log("Echo Code IDE runtime is already staged.");
   process.exit(0);
-}
-
-const major = Number(process.versions.node.split(".")[0]);
-if (major !== 22 && major !== 24) {
-  throw new Error("Echo Code IDE is validated with Node.js 22 or 24. Select one of those versions and retry.");
 }
 
 const pnpm = process.platform === "win32" ? "pnpm.cmd" : "pnpm";

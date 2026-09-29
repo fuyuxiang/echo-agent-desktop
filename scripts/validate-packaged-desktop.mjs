@@ -16,7 +16,7 @@ try {
   if (error) throw error;
   if (!finished) throw new Error("Packaged desktop did not finish its WebView/IPC startup check within 100 seconds");
   const report = JSON.parse(readFileSync(join(home, "desktop-validation.json"), "utf8"));
-  if (!report.webviewRendered || !report.ipcReady || !report.resourcesPresent || (process.platform === "win32" && !report.ideStarted) || app.exitCode !== 0) throw new Error(`Packaged desktop startup check failed: ${report.ideError ?? "see the validation report"}`);
+  if (!report.webviewRendered || !report.ipcReady || !report.resourcesPresent || (["win32", "darwin"].includes(process.platform) && !report.ideStarted) || app.exitCode !== 0) throw new Error(`Packaged desktop startup check failed: ${report.ideError ?? "see the validation report"}`);
   passed = true;
   console.log(JSON.stringify(report));
 } finally {

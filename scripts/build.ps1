@@ -286,9 +286,7 @@ if ($buildExit -eq 0 -and (Test-Path $bundleDir)) {
         Log-Err "Expected Tauri NSIS installer not found: $defaultInstaller"
         exit 1
     }
-    Move-Item -Force $defaultInstaller $canonicalInstaller
-
-    $versionInfo = (Get-Item $canonicalInstaller).VersionInfo
+    $versionInfo = (Get-Item $defaultInstaller).VersionInfo
     $coreParts = (($appVersion -split '[-+]')[0] -split '\.')
     if ($versionInfo.FileMajorPart -ne [int]$coreParts[0] -or
         $versionInfo.FileMinorPart -ne [int]$coreParts[1] -or
@@ -297,7 +295,7 @@ if ($buildExit -eq 0 -and (Test-Path $bundleDir)) {
         exit 1
     }
 
-    $authenticode = Get-AuthenticodeSignature $canonicalInstaller
+    $authenticode = Get-AuthenticodeSignature $defaultInstaller
     if ($authenticode.Status -ne [System.Management.Automation.SignatureStatus]::Valid) {
         if ($AllowUnsignedPlatform) {
             Log-Warn "Authenticode check failed ($($authenticode.Status)); development override accepted."
@@ -309,6 +307,7 @@ if ($buildExit -eq 0 -and (Test-Path $bundleDir)) {
     } else {
         Log-Ok "Windows Authenticode signature is valid"
     }
+    Move-Item -Force $defaultInstaller $canonicalInstaller
     Log-Ok "Normalized release name for windows-x86_64"
 }
 

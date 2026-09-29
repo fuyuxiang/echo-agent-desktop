@@ -6,6 +6,8 @@ release
 *.tsbuildinfo
 .DS_Store
 *.log
+__pycache__/
+*.pyc
 
 # EchoAgent project-local runtime state (memory, agents, skills, sessions)
 /.echo-agent/

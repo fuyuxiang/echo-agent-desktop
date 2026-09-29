@@ -18,6 +18,7 @@ Usage:
 
 The directory must have been produced by prepare-update-artifacts.sh. All
 updater and platform signatures must pass preflight before anything uploads.
+The three updater manifests become visible together after the remote copy.
 EOF
 }
 
@@ -100,22 +101,33 @@ if [[ $DRY_RUN -eq 1 ]]; then
   exit 0
 fi
 
+REMOTE_TMP="$(ssh "$HOST" 'mktemp -d /tmp/echoagent-update.XXXXXX')"
+if [[ ! "$REMOTE_TMP" =~ ^/tmp/echoagent-update\.[A-Za-z0-9]+$ ]]; then
+  die "Unexpected remote staging path: $REMOTE_TMP"
+fi
+# REMOTE_TMP is accepted only after the strict path check above.
+# shellcheck disable=SC2029
+cleanup() { ssh "$HOST" "rm -rf '$REMOTE_TMP'" >/dev/null 2>&1 || true; }
+trap cleanup EXIT
+
+files=()
 for target in "${TARGETS[@]}"; do
   artifact_name="$(read_manifest "updaterArtifacts.$target")"
-  command=(
-    bash "$SCRIPT_DIR/publish-update.sh"
-    --version "$VERSION"
-    --target "$target"
-    --artifact "$ARTIFACTS_DIR/$artifact_name"
-    --host "$HOST"
-  )
-  if [[ -n "$NOTES_FILE" ]]; then
-    command+=(--notes-file "$NOTES_FILE")
-  fi
-  if [[ $MANDATORY -eq 1 ]]; then
-    command+=(--mandatory)
-  fi
-  ECHOAGENT_BATCH_PUBLISH=1 "${command[@]}"
+  files+=("$ARTIFACTS_DIR/$artifact_name" "$ARTIFACTS_DIR/$artifact_name.sig")
 done
+scp "${files[@]}" "$HOST:$REMOTE_TMP/"
+
+REMOTE_NOTES=""
+if [[ -n "$NOTES_FILE" ]]; then
+  scp "$NOTES_FILE" "$HOST:$REMOTE_TMP/release-notes.txt"
+  REMOTE_NOTES="--notes-file '$REMOTE_TMP/release-notes.txt'"
+fi
+REMOTE_MANDATORY=""
+if [[ $MANDATORY -eq 1 ]]; then REMOTE_MANDATORY="--mandatory"; fi
+
+# VERSION is validated SemVer; REMOTE_TMP is restricted to the pattern above.
+# shellcheck disable=SC2029
+ssh "$HOST" \
+  "/usr/local/sbin/echoagent-publish-update --version '$VERSION' --batch-dir '$REMOTE_TMP' $REMOTE_NOTES $REMOTE_MANDATORY"
 
 printf 'EchoAgent %s 的三个平台更新已全部发布。\n' "$VERSION"

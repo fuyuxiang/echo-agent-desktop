@@ -21,15 +21,17 @@ pub async fn desktop_validation_ready(
         } else {
             "theia/node/bin/node"
         },
+        "office/worker.mjs",
+        "office/fonts/NotoSansCJKsc-Regular.otf",
     ] {
         if !resources.join(relative).is_file() {
             return Err(format!("Packaged resource missing: {relative}"));
         }
     }
-    // The staged-runtime smoke check starts Node from a normal build path.
-    // On Windows, also start it through the packaged Tauri resource path: that
-    // path can carry a verbatim prefix which Node rejects for its main script.
-    #[cfg(windows)]
+    // Start the IDE from the packaged resource path. Staged-resource tests
+    // cannot catch packaging errors such as missing native modules or lost
+    // executable permissions on macOS.
+    #[cfg(any(windows, target_os = "macos"))]
     let ide_error = async {
         let workspace = crate::paths::echo_agent_home_dir().join("中文项目验证");
         std::fs::create_dir_all(&workspace).map_err(|error| error.to_string())?;
@@ -48,14 +50,14 @@ pub async fn desktop_validation_ready(
     }
     .await
     .err();
-    #[cfg(not(windows))]
+    #[cfg(not(any(windows, target_os = "macos")))]
     let ide_error: Option<String> = None;
     crate::paths::write_private_file(
         &crate::paths::echo_agent_home_dir().join("desktop-validation.json"),
         &serde_json::to_vec(&serde_json::json!({
             "version": env!("CARGO_PKG_VERSION"), "platform": std::env::consts::OS,
             "webviewRendered": true, "ipcReady": true, "resourcesPresent": true,
-            "ideStarted": cfg!(windows) && ide_error.is_none(),
+            "ideStarted": cfg!(any(windows, target_os = "macos")) && ide_error.is_none(),
             "ideError": ide_error,
         }))
         .map_err(|e| e.to_string())?,

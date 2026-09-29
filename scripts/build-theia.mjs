@@ -1,4 +1,5 @@
-import { copyFileSync, existsSync, readFileSync, rmSync } from "node:fs";
+import { copyFileSync, existsSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { createHash } from "node:crypto";
 import { resolve, join } from "node:path";
 import { spawnSync } from "node:child_process";
 
@@ -20,7 +21,19 @@ function run(args) {
   }
 }
 
-if (!existsSync(join(sourceRoot, "node_modules"))) run(["ci"]);
+const nodeModules = join(sourceRoot, "node_modules");
+const installMarker = join(nodeModules, ".echoagent-install-fingerprint");
+const installFingerprint = createHash("sha256")
+  .update(readFileSync(join(sourceRoot, "package.json")))
+  .update(readFileSync(join(sourceRoot, "package-lock.json")))
+  .update(`${process.platform}/${process.arch}/${process.version}/${process.versions.modules}`)
+  .digest("hex");
+let installedFingerprint;
+try { installedFingerprint = readFileSync(installMarker, "utf8").trim(); } catch { /* Missing install. */ }
+if (!existsSync(nodeModules) || installedFingerprint !== installFingerprint) {
+  run(["ci"]);
+  writeFileSync(installMarker, `${installFingerprint}\n`);
+}
 for (const [id, url] of Object.entries(app.theiaPlugins)) {
   const version = url.match(/\/file\/[^/]+-([0-9][^-]+)\.vsix$/)?.[1];
   if (!version) throw new Error(`Unpinned Theia language plugin: ${id}`);
