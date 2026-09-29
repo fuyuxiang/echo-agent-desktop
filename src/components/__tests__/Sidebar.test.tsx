@@ -198,15 +198,15 @@ describe("Sidebar", () => {
 
   it("升级后旧默认目录会话仍显示为任务且不生成用户名空间", () => {
     useSessionsStore.setState({
-      independent: [{ sessionId: "legacy", title: "升级前任务", cwd: "/Users/fuyuxiang" }],
-      workspaces: [{ cwd: "/Users/fuyuxiang", sessionCount: 1 }],
-      homeCwd: "/Users/fuyuxiang/Documents/EchoAgent",
+      independent: [{ sessionId: "legacy", title: "升级前任务", cwd: "/Users/demo" }],
+      workspaces: [{ cwd: "/Users/demo", sessionCount: 1 }],
+      homeCwd: "/Users/demo/Documents/EchoAgent",
     });
 
     render(<Sidebar {...base} />);
 
     expect(screen.getByText("升级前任务")).toBeInTheDocument();
-    expect(screen.queryByText("fuyuxiang")).toBeNull();
+    expect(screen.queryByText("demo")).toBeNull();
     expect(screen.getByRole("button", { name: "项目 (0)" })).toBeInTheDocument();
   });
 
