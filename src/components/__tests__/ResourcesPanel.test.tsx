@@ -84,8 +84,25 @@ describe("ResourcesPanel", () => {
 
     expect(screen.getByLabelText("当前记忆上下文")).toHaveTextContent("未连接会话");
     fireEvent.click(screen.getByRole("tab", { name: /会话摘要/ }));
-    expect(screen.getByRole("button", { name: "立即提取" })).toBeDisabled();
-    expect(screen.getByRole("button", { name: /整理到长期记忆/ })).toBeDisabled();
+    expect(screen.queryByRole("button", { name: "立即提取" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: /整理到长期记忆/ })).not.toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "清空摘要" })).toBeInTheDocument();
+  });
+
+  it("旧版摘要中的模型推理不出现在预览、搜索和查看内容中", async () => {
+    api.memoryList.mockResolvedValueOnce([{ ...SESSION_ENTRY, content: "<think>private reasoning</think>\n## 可复用信息\n\n用户喜欢简洁说明" }]);
+    const user = userEvent.setup();
+    render(<ResourcesPanel cwd="/repo" />);
+    await user.click(await screen.findByRole("tab", { name: /会话摘要/ }));
+
+    expect(screen.getByText(/用户喜欢简洁说明/)).toBeInTheDocument();
+    expect(screen.queryByText(/private reasoning/)).not.toBeInTheDocument();
+    await user.type(screen.getByRole("textbox", { name: "搜索记忆" }), "private reasoning");
+    expect(screen.queryByText("2026-08-31-session.md")).not.toBeInTheDocument();
+    await user.clear(screen.getByRole("textbox", { name: "搜索记忆" }));
+    await user.click(screen.getByTitle("查看"));
+    expect(screen.getByDisplayValue(/用户喜欢简洁说明/)).toHaveAttribute("readonly");
+    expect(screen.queryByDisplayValue(/private reasoning/)).not.toBeInTheDocument();
   });
 
   it("新建记忆追加到工作区主文件", async () => {

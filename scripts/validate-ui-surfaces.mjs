@@ -28,12 +28,65 @@ try {
   const errors = [];
   let layouts = 0;
   page.on("pageerror", error => errors.push(error.message));
-  const surfaces = ["memory", "security", "cloud-storage", "notify-channels", "weixin-connected", "weixin-offline", "weixin-unconnected", "capabilities", "coding", "organization", "conversation", "meeting"];
+  const surfaces = ["memory", "personal-memory", "security", "cloud-storage", "notify-channels", "weixin-connected", "weixin-offline", "weixin-unconnected", "capabilities", "coding", "permission-picker", "organization", "conversation", "meeting"];
   for (const [width, height, theme] of [[1440, 900, "light"], [1024, 768, "dark"], [768, 720, "light"]]) {
     await page.setViewportSize({ width, height });
     for (const surface of surfaces) {
       await page.goto(`http://127.0.0.1:1439/__ui-review?surface=${surface}&theme=${theme}`);
       await page.addStyleTag({ content: "*,*::before,*::after{animation:none!important;transition:none!important}" });
+      if (surface === "personal-memory") {
+        await page.getByRole("tab", { name: /会话摘要/ }).click();
+        await page.getByText("2026-09-06-interval-01a074eb.md").waitFor();
+        const memoryLayout = await page.evaluate(() => {
+          const rect = (selector) => document.querySelector(selector).getBoundingClientRect();
+          return {
+            lefts: [".resources-panel__header", ".resources-panel__toolbar", ".resources-panel__notice", ".resources-panel__list-controls", ".resources-panel__list"].map(selector => rect(selector).left),
+            cards: [...document.querySelectorAll(".resources-panel__item")].map(element => ({ left: element.getBoundingClientRect().left, top: element.getBoundingClientRect().top })),
+            overflow: document.documentElement.scrollWidth > innerWidth + 1,
+          };
+        });
+        assert.ok(Math.max(...memoryLayout.lefts) - Math.min(...memoryLayout.lefts) < 2, "personal memory sections are misaligned");
+        assert.ok(!memoryLayout.overflow, "personal memory causes horizontal page overflow");
+        assert.equal(memoryLayout.cards.length, 2);
+        assert.equal(memoryLayout.cards[0].top === memoryLayout.cards[1].top, width === 1440, "personal memory card columns are incorrect");
+        assert.equal(await page.locator(".resources-panel__item-preview").first().innerText(), "旧版摘要没有可展示的内容，可删除这条无效摘要。");
+        await page.screenshot({ path: join(output, `personal-memory-${width}-${theme}.png`) });
+        layouts += 1;
+        continue;
+      }
+      if (surface === "permission-picker") {
+        await page.getByRole("button", { name: /审批模式/ }).click();
+        const menu = page.getByRole("menu", { name: "本任务权限" });
+        const assertPermissionLayout = async (label) => {
+          const geometry = await menu.evaluate(element => {
+          const box = element.getBoundingClientRect();
+          const rows = [...element.querySelectorAll(".permission-picker__mode")].map(row => {
+            const rect = row.getBoundingClientRect();
+            return { height: rect.height, top: rect.top, bottom: rect.bottom };
+          });
+          return { height: box.height, width: box.width, left: box.left, right: box.right, scrollWidth: element.scrollWidth, clientWidth: element.clientWidth, rows };
+        });
+          assert.ok(geometry.height <= 401, `${label}: permission menu is too tall`);
+          assert.ok(geometry.left >= 0 && geometry.right <= width, `${label}: permission menu clips horizontally`);
+          assert.ok(geometry.scrollWidth <= geometry.clientWidth + 1, `${label}: permission menu scrolls horizontally`);
+          assert.ok(geometry.rows.every(row => row.height < 130), `${label}: permission choices are stretched`);
+          assert.ok(geometry.rows.every((row, index) => index === 0 || row.top - geometry.rows[index - 1].bottom < 9), `${label}: permission choices have large gaps`);
+        };
+        await assertPermissionLayout(`permission ${width} ${theme}`);
+        await page.screenshot({ path: join(output, `permission-picker-${width}-${theme}.png`) });
+        layouts += 1;
+        await page.evaluate(() => { document.documentElement.style.fontSize = "22px"; });
+        await assertPermissionLayout(`permission large font ${width} ${theme}`);
+        await page.screenshot({ path: join(output, `permission-picker-large-font-${width}-${theme}.png`) });
+        layouts += 1;
+        await menu.getByRole("menuitemradio", { name: /本任务始终允许/ }).click();
+        const confirmation = menu.getByRole("alertdialog", { name: "确认本任务始终允许" });
+        await confirmation.waitFor();
+        assert.ok(await menu.evaluate(element => element.scrollWidth <= element.clientWidth + 1), "permission confirmation scrolls horizontally");
+        await confirmation.getByRole("button", { name: "取消" }).click();
+        assert.equal(await confirmation.count(), 0);
+        continue;
+      }
       if (surface === "conversation") {
         await page.getByRole("button", { name: "历史提问" }).click();
         const dialog = page.getByRole("dialog", { name: "历史提问" });

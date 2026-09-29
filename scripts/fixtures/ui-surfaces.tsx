@@ -12,6 +12,7 @@ import { OrganizationMemoryPanel } from "../../src/components/OrganizationMemory
 import { ChatView } from "../../src/components/ChatView";
 import { SecondarySidebar } from "../../src/components/SecondarySidebar";
 import { MeetingMinutesPanel } from "../../src/components/MeetingMinutesPanel";
+import { PermissionPicker } from "../../src/components/PermissionPicker";
 import { useSessionStore } from "../../src/stores/session-store";
 import "../../src/styles/global.css";
 import "../../src/styles/app.css";
@@ -64,6 +65,11 @@ Object.assign(window, {
     invoke: async (command: string, args: any = {}) => {
       switch (command) {
         case "memory_config_get": return memory;
+        case "memory_list": return [
+          { scope: "session", path: "2026-09-06-interval-01a074eb.md", content: "<think>The user is asking me to write a memory summary. Looking at this session, I was tasked with researching today's AI news focused on AI coding and embodied intelligence.", size: 180, revision: "r1", modifiedAt: "2026-09-06T10:00:00Z", readOnly: true },
+          { scope: "session", path: "2026-09-06-interval-01a074e6.md", content: "<think>The user is asking me to write a memory summary as described in the system prompt. Let me re-read the system prompt instructions.", size: 146, revision: "r2", modifiedAt: "2026-09-06T11:00:00Z", readOnly: true },
+        ];
+        case "permission_mode_get": return { permissionMode: "ask", configuredPermissionMode: "ask", autoModeAvailable: true, alwaysApproveAvailable: true, locked: false, runtimeSyncState: "offline" };
         case "memory_config_save": memory = { ...memory, ...args.memory }; return memory;
         case "permission_list": return rules;
         case "permission_save": rules = args.rules; return;
@@ -149,6 +155,9 @@ function Fixture() {
   </div>;
   if (surface === "organization") return <div style={{ height: "100%", overflow: "auto" }}><OrganizationMemoryPanel /></div>;
   if (surface === "meeting") return <MeetingMinutesPanel modelId="review/MiniMax-M3" models={[{ id: "review/MiniMax-M3", label: "MiniMax M3", providerId: "review", providerKind: "custom", source: "personal" }]} />;
+  if (surface === "permission-picker") return <div style={{ position: "relative", height: "100%", background: "var(--echo-bg-secondary)" }}>
+    <div style={{ position: "absolute", left: "46%", top: "63%" }}><PermissionPicker /></div>
+  </div>;
   if (surface === "coding") return <div className="app--macos" style={{ height: "100%" }}><div className="coding-workbench coding-workbench--theia">
     <header className="coding-workbench__topbar"><WorkbenchIdentity onExit={() => {}}>
       <ProjectSwitcher activeCwd={cwd} projects={[{ cwd: "/review/EchoAgent" }, { cwd: "/review/一个名称很长但仍然可以完整查看路径的项目" }]} onSelect={setCwd} onRemove={() => {}} onOpenFolder={() => {}} />
@@ -170,6 +179,6 @@ function Fixture() {
       />
     </div></aside>
   </div></div>;
-  return <SettingsPanel open initialSection={(surface === "weixin-connected" || surface === "weixin-offline" || surface === "weixin-unconnected" ? "weixin-channel" : surface) as SettingsSectionId} onClose={() => {}} />;
+  return <SettingsPanel open initialSection={(surface === "weixin-connected" || surface === "weixin-offline" || surface === "weixin-unconnected" ? "weixin-channel" : surface) as SettingsSectionId} cwd={surface === "personal-memory" ? "/Users/fuyuxiang/Documents/EchoAgent" : undefined} onClose={() => {}} />;
 }
 createRoot(document.getElementById("root")!).render(<ThemeProvider><Fixture /></ThemeProvider>);

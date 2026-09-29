@@ -48,6 +48,21 @@ function scopeLabel(scope: MemoryEntry["scope"]): string {
   return "会话摘要";
 }
 
+function visibleMemoryContent(entry: MemoryEntry): string {
+  if (entry.scope !== "session") return entry.content;
+  let content = entry.content.trim();
+  // Older runtimes sometimes saved the model's reasoning instead of a summary.
+  // Keep those files available for deletion without showing private process text.
+  while (/^<(think|thinking|reasoning|analysis)(?:\s[^>]*)?>/i.test(content)) {
+    const opening = content.match(/^<(think|thinking|reasoning|analysis)(?:\s[^>]*)?>/i);
+    if (!opening) break;
+    const closing = new RegExp(`</${opening[1]}\\s*>`, "i").exec(content.slice(opening[0].length));
+    if (!closing) return "";
+    content = content.slice(opening[0].length + closing.index + closing[0].length).trimStart();
+  }
+  return content;
+}
+
 type MemoryTab = "longTerm" | "summaries";
 
 export function ResourcesPanel({ cwd, sessionId, onToast }: ResourcesPanelProps) {
@@ -239,7 +254,7 @@ export function ResourcesPanel({ cwd, sessionId, onToast }: ResourcesPanelProps)
   const filtered = visibleEntries.filter((entry) => (
     !normalizedQuery
     || entry.path.toLowerCase().includes(normalizedQuery)
-    || entry.content.toLowerCase().includes(normalizedQuery)
+    || visibleMemoryContent(entry).toLowerCase().includes(normalizedQuery)
   ));
   const globalCount = entries.filter((entry) => entry.scope === "global").length;
   const workspaceCount = entries.filter((entry) => entry.scope === "workspace").length;
@@ -266,53 +281,57 @@ export function ResourcesPanel({ cwd, sessionId, onToast }: ResourcesPanelProps)
             </span>
           </div>
         </div>
+      </div>
+
+      <div className="resources-panel__toolbar">
+        <div className="resources-panel__tabs" role="tablist" aria-label="记忆类型">
+          <button
+            type="button"
+            role="tab"
+            aria-selected={activeTab === "longTerm"}
+            className={`resources-panel__tab${activeTab === "longTerm" ? " resources-panel__tab--active" : ""}`}
+            onClick={() => {
+              setActiveTab("longTerm");
+              setQuery("");
+            }}
+          >
+            长期记忆 <span>{globalCount + workspaceCount}</span>
+          </button>
+          {cwd && (
+            <button
+              type="button"
+              role="tab"
+              aria-selected={activeTab === "summaries"}
+              className={`resources-panel__tab${activeTab === "summaries" ? " resources-panel__tab--active" : ""}`}
+              onClick={() => {
+                setActiveTab("summaries");
+                setQuery("");
+              }}
+            >
+              会话摘要 <span>{sessionCount}</span>
+            </button>
+          )}
+        </div>
         <div className="resources-panel__header-actions">
-          {activeTab === "summaries" && (
+          {activeTab === "summaries" && sessionId && (
             <>
-              <button className="resources-panel__action-btn" onClick={handleFlush} disabled={busy || !sessionId} title="提取当前会话中的可复用信息并写入会话摘要">
+              <button className="resources-panel__action-btn" onClick={handleFlush} disabled={busy} title="提取当前会话中的可复用信息并写入会话摘要">
                 立即提取
               </button>
-              <button className="resources-panel__action-btn" onClick={handleDream} disabled={busy || !sessionId} title="把历史会话摘要归纳为长期记忆">
+              <button className="resources-panel__action-btn" onClick={handleDream} disabled={busy} title="把历史会话摘要归纳为长期记忆">
                 <SparklesIcon size="sm" /> 整理到长期记忆
               </button>
-              <button className="resources-panel__action-btn resources-panel__action-btn--danger" onClick={handleClearSummaries} disabled={busy}>
-                清空摘要
-              </button>
             </>
+          )}
+          {activeTab === "summaries" && sessionCount > 0 && (
+            <button className="resources-panel__action-btn resources-panel__action-btn--danger" onClick={handleClearSummaries} disabled={busy}>
+              清空摘要
+            </button>
           )}
           <button className="resources-panel__action-btn" onClick={() => void reload()} disabled={loading} title="刷新">
             <RefreshCwIcon size="sm" /> 刷新
           </button>
         </div>
-      </div>
-
-      <div className="resources-panel__tabs" role="tablist" aria-label="记忆类型">
-        <button
-          type="button"
-          role="tab"
-          aria-selected={activeTab === "longTerm"}
-          className={`resources-panel__tab${activeTab === "longTerm" ? " resources-panel__tab--active" : ""}`}
-          onClick={() => {
-            setActiveTab("longTerm");
-            setQuery("");
-          }}
-        >
-          长期记忆 <span>{globalCount + workspaceCount}</span>
-        </button>
-        {cwd && (
-          <button
-            type="button"
-            role="tab"
-            aria-selected={activeTab === "summaries"}
-            className={`resources-panel__tab${activeTab === "summaries" ? " resources-panel__tab--active" : ""}`}
-            onClick={() => {
-              setActiveTab("summaries");
-              setQuery("");
-            }}
-          >
-            会话摘要 <span>{sessionCount}</span>
-          </button>
-        )}
       </div>
 
       {activeTab === "summaries" && (
@@ -322,20 +341,21 @@ export function ResourcesPanel({ cwd, sessionId, onToast }: ResourcesPanelProps)
         </div>
       )}
 
-      <div className="resources-panel__search">
-        <SearchIcon size="md" className="resources-panel__search-icon" />
-        <input className="resources-panel__search-input" aria-label="搜索记忆" placeholder={activeTab === "summaries" ? "搜索会话摘要…" : "搜索长期记忆…"} value={query} onChange={(event) => setQuery(event.target.value)} />
-      </div>
-
-      <div className="resources-panel__stats">
-        {activeTab === "summaries" ? (
-          <span>{sessionCount} 条自动摘要</span>
-        ) : (
-          <>
-            <span>全局 {globalCount}</span>
-            {cwd && <span>· 工作区 {workspaceCount}</span>}
-          </>
-        )}
+      <div className="resources-panel__list-controls">
+        <div className="resources-panel__search">
+          <SearchIcon size="md" className="resources-panel__search-icon" />
+          <input className="resources-panel__search-input" aria-label="搜索记忆" placeholder={activeTab === "summaries" ? "搜索会话摘要…" : "搜索长期记忆…"} value={query} onChange={(event) => setQuery(event.target.value)} />
+        </div>
+        <div className="resources-panel__stats">
+          {activeTab === "summaries" ? (
+            <span>{sessionCount} 条自动摘要</span>
+          ) : (
+            <>
+              <span>全局 {globalCount}</span>
+              {cwd && <span>· 工作区 {workspaceCount}</span>}
+            </>
+          )}
+        </div>
       </div>
 
       {loadError && (
@@ -376,22 +396,25 @@ export function ResourcesPanel({ cwd, sessionId, onToast }: ResourcesPanelProps)
             )}
           </div>
         )}
-        {filtered.map((entry) => (
-          <div key={`${entry.scope}/${entry.path}`} className="resources-panel__item">
+        {filtered.map((entry) => {
+          const visibleContent = visibleMemoryContent(entry);
+          return <div key={`${entry.scope}/${entry.path}`} className="resources-panel__item">
             <div className="resources-panel__item-icon"><BookIcon size="md" /></div>
             <div className="resources-panel__item-content">
               <div className="resources-panel__item-name">
-                {entry.path}
+                <span className="resources-panel__item-path" title={entry.path}>{entry.path}</span>
                 <span className="resources-panel__item-scope">{scopeLabel(entry.scope)}</span>
               </div>
               <pre className="resources-panel__item-preview">
-                {entry.content.slice(0, 200)}{entry.content.length > 200 ? "…" : ""}
+                {visibleContent
+                  ? `${visibleContent.slice(0, 200)}${visibleContent.length > 200 ? "…" : ""}`
+                  : "旧版摘要没有可展示的内容，可删除这条无效摘要。"}
               </pre>
             </div>
             <div className="resources-panel__item-actions">
               <button
                 className="resources-panel__icon-btn"
-                onClick={() => setEditing({ ...entry, isNew: false })}
+                onClick={() => setEditing({ ...entry, content: visibleContent || "旧版摘要没有可展示的内容。", isNew: false })}
                 title={entry.readOnly ? "查看" : "编辑"}
               >
                 <EditToolIcon size="sm" />
@@ -400,8 +423,8 @@ export function ResourcesPanel({ cwd, sessionId, onToast }: ResourcesPanelProps)
                 <DeleteIcon size="sm" />
               </button>
             </div>
-          </div>
-        ))}
+          </div>;
+        })}
         {loading && <div className="resources-panel__empty">加载中…</div>}
       </div>
 

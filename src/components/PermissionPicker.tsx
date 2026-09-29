@@ -82,8 +82,9 @@ export function PermissionPicker({
     {
       preferredPlacement: "top",
       align: "start",
-      width: 260,
-      estimatedHeight: confirmingAlways ? 390 : 250,
+      width: 320,
+      estimatedHeight: confirmingAlways ? 460 : 300,
+      maxHeight: confirmingAlways ? 480 : 400,
     },
   );
 

@@ -2232,17 +2232,110 @@ button,
   padding: 0 24px 24px;
 }
 
+.settings-personal-memory {
+  gap: 16px;
+}
+
 .settings-personal-memory .resources-panel {
   height: auto;
   overflow: visible;
-  gap: 16px;
-  padding: 14px 4px 24px;
+  gap: 14px;
+  padding: 0 0 24px;
 }
 
 .settings-personal-memory .resources-panel__header {
-  padding: 0 36px 0 24px;
-  gap: 16px;
+  padding: 0;
+}
+
+.settings-personal-memory .resources-panel__context {
+  max-width: 100%;
+}
+
+.settings-personal-memory .resources-panel__session-state {
+  padding-left: 0;
+  border-left: 0;
+}
+
+.settings-personal-memory .resources-panel > .resources-panel__toolbar,
+.settings-personal-memory .resources-panel > .resources-panel__list-controls,
+.settings-personal-memory .resources-panel > .resources-panel__stats,
+.settings-personal-memory .resources-panel > .resources-panel__list {
+  padding-left: 0;
+  padding-right: 0;
+}
+
+.settings-personal-memory .resources-panel__toolbar {
+  padding-bottom: 12px;
+  border-bottom: 1px solid var(--ui-line);
+}
+
+.settings-personal-memory .resources-panel__header-actions {
+  margin-left: auto;
+}
+
+.settings-personal-memory .resources-panel > .resources-panel__notice {
+  margin: 0;
+  padding: 10px 12px;
+}
+
+.settings-personal-memory .resources-panel__list-controls {
   flex-wrap: wrap;
+}
+
+.settings-personal-memory .resources-panel__list {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  align-items: start;
+  gap: 10px;
+}
+
+.settings-personal-memory .resources-panel__item {
+  min-width: 0;
+  height: 100%;
+}
+
+.settings-personal-memory .resources-panel__item-name {
+  align-items: flex-start;
+}
+
+.settings-personal-memory .resources-panel__item-path {
+  overflow: visible;
+  overflow-wrap: anywhere;
+  white-space: normal;
+}
+
+.settings-personal-memory .resources-panel__item-preview {
+  display: -webkit-box;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 3;
+  overflow: hidden;
+  overflow-wrap: anywhere;
+}
+
+.settings-personal-memory .resources-panel__empty {
+  grid-column: 1 / -1;
+}
+
+@media (max-width: 1050px) {
+  .settings-personal-memory .resources-panel__list {
+    grid-template-columns: minmax(0, 1fr);
+  }
+}
+
+@media (max-width: 720px) {
+  .settings-personal-memory .resources-panel__toolbar {
+    align-items: flex-start;
+    flex-direction: column;
+  }
+
+  .settings-personal-memory .resources-panel__header-actions {
+    justify-content: flex-start;
+    margin-left: 0;
+  }
+
+  .settings-personal-memory .resources-panel__list-controls .resources-panel__search {
+    width: 100%;
+  }
 }
 
 @media (max-width: 700px) {
