@@ -7,6 +7,7 @@ import { SettingsPanel, type SettingsSectionId } from "../../src/components/Sett
 import { PlaceholderPage } from "../../src/components/PlaceholderPage";
 import { WorkbenchIdentity } from "../../src/features/coding/shell/WorkbenchIdentity";
 import { ProjectSwitcher } from "../../src/features/coding/shell/ProjectSwitcher";
+import { TaskSwitcher } from "../../src/features/coding/shell/TaskSwitcher";
 import { OrganizationMemoryPanel } from "../../src/components/OrganizationMemoryPanel";
 import { ChatView } from "../../src/components/ChatView";
 import { SecondarySidebar } from "../../src/components/SecondarySidebar";
@@ -152,6 +153,22 @@ function Fixture() {
     <header className="coding-workbench__topbar"><WorkbenchIdentity onExit={() => {}}>
       <ProjectSwitcher activeCwd={cwd} projects={[{ cwd: "/review/EchoAgent" }, { cwd: "/review/一个名称很长但仍然可以完整查看路径的项目" }]} onSelect={setCwd} onRemove={() => {}} onOpenFolder={() => {}} />
     </WorkbenchIdentity><div /></header>
+    <main className="echo-theia-workspace" />
+    <div className="echo-theia-agent__splitter" />
+    <aside className="echo-theia-agent"><div className="echo-theia-agent__heading">
+      <TaskSwitcher
+        tasks={[
+          { id: "task-1", name: "修复代码开发页面菜单遮挡问题", phase: "delivered", updatedAt: "2026-09-29T10:00:00Z" },
+          { id: "task-2", name: "完成任务报告并检查回归测试", phase: "stopped", updatedAt: "2026-09-29T09:00:00Z" },
+          { id: "task-3", name: "继续进行中任务的开发", phase: "implementing", updatedAt: "2026-09-29T08:00:00Z" },
+        ]}
+        activeId={null}
+        onSelect={() => {}}
+        onNew={() => {}}
+        onRename={() => {}}
+        onDelete={() => {}}
+      />
+    </div></aside>
   </div></div>;
   return <SettingsPanel open initialSection={(surface === "weixin-connected" || surface === "weixin-offline" || surface === "weixin-unconnected" ? "weixin-channel" : surface) as SettingsSectionId} onClose={() => {}} />;
 }

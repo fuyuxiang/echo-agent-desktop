@@ -141,6 +141,25 @@ try {
         assert.ok(template && template.y < height - 100, "templates pushed below first screen");
         assert.equal(await page.locator(".colleagues-panel-shell").evaluate(element => getComputedStyle(element).overflowY), "visible");
       }
+      if (surface === "coding") {
+        await page.getByRole("button", { name: "切换开发任务" }).click();
+        const menu = page.getByRole("menu", { name: "开发任务" });
+        const geometry = await menu.evaluate(element => {
+          const box = element.getBoundingClientRect();
+          const pane = document.querySelector(".echo-theia-agent").getBoundingClientRect();
+          const row = element.querySelector(".coding-task-switcher__row").getBoundingClientRect();
+          const hit = document.elementFromPoint(box.right - 12, row.top + row.height / 2);
+          return { left: box.left, right: box.right, top: box.top, bottom: box.bottom,
+            paneLeft: pane.left, portal: element.parentElement === document.body,
+            rowVisible: element.contains(hit) };
+        });
+        assert.ok(geometry.portal && geometry.left >= geometry.paneLeft && geometry.right <= width
+          && geometry.top >= 0 && geometry.bottom <= height && geometry.rowVisible,
+        "coding task menu clips or hides behind the Agent pane");
+        await page.screenshot({ path: join(output, `coding-task-menu-${width}-${theme}.png`) });
+        layouts += 1;
+        await page.keyboard.press("Escape");
+      }
       assert.ok(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth + 1), `${surface}: horizontal page overflow`);
       await page.screenshot({ path: join(output, `${surface}-${width}-${theme}.png`) });
       layouts += 1;

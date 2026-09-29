@@ -1,4 +1,5 @@
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useId, useRef, useState } from "react";
+import { createPortal } from "react-dom";
 import {
   AlertTriangle,
   CheckCircle2,
@@ -14,10 +15,12 @@ import {
 
 import { describeTaskProgress, isBusyPhase } from "../lib/phase";
 import type { TaskSummary } from "../lib/types";
+import { useAnchoredFloating } from "@/lib/use-anchored-floating";
 
 interface TaskSwitcherProps {
   tasks: TaskSummary[];
   activeId?: string | null;
+  activeName?: string;
   onSelect: (taskId: string) => void;
   onNew: () => void;
   newDisabled?: boolean;
@@ -35,6 +38,7 @@ interface TaskSwitcherProps {
 export function TaskSwitcher({
   tasks,
   activeId,
+  activeName,
   onSelect,
   onNew,
   newDisabled = false,
@@ -44,14 +48,24 @@ export function TaskSwitcher({
   const [open, setOpen] = useState(false);
   const [actionTaskId, setActionTaskId] = useState<string | null>(null);
   const [query, setQuery] = useState("");
+  const menuId = useId();
   const containerRef = useRef<HTMLDivElement | null>(null);
   const toggleRef = useRef<HTMLButtonElement | null>(null);
   const menuRef = useRef<HTMLDivElement | null>(null);
+  const { style: menuStyle, placement } = useAnchoredFloating(toggleRef, menuRef, open, {
+    preferredPlacement: "bottom",
+    align: "start",
+    width: 320,
+    estimatedHeight: Math.min(460, 54 + tasks.length * 42),
+    maxHeight: 460,
+    offset: 4,
+  });
 
   useEffect(() => {
     if (!open) return;
     const onPointerDown = (event: MouseEvent) => {
-      if (!containerRef.current?.contains(event.target as Node)) {
+      if (!containerRef.current?.contains(event.target as Node)
+        && !menuRef.current?.contains(event.target as Node)) {
         setOpen(false);
         setActionTaskId(null);
       }
@@ -84,8 +98,12 @@ export function TaskSwitcher({
     items[next]?.focus();
   };
 
+  if (!activeId && tasks.length === 0) {
+    return <div className="coding-task-switcher coding-task-switcher--heading">开发任务</div>;
+  }
+
   return (
-    <div className={`coding-task-switcher${active ? "" : " is-empty"}`} ref={containerRef}>
+    <div className={`coding-task-switcher${activeId ? "" : " is-empty"}`} ref={containerRef}>
       <button
         ref={toggleRef}
         type="button"
@@ -101,18 +119,22 @@ export function TaskSwitcher({
         }}
         aria-expanded={open}
         aria-haspopup="menu"
+        aria-controls={open ? menuId : undefined}
         aria-label="切换开发任务"
       >
-        {!active && <Plus size={12} />}
-        <span>{active ? active.name : "新建任务"}</span>
+        <span>{active?.name ?? (activeId ? activeName || "当前任务" : "任务记录")}</span>
         <ChevronDown size={12} />
       </button>
 
-      {open && (
+      {open && createPortal(
         <div
           ref={menuRef}
+          id={menuId}
           className="coding-task-switcher__menu"
           role="menu"
+          aria-label="开发任务"
+          style={menuStyle}
+          data-placement={placement ?? undefined}
           onKeyDown={(event) => {
             if (event.key === "ArrowDown") {
               event.preventDefault();
@@ -220,21 +242,24 @@ export function TaskSwitcher({
               </div>
             );
           })}
-          <div className="coding-task-switcher__sep" />
-          <button
-            type="button"
-            role="menuitem"
-            disabled={newDisabled}
-            title={newDisabled ? "正在准备隔离工作树" : "新建开发任务"}
-            onClick={() => {
-              setOpen(false);
-              onNew();
-            }}
-          >
-            <Plus size={12} />
-            <span>{newDisabled ? "正在准备…" : "新建开发任务"}</span>
-          </button>
-        </div>
+          {activeId && <>
+            <div className="coding-task-switcher__sep" />
+            <button
+              type="button"
+              role="menuitem"
+              disabled={newDisabled}
+              title={newDisabled ? "正在准备隔离工作树" : "开始新任务"}
+              onClick={() => {
+                setOpen(false);
+                onNew();
+              }}
+            >
+              <Plus size={12} />
+              <span>{newDisabled ? "正在准备…" : "开始新任务"}</span>
+            </button>
+          </>}
+        </div>,
+        document.body,
       )}
     </div>
   );

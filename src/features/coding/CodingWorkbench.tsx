@@ -35,7 +35,7 @@ import { TheiaAgentComposer } from "./agent/TheiaAgentComposer";
 import { TheiaIdeFrame, type TheiaMutationTicket } from "./TheiaIdeFrame";
 import { TheiaTaskReview } from "./TheiaTaskReview";
 import { ChangeSetView } from "./explorer/ChangeSetView";
-import { codingTaskDraftKey } from "./lib/task-draft-key";
+import { codingTaskContextDraftKey, codingTaskDraftKey } from "./lib/task-draft-key";
 import { useTheiaWorkbenchBridge } from "./hooks/useTheiaWorkbenchBridge";
 import { idePath, relativeToWorkspace } from "./lib/windows-path";
 import { useCodingMutationLifecycle } from "./hooks/useCodingMutationLifecycle";
@@ -227,6 +227,7 @@ export function CodingWorkbench({
   const { prepareManualMutation, finishManualMutation, blockInterruptedManualMutation } =
     useCodingMutationLifecycle(cwd, onToast, setReportRevision);
   const contextSaveQueueRef = useRef<Promise<void>>(Promise.resolve());
+  const previousContextScopeRef = useRef<string | null>(null);
 
   const task = useTaskStore((state) => state.task);
   const lifecycleSettling = useCodingRuntimeStore((state) => task ? Boolean(state.settling[codingRuntimeKey(cwd, task.id)]) : false);
@@ -358,11 +359,33 @@ export function CodingWorkbench({
     if (cwd) void useTaskStore.getState().refreshSummaries();
   }, [cwd]);
 
-  // Task context is owned by the task, not by whichever repository happened to
-  // be visible when the user pinned it. A new-task draft starts empty.
+  // Task context belongs to its task; draft context may be carried to an
+  // isolated worktree after a parallel task is started from the composer.
   useEffect(() => {
-    if (task) setContextPaths(task.contextPaths ?? []);
-  }, [task?.id]);
+    const scope = `${cwd}\0${task?.id ?? "draft"}`;
+    const previousScope = previousContextScopeRef.current;
+    previousContextScopeRef.current = scope;
+    if (task) {
+      setContextPaths(task.contextPaths ?? []);
+      return;
+    }
+    if (!cwd) return;
+    let paths: string[] = [];
+    let restored = false;
+    try {
+      const key = codingTaskContextDraftKey(cwd);
+      const stored = localStorage.getItem(key);
+      if (stored) {
+        const parsed: unknown = JSON.parse(stored);
+        if (Array.isArray(parsed)) paths = parsed.filter((path): path is string => typeof path === "string");
+        localStorage.removeItem(key);
+        restored = true;
+      }
+    } catch {
+      // Draft context is optional; never block opening the workspace.
+    }
+    if (restored || (previousScope !== null && previousScope !== scope)) setContextPaths(paths);
+  }, [cwd, task?.id]);
 
   /**
    * The orchestrator is the only authority on phase, so the UI reacts to its
@@ -540,6 +563,37 @@ export function CodingWorkbench({
     return firstLine.length > 24 ? `${firstLine.slice(0, 24)}…` : firstLine || "开发任务";
   }, []);
 
+  const openParallelWorkspace = useCallback(async (draft?: string) => {
+    if (creatingIsolatedWorkspace || !cwd) return;
+    if (!onSelectWorkspace) {
+      setStartError("无法打开隔离工作树，请重新进入代码开发页面");
+      return;
+    }
+    if (!(await saveTheiaBeforeLeaving())) return;
+    setCreatingIsolatedWorkspace(true);
+    try {
+      const workspace = await codingApi.createIsolatedWorkspace(cwd);
+      if (draft) {
+        try {
+          localStorage.setItem(codingTaskDraftKey(workspace.root), draft);
+          if (contextPaths.length > 0) {
+            localStorage.setItem(codingTaskContextDraftKey(workspace.root), JSON.stringify(contextPaths));
+          }
+        } catch {
+          // The current editor keeps the text if workspace switching fails.
+        }
+      }
+      onSelectWorkspace(workspace.root);
+      onToast?.("已创建隔离工作树；新任务可以与原任务并行执行");
+    } catch (error) {
+      const reason = String(error).replace(/^Error:\s*/, "");
+      setStartError(`无法创建并行任务：${reason}`);
+      onToast?.(`无法创建并行任务：${reason}`);
+    } finally {
+      setCreatingIsolatedWorkspace(false);
+    }
+  }, [contextPaths, creatingIsolatedWorkspace, cwd, onSelectWorkspace, onToast, saveTheiaBeforeLeaving]);
+
   /**
    * Create the task, then hand the requirement to the host so it can open an
    * Agent session. The orchestrator records the phase transition; the workbench
@@ -561,6 +615,16 @@ export function CodingWorkbench({
       setStartError(null);
       let createdId: string | undefined;
       try {
+        // Summaries and isolation details load asynchronously. Check the host
+        // at submit time so an early click cannot start work in a busy tree.
+        const [latestTasks, latestIsolation] = await Promise.all([
+          codingApi.listTasks(cwd),
+          codingApi.isolatedWorkspaceInfo(cwd),
+        ]);
+        if (latestTasks.some((item) => isBusyPhase(item.phase)) || latestIsolation) {
+          await openParallelWorkspace(trimmedRequirement);
+          return;
+        }
         const effectiveContextPaths = [...new Set([
           ...contextPaths,
           ...additionalContextPaths,
@@ -624,7 +688,7 @@ export function CodingWorkbench({
         setStarting(false);
       }
     },
-    [contextPaths, cwd, deriveName, modelId, onStartRun],
+    [contextPaths, cwd, deriveName, modelId, onStartRun, openParallelWorkspace],
   );
 
   const sendFollowup = useCallback(
@@ -718,18 +782,7 @@ export function CodingWorkbench({
 
   const beginNewTask = useCallback(async () => {
     if (activeTaskCount > 0 || isolatedWorkspace) {
-      if (creatingIsolatedWorkspace || !cwd) return;
-      if (!(await saveTheiaBeforeLeaving())) return;
-      setCreatingIsolatedWorkspace(true);
-      try {
-        const workspace = await codingApi.createIsolatedWorkspace(cwd);
-        onSelectWorkspace?.(workspace.root);
-        onToast?.("已创建隔离工作树；新任务可以与原任务并行执行");
-      } catch (error) {
-        onToast?.(`无法创建并行任务：${String(error).replace(/^Error:\s*/, "")}`);
-      } finally {
-        setCreatingIsolatedWorkspace(false);
-      }
+      await openParallelWorkspace();
       return;
     }
     useTaskStore.setState({
@@ -745,7 +798,7 @@ export function CodingWorkbench({
     setTheiaPanel("agent");
     setPhaseReason(undefined);
     setBlocker(undefined);
-  }, [activeTaskCount, creatingIsolatedWorkspace, cwd, isolatedWorkspace, onSelectWorkspace, onToast, saveTheiaBeforeLeaving]);
+  }, [activeTaskCount, isolatedWorkspace, openParallelWorkspace]);
 
   const persistTaskContext = useCallback((taskId: string, paths: string[]) => {
     // Tauri invocations may complete out of order. Serialize context writes so
@@ -1360,6 +1413,7 @@ export function CodingWorkbench({
           <TaskSwitcher
             tasks={summaries}
             activeId={task?.id}
+            activeName={task?.name}
             newDisabled={creatingIsolatedWorkspace}
             onSelect={(taskId) => void activateCodingTask(taskId)}
             onNew={beginNewTask}
@@ -1443,6 +1497,7 @@ export function CodingWorkbench({
             <div className="echo-theia-agent__empty">
               <strong>描述目标，开始开发</strong>
               <p>选一个具体目标，或直接描述你想完成的改动。</p>
+              {activeTaskCount > 0 && <p>当前项目有任务正在执行；提交新任务时会创建隔离工作树。</p>}
               {isolatedWorkspace && <p>隔离于 {isolatedWorkspace.sourceRoot} · 基于提交 {isolatedWorkspace.baseHead.slice(0, 8)}，不包含原项目未提交文件。</p>}
               <div className="echo-theia-agent__examples" aria-label="示例任务">
                 {[
@@ -1513,7 +1568,7 @@ export function CodingWorkbench({
           contextPaths={contextPaths}
           apiReady={apiReady}
           startError={startError}
-          starting={starting}
+          starting={starting || creatingIsolatedWorkspace}
           sending={sending || lifecycleSettling}
           streaming={streaming}
           onModelChange={(next) => void changeTaskModel(next)}

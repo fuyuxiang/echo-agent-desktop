@@ -253,11 +253,6 @@
   font-weight: 600;
 }
 
-.echo-theia-agent__heading .coding-task-switcher__menu {
-  right: 0;
-  left: auto;
-}
-
 .echo-theia-agent__task-status {
   display: flex;
   align-items: center;
@@ -1867,6 +1862,13 @@
   position: relative;
 }
 
+.coding-task-switcher--heading {
+  padding: 3px 7px;
+  color: var(--echo-text-medium);
+  font-size: 0.75rem;
+  font-weight: 600;
+}
+
 .coding-task-switcher > button {
   display: flex;
   align-items: center;
@@ -1899,15 +1901,13 @@
 }
 
 .coding-task-switcher__menu {
-  position: absolute;
-  top: calc(100% + 4px);
-  left: 0;
+  position: fixed;
   z-index: var(--echo-layer-popover);
   display: flex;
   flex-direction: column;
-  min-width: 260px;
-  max-width: min(360px, calc(100vw - 24px));
-  max-height: min(460px, calc(100vh - 76px));
+  box-sizing: border-box;
+  min-width: 0;
+  max-height: 460px;
   padding: 4px;
   border: 1px solid var(--echo-border-default);
   border-radius: 8px;
@@ -3161,7 +3161,8 @@
  * stable token types, so application CSS must never override them.
  */
 
-.coding-workbench .is-spinning {
+.coding-workbench .is-spinning,
+.coding-task-switcher__menu .is-spinning {
   animation: coding-spin 900ms linear infinite;
 }
 

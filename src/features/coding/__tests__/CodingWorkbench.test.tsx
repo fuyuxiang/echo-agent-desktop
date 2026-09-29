@@ -86,7 +86,9 @@ vi.mock("@/components/Markdown", () => ({
 }));
 
 import { CodingWorkbench } from "../CodingWorkbench";
+import { codingTaskContextDraftKey, codingTaskDraftKey } from "../lib/task-draft-key";
 import type { CodingTask } from "../lib/types";
+import { useAiDraftStore } from "../store/ai-draft-store";
 import { useTaskStore } from "../store/task-store";
 
 function verificationTask(overrides: Partial<CodingTask> = {}): CodingTask {
@@ -131,6 +133,7 @@ describe("Theia workbench", () => {
       loading: false,
       error: null,
     });
+    useAiDraftStore.getState().clear();
   });
 
   it("keeps the Agent pane beside Theia and allows resizing independently", async () => {
@@ -245,12 +248,38 @@ describe("Theia workbench", () => {
       if (command === "coding_isolation_create") return { root: "/managed/parallel", sourceRoot: "/repo", baseHead: "abc123" };
       return null;
     });
-    render(<CodingWorkbench cwd="/repo" models={[]} onSelectWorkspace={onSelectWorkspace} />);
+    const onStartRun = vi.fn();
+    const { rerender } = render(<CodingWorkbench
+      cwd="/repo"
+      models={[{ id: "model-1" }]}
+      defaultModelId="model-1"
+      apiReady
+      onStartRun={onStartRun}
+      onSelectWorkspace={onSelectWorkspace}
+    />);
     await screen.findByTitle("Echo Code IDE");
-    await userEvent.click(screen.getByRole("button", { name: "切换开发任务" }));
-    await userEvent.click(screen.getByRole("menuitem", { name: "新建开发任务" }));
+    expect(await screen.findByText("当前项目有任务正在执行；提交新任务时会创建隔离工作树。")).toBeInTheDocument();
+    act(() => useAiDraftStore.getState().setDraft({ prompt: "", contextPaths: ["src/orders.ts"], source: "context-menu" }));
+    expect(await screen.findByText("orders.ts")).toBeInTheDocument();
+    fireEvent.change(screen.getByRole("textbox", { name: "任务描述" }), { target: { value: "实现新的订单流程" } });
+    await userEvent.click(screen.getByRole("button", { name: "开始 Agent 任务" }));
     await waitFor(() => expect(invoke).toHaveBeenCalledWith("coding_isolation_create", { root: "/repo" }));
     await waitFor(() => expect(onSelectWorkspace).toHaveBeenCalledWith("/managed/parallel"));
+    expect(window.localStorage.getItem(codingTaskDraftKey("/managed/parallel"))).toBe("实现新的订单流程");
+    expect(window.localStorage.getItem(codingTaskContextDraftKey("/managed/parallel"))).toBe('["src/orders.ts"]');
+    expect(invoke).not.toHaveBeenCalledWith("coding_task_create", expect.anything());
+
+    rerender(<CodingWorkbench
+      cwd="/managed/parallel"
+      models={[{ id: "model-1" }]}
+      defaultModelId="model-1"
+      apiReady
+      onStartRun={onStartRun}
+      onSelectWorkspace={onSelectWorkspace}
+    />);
+    expect(await screen.findByRole("textbox", { name: "任务描述" })).toHaveValue("实现新的订单流程");
+    expect(await screen.findByText("orders.ts")).toBeInTheDocument();
+    expect(window.localStorage.getItem(codingTaskContextDraftKey("/managed/parallel"))).toBeNull();
   });
 
   it("saves dirty Theia editors before switching projects", async () => {

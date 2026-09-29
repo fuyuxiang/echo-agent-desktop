@@ -2,3 +2,7 @@
 export function codingTaskDraftKey(root: string): string {
   return `echo-coding-hot-exit-v1:task-draft:${encodeURIComponent(root)}`;
 }
+
+export function codingTaskContextDraftKey(root: string): string {
+  return `echo-coding-hot-exit-v1:task-context:${encodeURIComponent(root)}`;
+}

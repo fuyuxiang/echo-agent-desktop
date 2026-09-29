@@ -23,6 +23,7 @@ interface AnchoredFloatingOptions {
   align?: FloatingAlignment;
   width?: FloatingWidth;
   estimatedHeight?: number;
+  maxHeight?: number;
   offset?: number;
   viewportMargin?: number;
   zIndex?: CSSProperties["zIndex"];
@@ -52,6 +53,7 @@ export function useAnchoredFloating(
     align = "start",
     width = "content",
     estimatedHeight = 240,
+    maxHeight = Infinity,
     offset = 8,
     viewportMargin = 8,
     zIndex = "var(--echo-layer-popover)",
@@ -96,7 +98,10 @@ export function useAnchoredFloating(
       Math.max(0, measuredWidth || rect.width),
       maxViewportWidth,
     );
-    const measuredHeight = floating.scrollHeight || floating.offsetHeight || estimatedHeight;
+    const measuredHeight = Math.min(
+      floating.scrollHeight || floating.offsetHeight || estimatedHeight,
+      maxHeight,
+    );
     const spaceAbove = Math.max(0, rect.top - offset - viewportMargin);
     const spaceBelow = Math.max(0, viewportHeight - rect.bottom - offset - viewportMargin);
     const preferredSpace = preferredPlacement === "top" ? spaceAbove : spaceBelow;
@@ -137,6 +142,7 @@ export function useAnchoredFloating(
     anchorRef,
     estimatedHeight,
     floatingRef,
+    maxHeight,
     offset,
     preferredPlacement,
     viewportMargin,
@@ -181,7 +187,7 @@ export function useAnchoredFloating(
           // tooltips respond when their text or font metrics change.
           width: width === "content" ? undefined : layout.width,
           maxWidth: `calc(100vw - ${viewportMargin * 2}px)`,
-          maxHeight: layout.maxHeight,
+          maxHeight: Math.min(layout.maxHeight, maxHeight),
           overflowY: "auto",
           overscrollBehavior: "contain",
           zIndex,
