@@ -8,6 +8,7 @@
     "dev": "vite",
     "build": "tsc --noEmit && vite build",
     "ide:build": "node scripts/build-theia.mjs",
+    "ide:plugins:update": "node scripts/manage-theia-vsix.mjs update",
     "ide:stage": "node scripts/stage-theia-runtime.mjs",
     "ide:prepare": "node scripts/prepare-theia.mjs",
     "office:build": "node scripts/build-office-worker.mjs",

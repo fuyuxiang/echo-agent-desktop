@@ -1,4 +1,4 @@
-import { copyFileSync, existsSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { copyFileSync, existsSync, readFileSync, writeFileSync } from "node:fs";
 import { createHash } from "node:crypto";
 import { resolve, join } from "node:path";
 import { spawnSync } from "node:child_process";
@@ -9,8 +9,6 @@ if (major !== 22 && major !== 24) {
 }
 
 const sourceRoot = resolve(import.meta.dirname, "../vendor/theia-platform");
-const appRoot = join(sourceRoot, "examples/browser");
-const app = JSON.parse(readFileSync(join(appRoot, "package.json"), "utf8"));
 const npm = process.platform === "win32" ? "npm.cmd" : "npm";
 const env = { ...process.env, PUPPETEER_SKIP_DOWNLOAD: "1" };
 
@@ -34,16 +32,10 @@ if (!existsSync(nodeModules) || installedFingerprint !== installFingerprint) {
   run(["ci"]);
   writeFileSync(installMarker, `${installFingerprint}\n`);
 }
-for (const [id, url] of Object.entries(app.theiaPlugins)) {
-  const version = url.match(/\/file\/[^/]+-([0-9][^-]+)\.vsix$/)?.[1];
-  if (!version) throw new Error(`Unpinned Theia language plugin: ${id}`);
-  const pluginPath = join(sourceRoot, "plugins", id);
-  let installed;
-  try { installed = JSON.parse(readFileSync(join(pluginPath, "extension/package.json"), "utf8")); } catch { /* Missing or incomplete download. */ }
-  if (installed && `${installed.publisher}.${installed.name}`.toLowerCase() === id.toLowerCase() && installed.version === version) continue;
-  rmSync(pluginPath, { recursive: true, force: true });
-}
-run(["run", "download:plugins", "--workspace", "@echoagent/theia-browser"]);
+const plugins = spawnSync(process.execPath, [join(import.meta.dirname, "manage-theia-vsix.mjs"), "stage"], {
+  cwd: sourceRoot, env, stdio: "inherit",
+});
+if (plugins.status !== 0) throw new Error("Failed to stage vendored Theia VSIX plugins.");
 // The source snapshot omits generated @theia/core/shared re-export shims.
 // Filesystem and other packages import these during TypeScript compilation.
 run(["exec", "--", "theia-re-exports", "generate", "@theia/core"]);
