@@ -1375,13 +1375,13 @@ export async function memoryRewrite(
 }
 
 /** Flush in-flight memory writes to disk (`echo.agent/memory/flush`). */
-export async function memoryFlush(sessionId: string): Promise<void> {
-  await invoke<void>("memory_flush", { sessionId });
+export async function memoryFlush(sessionId: string): Promise<boolean> {
+  return invoke<boolean>("memory_flush", { sessionId });
 }
 
-/** Consolidate generated session summaries into long-term memory via `/dream`. */
-export async function memoryDream(sessionId: string): Promise<void> {
-  await invoke<void>("memory_dream", { sessionId });
+/** Consolidate generated session summaries into long-term memory. */
+export async function memoryDream(sessionId: string): Promise<boolean> {
+  return invoke<boolean>("memory_dream", { sessionId });
 }
 
 // ---------- session search (FTS5) ----------

@@ -16,6 +16,7 @@ import {
   commandsList,
   memoryClearSessionSummaries,
   memoryDelete,
+  memoryDream,
   memoryFlush,
   memoryRewrite,
   memorySave,
@@ -370,13 +371,15 @@ describe("memory command contract", () => {
     invokeMock.mockResolvedValue(undefined);
   });
 
-  it("落盘和重写携带 Runtime 必需参数", async () => {
-    invokeMock.mockResolvedValueOnce(undefined).mockResolvedValueOnce("rewritten");
-    await memoryFlush("session-1");
+  it("提取、整理和重写携带 Runtime 必需参数及实际结果", async () => {
+    invokeMock.mockResolvedValueOnce(true).mockResolvedValueOnce(false).mockResolvedValueOnce("rewritten");
+    await expect(memoryFlush("session-1")).resolves.toBe(true);
+    await expect(memoryDream("session-1")).resolves.toBe(false);
     await expect(memoryRewrite("session-1", "raw", "global memory")).resolves.toBe("rewritten");
 
     expect(invokeMock).toHaveBeenNthCalledWith(1, "memory_flush", { sessionId: "session-1" });
-    expect(invokeMock).toHaveBeenNthCalledWith(2, "memory_rewrite", {
+    expect(invokeMock).toHaveBeenNthCalledWith(2, "memory_dream", { sessionId: "session-1" });
+    expect(invokeMock).toHaveBeenNthCalledWith(3, "memory_rewrite", {
       sessionId: "session-1",
       rawText: "raw",
       contextSummary: "global memory",

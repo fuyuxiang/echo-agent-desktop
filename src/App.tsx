@@ -638,10 +638,18 @@ function Shell() {
             }
             if (updateType === "memory_flush_completed") {
               const result = (u as { result?: string }).result;
-              showToast(result ? `记忆已落盘：${result}` : "记忆已落盘");
+              showToast(result?.startsWith("written")
+                ? "会话摘要已保存"
+                : result === "nothing to store" || result === "semantic duplicate"
+                  ? "提取完成，暂无新内容"
+                  : `记忆提取未完成${result ? `：${result}` : ""}`);
             } else if (updateType === "memory_dream_completed") {
               const result = (u as { result?: string }).result;
-              showToast(result ? `记忆整理完成：${result}` : "记忆整理完成");
+              showToast(result?.startsWith("written")
+                ? "长期记忆已更新"
+                : result === "nothing to consolidate"
+                  ? "整理完成，暂无新内容"
+                  : `记忆整理未完成${result ? `：${result}` : ""}`);
             } else if (updateType === "memory_session_saved") {
               showToast("已保存会话记忆");
             }
@@ -1932,9 +1940,13 @@ function Shell() {
     clearDeletedSessionState(sessionId);
     sessionsStore.getState().remove(sessionId, cwd);
     if (result?.memoryCleanupWarning) {
-      showToast(`对话已删除，但自动摘要清理失败：${result.memoryCleanupWarning}`, 6000);
+      showActionToast(`对话已删除，但自动摘要清理失败：${result.memoryCleanupWarning}`, [
+        { label: "检查会话摘要", onClick: () => openSettings("personal-memory") },
+      ]);
     } else {
-      showToast("对话已永久删除");
+      showActionToast("对话与自动摘要已删除。已整理的长期记忆可能仍包含相关内容。", [
+        { label: "检查长期记忆", onClick: () => openSettings("personal-memory") },
+      ]);
     }
   };
 

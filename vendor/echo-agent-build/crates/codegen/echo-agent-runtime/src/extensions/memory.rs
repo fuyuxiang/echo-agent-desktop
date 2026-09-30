@@ -1,8 +1,9 @@
-//! `echo.agent/memory/flush`, `echo.agent/memory/rewrite`, and `echo.agent/compact_conversation`
+//! `echo.agent/memory/flush`, `echo.agent/memory/dream`, `echo.agent/memory/rewrite`, and `echo.agent/compact_conversation`
 //! extension handlers.
 //!
 //! - `compact_conversation`: trigger an on-demand compaction for a session.
 //! - `memory/flush`: trigger an on-demand memory flush for a session.
+//! - `memory/dream`: consolidate session summaries into long-term memory.
 //! - `memory/rewrite`: rewrite a raw memory note into structured markdown via
 //!   a one-shot LLM call.
 
@@ -10,7 +11,7 @@ use agent_client_protocol as acp;
 use serde::Deserialize;
 use tokio::sync::oneshot;
 
-use super::{Empty, ExtResult, parse_params, to_ext_response, to_raw_response};
+use super::{ExtResult, parse_params, to_ext_response, to_raw_response};
 use crate::agent::MvpAgent;
 use crate::session::{CompactConversationRequest, CompactConversationResponse, SessionCommand};
 
@@ -19,6 +20,7 @@ pub async fn handle(agent: &MvpAgent, args: &acp::ExtRequest) -> ExtResult {
     match args.method.as_ref() {
         m if m.starts_with("echo.agent/compact_conversation") => handle_compact(agent, args).await,
         "echo.agent/memory/flush" => handle_flush(agent, args).await,
+        "echo.agent/memory/dream" => handle_dream(agent, args).await,
         "echo.agent/memory/rewrite" => handle_rewrite(agent, args).await,
         _ => Err(acp::Error::method_not_found()),
     }
@@ -58,10 +60,34 @@ async fn handle_flush(agent: &MvpAgent, args: &acp::ExtRequest) -> ExtResult {
     let _ = session
         .cmd_tx
         .send(SessionCommand::FlushMemory { respond_to: tx });
-    rx.await
+    let completed = rx
+        .await
         .map_err(|_| acp::Error::internal_error().data("session failed to respond"))?
         .map_err(|e| acp::Error::internal_error().data(format!("{:?}", e)))?;
-    to_ext_response(Ok(Empty {}))
+    to_ext_response(Ok(serde_json::json!({ "completed": completed })))
+}
+
+async fn handle_dream(agent: &MvpAgent, args: &acp::ExtRequest) -> ExtResult {
+    #[derive(Deserialize)]
+    struct MemoryDreamRequest {
+        session_id: String,
+    }
+
+    let req: MemoryDreamRequest = parse_params(args)?;
+    let not_found_err = format!("session not found: {}", req.session_id);
+    let sid: acp::SessionId = req.session_id.into();
+    let Some(session) = agent.resident_handle(&sid) else {
+        return Err(acp::Error::invalid_params().data(not_found_err));
+    };
+    let (tx, rx) = oneshot::channel();
+    let _ = session
+        .cmd_tx
+        .send(SessionCommand::DreamMemory { respond_to: tx });
+    let changed = rx
+        .await
+        .map_err(|_| acp::Error::internal_error().data("session failed to respond"))?
+        .map_err(|error| acp::Error::internal_error().data(format!("{error:?}")))?;
+    to_ext_response(Ok(serde_json::json!({ "changed": changed })))
 }
 
 async fn handle_rewrite(agent: &MvpAgent, args: &acp::ExtRequest) -> ExtResult {

@@ -74,7 +74,13 @@ impl SessionActor {
             BuiltinAction::Dream => {
                 // No user-visible output — intentional, matches /flush behaviour.
                 if self.memory.is_enabled() {
-                    self.run_dream_slash_command().await;
+                    if let Err(error) = self.run_dream_slash_command().await {
+                        tracing::warn!(
+                            session_id = %self.session_info.id.0,
+                            %error,
+                            "dream failed via /dream"
+                        );
+                    }
                 } else {
                     tracing::warn!(
                         session_id = %self.session_info.id.0,

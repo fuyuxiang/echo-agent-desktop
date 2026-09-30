@@ -1064,6 +1064,15 @@ pub(super) async fn run_session(
                                 }
                             });
                         }
+                        SessionCommand::DreamMemory { respond_to } => {
+                            let s = session.clone();
+                            tokio::task::spawn_local(async move {
+                                let result = s.run_dream_slash_command().await.map_err(|error| {
+                                    acp::Error::internal_error().data(error)
+                                });
+                                let _ = respond_to.send(result);
+                            });
+                        }
                         SessionCommand::SetYoloMode { enabled } => {
                             let was = session.permissions.is_yolo_mode();
                             tracing::info!("Session received SetYoloMode: {}", enabled);

@@ -131,7 +131,14 @@ export function ResourcesPanel({ cwd, sessionId, onToast }: ResourcesPanelProps)
       setEditing(null);
       await reload();
     } catch (error) {
-      onToast?.(`保存失败：${errorText(error)}`);
+      const message = errorText(error);
+      if (message.startsWith("记忆文件已保存，但检索索引更新失败")) {
+        setEditing(null);
+        await reload();
+        onToast?.(message);
+      } else {
+        onToast?.(`保存失败：${message}`);
+      }
     } finally {
       setBusy(false);
     }
@@ -142,8 +149,8 @@ export function ResourcesPanel({ cwd, sessionId, onToast }: ResourcesPanelProps)
     requestConfirmation({
       title: isSummary ? "删除这条会话摘要？" : `删除${scopeLabel(entry.scope)}记忆文件？`,
       description: isSummary
-        ? `将永久删除“${entry.path}”及其检索索引，不会删除原会话。`
-        : `将永久删除“${entry.path}”，此操作无法撤销。`,
+        ? `将永久删除“${entry.path}”及其检索索引。原会话和已整理进长期记忆的内容不会随之删除。`
+        : `将永久删除“${entry.path}”中的全部长期记忆，此操作无法撤销。`,
       confirmLabel: isSummary ? "删除摘要" : "删除记忆",
       danger: true,
       action: async () => {
@@ -195,7 +202,8 @@ export function ResourcesPanel({ cwd, sessionId, onToast }: ResourcesPanelProps)
     }
     setBusy(true);
     try {
-      await memoryFlush(sessionId);
+      const completed = await memoryFlush(sessionId);
+      onToast?.(completed ? "提取已执行；若有可复用内容，可在会话摘要中查看" : "本次提取未完成，请稍后重试");
       await reload();
     } catch (error) {
       onToast?.(`落盘失败：${errorText(error)}`);
@@ -216,9 +224,10 @@ export function ResourcesPanel({ cwd, sessionId, onToast }: ResourcesPanelProps)
       action: async () => {
         setBusy(true);
         try {
-          await memoryDream(sessionId);
-          await reload();
+          const changed = await memoryDream(sessionId);
+          onToast?.(changed ? "长期记忆已更新" : "本次没有更新长期记忆；可能没有待整理的摘要");
         } finally {
+          await reload();
           setBusy(false);
         }
       },
@@ -267,7 +276,7 @@ export function ResourcesPanel({ cwd, sessionId, onToast }: ResourcesPanelProps)
           <h2 className="resources-panel__title">个人记忆</h2>
           <p className="resources-panel__subtitle">
             {activeTab === "longTerm"
-              ? "管理跨会话复用的个人偏好和工作区上下文"
+              ? "管理跨会话复用的全局与工作区记忆文档"
               : "管理 Agent 从会话中自动提取的待整理摘要"}
           </p>
           <div className="resources-panel__context" aria-label="当前记忆上下文">
@@ -295,7 +304,7 @@ export function ResourcesPanel({ cwd, sessionId, onToast }: ResourcesPanelProps)
               setQuery("");
             }}
           >
-            长期记忆 <span>{globalCount + workspaceCount}</span>
+            长期记忆文档 <span>{globalCount + workspaceCount}</span>
           </button>
           {cwd && (
             <button
@@ -351,8 +360,8 @@ export function ResourcesPanel({ cwd, sessionId, onToast }: ResourcesPanelProps)
             <span>{sessionCount} 条自动摘要</span>
           ) : (
             <>
-              <span>全局 {globalCount}</span>
-              {cwd && <span>· 工作区 {workspaceCount}</span>}
+              <span>全局文档 {globalCount}</span>
+              {cwd && <span>· 工作区文档 {workspaceCount}</span>}
             </>
           )}
         </div>
@@ -379,7 +388,7 @@ export function ResourcesPanel({ cwd, sessionId, onToast }: ResourcesPanelProps)
             readOnly: false,
           })}
         >
-          <AddIcon size="sm" /> 添加一条记忆
+          <AddIcon size="sm" /> 追加记忆到文档
         </button>
       )}
 
@@ -391,7 +400,7 @@ export function ResourcesPanel({ cwd, sessionId, onToast }: ResourcesPanelProps)
               <p>暂无会话摘要。Agent 只会在会话中出现值得跨会话复用的信息时生成摘要。</p>
             ) : (
               <p>
-                暂无长期记忆。可手动添加，或在对话中使用 <code>/remember</code> 保存。
+                暂无长期记忆文档。可手动添加，或在对话中使用 <code>/remember</code> 保存。
               </p>
             )}
           </div>
@@ -465,13 +474,13 @@ function MemoryEditor({
   onSave: () => void;
 }) {
   const dialogRef = useModalFocus<HTMLDivElement>(true, onCancel);
-  const dialogLabel = draft.isNew ? "添加记忆" : `${draft.readOnly ? "查看" : "编辑"} ${draft.path}`;
+  const dialogLabel = draft.isNew ? "追加记忆到文档" : `${draft.readOnly ? "查看" : "编辑"} ${draft.path}`;
 
   return (
     <div className="modal-overlay memory-editor__overlay" onClick={onCancel}>
       <div ref={dialogRef} className="memory-editor" onClick={(event) => event.stopPropagation()} role="dialog" aria-modal="true" aria-label={dialogLabel} tabIndex={-1}>
         <div className="memory-editor__header">
-          <h3>{draft.isNew ? "添加记忆" : `${draft.readOnly ? "查看" : "编辑"} ${draft.path}`}</h3>
+          <h3>{draft.isNew ? "追加记忆到文档" : `${draft.readOnly ? "查看" : "编辑"} ${draft.path}`}</h3>
           <button className="memory-editor__close" onClick={onCancel} aria-label="关闭">✕</button>
         </div>
         <div className="memory-editor__meta">

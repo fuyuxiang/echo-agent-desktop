@@ -47,8 +47,8 @@ describe("ResourcesPanel", () => {
     api.memorySave.mockResolvedValue(GLOBAL_ENTRY);
     api.memoryDelete.mockResolvedValue(undefined);
     api.memoryClearSessionSummaries.mockResolvedValue(2);
-    api.memoryFlush.mockResolvedValue(undefined);
-    api.memoryDream.mockResolvedValue(undefined);
+    api.memoryFlush.mockResolvedValue(true);
+    api.memoryDream.mockResolvedValue(true);
     api.memoryRewrite.mockResolvedValue("# Global\n\nRewritten");
   });
 
@@ -76,6 +76,28 @@ describe("ResourcesPanel", () => {
     fireEvent.click(screen.getByRole("tab", { name: /会话摘要/ }));
     fireEvent.click(screen.getByRole("button", { name: "立即提取" }));
     await waitFor(() => expect(api.memoryFlush).toHaveBeenCalledWith("session-1"));
+  });
+
+  it("提取被跳过时不显示保存成功", async () => {
+    const onToast = vi.fn();
+    api.memoryFlush.mockResolvedValueOnce(false);
+    render(<ResourcesPanel cwd="/repo" sessionId="session-1" onToast={onToast} />);
+    await screen.findByText("MEMORY.md");
+    fireEvent.click(screen.getByRole("tab", { name: /会话摘要/ }));
+    fireEvent.click(screen.getByRole("button", { name: "立即提取" }));
+    await waitFor(() => expect(onToast).toHaveBeenCalledWith("本次提取未完成，请稍后重试"));
+  });
+
+  it("没有可整理内容时不显示长期记忆已更新", async () => {
+    const user = userEvent.setup();
+    const onToast = vi.fn();
+    api.memoryDream.mockResolvedValueOnce(false);
+    render(<ResourcesPanel cwd="/repo" sessionId="session-1" onToast={onToast} />);
+    await screen.findByText("MEMORY.md");
+    await user.click(screen.getByRole("tab", { name: /会话摘要/ }));
+    await user.click(screen.getByRole("button", { name: /整理到长期记忆/ }));
+    await user.click(within(screen.getByRole("dialog", { name: "整理历史会话摘要？" })).getByRole("button", { name: "开始整理" }));
+    await waitFor(() => expect(onToast).toHaveBeenCalledWith("本次没有更新长期记忆；可能没有待整理的摘要"));
   });
 
   it("没有活动会话时明确说明维护能力受限", async () => {
@@ -110,13 +132,28 @@ describe("ResourcesPanel", () => {
     render(<ResourcesPanel cwd="/repo" sessionId="session-1" />);
     await screen.findByText("MEMORY.md");
 
-    await user.click(screen.getByRole("button", { name: /添加一条记忆/ }));
+    await user.click(screen.getByRole("button", { name: /追加记忆到文档/ }));
     await user.type(screen.getByPlaceholderText(/TypeScript/), "优先写测试");
     await user.click(screen.getByRole("button", { name: "添加" }));
 
     await waitFor(() => {
       expect(api.memoryAppend).toHaveBeenCalledWith("workspace", "优先写测试", "/repo");
     });
+  });
+
+  it("文件已保存但索引更新失败时刷新列表并准确提示", async () => {
+    const user = userEvent.setup();
+    const onToast = vi.fn();
+    api.memorySave.mockRejectedValueOnce(new Error("记忆文件已保存，但检索索引更新失败：数据库正忙"));
+    render(<ResourcesPanel cwd="/repo" sessionId="session-1" onToast={onToast} />);
+    await screen.findByText("MEMORY.md");
+
+    await user.click(screen.getByTitle("编辑"));
+    await user.click(screen.getByRole("button", { name: "保存" }));
+
+    await waitFor(() => expect(api.memoryList).toHaveBeenCalledTimes(2));
+    expect(screen.queryByRole("dialog", { name: /编辑 MEMORY.md/ })).not.toBeInTheDocument();
+    expect(onToast).toHaveBeenCalledWith("记忆文件已保存，但检索索引更新失败：数据库正忙");
   });
 
   it("AI 整理只更新草稿，保存时带修订号", async () => {

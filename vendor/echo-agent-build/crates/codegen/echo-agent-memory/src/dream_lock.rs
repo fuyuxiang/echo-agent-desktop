@@ -166,6 +166,9 @@ pub fn sessions_since(
     let mut result = Vec::new();
     for entry in entries {
         let entry = entry?;
+        if !entry.file_type()?.is_file() {
+            continue;
+        }
         let path = entry.path();
 
         if path.extension().and_then(|e| e.to_str()) != Some("md") {
@@ -198,6 +201,22 @@ mod tests {
     use filetime::FileTime;
     use std::time::Duration;
     use tempfile::TempDir;
+
+    #[cfg(unix)]
+    #[test]
+    fn sessions_since_ignores_symlinked_summaries() {
+        let dir = TempDir::new().unwrap();
+        let sessions = dir.path().join("sessions");
+        fs::create_dir_all(&sessions).unwrap();
+        let outside = dir.path().join("outside.md");
+        fs::write(&outside, "private text").unwrap();
+        std::os::unix::fs::symlink(&outside, sessions.join("linked.md")).unwrap();
+        assert!(
+            sessions_since(&sessions, SystemTime::UNIX_EPOCH, None)
+                .unwrap()
+                .is_empty()
+        );
+    }
 
     // --- DreamLock tests ---
 

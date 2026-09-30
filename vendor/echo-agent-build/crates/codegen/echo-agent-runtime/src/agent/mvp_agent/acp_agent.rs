@@ -2253,7 +2253,7 @@ impl acp::Agent for MvpAgent {
             }
             "echo.agent/session/repair" => crate::extensions::repair::handle(self, &args).await,
             "echo.agent/session/usage" => crate::extensions::usage::handle(self, &args).await,
-            "echo.agent/memory/flush" | "echo.agent/memory/rewrite" => {
+            "echo.agent/memory/flush" | "echo.agent/memory/dream" | "echo.agent/memory/rewrite" => {
                 crate::extensions::memory::handle(self, &args).await
             }
             "echo.agent/skills/refresh-baseline" => {

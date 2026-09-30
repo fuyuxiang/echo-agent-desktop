@@ -91,6 +91,31 @@ pub struct MemoryIndex {
 }
 
 impl MemoryIndex {
+    /// Open an existing index without resetting embeddings produced by a
+    /// custom model with dimensions different from the desktop default.
+    pub fn open_or_create_preserving_dimensions(
+        db_path: &Path,
+        storage: MemoryStorage,
+        config: MemoryIndexConfig,
+        default_dimensions: usize,
+    ) -> Result<Self, rusqlite::Error> {
+        let dimensions = JournalMode::for_db_path(db_path)
+            .open_readonly(db_path)
+            .ok()
+            .and_then(|db| {
+                db.query_row(
+                    schema::GET_META_SQL,
+                    params!["embedding_dimensions"],
+                    |row| row.get::<_, String>(0),
+                )
+                .ok()
+            })
+            .and_then(|value| value.parse::<usize>().ok())
+            .filter(|value| *value > 0 && *value <= 8192)
+            .unwrap_or(default_dimensions);
+        Self::open_or_create(db_path, storage, config, dimensions)
+    }
+
     /// Open or create the index database at `db_path`.
     ///
     /// `dimensions` sets the embedding vector size for the `chunks_vec` table.
@@ -371,7 +396,7 @@ impl MemoryIndex {
         let keywords = super::query_expansion::extract_keywords(query);
         let fts_query = keywords.join(" OR ");
         if fts_query.is_empty() {
-            return Ok(vec![]);
+            return self.search_cjk_substrings(query, limit, Some(sources));
         }
 
         let placeholders: Vec<String> = sources
@@ -402,14 +427,14 @@ impl MemoryIndex {
             })?
             .collect::<Result<Vec<_>, _>>()?;
 
-        self.resolve_fts_rowids(rows)
+        self.merge_cjk_results(query, limit, Some(sources), rows)
     }
 
     pub fn search_fts(&self, query: &str, limit: usize) -> Result<Vec<FtsResult>, rusqlite::Error> {
         let keywords = super::query_expansion::extract_keywords(query);
         let fts_query = keywords.join(" OR ");
         if fts_query.is_empty() {
-            return Ok(vec![]);
+            return self.search_cjk_substrings(query, limit, None);
         }
 
         let mut stmt = self.db.prepare(
@@ -422,7 +447,94 @@ impl MemoryIndex {
             })?
             .collect::<Result<Vec<_>, _>>()?;
 
+        self.merge_cjk_results(query, limit, None, rows)
+    }
+
+    /// SQLite's default FTS5 tokenizer treats a continuous Chinese sentence as
+    /// one token. Match overlapping Han bigrams against the source chunks so a
+    /// shorter Chinese phrase can find a longer saved sentence. The scan uses
+    /// at most 16 bigrams and only runs for queries containing Han characters; English still
+    /// follows the indexed BM25 path above.
+    fn search_cjk_substrings(
+        &self,
+        query: &str,
+        limit: usize,
+        sources: Option<&[&str]>,
+    ) -> Result<Vec<FtsResult>, rusqlite::Error> {
+        let terms = super::query_expansion::extract_cjk_bigrams(query);
+        if terms.is_empty() || limit == 0 {
+            return Ok(Vec::new());
+        }
+        let score = vec!["(instr(c.text, ?) > 0)"; terms.len()].join(" + ");
+        let source_clause = sources
+            .filter(|items| !items.is_empty())
+            .map(|items| format!(" AND c.source IN ({})", vec!["?"; items.len()].join(", ")))
+            .unwrap_or_default();
+        let sql = format!(
+            "WITH scored AS (SELECT c.rowid, ({score}) AS hits FROM chunks c WHERE 1=1{source_clause}) \
+             SELECT rowid, hits FROM scored WHERE hits > 0 ORDER BY hits DESC, rowid DESC LIMIT ?"
+        );
+        let mut args: Vec<Box<dyn rusqlite::types::ToSql>> = terms
+            .iter()
+            .map(|term| Box::new(term.clone()) as Box<dyn rusqlite::types::ToSql>)
+            .collect();
+        if let Some(sources) = sources {
+            args.extend(
+                sources
+                    .iter()
+                    .map(|source| Box::new(source.to_string()) as Box<dyn rusqlite::types::ToSql>),
+            );
+        }
+        args.push(Box::new(limit as i64));
+        let refs: Vec<&dyn rusqlite::types::ToSql> = args.iter().map(|arg| arg.as_ref()).collect();
+        let mut stmt = self.db.prepare(&sql)?;
+        let rows = stmt
+            .query_map(refs.as_slice(), |row| {
+                Ok((row.get::<_, i64>(0)?, row.get::<_, i64>(1)?))
+            })?
+            .collect::<Result<Vec<_>, _>>()?
+            .into_iter()
+            .map(|(rowid, hits)| {
+                // Use a bounded synthetic rank; lower (more negative) means better.
+                (rowid, -(hits as f64 / terms.len() as f64))
+            })
+            .collect::<Vec<_>>();
         self.resolve_fts_rowids(rows)
+    }
+
+    fn merge_cjk_results(
+        &self,
+        query: &str,
+        limit: usize,
+        sources: Option<&[&str]>,
+        rows: Vec<(i64, f64)>,
+    ) -> Result<Vec<FtsResult>, rusqlite::Error> {
+        let mut merged = self.resolve_fts_rowids(rows)?;
+        let seen: std::collections::HashSet<i64> =
+            merged.iter().map(|result| result.rowid).collect();
+        let rank_bounds = merged
+            .iter()
+            .fold(None, |bounds: Option<(f64, f64)>, result| {
+                Some(match bounds {
+                    Some((best, worst)) => (best.min(result.rank), worst.max(result.rank)),
+                    None => (result.rank, result.rank),
+                })
+            });
+        merged.extend(
+            self.search_cjk_substrings(query, limit, sources)?
+                .into_iter()
+                .filter(|result| !seen.contains(&result.rowid))
+                .map(|mut result| {
+                    if let Some((best, worst)) = rank_bounds {
+                        let coverage = -result.rank;
+                        result.rank = best + (1.0 - coverage) * (worst - best);
+                    }
+                    result
+                }),
+        );
+        merged.sort_by(|left, right| left.rank.total_cmp(&right.rank));
+        merged.truncate(limit);
+        Ok(merged)
     }
 
     fn resolve_fts_rowids(&self, rows: Vec<(i64, f64)>) -> Result<Vec<FtsResult>, rusqlite::Error> {
@@ -882,6 +994,29 @@ mod tests {
     }
 
     #[test]
+    fn test_admin_open_preserves_custom_embedding_dimensions() {
+        let tmp = TempDir::new().unwrap();
+        let db_path = tmp.path().join("test.sqlite");
+        let storage = test_storage(&tmp);
+        let original = MemoryIndex::open_or_create(
+            &db_path,
+            storage.clone(),
+            MemoryIndexConfig::default(),
+            768,
+        )
+        .unwrap();
+        drop(original);
+        let reopened = MemoryIndex::open_or_create_preserving_dimensions(
+            &db_path,
+            storage,
+            MemoryIndexConfig::default(),
+            1024,
+        )
+        .unwrap();
+        assert_eq!(reopened.embedding_dimensions(), 768);
+    }
+
+    #[test]
     fn test_network_mode_uses_fresh_per_host_truncate_db() {
         // Network mode opens a per-host sibling of the given path (the
         // legacy shared file is left untouched — a live old binary can flip
@@ -923,6 +1058,41 @@ mod tests {
         assert_eq!(result.added, 1);
         assert_eq!(result.updated, 0);
         assert_eq!(result.removed, 0);
+    }
+
+    #[test]
+    fn test_chinese_subphrase_finds_longer_memory_sentence() {
+        let tmp = TempDir::new().unwrap();
+        let mut idx = test_index(&tmp);
+        let file = tmp.path().join("memory.md");
+        std::fs::write(&file, "## 用户偏好\n\n用户喜欢简洁说明。\n").unwrap();
+        idx.reindex_file(&file, "workspace").unwrap();
+        let weak_file = tmp.path().join("weak.md");
+        std::fs::write(&weak_file, "## 其他偏好\n\n用户喜欢简洁内容。\n").unwrap();
+        idx.reindex_file(&weak_file, "workspace").unwrap();
+
+        let matches = idx.search_fts("简洁说明", 10).unwrap();
+        assert_eq!(matches.len(), 2);
+        assert!(
+            idx.get_chunk(&matches[0].chunk_id)
+                .unwrap()
+                .unwrap()
+                .text
+                .contains("简洁说明")
+        );
+        assert_eq!(
+            idx.search_fts("简洁说明", 1).unwrap()[0].chunk_id,
+            matches[0].chunk_id
+        );
+        let scoped = idx
+            .search_fts_by_sources("简洁说明", 10, &["workspace"])
+            .unwrap();
+        assert_eq!(scoped.len(), 2);
+        assert!(
+            idx.search_fts_by_sources("简洁说明", 10, &["global"])
+                .unwrap()
+                .is_empty()
+        );
     }
 
     #[test]

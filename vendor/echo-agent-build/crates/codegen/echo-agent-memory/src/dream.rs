@@ -153,6 +153,9 @@ pub struct DreamMessage {
     /// stems beyond the [`MAX_DREAM_INPUT_CHARS`] cap are deliberately
     /// excluded so their content is preserved for a future dream pass.
     pub processed_stems: Vec<String>,
+    /// Digest of each source exactly as sent to the model. A deleted or edited
+    /// summary must never be merged from a stale model response.
+    pub source_hashes: Vec<(String, String)>,
 }
 
 /// Returns `true` if the content is scaffold boilerplate that should not be
@@ -211,6 +214,7 @@ pub fn build_dream_user_message(
     }
 
     let mut processed_stems = Vec::with_capacity(stems.len());
+    let mut source_hashes = Vec::with_capacity(stems.len());
     for stem in stems {
         let path = sessions_dir.join(format!("{stem}.md"));
         if let Ok(content) = std::fs::read_to_string(&path)
@@ -237,6 +241,10 @@ pub fn build_dream_user_message(
             buf.push_str(&separator);
             buf.push_str(&content);
             processed_stems.push(stem.clone());
+            source_hashes.push((
+                stem.clone(),
+                blake3::hash(content.as_bytes()).to_hex().to_string(),
+            ));
         }
     }
     if processed_stems.is_empty() {
@@ -253,6 +261,7 @@ pub fn build_dream_user_message(
     Some(DreamMessage {
         content: buf,
         processed_stems,
+        source_hashes,
     })
 }
 
@@ -437,6 +446,33 @@ pub fn execute_dream(
     sessions_dir: &Path,
     processed_stems: &[String],
 ) -> DreamResult {
+    execute_dream_with_expected(
+        lock,
+        storage,
+        response,
+        sessions_eligible,
+        stale_lock_secs,
+        sessions_dir,
+        processed_stems,
+        None,
+        None,
+    )
+}
+
+/// The expected document and source digests are the exact inputs sent to the
+/// model. If either changes during sampling, retain current files and retry
+/// with fresh context on a later consolidation.
+pub fn execute_dream_with_expected(
+    lock: &DreamLock,
+    storage: &super::storage::MemoryStorage,
+    response: &str,
+    sessions_eligible: usize,
+    stale_lock_secs: u64,
+    sessions_dir: &Path,
+    processed_stems: &[String],
+    expected_existing: Option<Option<&str>>,
+    expected_sources: Option<&[(String, String)]>,
+) -> DreamResult {
     let prior = match lock.try_acquire(stale_lock_secs) {
         Ok(Some(prior)) => {
             tracing::info!(target: LOG, "DREAM_EXECUTE: lock acquired");
@@ -474,7 +510,36 @@ pub fn execute_dream(
     };
 
     let chars_written = content.chars().count();
-    if let Err(e) = storage.write_long_term(super::storage::MemoryScope::Workspace, &content) {
+    let write_result = (|| {
+        let _guard = super::storage::memory_mutation_lock()
+            .lock()
+            .map_err(|_| std::io::Error::other("memory write lock is poisoned"))?;
+        if let Some(expected) = expected_existing {
+            let current = match std::fs::read_to_string(storage.workspace_memory_file()) {
+                Ok(content) => Some(content),
+                Err(error) if error.kind() == std::io::ErrorKind::NotFound => None,
+                Err(error) => return Err(error),
+            };
+            if current.as_deref() != expected {
+                return Err(std::io::Error::other(
+                    "long-term memory changed during consolidation; retry with fresh context",
+                ));
+            }
+        }
+        if let Some(sources) = expected_sources {
+            for (stem, expected_hash) in sources {
+                let path = sessions_dir.join(format!("{stem}.md"));
+                let content = std::fs::read(&path)?;
+                if blake3::hash(&content).to_hex().as_str() != expected_hash {
+                    return Err(std::io::Error::other(format!(
+                        "session summary changed during consolidation: {stem}"
+                    )));
+                }
+            }
+        }
+        storage.write_long_term(super::storage::MemoryScope::Workspace, &content)
+    })();
+    if let Err(e) = write_result {
         let _ = lock.rollback(prior);
         tracing::warn!(target: LOG, error = %e, "DREAM_EXECUTE: write failed, lock rolled back");
         return DreamResult {
@@ -921,6 +986,75 @@ mod tests {
         let memory = fs::read_to_string(ws.join("MEMORY.md")).unwrap();
         assert!(memory.contains("We chose Rust."));
         assert!(memory.contains("Event-driven."));
+    }
+
+    #[test]
+    fn consolidation_does_not_overwrite_a_newer_manual_edit() {
+        let dir = TempDir::new().unwrap();
+        let lock = DreamLock::new(dir.path());
+        let (storage, workspace) = test_storage(&dir);
+        let sessions = empty_sessions_dir(&dir);
+        fs::create_dir_all(&workspace).unwrap();
+        fs::write(storage.workspace_memory_file(), "## Preference\n\nOriginal").unwrap();
+        let sampled_snapshot = "## Preference\n\nOriginal";
+        fs::write(
+            storage.workspace_memory_file(),
+            "## Preference\n\nUser edit",
+        )
+        .unwrap();
+
+        let result = execute_dream_with_expected(
+            &lock,
+            &storage,
+            "## Preference\n\nModel rewrite",
+            1,
+            300,
+            &sessions,
+            &[],
+            Some(Some(sampled_snapshot)),
+            None,
+        );
+        assert!(matches!(result.status, DreamStatus::Failed(_)));
+        assert_eq!(
+            fs::read_to_string(storage.workspace_memory_file()).unwrap(),
+            "## Preference\n\nUser edit"
+        );
+    }
+
+    #[test]
+    fn consolidation_does_not_restore_a_deleted_source_summary() {
+        let dir = TempDir::new().unwrap();
+        let lock = DreamLock::new(dir.path());
+        let (storage, workspace) = test_storage(&dir);
+        let sessions = empty_sessions_dir(&dir);
+        fs::create_dir_all(&workspace).unwrap();
+        fs::write(storage.workspace_memory_file(), "## Preference\n\nOriginal").unwrap();
+        let stem = "session-to-forget";
+        let source = sessions.join(format!("{stem}.md"));
+        let source_content = "## Session\n\nPrivate preference";
+        fs::write(&source, source_content).unwrap();
+        let hashes = vec![(
+            stem.to_owned(),
+            blake3::hash(source_content.as_bytes()).to_hex().to_string(),
+        )];
+        fs::remove_file(source).unwrap();
+
+        let result = execute_dream_with_expected(
+            &lock,
+            &storage,
+            "## Preference\n\nPrivate preference",
+            1,
+            300,
+            &sessions,
+            &[stem.to_owned()],
+            Some(Some("## Preference\n\nOriginal")),
+            Some(&hashes),
+        );
+        assert!(matches!(result.status, DreamStatus::Failed(_)));
+        assert_eq!(
+            fs::read_to_string(storage.workspace_memory_file()).unwrap(),
+            "## Preference\n\nOriginal"
+        );
     }
 
     #[test]

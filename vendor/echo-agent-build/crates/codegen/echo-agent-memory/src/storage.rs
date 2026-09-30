@@ -6,6 +6,7 @@
 
 use std::io::Write;
 use std::path::{Path, PathBuf};
+use std::sync::{Mutex, OnceLock};
 
 use echo_agent_tools::util::echo_agent_home::echo_agent_home;
 
@@ -17,6 +18,14 @@ pub enum MemoryScope {
     Global,
     /// Workspace-scoped memory — specific to one project.
     Workspace,
+}
+
+/// Coordinates desktop edits with runtime consolidation in the same process.
+/// Filesystem changes made by other programs are still detected by the
+/// consolidation revision check.
+pub fn memory_mutation_lock() -> &'static Mutex<()> {
+    static LOCK: OnceLock<Mutex<()>> = OnceLock::new();
+    LOCK.get_or_init(|| Mutex::new(()))
 }
 
 /// Handles file I/O for the memory storage layer.
@@ -201,6 +210,10 @@ impl MemoryStorage {
             return Ok(path);
         }
 
+        let _guard = memory_mutation_lock()
+            .lock()
+            .map_err(|_| std::io::Error::other("memory write lock is poisoned"))?;
+
         std::fs::create_dir_all(&sessions_dir)?;
 
         if append && path.exists() {
@@ -259,6 +272,10 @@ impl MemoryStorage {
         if normalized.is_empty() {
             return Ok(());
         }
+
+        let _guard = memory_mutation_lock()
+            .lock()
+            .map_err(|_| std::io::Error::other("memory write lock is poisoned"))?;
 
         let path = match scope {
             MemoryScope::Global => {
@@ -914,7 +931,7 @@ mod tests {
 
     #[test]
     fn test_compute_workspace_hash_human_readable() {
-        let name = compute_workspace_hash(Path::new("/users/me/work/echoagent"));
+        let name = compute_workspace_hash(Path::new("/users/me/work/echo-agent"));
         assert!(
             name.starts_with("echo-agent-"),
             "should start with project name slug, got: {name}"

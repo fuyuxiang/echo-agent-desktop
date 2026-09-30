@@ -178,6 +178,31 @@ pub fn extract_keywords(query: &str) -> Vec<String> {
         .collect()
 }
 
+/// Character pairs for Chinese substring retrieval. Limit query expansion to
+/// keep the fallback scan bounded even for a pasted paragraph.
+pub fn extract_cjk_bigrams(query: &str) -> Vec<String> {
+    let mut terms = Vec::new();
+    let mut seen = HashSet::new();
+    let mut previous = None;
+    for character in query.chars() {
+        if matches!(character, '\u{3400}'..='\u{9fff}' | '\u{f900}'..='\u{faff}') {
+            if let Some(first) = previous {
+                let term = format!("{first}{character}");
+                if seen.insert(term.clone()) {
+                    terms.push(term);
+                    if terms.len() == 16 {
+                        break;
+                    }
+                }
+            }
+            previous = Some(character);
+        } else {
+            previous = None;
+        }
+    }
+    terms
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

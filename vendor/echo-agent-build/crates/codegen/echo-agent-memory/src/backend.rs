@@ -463,6 +463,11 @@ impl MemoryBackend for MemoryBackendImpl {
                     "failed to validate embedding cache identity"
                 ),
             }
+            // Desktop edits can reindex files while file watching is disabled.
+            // Fill those new chunks on the next semantic search as well.
+            if reindex_chunks.is_empty() {
+                reindex_chunks = index.chunks_without_embeddings().unwrap_or_default();
+            }
         }
         let mut embedded_count: usize = 0;
         if !reindex_chunks.is_empty()
@@ -722,6 +727,34 @@ mod factory_tests {
             observation_sink: noop_memory_observation_sink(),
             embedding_credentials: EndpointScopedCredentials::none(),
         }
+    }
+
+    #[tokio::test]
+    async fn chinese_subphrase_is_retrievable_at_the_normal_score_threshold() {
+        let tmp = TempDir::new().unwrap();
+        init_sqlite_vec();
+        let storage = make_storage(&tmp);
+        std::fs::create_dir_all(storage.workspace_dir()).unwrap();
+        let file = storage.workspace_memory_file();
+        std::fs::write(&file, "## 用户偏好\n\n用户喜欢简洁说明。\n").unwrap();
+        let db_path = storage.workspace_dir().join("index.sqlite");
+        let mut index = MemoryIndex::open_or_create(
+            &db_path,
+            storage.clone(),
+            echo_agent_config_types::MemoryIndexConfig::default(),
+            4,
+        )
+        .unwrap();
+        index.reindex_file(&file, "workspace").unwrap();
+        drop(index);
+
+        let backend = MemoryBackendImpl::from_session_params(
+            storage,
+            &make_params_fts_only("chinese-subphrase"),
+        );
+        let results = backend.search("简洁说明", 5, 0.7).await.unwrap();
+        assert_eq!(results.len(), 1);
+        assert!(results[0].snippet.contains("简洁说明"));
     }
 
     #[tokio::test]

@@ -5,7 +5,7 @@
  * 每个分区对接 EchoAgent 已有的能力：
  *  - personalize: 主题（接 ThemeProvider）+ 字号
  *  - shortcuts: 当前版本真实生效的快捷键说明
- *  - memory: 本地记忆配置、当前会话落盘与整理
+ *  - memory: 记忆配置与检索方式
  *  - help: 版本更新、文档与排查说明
  *  - security: 系统授权、工具规则与诊断
  *  - data: 备份恢复与本地数据目录
@@ -40,8 +40,6 @@ import {
   internalReload,
   memoryConfigGet,
   memoryConfigSave,
-  memoryDream,
-  memoryFlush,
   notificationClear,
   notificationList,
   notificationMarkAllRead,
@@ -272,14 +270,14 @@ const DEFAULT_MEMORY_CONFIG: MemoryConfig = {
   dreamEnabled: true,
 };
 
-export function MemorySettingsPanel({ sessionId }: { sessionId?: string }) {
+export function MemorySettingsPanel() {
   const [busy, setBusy] = useState(false);
   const [msg, setMsg] = useState<string | null>(null);
   const [config, setConfig] = useState<MemoryConfig>(DEFAULT_MEMORY_CONFIG);
   const [loading, setLoading] = useState(true);
   const [loadError, setLoadError] = useState(false);
   const [reload, setReload] = useState(0);
-  const { requestConfirmation, dialog } = useAppDialog(sessionId);
+  const { requestConfirmation, dialog } = useAppDialog("memory-settings");
 
   useEffect(() => {
     let cancelled = false;
@@ -318,53 +316,15 @@ export function MemorySettingsPanel({ sessionId }: { sessionId?: string }) {
     }
   };
 
-  const handleFlush = async () => {
-    if (!sessionId) {
-      setMsg("立即落盘需要一个已打开的会话。");
-      return;
-    }
-    setBusy(true);
-    try {
-      await memoryFlush(sessionId);
-      setMsg("当前会话摘要已提取。");
-    } catch (e) {
-      setMsg(`失败：${String(e).replace(/^Error:\s*/, "")}`);
-    } finally {
-      setBusy(false);
-    }
-  };
-
-  const handleDream = () => {
-    if (!sessionId) {
-      setMsg("整理记忆需要一个已打开的会话。");
-      return;
-    }
-    requestConfirmation({
-      title: "整理历史会话摘要？",
-      description: "Agent 会把历史会话摘要归纳到长期记忆中，可能会修改现有记忆内容。",
-      confirmLabel: "开始整理",
-      action: async () => {
-        setBusy(true);
-        try {
-          await memoryDream(sessionId);
-          setMsg("长期记忆整理完成。");
-        } finally {
-          setBusy(false);
-        }
-      },
-      onError: (error) => setMsg(`失败：${String(error).replace(/^Error:\s*/, "")}`),
-    });
-  };
-
   const toggles: Array<{
     key: "enabled" | "initialInjectionEnabled" | "saveOnEnd" | "watcherEnabled" | "autoFlushEnabled" | "dreamEnabled";
     name: string;
     description: string;
   }> = [
-    { key: "enabled", name: "启用本地记忆", description: "为新会话启用记忆检索、写入和整理能力" },
+    { key: "enabled", name: "启用记忆", description: "为新会话启用记忆检索、写入和整理能力" },
     { key: "initialInjectionEnabled", name: "会话开始时检索", description: "首轮对话自动注入相关长期记忆" },
     { key: "saveOnEnd", name: "会话结束时保存", description: "有可复用信息时生成可检索的会话摘要" },
-    { key: "watcherEnabled", name: "监听外部修改", description: "手动编辑记忆文件后自动同步索引" },
+    { key: "watcherEnabled", name: "监听外部修改", description: "在应用外修改记忆文件后自动同步检索索引" },
     { key: "autoFlushEnabled", name: "自动提取", description: "空闲或上下文压缩前提取信息并写入会话摘要" },
     { key: "dreamEnabled", name: "自动整理", description: "定期将会话摘要合并为结构化长期记忆" },
   ];
@@ -372,7 +332,7 @@ export function MemorySettingsPanel({ sessionId }: { sessionId?: string }) {
   return (
     <SectionShell
       title="记忆"
-      desc="本地、可审阅的跨会话记忆。会话摘要是自动提取的中间资料，不是完整聊天记录。"
+      desc="跨会话记忆保存在本机，可随时审阅。会话摘要是自动提取的中间资料，不是完整聊天记录。"
     >
       {loadError && <div role="alert" className="settings-hint">配置未加载，暂时无法修改。<button className="btn-secondary" onClick={() => setReload((n) => n + 1)}>重新加载</button></div>}
       <SettingsGroup title="检索与数据来源">
@@ -418,26 +378,6 @@ export function MemorySettingsPanel({ sessionId }: { sessionId?: string }) {
             <span className="settings-row__description">可在“设置 → 记忆 → 个人记忆”中查看、编辑和审阅</span>
           </div>
           <code className="settings-path-chip">~/.echo-agent/memory/</code>
-        </div>
-      </SettingsGroup>
-      <SettingsGroup title="当前会话维护" desc={sessionId ? "通常无需手动执行。" : "请先打开一个会话。"}>
-        <div className="settings-action-row">
-          <div className="settings-action-row__content">
-            <strong>立即提取摘要</strong>
-            <span>从当前会话提取可复用信息，不保存完整聊天。</span>
-          </div>
-          <button className="settings-btn" onClick={handleFlush} disabled={busy || !sessionId || !config.enabled}>
-            <Database size={15} /> 立即提取
-          </button>
-        </div>
-        <div className="settings-action-row">
-          <div className="settings-action-row__content">
-            <strong>整理长期记忆</strong>
-            <span>将历史会话摘要归纳到主题化长期记忆中。</span>
-          </div>
-          <button className="settings-btn" onClick={handleDream} disabled={busy || !sessionId || !config.enabled}>
-            <RefreshCw size={15} /> 立即整理
-          </button>
         </div>
       </SettingsGroup>
       {msg && <p className="settings-msg">{msg}</p>}

@@ -430,6 +430,10 @@ pub enum SessionCommand {
     FlushMemory {
         respond_to: oneshot::Sender<acp::Result<bool>>,
     },
+    /// Run manual long-term consolidation and report whether it wrote memory.
+    DreamMemory {
+        respond_to: oneshot::Sender<acp::Result<bool>>,
+    },
     /// Auto-approve all permission prompts when `enabled`.
     SetYoloMode {
         enabled: bool,

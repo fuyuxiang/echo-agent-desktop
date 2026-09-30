@@ -22,13 +22,13 @@ use std::rc::Rc;
 use std::sync::Arc;
 
 use agent_client_protocol as acp;
-use anyhow::{anyhow, Result};
+use anyhow::{Result, anyhow};
 use base64::Engine;
 use serde::Serialize;
 use tokio_util::sync::CancellationToken;
 
 use echo_agent_acp::{
-    acp_channels, acp_send, AcpAgentGatewaySender, AcpAgentTx, AcpClientRx, AcpGatewayReceiver,
+    AcpAgentGatewaySender, AcpAgentTx, AcpClientRx, AcpGatewayReceiver, acp_channels, acp_send,
 };
 use echo_agent_runtime::agent::init::bootstrap;
 use echo_agent_runtime::agent::mvp_agent::MvpAgent;
@@ -579,17 +579,6 @@ pub async fn model_ids(tx: &AcpAgentTx) -> Result<Vec<String>> {
     Ok(ids)
 }
 
-/// Send a user prompt. ACP resolves this request after the complete model turn;
-/// streamed updates arrive earlier on the client rx channel (drained by the
-/// dispatcher in bridge.rs).
-///
-/// Rate-limit handling belongs inside the runtime's sampler. Re-submitting a
-/// whole ACP PromptRequest here is not idempotent: each attempt is persisted as
-/// a new user turn before sampling starts.
-pub async fn prompt(tx: &AcpAgentTx, session_id: &str, text: &str) -> Result<()> {
-    prompt_with_attachments(tx, session_id, text, &[], None, None, false).await
-}
-
 fn image_mime(path: &Path) -> Option<&'static str> {
     match path.extension()?.to_str()?.to_ascii_lowercase().as_str() {
         "png" => Some("image/png"),
@@ -729,6 +718,9 @@ pub(crate) fn completion_from_prompt_response(
     ))
 }
 
+/// ACP resolves this request after the complete model turn. Streamed updates
+/// arrive earlier on the client rx channel. Rate limiting belongs inside the
+/// runtime sampler because resubmitting a prompt persists another user turn.
 pub async fn prompt_with_attachments(
     tx: &AcpAgentTx,
     session_id: &str,

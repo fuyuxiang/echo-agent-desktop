@@ -235,16 +235,20 @@ impl SessionActor {
             "MEMORY_DREAM: gates passed, starting consolidation"
         );
 
-        self.run_dream_inner(&storage, &lock, &sessions_dir, &sessions, "MEMORY_DREAM")
+        let _ = self
+            .run_dream_inner(&storage, &lock, &sessions_dir, &sessions, "MEMORY_DREAM")
             .await;
     }
 
     /// Run dream from `/dream` slash command, bypassing time/session gates.
-    pub(super) async fn run_dream_slash_command(&self) {
+    pub(super) async fn run_dream_slash_command(&self) -> Result<bool, String> {
         use crate::session::memory::dream_lock::sessions_since;
 
+        if !self.memory.is_enabled() {
+            return Err("memory is not enabled for this session".into());
+        }
         let Some((storage, lock, sessions_dir, sid8)) = self.dream_context() else {
-            return;
+            return Err("memory storage is not available for this session".into());
         };
 
         let sessions = match sessions_since(
@@ -257,7 +261,7 @@ impl SessionActor {
                     target: echo_agent_telemetry::memory_log::TARGET,
                     "MEMORY_DREAM_SLASH: no session logs found, nothing to consolidate"
                 );
-                return;
+                return Ok(false);
             }
             Ok(s) => s,
             Err(e) => {
@@ -266,7 +270,7 @@ impl SessionActor {
                     error = %e,
                     "MEMORY_DREAM_SLASH: failed to list sessions"
                 );
-                return;
+                return Err(format!("failed to list session summaries: {e}"));
             }
         };
 
@@ -283,7 +287,7 @@ impl SessionActor {
             &sessions,
             "MEMORY_DREAM_SLASH",
         )
-        .await;
+        .await
     }
 
     /// Shared dream execution: build message, call model, execute, record result.
@@ -294,7 +298,7 @@ impl SessionActor {
         sessions_dir: &std::path::Path,
         sessions: &[String],
         log_prefix: &str,
-    ) {
+    ) -> Result<bool, String> {
         use crate::session::memory::dream::*;
 
         let existing_memory = std::fs::read_to_string(storage.workspace_memory_file()).ok();
@@ -307,7 +311,7 @@ impl SessionActor {
                         target: echo_agent_telemetry::memory_log::TARGET,
                         "{log_prefix}: no readable session content, skipping"
                     );
-                    return;
+                    return Ok(false);
                 }
             };
 
@@ -325,7 +329,7 @@ impl SessionActor {
                     "{log_prefix}: model call failed"
                 );
                 self.memory.record_dream_result(false);
-                return;
+                return Err(format!("dream model call failed: {e}"));
             }
             Err(_) => {
                 tracing::warn!(
@@ -333,11 +337,11 @@ impl SessionActor {
                     "{log_prefix}: model call timed out (30m)"
                 );
                 self.memory.record_dream_result(false);
-                return;
+                return Err("dream model call timed out (30m)".into());
             }
         };
 
-        let result = execute_dream(
+        let result = execute_dream_with_expected(
             lock,
             storage,
             &model_response,
@@ -345,6 +349,8 @@ impl SessionActor {
             self.memory.dream_config.stale_lock_secs,
             sessions_dir,
             &dream_msg.processed_stems,
+            Some(existing_memory.as_deref()),
+            Some(&dream_msg.source_hashes),
         );
 
         match &result.status {
@@ -393,6 +399,11 @@ impl SessionActor {
             sessions_cleaned = result.cleaned_stems.len(),
             "{log_prefix}: consolidation complete"
         );
+        match result.status {
+            DreamStatus::Completed { .. } => Ok(true),
+            DreamStatus::NothingToConsolidate | DreamStatus::Skipped(_) => Ok(false),
+            DreamStatus::Failed(error) => Err(error),
+        }
     }
 
     /// Make the dream model call using the session's sampling client.

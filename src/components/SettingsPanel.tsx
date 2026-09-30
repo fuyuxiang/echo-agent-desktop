@@ -281,7 +281,7 @@ export function SettingsPanel({
             ) : active === "memory" ? (
               <div className="settings-subview">
                 <SettingsViewTabs label="记忆视图" items={MEMORY_VIEWS} active={active} onSelect={setActive} />
-                <MemorySettingsPanel sessionId={sessionId} />
+                <MemorySettingsPanel />
               </div>
             ) : active === "personal-memory" ? (
               <div className="settings-subview settings-personal-memory">

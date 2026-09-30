@@ -20,10 +20,10 @@ use std::io::Read;
 use std::path::{Path, PathBuf};
 use std::sync::{Mutex, OnceLock};
 
-use echo_agent_runtime::session::memory::{
-    init_sqlite_vec, storage::normalize_memory_content, MemoryIndex, MemoryScope, MemoryStorage,
-};
 use echo_agent_runtime::session::RewindMode as RuntimeRewindMode;
+use echo_agent_runtime::session::memory::{
+    MemoryIndex, MemoryScope, MemoryStorage, init_sqlite_vec, storage::normalize_memory_content,
+};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use tauri::{AppHandle, State};
@@ -77,8 +77,7 @@ pub(crate) fn clear_runtime_capabilities() {
 }
 
 fn memory_mutation_lock() -> &'static Mutex<()> {
-    static LOCK: OnceLock<Mutex<()>> = OnceLock::new();
-    LOCK.get_or_init(|| Mutex::new(()))
+    echo_agent_runtime::session::memory::storage::memory_mutation_lock()
 }
 
 fn valid_admin_id(value: &str) -> bool {
@@ -264,7 +263,7 @@ fn open_memory_index(storage: &MemoryStorage) -> Result<Option<MemoryIndex>, Str
     }
 
     init_sqlite_vec();
-    MemoryIndex::open_or_create(
+    MemoryIndex::open_or_create_preserving_dimensions(
         &db_path,
         storage.clone(),
         Default::default(),
@@ -287,6 +286,91 @@ fn purge_memory_index_paths(storage: &MemoryStorage, paths: &[PathBuf]) -> Resul
         );
     }
     Ok(removed)
+}
+
+/// Global MEMORY.md is copied into every workspace search index. Keep all
+/// existing indexes in sync even when a live session disabled file watching.
+fn memory_index_paths(
+    storage: &MemoryStorage,
+    scope: MemoryEntryScope,
+) -> Result<Vec<PathBuf>, String> {
+    if scope != MemoryEntryScope::Global {
+        return Ok(vec![storage.workspace_dir().join("index.sqlite")]);
+    }
+    let mut paths = Vec::new();
+    match std::fs::read_dir(storage.global_dir()) {
+        Ok(entries) => {
+            for (position, entry) in entries.enumerate() {
+                if position >= MAX_MEMORY_SCAN_ENTRIES {
+                    return Err("工作区记忆索引数量超过安全处理上限".into());
+                }
+                let entry = entry.map_err(|error| format!("scan memory indexes: {error}"))?;
+                if !entry
+                    .file_type()
+                    .map_err(|error| error.to_string())?
+                    .is_dir()
+                {
+                    continue;
+                }
+                let path = entry.path().join("index.sqlite");
+                match std::fs::symlink_metadata(&path) {
+                    Ok(metadata) if metadata.is_file() && !metadata.file_type().is_symlink() => {
+                        paths.push(path)
+                    }
+                    Ok(_) => {
+                        return Err(format!(
+                            "memory index must be a regular file: {}",
+                            path.display()
+                        ));
+                    }
+                    Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+                    Err(error) => return Err(format!("inspect {}: {error}", path.display())),
+                }
+            }
+        }
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+        Err(error) => return Err(format!("scan memory indexes: {error}")),
+    }
+    Ok(paths)
+}
+
+fn sync_memory_indexes(
+    storage: &MemoryStorage,
+    scope: MemoryEntryScope,
+    target: &Path,
+    deleted: bool,
+) -> Result<(), String> {
+    init_sqlite_vec();
+    for db_path in memory_index_paths(storage, scope)? {
+        match std::fs::symlink_metadata(&db_path) {
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => continue,
+            Err(error) => return Err(format!("inspect {}: {error}", db_path.display())),
+            Ok(metadata) if metadata.is_file() && !metadata.file_type().is_symlink() => {}
+            Ok(_) => {
+                return Err(format!(
+                    "memory index must be a regular file: {}",
+                    db_path.display()
+                ));
+            }
+        }
+        let mut index = MemoryIndex::open_or_create_preserving_dimensions(
+            &db_path,
+            storage.clone(),
+            Default::default(),
+            crate::agent_runtime::MEMORY_EMBEDDING_DIMENSIONS,
+        )
+        .map_err(|error| format!("open memory index {}: {error}", db_path.display()))?;
+        if deleted {
+            index
+                .delete_path(target)
+                .map_err(|error| format!("delete memory index {}: {error}", db_path.display()))?;
+        } else {
+            index
+                .reindex_file(target, scope.as_str())
+                .map_err(|error| format!("update memory index {}: {error}", db_path.display()))?;
+        }
+    }
+    Ok(())
 }
 
 fn collect_markdown_files(dir: &Path, paths: &mut Vec<PathBuf>) -> Result<(), String> {
@@ -687,10 +771,10 @@ pub fn memory_get(
 fn check_expected_revision(path: &Path, expected: Option<&str>) -> Result<(), String> {
     match std::fs::symlink_metadata(path) {
         Err(error) if error.kind() == std::io::ErrorKind::NotFound && expected == Some("") => {
-            return Ok(())
+            return Ok(());
         }
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
-            return Err("记忆文件已被删除，请刷新后重试".into())
+            return Err("记忆文件已被删除，请刷新后重试".into());
         }
         Err(error) => return Err(format!("read {}: {error}", path.display())),
         Ok(_) => {}
@@ -732,6 +816,8 @@ pub fn memory_save(
     reject_symlink(&target)?;
     check_expected_revision(&target, expected_revision.as_deref())?;
     crate::paths::write_private_file(&target, content.as_bytes())?;
+    sync_memory_indexes(&storage, scope, &target, false)
+        .map_err(|error| format!("记忆文件已保存，但检索索引更新失败：{error}"))?;
     read_entry(&storage, scope, &path)
 }
 
@@ -790,6 +876,8 @@ pub fn memory_append(
     combined.extend_from_slice(separator.as_bytes());
     combined.extend_from_slice(normalized.as_bytes());
     crate::paths::write_private_file(&target, &combined)?;
+    sync_memory_indexes(&storage, scope, &target, false)
+        .map_err(|error| format!("记忆文件已保存，但检索索引更新失败：{error}"))?;
     read_entry(&storage, scope, MEMORY_FILE)
 }
 
@@ -816,7 +904,7 @@ pub fn memory_delete(
     }
     reject_symlink(&target)?;
     check_expected_revision(&target, expected_revision.as_deref())?;
-    purge_memory_index_paths(&storage, std::slice::from_ref(&target))?;
+    sync_memory_indexes(&storage, scope, &target, true)?;
     std::fs::remove_file(&target).map_err(|error| format!("delete {}: {error}", target.display()))
 }
 
@@ -880,7 +968,7 @@ pub async fn memory_rewrite(
 
 /// Flush in-flight memory writes to disk (`echo.agent/memory/flush`).
 #[tauri::command]
-pub async fn memory_flush(state: State<'_, AppState>, session_id: String) -> Result<(), String> {
+pub async fn memory_flush(state: State<'_, AppState>, session_id: String) -> Result<bool, String> {
     require_live_session(&state, &session_id)?;
     let tx = state
         .tx
@@ -891,21 +979,24 @@ pub async fn memory_flush(state: State<'_, AppState>, session_id: String) -> Res
     // The upstream flush request predates the camelCase rewrite request and
     // intentionally deserializes this one field as snake_case.
     let params = raw_params(&serde_json::json!({ "session_id": session_id }));
-    let _: serde_json::Value = call_ext(&tx, "echo.agent/memory/flush", params)
+    let value: serde_json::Value = call_ext(&tx, "echo.agent/memory/flush", params)
         .await
         .map_err(|e| e.to_string())?;
-    Ok(())
+    value
+        .get("completed")
+        .and_then(serde_json::Value::as_bool)
+        .ok_or_else(|| "Agent Runtime 未返回记忆提取结果".to_string())
 }
 
-/// Run the Runtime's `/dream` consolidation for the active session. This
-/// bypasses the periodic time/session gates while preserving Runtime locking,
-/// indexing, notifications and failure handling.
+/// Run manual Runtime consolidation for the active session. This bypasses
+/// periodic gates while returning the actual outcome and preserving Runtime
+/// locking, indexing, notifications and failure handling.
 #[tauri::command]
 pub async fn memory_dream(
     app: AppHandle,
     state: State<'_, AppState>,
     session_id: String,
-) -> Result<(), String> {
+) -> Result<bool, String> {
     require_live_session(&state, &session_id)?;
     crate::commands::require_runtime_ready(Some(&app), &state, None)?;
     let tx = state
@@ -914,9 +1005,14 @@ pub async fn memory_dream(
         .unwrap()
         .clone()
         .ok_or("agent not initialized")?;
-    crate::agent_runtime::prompt(&tx, &session_id, "/dream")
+    let params = raw_params(&serde_json::json!({ "session_id": session_id }));
+    let value: serde_json::Value = call_ext(&tx, "echo.agent/memory/dream", params)
         .await
-        .map_err(|error| error.to_string())
+        .map_err(|error| error.to_string())?;
+    value
+        .get("changed")
+        .and_then(serde_json::Value::as_bool)
+        .ok_or_else(|| "Agent Runtime 未返回记忆整理结果".to_string())
 }
 
 // ========================================================================
@@ -2379,14 +2475,14 @@ pub async fn marketplace_action(
 #[cfg(test)]
 mod tests {
     use super::{
-        check_expected_revision, delete_session_memory_artifacts_from_storage, file_revision,
-        init_sqlite_vec, kill_running_task, list_memory, list_running_tasks,
-        normalize_plugin_action, parse_model_reload_ack, parse_rewind_execution,
-        parse_slash_commands, remember_marketplace, remember_plugins,
-        request_internal_reload_and_wait, require_listed_marketplace_source,
+        MAX_ADMIN_ACTION_STRING_BYTES, MemoryEntryScope, MemoryIndex, MemoryStorage,
+        ModelReloadAck, RawSearchHit, RunningTaskSource, check_expected_revision,
+        delete_session_memory_artifacts_from_storage, file_revision, init_sqlite_vec,
+        kill_running_task, list_memory, list_running_tasks, normalize_plugin_action,
+        parse_model_reload_ack, parse_rewind_execution, parse_slash_commands, remember_marketplace,
+        remember_plugins, request_internal_reload_and_wait, require_listed_marketplace_source,
         require_listed_plugin_id, resolve_memory_path, rewind_execute_payload, rewind_point_values,
-        secure_remote_source, validate_admin_action, MemoryEntryScope, MemoryIndex, MemoryStorage,
-        ModelReloadAck, RawSearchHit, RunningTaskSource, MAX_ADMIN_ACTION_STRING_BYTES,
+        secure_remote_source, validate_admin_action,
     };
 
     #[test]
@@ -2725,9 +2821,11 @@ mod tests {
                 "authReady": true,
             })));
 
-        assert!(parse_model_reload_ack(response)
-            .expect_err("authReady without an auth method must fail closed")
-            .contains("inconsistent authentication state"));
+        assert!(
+            parse_model_reload_ack(response)
+                .expect_err("authReady without an auth method must fail closed")
+                .contains("inconsistent authentication state")
+        );
     }
 
     #[test]
@@ -2752,6 +2850,70 @@ mod tests {
         assert!(!entries[0].read_only);
         assert!(entries[2].read_only);
         assert_eq!(entries[0].revision, file_revision(b"# Global\n"));
+    }
+
+    #[test]
+    fn global_memory_edits_and_deletes_update_every_workspace_index() {
+        let root = tempfile::tempdir().unwrap();
+        let first = tempfile::tempdir().unwrap();
+        let second = tempfile::tempdir().unwrap();
+        let first_storage = MemoryStorage::new(first.path(), Some(root.path()));
+        let second_storage = MemoryStorage::new(second.path(), Some(root.path()));
+        let global_file = first_storage.global_memory_file();
+        std::fs::write(&global_file, "## Preferences\n\nOldPreferenceToken").unwrap();
+
+        init_sqlite_vec();
+        for storage in [&first_storage, &second_storage] {
+            std::fs::create_dir_all(storage.workspace_dir()).unwrap();
+            let mut index = MemoryIndex::open_or_create(
+                &storage.workspace_dir().join("index.sqlite"),
+                storage.clone(),
+                Default::default(),
+                crate::agent_runtime::MEMORY_EMBEDDING_DIMENSIONS,
+            )
+            .unwrap();
+            index.reindex_file(&global_file, "global").unwrap();
+        }
+
+        std::fs::write(&global_file, "## Preferences\n\nNewPreferenceToken").unwrap();
+        super::sync_memory_indexes(
+            &first_storage,
+            MemoryEntryScope::Global,
+            &global_file,
+            false,
+        )
+        .unwrap();
+        for storage in [&first_storage, &second_storage] {
+            let index = MemoryIndex::open_or_create(
+                &storage.workspace_dir().join("index.sqlite"),
+                storage.clone(),
+                Default::default(),
+                crate::agent_runtime::MEMORY_EMBEDDING_DIMENSIONS,
+            )
+            .unwrap();
+            assert_eq!(index.search_fts("NewPreferenceToken", 10).unwrap().len(), 1);
+            assert!(
+                index
+                    .search_fts("OldPreferenceToken", 10)
+                    .unwrap()
+                    .is_empty()
+            );
+        }
+        super::sync_memory_indexes(&first_storage, MemoryEntryScope::Global, &global_file, true)
+            .unwrap();
+        let index = MemoryIndex::open_or_create(
+            &second_storage.workspace_dir().join("index.sqlite"),
+            second_storage,
+            Default::default(),
+            crate::agent_runtime::MEMORY_EMBEDDING_DIMENSIONS,
+        )
+        .unwrap();
+        assert!(
+            index
+                .search_fts("NewPreferenceToken", 10)
+                .unwrap()
+                .is_empty()
+        );
     }
 
     #[test]
@@ -2843,10 +3005,10 @@ mod tests {
             accepted,
             flush::FlushResult::Accepted("## Decision\n\nKeep the public result.".to_string())
         );
-        assert!(dream::process_dream_response(
-            "<reasoning>private ## headings</reasoning>\nNO_REPLY"
-        )
-        .is_none());
+        assert!(
+            dream::process_dream_response("<reasoning>private ## headings</reasoning>\nNO_REPLY")
+                .is_none()
+        );
     }
 
     #[test]
