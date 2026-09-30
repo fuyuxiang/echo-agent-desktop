@@ -806,14 +806,17 @@ export function Sidebar({
       <button
         type="button"
         onClick={() => onSelect(s.sessionId, s.cwd)}
-        title={s.title}
+        title={[
+          s.title || "未命名会话",
+          s.status && ACTIVE_STATUS_META[s.status]?.label,
+          s.updatedAt && relativeTime(s.updatedAt),
+        ].filter(Boolean).join(" · ")}
         aria-current={s.sessionId === currentSessionId ? "page" : undefined}
         className="sidebar__conv-select"
       >
         <span className="sidebar__conv-title">{s.title || "未命名会话"}</span>
         {s.pinned && <PinFilledIcon size="sm" className="sidebar__conv-pin" />}
         <SessionStatusBadge status={s.status} />
-        {s.updatedAt && <span className="sidebar__conv-time">{relativeTime(s.updatedAt)}</span>}
       </button>
       <button
         type="button"
@@ -830,7 +833,6 @@ export function Sidebar({
           s.archived || false,
           projectId,
         )}
-        style={{ border: 0, padding: 0, background: "transparent", flex: "none" }}
       >
         <MoreDotsIcon size="sm" />
       </button>

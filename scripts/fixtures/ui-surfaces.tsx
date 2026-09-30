@@ -66,6 +66,13 @@ if (["conversation", "conversation-layout"].includes(query.get("surface") ?? "")
     { sessionId: "review-conversation", title: "请检查最新任务和运行状态", cwd: "", status: "working", pinned: true, updatedAt: new Date().toISOString() },
     { sessionId: "review-other", title: "等待授权的另外一个任务", cwd: "", status: "awaiting_permission", updatedAt: new Date().toISOString() },
     { sessionId: "review-done", title: "最近完成的历史任务", cwd: "", status: "completed", updatedAt: new Date().toISOString() },
+    { sessionId: "review-news", title: "关注当天 AI 领域的重要动态", cwd: "", status: "completed", updatedAt: new Date(Date.now() - 53 * 60000).toISOString() },
+    { sessionId: "review-reading", title: "趣味冷知识随机问答", cwd: "", status: "stopped", updatedAt: new Date(Date.now() - 12 * 3600000).toISOString() },
+    { sessionId: "review-weather", title: "查询北京当日天气", cwd: "", status: "completed", updatedAt: new Date(Date.now() - 13 * 3600000).toISOString() },
+    { sessionId: "review-choice", title: "随机挑选一个有趣的冷知识", cwd: "", status: "completed", updatedAt: new Date(Date.now() - 25 * 3600000).toISOString() },
+    { sessionId: "review-model", title: "比较新模型的编程能力", cwd: "", status: "completed", updatedAt: new Date(Date.now() - 26 * 3600000).toISOString() },
+    { sessionId: "review-plugin", title: "添加搜索插件并检查连接配置", cwd: "", status: "failed", updatedAt: new Date(Date.now() - 48 * 3600000).toISOString() },
+    { sessionId: "review-writing", title: "部署 writing-dna skill 与验证", cwd: "", status: "completed", updatedAt: new Date(Date.now() - 72 * 3600000).toISOString() },
   ], tasksOpen: true, loading: false, currentSessionId: "review-conversation" });
 }
 const callbacks = new Map();

@@ -8024,12 +8024,13 @@ button.diff__path {
   flex: 1;
 }
 .sidebar__conv {
+  position: relative;
   display: flex;
   align-items: center;
   /* EchoAgent CDP conversation-agent-card: gap=0, w=240px */
   gap: 0;
   width: 100%;
-  min-height: 44px;
+  min-height: 38px;
   height: auto;
   /* EchoAgent: no leading icon — text aligns with the 任务/空间 section label text */
   padding: 4px 12px;
@@ -8049,13 +8050,12 @@ button.diff__path {
   background: var(--echo-palette-gray-5);
 }
 .sidebar__conv-select {
-  display: grid;
-  grid-template-columns: minmax(0, 1fr) auto auto;
-  grid-template-rows: auto auto;
-  row-gap: 2px;
+  display: flex;
   align-items: center;
+  gap: 6px;
   flex: 1;
   min-width: 0;
+  min-height: 28px;
   padding: 0;
   border: 0;
   background: transparent;
@@ -8066,26 +8066,54 @@ button.diff__path {
   cursor: pointer;
 }
 .sidebar__conv-title {
-  grid-column: 1 / -1;
-  grid-row: 1;
+  flex: 1;
   min-width: 0;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
 .sidebar__conv-action {
+  position: absolute;
+  right: 8px;
+  top: 50%;
+  transform: translateY(-50%);
   display: inline-flex;
   align-items: center;
   justify-content: center;
   width: 22px;
   height: 22px;
+  padding: 0;
+  border: 0;
   border-radius: 6px;
+  background: var(--ui-surface-raised, var(--echo-bg-primary));
   color: var(--echo-text-tertiary);
   cursor: pointer;
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity 140ms ease, background-color 140ms ease;
+}
+.sidebar__conv:hover .sidebar__conv-action,
+.sidebar__conv:has(> .sidebar__conv-action:focus) .sidebar__conv-action {
+  opacity: 1;
+  pointer-events: auto;
+}
+.sidebar__conv:hover .sidebar__conv-status,
+.sidebar__conv:hover .sidebar__conv-pin,
+.sidebar__conv:has(> .sidebar__conv-action:focus) .sidebar__conv-status,
+.sidebar__conv:has(> .sidebar__conv-action:focus) .sidebar__conv-pin {
+  visibility: hidden;
 }
 .sidebar__conv-action:hover {
-  background: color-mix(in srgb, var(--echo-palette-black-100) 8%, transparent);
+  background: var(--ui-surface-raised, var(--echo-bg-primary));
   color: var(--echo-text-strong);
+}
+@media (hover: none) and (pointer: coarse) {
+  .sidebar__conv-select { padding-right: 24px; }
+  .sidebar__conv-action { opacity: 1; pointer-events: auto; }
+  .sidebar__conv:hover .sidebar__conv-status,
+  .sidebar__conv:hover .sidebar__conv-pin,
+  .sidebar__conv:has(> .sidebar__conv-action:focus) .sidebar__conv-status,
+  .sidebar__conv:has(> .sidebar__conv-action:focus) .sidebar__conv-pin { visibility: visible; }
 }
 .sidebar__footer {
   display: flex;
@@ -8600,10 +8628,8 @@ button.diff__path {
   font-weight: 500;
 }
 .sidebar__conv-pin {
-  grid-column: 2;
-  grid-row: 2;
+  flex: none;
   color: var(--echo-brand);
-  margin-left: 4px;
 }
 
 /* ========================================================================
@@ -8647,24 +8673,11 @@ button.diff__path {
 .sidebar__children .sidebar__conv {
   padding-left: 32px;
 }
-/* Relative-time tail on a session row (e.g. "3小时前"). */
-.sidebar__conv-time {
-  grid-column: 3;
-  grid-row: 2;
-  justify-self: end;
-  flex: none;
-  margin-left: 6px;
-  font-size: 0.6875rem;
-  color: var(--echo-text-tertiary);
-}
 .sidebar__conv-status {
-  grid-column: 1;
-  grid-row: 2;
   display: inline-flex;
   align-items: center;
   gap: 4px;
   flex: none;
-  margin-left: 0;
   color: var(--echo-text-tertiary);
   font-size: 0.625rem;
   white-space: nowrap;
