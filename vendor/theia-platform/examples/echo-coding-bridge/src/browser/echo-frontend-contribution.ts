@@ -1,5 +1,6 @@
 import { inject, injectable } from '@theia/core/shared/inversify';
 import { FrontendApplication, FrontendApplicationContribution } from '@theia/core/lib/browser';
+import { ConnectionStatus, ConnectionStatusService } from '@theia/core/lib/browser/connection-status-service';
 import { Widget } from '@theia/core/shared/@lumino/widgets';
 import { FileUri } from '@theia/core/lib/common/file-uri';
 import { CommandRegistry } from '@theia/core/lib/common/command';
@@ -37,9 +38,14 @@ export class EchoFrontendContribution implements FrontendApplicationContribution
     protected readonly corePreferences: CorePreferences;
     @inject(TerminalService)
     protected readonly terminals: TerminalService;
+    @inject(ConnectionStatusService)
+    protected readonly connectionStatus: ConnectionStatusService;
     onStart(): void {
         if (echoHostBridge.enabled) {
             document.body.classList.add('echo-embedded');
+            this.connectionStatus.onStatusChange(status => {
+                echoHostBridge.notify('echo/backend-connection', { online: status === ConnectionStatus.ONLINE });
+            });
         }
         window.addEventListener('message', event => {
             if (!echoHostBridge.isTrusted(event)) {

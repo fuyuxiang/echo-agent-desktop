@@ -55,6 +55,8 @@
   height: 100%;
 }
 
+.echo-theia { position: relative; }
+
 .echo-theia__frame {
   display: block;
   border: 0;
@@ -103,6 +105,7 @@
 }
 
 .echo-theia__cover button,
+.echo-theia__connection-warning button,
 .echo-theia-preview-form button,
 .echo-theia-agent__context button,
 .echo-theia-review__header button {
@@ -117,6 +120,24 @@
   background: var(--echo-bg-secondary);
   color: var(--echo-text-strong);
   cursor: pointer;
+}
+
+.echo-theia__connection-warning {
+  position: absolute;
+  z-index: 3;
+  right: 16px;
+  bottom: 30px;
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  max-width: min(560px, calc(100% - 32px));
+  padding: 10px 12px;
+  border: 1px solid var(--echo-status-error);
+  border-radius: 8px;
+  background: var(--echo-bg-primary);
+  color: var(--echo-text-strong);
+  box-shadow: 0 6px 20px rgba(0, 0, 0, 0.12);
+  line-height: 1.5;
 }
 
 .echo-theia-preview {

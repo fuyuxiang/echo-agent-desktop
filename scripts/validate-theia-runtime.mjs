@@ -4,7 +4,7 @@ import { join, resolve } from "node:path";
 import { tmpdir } from "node:os";
 import { randomBytes } from "node:crypto";
 import { setTimeout as delay } from "node:timers/promises";
-import { isNodePtyConsoleHelperHidden } from "./patch-theia-node-pty.mjs";
+import { isNodePtyConsoleHelperHidden, isNodePtyPipeErrorsHandled, isNodePtyConptyRebuilt } from "./patch-theia-node-pty.mjs";
 
 if (process.argv.length > 3) throw new Error("Usage: node scripts/validate-theia-runtime.mjs [theia-resource-directory]");
 const root = process.argv[2]
@@ -15,6 +15,14 @@ const entry = join(root, "browser/lib/backend/main.js");
 if (!existsSync(node) || !existsSync(entry)) throw new Error("Staged Node or Theia backend missing");
 if (!isNodePtyConsoleHelperHidden(join(root, "browser"))) {
   throw new Error("Staged node-pty ConPTY helper may open a visible Windows console");
+}
+if (process.platform === "win32") {
+  if (!isNodePtyPipeErrorsHandled(join(root, "browser"))) {
+    throw new Error("Staged node-pty ConPTY pipe errors can terminate the IDE backend");
+  }
+  if (!isNodePtyConptyRebuilt(join(root, "browser"))) {
+    throw new Error("Staged node-pty ConPTY binary was not rebuilt with the no-window flag");
+  }
 }
 const temporary = mkdtempSync(join(tmpdir(), "echo-中文项目验证-"));
 const workspace = join(temporary, "中文路径".repeat(30), "代码开发".repeat(30));

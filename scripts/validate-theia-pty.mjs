@@ -1,12 +1,14 @@
 import { createRequire } from "node:module";
 import { resolve, join } from "node:path";
 import { setTimeout as delay } from "node:timers/promises";
-import { isNodePtyConsoleHelperHidden } from "./patch-theia-node-pty.mjs";
+import { isNodePtyConsoleHelperHidden, isNodePtyPipeErrorsHandled, isNodePtyConptyRebuilt } from "./patch-theia-node-pty.mjs";
 
 if (process.platform !== "win32") throw new Error("This ConPTY smoke test requires Windows.");
 if (process.argv.length !== 3) throw new Error("Usage: node scripts/validate-theia-pty.mjs [theia-browser-directory]");
 const browserRoot = resolve(process.argv[2]);
 if (!isNodePtyConsoleHelperHidden(browserRoot)) throw new Error("Staged node-pty helper is not hidden.");
+if (!isNodePtyPipeErrorsHandled(browserRoot)) throw new Error("Staged node-pty ConPTY pipe errors can terminate the IDE backend.");
+if (!isNodePtyConptyRebuilt(browserRoot)) throw new Error("Staged node-pty ConPTY binary lacks the no-window rebuild.");
 
 const require = createRequire(join(browserRoot, "package.json"));
 const childProcess = require("node:child_process");
@@ -62,7 +64,38 @@ try {
     }
   });
   if (helperForkCount !== 1) throw new Error(`Expected one hidden console helper, got ${helperForkCount}.`);
-  console.log("Theia ConPTY shell and hidden cleanup helper are working.");
+  terminal = pty.spawn(process.env.ComSpec || "cmd.exe", ["/Q"], {
+    cwd: browserRoot,
+    cols: 80,
+    rows: 24,
+    env: process.env,
+  });
+  await new Promise((resolve, reject) => {
+    const timeout = setTimeout(() => reject(new Error("Second ConPTY shell did not respond.")), 10_000);
+    let output = "";
+    terminal.onData(data => {
+      output += data;
+      if (output.includes("ECHO_PTY_PIPE_READY")) {
+        clearTimeout(timeout);
+        resolve();
+      }
+    });
+    terminal.write("echo ECHO_PTY_PIPE_READY\r");
+  });
+  const brokenPipeExited = new Promise((resolve, reject) => {
+    const timeout = setTimeout(() => reject(new Error("Broken ConPTY pipe did not close its terminal.")), 10_000);
+    terminal.onExit(() => {
+      clearTimeout(timeout);
+      resolve();
+    });
+  });
+  // Simulate the named pipe error seen when the user closes the shell window.
+  // The script process is the host: an uncaught error here fails the build.
+  terminal._agent.inSocket.emit("error", Object.assign(new Error("simulated broken ConPTY pipe"), { code: "UNKNOWN" }));
+  await brokenPipeExited;
+  terminal.kill();
+  terminal = undefined;
+  console.log("Theia ConPTY shell, hidden cleanup helper, and broken-pipe recovery are working.");
 } finally {
   if (terminal) {
     try { terminal.kill(); } catch { /* Preserve the smoke-test failure. */ }

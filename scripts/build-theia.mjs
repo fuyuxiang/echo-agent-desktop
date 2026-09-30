@@ -2,7 +2,7 @@ import { copyFileSync, existsSync, readFileSync, writeFileSync } from "node:fs";
 import { createHash } from "node:crypto";
 import { resolve, join } from "node:path";
 import { spawnSync } from "node:child_process";
-import { patchNodePtyConsoleHelper } from "./patch-theia-node-pty.mjs";
+import { patchNodePtyConsoleHelper, patchNodePtyPipeErrors, patchNodePtyConptySource, markNodePtyConptyRebuilt } from "./patch-theia-node-pty.mjs";
 
 const major = Number(process.versions.node.split(".")[0]);
 if (major !== 22 && major !== 24) {
@@ -13,8 +13,8 @@ const sourceRoot = resolve(import.meta.dirname, "../vendor/theia-platform");
 const npm = process.platform === "win32" ? "npm.cmd" : "npm";
 const env = { ...process.env, PUPPETEER_SKIP_DOWNLOAD: "1" };
 
-function run(args) {
-  const result = spawnSync(npm, args, { cwd: sourceRoot, env, stdio: "inherit" });
+function run(args, extraEnv = {}) {
+  const result = spawnSync(npm, args, { cwd: sourceRoot, env: { ...env, ...extraEnv }, stdio: "inherit" });
   if (result.status !== 0) {
     throw new Error(`Theia build failed: npm ${args.join(" ")}`);
   }
@@ -34,6 +34,11 @@ if (!existsSync(nodeModules) || installedFingerprint !== installFingerprint) {
   writeFileSync(installMarker, `${installFingerprint}\n`);
 }
 patchNodePtyConsoleHelper(sourceRoot);
+if (process.platform === "win32") {
+  patchNodePtyPipeErrors(sourceRoot);
+  patchNodePtyConptySource(sourceRoot);
+  run(["rebuild", "node-pty", "--build-from-source"], { npm_config_build_from_source: "true" });
+}
 const plugins = spawnSync(process.execPath, [join(import.meta.dirname, "manage-theia-vsix.mjs"), "stage"], {
   cwd: sourceRoot, env, stdio: "inherit",
 });
@@ -49,6 +54,7 @@ copyFileSync(
   join(sourceRoot, "packages/core/lib/browser/catalog.json"),
 );
 run(["run", "build:production", "--workspace", "@echoagent/theia-browser"]);
+if (process.platform === "win32") markNodePtyConptyRebuilt(sourceRoot);
 
 if (!existsSync(join(sourceRoot, "examples/browser/lib/backend/main.js"))) {
   throw new Error("Theia backend entry point was not produced by the build.");

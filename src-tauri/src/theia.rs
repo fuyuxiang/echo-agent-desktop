@@ -228,6 +228,19 @@ fn theia_ready(port: u16, embed_token: &str) -> bool {
             .any(|line| line.trim_end_matches('\r') == format!("X-Echo-Theia-Ready: {embed_token}"))
 }
 
+fn running_theia_ready(port: u16, embed_token: &str) -> bool {
+    // A transient busy event loop should not discard the existing editor session.
+    for attempt in 0..3 {
+        if theia_ready(port, embed_token) {
+            return true;
+        }
+        if attempt < 2 {
+            std::thread::sleep(Duration::from_millis(150));
+        }
+    }
+    false
+}
+
 fn port_conflict_in_attempt(log_path: &Path, attempt_log_start: usize) -> bool {
     fs::read(log_path)
         .map(|content| {
@@ -262,6 +275,7 @@ pub async fn coding_theia_start(
                 .try_wait()
                 .map_err(|error| error.to_string())?
                 .is_none()
+            && running_theia_ready(running.port, &running.embed_token)
         {
             return Ok(TheiaEndpoint {
                 url: format!("http://127.0.0.1:{}/", running.port),
@@ -284,8 +298,18 @@ pub async fn coding_theia_start(
     fs::create_dir_all(&config_dir).map_err(|error| format!("无法创建 IDE 配置目录：{error}"))?;
     let config_dir = node_compatible_path(&config_dir)?;
     let log_path = data_dir.join("theia.log");
-    // One launch gets one fresh log; retries within that launch remain visible.
-    File::create(&log_path).map_err(|error| format!("无法创建 IDE 日志：{error}"))?;
+    // Keep the failure that triggered an automatic restart available for diagnosis.
+    // Rotate large logs; if preservation fails, keep appending instead of losing it.
+    if fs::metadata(&log_path).is_ok_and(|meta| meta.len() >= 5 * 1024 * 1024)
+        && fs::copy(&log_path, data_dir.join("theia.previous.log")).is_ok()
+    {
+        File::create(&log_path).map_err(|error| format!("无法轮换 IDE 日志：{error}"))?;
+    }
+    OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(&log_path)
+        .map_err(|error| format!("无法创建 IDE 日志：{error}"))?;
     for attempt in 0..3 {
         // The preferred origin restores layout. A bind/drop/spawn race can
         // still occur; an occupied port gets a fresh ephemeral retry.

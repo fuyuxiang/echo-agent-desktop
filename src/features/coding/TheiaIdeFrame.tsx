@@ -65,6 +65,7 @@ export const TheiaIdeFrame = forwardRef<TheiaIdeFrameHandle, TheiaIdeFrameProps>
   const [error, setError] = useState("");
   const [attempt, setAttempt] = useState(0);
   const [reloadKey, setReloadKey] = useState(0);
+  const [connectionWarning, setConnectionWarning] = useState("");
   const [theme, setTheme] = useState(() => document.documentElement.getAttribute("data-theme") === "dark" ? "dark" : "light");
 
   const requestCount = useCallback((type: "echo/save-all" | "echo/get-dirty") => {
@@ -133,6 +134,7 @@ export const TheiaIdeFrame = forwardRef<TheiaIdeFrameHandle, TheiaIdeFrameProps>
     let cancelled = false;
     setStatus("starting");
     setEndpoint(null);
+    setConnectionWarning("");
     onDirtyChange?.(null);
     invoke<TheiaEndpoint>("coding_theia_start", { root })
       .then((next) => {
@@ -186,15 +188,79 @@ export const TheiaIdeFrame = forwardRef<TheiaIdeFrameHandle, TheiaIdeFrameProps>
   useLayoutEffect(() => {
     if (!baseUrl) return;
     const theiaOrigin = new URL(baseUrl).origin;
+    let offline = false;
+    let disposed = false;
+    let recoveryFailed = false;
+    let recoveryTimer: number | undefined;
+    const clearRecovery = () => {
+      if (recoveryTimer !== undefined) window.clearTimeout(recoveryTimer);
+      recoveryTimer = undefined;
+    };
+    const reloadFrame = () => {
+      if (lastKnownDirtyCount.current !== 0) {
+        const detail = lastKnownDirtyCount.current === null
+          ? "无法确认是否有未保存文件"
+          : `当前有 ${lastKnownDirtyCount.current} 个未保存文件`;
+        setConnectionWarning(`IDE 连接已断开，${detail}。请先复制需要保留的内容，再重新连接。`);
+        return;
+      }
+      onDirtyChange?.(null);
+      setStatus("loading");
+      setReloadKey((value) => value + 1);
+    };
     const onMessage = (event: MessageEvent) => {
       if (event.origin !== theiaOrigin || event.source !== frameRef.current?.contentWindow
           || typeof event.data !== "object" || !event.data) return;
       const message = event.data as Record<string, unknown>;
       if (message.token !== token || typeof message.type !== "string") return;
       if (message.type === "echo/ready") {
+        offline = false;
+        clearRecovery();
+        setConnectionWarning("");
         resettingWorkspace.current = false;
         hasBeenReady.current = true;
         setStatus("ready");
+        return;
+      }
+      if (message.type === "echo/backend-connection") {
+        if (message.online === true) {
+          offline = false;
+          clearRecovery();
+          setConnectionWarning("");
+          if (recoveryFailed) {
+            recoveryFailed = false;
+            setStatus("ready");
+          }
+        } else if (message.online === false && !offline) {
+          offline = true;
+          recoveryTimer = window.setTimeout(() => {
+            recoveryTimer = undefined;
+            if (disposed || !offline) return;
+            if (lastKnownDirtyCount.current !== 0) {
+              reloadFrame();
+              return;
+            }
+            void invoke<TheiaEndpoint>("coding_theia_start", { root }).then((next) => {
+              if (disposed || !offline) return;
+              if (next.url !== activeEndpoint?.url || next.embedToken !== activeEndpoint?.embedToken) {
+                setEndpoint({ ...next, root });
+                reloadFrame();
+              } else {
+                // The native server recovered, but Theia's websocket may still
+                // be stuck. Give its own reconnect a chance before reloading.
+                recoveryTimer = window.setTimeout(() => {
+                  recoveryTimer = undefined;
+                  if (!disposed && offline) reloadFrame();
+                }, 6_000);
+              }
+            }).catch((reason) => {
+              if (disposed || !offline) return;
+              recoveryFailed = true;
+              setError(`IDE 连接中断，自动恢复失败：${String(reason)}`);
+              setStatus("error");
+            });
+          }, 1_500);
+        }
         return;
       }
       if (message.type === "echo/dirty-state") {
@@ -292,8 +358,12 @@ export const TheiaIdeFrame = forwardRef<TheiaIdeFrameHandle, TheiaIdeFrameProps>
       }
     };
     window.addEventListener("message", onMessage);
-    return () => window.removeEventListener("message", onMessage);
-  }, [baseUrl, onActiveFile, onActiveSymbol, onPreviewUrl, onAfterMutation, onBeforeMutation, onDirtyChange, onToast, root, token]);
+    return () => {
+      disposed = true;
+      clearRecovery();
+      window.removeEventListener("message", onMessage);
+    };
+  }, [activeEndpoint, baseUrl, onActiveFile, onActiveSymbol, onPreviewUrl, onAfterMutation, onBeforeMutation, onDirtyChange, onToast, root, token]);
 
   return (
     <div className="echo-theia" aria-label="Theia 代码工作台">
@@ -338,6 +408,12 @@ export const TheiaIdeFrame = forwardRef<TheiaIdeFrameHandle, TheiaIdeFrameProps>
               <LoaderCircle size={17} className="is-spinning" />
             </>
           )}
+        </div>
+      )}
+      {status === "ready" && connectionWarning && (
+        <div className="echo-theia__connection-warning" role="alert">
+          <span>{connectionWarning}</span>
+          <button type="button" onClick={() => setAttempt((value) => value + 1)}>重新连接</button>
         </div>
       )}
     </div>

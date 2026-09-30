@@ -1,4 +1,4 @@
-import { act, render, screen, waitFor } from "@testing-library/react";
+import { act, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { createRef } from "react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { TheiaIdeFrame, type TheiaIdeFrameHandle } from "../TheiaIdeFrame";
@@ -89,6 +89,61 @@ describe("Theia IDE bridge", () => {
     await waitFor(() => expect(new URL(second.src).hash).toBe("#/repo-two"));
     expect(JSON.parse(second.name.slice("echo-embed:".length)).bridgeToken).not.toBe(firstToken);
     expect(invoke).toHaveBeenCalledWith("coding_theia_start", { root: "/repo-two" });
+  });
+
+  it("restarts a lost local IDE backend and reloads its frame", async () => {
+    render(<TheiaIdeFrame root="/repo" onBeforeMutation={vi.fn()} onAfterMutation={vi.fn()} />);
+    const frame = await screen.findByTitle("Echo Code IDE") as HTMLIFrameElement;
+    sendFrameMessage(frame, { type: "echo/ready" });
+    sendFrameMessage(frame, { type: "echo/dirty-state", count: 0 });
+    invoke.mockResolvedValueOnce({ url: "http://127.0.0.1:41774/", embedToken: "restarted-token" });
+
+    vi.useFakeTimers();
+    try {
+      sendFrameMessage(frame, { type: "echo/backend-connection", online: false });
+      await act(async () => { await vi.advanceTimersByTimeAsync(1_500); });
+      expect(invoke).toHaveBeenCalledTimes(2);
+      expect((screen.getByTitle("Echo Code IDE") as HTMLIFrameElement).src).toContain(":41774/");
+      expect(screen.getByText("正在启动 Echo Code IDE")).toBeInTheDocument();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("keeps unsaved editor content accessible when the backend disconnects", async () => {
+    render(<TheiaIdeFrame root="/repo" onBeforeMutation={vi.fn()} onAfterMutation={vi.fn()} />);
+    const frame = await screen.findByTitle("Echo Code IDE") as HTMLIFrameElement;
+    sendFrameMessage(frame, { type: "echo/ready" });
+    sendFrameMessage(frame, { type: "echo/dirty-state", count: 2 });
+
+    vi.useFakeTimers();
+    try {
+      sendFrameMessage(frame, { type: "echo/backend-connection", online: false });
+      await act(async () => { await vi.advanceTimersByTimeAsync(1_500); });
+      expect(invoke).toHaveBeenCalledTimes(1);
+      expect(screen.getByTitle("Echo Code IDE")).toBe(frame);
+      expect(screen.getByRole("alert")).toHaveTextContent("2 个未保存文件");
+      await act(async () => { fireEvent.click(screen.getByRole("button", { name: "重新连接" })); });
+      expect(invoke).toHaveBeenCalledTimes(2);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("does not discard an editor whose save state was never reported", async () => {
+    render(<TheiaIdeFrame root="/repo" onBeforeMutation={vi.fn()} onAfterMutation={vi.fn()} />);
+    const frame = await screen.findByTitle("Echo Code IDE") as HTMLIFrameElement;
+    sendFrameMessage(frame, { type: "echo/ready" });
+    vi.useFakeTimers();
+    try {
+      sendFrameMessage(frame, { type: "echo/backend-connection", online: false });
+      await act(async () => { await vi.advanceTimersByTimeAsync(1_500); });
+      expect(invoke).toHaveBeenCalledTimes(1);
+      expect(screen.getByTitle("Echo Code IDE")).toBe(frame);
+      expect(screen.getByRole("alert")).toHaveTextContent("无法确认是否有未保存文件");
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it("opens a Chinese Windows workspace from a verbatim native path", async () => {

@@ -3,7 +3,7 @@ import { resolve, join } from "node:path";
 import { spawnSync } from "node:child_process";
 import { latestTheiaSourceMtime } from "./theia-source-mtime.mjs";
 import { ensureTheiaNodeWritable } from "./ensure-theia-node-writable.mjs";
-import { isNodePtyConsoleHelperHidden } from "./patch-theia-node-pty.mjs";
+import { isNodePtyConsoleHelperHidden, isNodePtyPipeErrorsHandled, isNodePtyConptyRebuilt } from "./patch-theia-node-pty.mjs";
 
 const root = resolve(import.meta.dirname, "..");
 const major = Number(process.versions.node.split(".")[0]);
@@ -44,6 +44,10 @@ if (existsSync(runtime) && existsSync(node)
     && runtimeDependencies.every(path => existsSync(join(resources, path)))
     && languagePluginsReady
     && isNodePtyConsoleHelperHidden(join(resources, "browser"))
+    && (process.platform !== "win32" || (
+      isNodePtyPipeErrorsHandled(join(resources, "browser"))
+      && isNodePtyConptyRebuilt(join(resources, "browser"))
+    ))
     && platform?.platform === process.platform && platform?.arch === process.arch
     && platform?.node === process.version
     && stagedNodeVersion?.status === 0 && stagedNodeVersion.stdout.trim() === process.version
