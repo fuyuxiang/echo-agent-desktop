@@ -75,6 +75,7 @@ fn request_graceful_exit(app: tauri::AppHandle) {
 
         let state = app.state::<AppState>();
         automation::shutdown_all().await;
+        weixin::shutdown(&app).await;
         app.state::<theia::TheiaServer>().stop();
         commands::stop_agent_runtime(&state).await;
         app.exit(0);
@@ -87,6 +88,7 @@ fn request_graceful_restart(app: tauri::AppHandle) {
     }
     tauri::async_runtime::spawn(async move {
         automation::shutdown_all().await;
+        weixin::shutdown(&app).await;
         app.state::<theia::TheiaServer>().stop();
         commands::stop_agent_runtime(&app.state::<AppState>()).await;
         app.restart();

@@ -219,12 +219,13 @@ try {
       await page.screenshot({ path: join(output, `${surface}-${width}-${theme}.png`) });
       layouts += 1;
       if (surface === "weixin-connected" || surface === "weixin-offline") {
-        await page.getByRole("heading", { name: "单独交接的任务" }).scrollIntoViewIfNeeded();
+        const sharedRow = page.locator(".weixin-channel__shared").last();
+        if (await sharedRow.count()) await sharedRow.scrollIntoViewIfNeeded();
         await page.screenshot({ path: join(output, `${surface}-shared-${width}-${theme}.png`) });
         layouts += 1;
       }
       if (surface === "weixin-connected") {
-        await page.getByRole("button", { name: "撤销 准备发布说明 的微信授权" }).click();
+        await page.getByRole("button", { name: "撤销 准备发布说明 的单独交接授权" }).click();
         await page.getByText("暂无单独交接的任务。").waitFor();
       }
       if (surface === "cloud-storage") {

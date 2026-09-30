@@ -13,6 +13,7 @@ import {
   X,
   Cloud,
   Send,
+  MessageCircle,
   type LucideIcon,
 } from "lucide-react";
 import {
@@ -78,7 +79,7 @@ interface NavGroup {
 }
 
 const NOTIFICATION_VIEWS: Array<[SettingsSectionId, string]> = [
-  ["agent-mail", "事件收件箱"], ["notify-channels", "通知渠道"], ["weixin-channel", "微信远程对话"],
+  ["agent-mail", "事件收件箱"], ["notify-channels", "通知渠道"],
 ];
 const MEMORY_VIEWS: Array<[SettingsSectionId, string]> = [
   ["memory", "记忆行为"], ["personal-memory", "个人记忆"],
@@ -88,7 +89,7 @@ const DATA_VIEWS: Array<[SettingsSectionId, string]> = [
 ];
 
 function isActiveNavItem(active: SettingsSectionId, item: SettingsSectionId): boolean {
-  if (item === "agent-mail") return active === "agent-mail" || active === "notify-channels" || active === "weixin-channel";
+  if (item === "agent-mail") return active === "agent-mail" || active === "notify-channels";
   if (item === "memory") return active === "memory" || active === "personal-memory";
   if (item === "data") return active === "data" || active === "archived";
   return active === item;
@@ -118,9 +119,10 @@ function SettingsViewTabs({
 
 const NAV_GROUPS: NavGroup[] = [
   {
-    label: "通知",
+    label: "消息与提醒",
     items: [
       { id: "agent-mail", label: "通知", icon: Send },
+      { id: "weixin-channel", label: "消息通道", icon: MessageCircle },
     ],
   },
   {
@@ -332,12 +334,11 @@ export function SettingsPanel({
                 </div>
               </div>
             ) : active === "weixin-channel" ? (
-              <div className="settings-section settings-subview">
-                <SettingsViewTabs label="通知视图" items={NOTIFICATION_VIEWS} active={active} onSelect={setActive} />
+              <div className="settings-section">
                 <header className="settings-section__header">
                   <div className="settings-section__heading">
-                    <h2 className="settings-section__title">微信远程对话</h2>
-                    <p className="settings-section__desc">绑定微信，随时接续已有任务。</p>
+                    <h2 className="settings-section__title">消息通道</h2>
+                    <p className="settings-section__desc">连接消息应用，在外出时继续桌面任务并管理访问范围。</p>
                   </div>
                 </header>
                 <div className="settings-section__body"><WeixinChannelPanel onToast={onToast} /></div>

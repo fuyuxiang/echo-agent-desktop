@@ -4,7 +4,7 @@
 
 use std::collections::{HashMap, VecDeque};
 use std::path::PathBuf;
-use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Mutex, OnceLock};
 use std::time::{Duration, Instant, SystemTime};
 
@@ -27,6 +27,7 @@ const CREDENTIAL_ACCOUNT: &str = "echoagent-weixin-personal";
 const MAX_STATE_BYTES: u64 = 4 * 1024 * 1024;
 const MAX_REPLY_CHARS: usize = 3_600;
 const MAX_INPUT_CHARS: usize = 32_000;
+const TASKS_PER_PAGE: usize = 5;
 const MAX_SEEN: usize = 256;
 const MAX_INFLIGHT: usize = 64;
 const MAX_ROUTES: usize = 256;
@@ -43,12 +44,14 @@ struct Binding {
     base_url: String,
     active_session: Option<String>,
     allowed_workspaces: Vec<String>,
+    default_workspace: Option<String>,
     shared_sessions: Vec<String>,
     cursor: String,
     context_token: Option<String>,
     seen_ids: VecDeque<String>,
     inflight: VecDeque<InboundAttempt>,
     outbound_routes: VecDeque<(String, String)>,
+    outbound_pending: VecDeque<(String, String)>,
     outbox: VecDeque<OutboundText>,
 }
 
@@ -103,6 +106,9 @@ pub(crate) struct WeixinState {
     login_generation: AtomicU64,
     worker: Mutex<Option<JoinHandle<()>>>,
     outbox_worker: Mutex<Option<JoinHandle<()>>>,
+    worker_generation: AtomicU64,
+    worker_alive: AtomicBool,
+    outbox_alive: AtomicBool,
     output: Mutex<HashMap<String, String>>,
     pending: Mutex<HashMap<String, Pending>>,
     progress_at: Mutex<HashMap<String, Instant>>,
@@ -110,6 +116,25 @@ pub(crate) struct WeixinState {
     last_error: Mutex<Option<String>>,
     outbox_error: Mutex<Option<String>>,
     paused_until: Mutex<Option<Instant>>,
+}
+
+struct WorkerGuard {
+    app: AppHandle,
+    generation: u64,
+    outbox: bool,
+}
+
+impl Drop for WorkerGuard {
+    fn drop(&mut self) {
+        let state = self.app.state::<WeixinState>();
+        if state.worker_generation.load(Ordering::SeqCst) == self.generation {
+            if self.outbox {
+                state.outbox_alive.store(false, Ordering::SeqCst);
+            } else {
+                state.worker_alive.store(false, Ordering::SeqCst);
+            }
+        }
+    }
 }
 
 #[derive(Serialize)]
@@ -120,6 +145,7 @@ pub(crate) struct WeixinStatus {
     active_session: Option<String>,
     active_session_title: Option<String>,
     allowed_workspaces: Vec<String>,
+    default_workspace: Option<String>,
     shared_sessions: Vec<SharedSession>,
     pending_replies: usize,
     online: bool,
@@ -153,8 +179,10 @@ fn state_path() -> PathBuf {
 
 fn load_binding() -> Result<Option<Binding>, String> {
     let path = state_path();
-    if !path.exists() {
-        return Ok(None);
+    match std::fs::metadata(&path) {
+        Ok(_) => {}
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+        Err(error) => return Err(format!("读取微信通道配置失败：{error}")),
     }
     let raw = crate::shell_fs::read_regular_file_bounded(&path, MAX_STATE_BYTES)?;
     let binding: Binding =
@@ -273,8 +301,6 @@ async fn api_get(base: &str, path: &str, timeout: Duration) -> Result<Value, Str
     let url = api_url(base, path)?;
     let response = api_client(timeout)?
         .get(url)
-        .header("AuthorizationType", "ilink_bot_token")
-        .header("X-WECHAT-UIN", uin_header())
         .header("iLink-App-Id", "bot")
         .header("iLink-App-ClientVersion", client_version().to_string())
         .send()
@@ -640,6 +666,19 @@ fn token() -> Result<String, String> {
         .ok_or_else(|| "微信绑定凭据不存在，请重新扫码".into())
 }
 
+fn default_workspace(binding: &Binding) -> Option<&str> {
+    binding
+        .default_workspace
+        .as_deref()
+        .filter(|cwd| {
+            binding
+                .allowed_workspaces
+                .iter()
+                .any(|allowed| allowed == cwd)
+        })
+        .or_else(|| binding.allowed_workspaces.first().map(String::as_str))
+}
+
 #[tauri::command]
 pub(crate) fn weixin_status(state: State<'_, WeixinState>) -> Result<WeixinStatus, String> {
     let binding = load_binding()?;
@@ -683,9 +722,16 @@ pub(crate) fn weixin_status(state: State<'_, WeixinState>) -> Result<WeixinStatu
             .as_ref()
             .map(|value| value.allowed_workspaces.clone())
             .unwrap_or_default(),
+        default_workspace: binding
+            .as_ref()
+            .and_then(default_workspace)
+            .map(str::to_string),
         shared_sessions,
         pending_replies: binding.as_ref().map_or(0, |value| value.outbox.len()),
         online: connected
+            && state.worker_alive.load(Ordering::SeqCst)
+            && state.outbox_alive.load(Ordering::SeqCst)
+            && state.last_error.lock().unwrap().is_none()
             && state
                 .paused_until
                 .lock()
@@ -718,11 +764,18 @@ pub(crate) async fn weixin_qr_start(state: State<'_, WeixinState>) -> Result<QrS
         *login = None;
         state.login_generation.fetch_add(1, Ordering::SeqCst) + 1
     };
+    let local_tokens: Vec<String> = if load_binding()?.is_some() {
+        crate::org::credential_read(CREDENTIAL_ACCOUNT)?
+            .into_iter()
+            .collect()
+    } else {
+        Vec::new()
+    };
     let result = api_post(
         API_BASE,
         "ilink/bot/get_bot_qrcode?bot_type=3",
         None,
-        json!({"local_token_list": []}),
+        json!({"local_token_list": local_tokens}),
         Duration::from_secs(15),
     )
     .await?;
@@ -811,6 +864,17 @@ pub(crate) async fn weixin_qr_poll(
             }
         }
     }
+    if status == "binded_redirect" {
+        let connected = load_binding()?.is_some() && token().is_ok();
+        if connected {
+            *state.login.lock().unwrap() = None;
+            start_worker(&app);
+        }
+        return Ok(QrPoll {
+            status: status.into(),
+            connected,
+        });
+    }
     if status == "confirmed" {
         let mut active = state.login.lock().unwrap();
         if active
@@ -852,6 +916,7 @@ pub(crate) async fn weixin_qr_poll(
             binding.seen_ids.clear();
             binding.inflight.clear();
             binding.outbound_routes.clear();
+            binding.outbound_pending.clear();
             binding.outbox.clear();
             save_binding(&binding)
         })();
@@ -873,6 +938,7 @@ pub(crate) async fn weixin_qr_poll(
 pub(crate) async fn weixin_set_workspaces(
     app: AppHandle,
     workspaces: Vec<String>,
+    default_workspace: Option<String>,
 ) -> Result<WeixinStatus, String> {
     let _outbox_guard = OUTBOX_LOCK
         .get_or_init(|| tokio::sync::Mutex::new(()))
@@ -892,9 +958,21 @@ pub(crate) async fn weixin_set_workspaces(
             allowed.push(canonical);
         }
     }
+    let preferred = default_workspace
+        .map(|cwd| {
+            access
+                .require_workspace(&cwd)
+                .map(|path| path.to_string_lossy().into_owned())
+        })
+        .transpose()?;
+    if preferred.as_ref().is_some_and(|cwd| !allowed.contains(cwd)) {
+        return Err("默认工作区必须已授权微信访问".into());
+    }
     let sessions = crate::sessions::list_all_sessions(false)?;
     mutate_binding(|binding| {
         binding.allowed_workspaces = allowed;
+        binding.default_workspace =
+            preferred.or_else(|| self::default_workspace(binding).map(str::to_string));
         if binding.active_session.as_ref().is_some_and(|id| {
             !sessions.iter().any(|session| {
                 &session.session_id == id && session_accessible(binding, session, &access)
@@ -916,30 +994,57 @@ pub(crate) async fn weixin_revoke_session(
         .get_or_init(|| tokio::sync::Mutex::new(()))
         .lock()
         .await;
-    mutate_binding(|binding| revoke_session_access(binding, &session_id))?;
-    app.state::<WeixinState>()
-        .pending
-        .lock()
-        .unwrap()
-        .retain(|_, pending| pending.session_id != session_id);
-    app.state::<WeixinState>()
-        .progress_at
-        .lock()
-        .unwrap()
-        .remove(&session_id);
+    let session = crate::sessions::list_all_sessions(false)?
+        .into_iter()
+        .find(|session| session.session_id == session_id);
+    let access = app.state::<crate::shell_fs::FilesystemAccess>();
+    let mut retained_access = false;
+    mutate_binding(|binding| {
+        retained_access = session.as_ref().is_some_and(|session| {
+            !session.hidden
+                && access.require_workspace(&session.cwd).is_ok_and(|cwd| {
+                    binding
+                        .allowed_workspaces
+                        .iter()
+                        .any(|root| root == &cwd.to_string_lossy())
+                })
+        });
+        revoke_session_access(binding, &session_id, retained_access)
+    })?;
+    if !retained_access {
+        app.state::<WeixinState>()
+            .pending
+            .lock()
+            .unwrap()
+            .retain(|_, pending| pending.session_id != session_id);
+        app.state::<WeixinState>()
+            .progress_at
+            .lock()
+            .unwrap()
+            .remove(&session_id);
+    }
     weixin_status(app.state::<WeixinState>())
 }
 
-fn revoke_session_access(binding: &mut Binding, session_id: &str) -> Result<(), String> {
+fn revoke_session_access(
+    binding: &mut Binding,
+    session_id: &str,
+    retained_access: bool,
+) -> Result<(), String> {
     if !binding.shared_sessions.iter().any(|id| id == session_id) {
         return Err("任务未单独授权微信访问".into());
     }
     binding.shared_sessions.retain(|id| id != session_id);
-    binding
-        .outbox
-        .retain(|message| message.session_id.as_deref() != Some(session_id));
-    if binding.active_session.as_deref() == Some(session_id) {
-        binding.active_session = None;
+    if !retained_access {
+        binding
+            .outbox
+            .retain(|message| message.session_id.as_deref() != Some(session_id));
+        binding
+            .outbound_pending
+            .retain(|(_, target)| target != session_id);
+        if binding.active_session.as_deref() == Some(session_id) {
+            binding.active_session = None;
+        }
     }
     Ok(())
 }
@@ -978,6 +1083,121 @@ fn short_id(id: &str) -> &str {
     id.get(id.len().saturating_sub(8)..).unwrap_or(id)
 }
 
+fn task_page_command(input: &str) -> Result<Option<usize>, String> {
+    let input = input.trim();
+    let rest = input
+        .strip_prefix("任务")
+        .or_else(|| input.strip_prefix("/sessions"));
+    let Some(rest) = rest else {
+        return Ok(None);
+    };
+    if rest.is_empty() {
+        return Ok(Some(1));
+    }
+    if !rest
+        .chars()
+        .next()
+        .is_some_and(|first| first.is_whitespace() || first.is_ascii_digit())
+    {
+        return Ok(None);
+    }
+    let number = rest.trim();
+    if number.is_empty() {
+        return Ok(Some(1));
+    }
+    let page = number
+        .parse::<usize>()
+        .map_err(|_| "页码无效，请发送“任务2”或“任务 2”翻页".to_string())?;
+    if !(1..10_000).contains(&page) {
+        return Err("页码无效，请发送“任务2”或“任务 2”翻页".into());
+    }
+    Ok(Some(page))
+}
+
+fn weixin_list_label(value: &str, max_chars: usize) -> String {
+    let clean: String = value
+        .chars()
+        .map(|character| {
+            if character.is_control() {
+                ' '
+            } else {
+                character
+            }
+        })
+        .collect();
+    let normalized = clean.split_whitespace().collect::<Vec<_>>().join(" ");
+    let mut chars = normalized.chars();
+    let mut label: String = chars.by_ref().take(max_chars).collect();
+    if chars.next().is_some() {
+        label.push('…');
+    }
+    label
+}
+
+fn format_task_page(
+    sessions: &[SessionSummary],
+    active_session: Option<&str>,
+    page: usize,
+) -> Result<String, String> {
+    let total_pages = sessions.len().div_ceil(TASKS_PER_PAGE).max(1);
+    if page == 0 || page > total_pages {
+        return Err(format!(
+            "只有 {total_pages} 页任务，请发送“任务”从第一页查看"
+        ));
+    }
+    if sessions.is_empty() {
+        return Ok(
+            "尚无可通过微信访问的会话。请在桌面任务中选择“在微信继续”，或前往“设置 → 消息通道”授权工作区。"
+                .into(),
+        );
+    }
+
+    let mut sections = vec![format!(
+        "可继续的任务 · {page}/{total_pages}（共 {} 个）",
+        sessions.len()
+    )];
+    for session in sessions
+        .iter()
+        .skip((page - 1) * TASKS_PER_PAGE)
+        .take(TASKS_PER_PAGE)
+    {
+        let title = weixin_list_label(&session.title, 32);
+        let title = if title.is_empty() {
+            "未命名任务"
+        } else {
+            &title
+        };
+        let folder = PathBuf::from(&session.cwd)
+            .file_name()
+            .map(|name| name.to_string_lossy().into_owned())
+            .unwrap_or_else(|| session.cwd.clone());
+        let folder = weixin_list_label(&folder, 18);
+        let folder = if folder.is_empty() {
+            "工作区"
+        } else {
+            &folder
+        };
+        let current = if active_session == Some(session.session_id.as_str()) {
+            "【当前】"
+        } else {
+            ""
+        };
+        sections.push(format!(
+            "• {current}{title}\n  #{} · {folder}",
+            short_id(&session.session_id)
+        ));
+    }
+    let mut guidance = String::from("切换任务：发送“切换 #编号”");
+    if page > 1 {
+        guidance.push_str(&format!("\n上一页：发送“任务{}”", page - 1));
+    }
+    if page < total_pages {
+        guidance.push_str(&format!("\n下一页：发送“任务{}”", page + 1));
+    }
+    sections.push(guidance);
+    Ok(sections.join("\n\n"))
+}
+
 fn reviewable_permission_details(raw_input: Option<&Value>) -> Option<String> {
     let input = raw_input?;
     if input.is_null() || input.get("_truncated").and_then(Value::as_bool) == Some(true) {
@@ -989,7 +1209,7 @@ fn reviewable_permission_details(raw_input: Option<&Value>) -> Option<String> {
 
 #[tauri::command]
 pub(crate) async fn weixin_handoff(app: AppHandle, session_id: String) -> Result<String, String> {
-    let binding = load_binding()?.ok_or("请先前往“设置 → 通知 → 微信远程对话”绑定微信")?;
+    let binding = load_binding()?.ok_or("请先前往“设置 → 消息通道”绑定微信")?;
     token()?;
     let session = crate::sessions::list_all_sessions(true)?
         .into_iter()
@@ -1005,7 +1225,9 @@ pub(crate) async fn weixin_handoff(app: AppHandle, session_id: String) -> Result
         }
         if !current.shared_sessions.contains(&session_id) {
             if current.shared_sessions.len() >= 128 {
-                return Err("单独交接任务已达 128 个，请在微信设置中撤销不再需要的任务".into());
+                return Err(
+                    "单独交接任务已达 128 个，请在“设置 → 消息通道”撤销不再需要的任务".into(),
+                );
             }
             current.shared_sessions.push(session_id.clone());
         }
@@ -1036,20 +1258,49 @@ pub(crate) async fn weixin_handoff(app: AppHandle, session_id: String) -> Result
     Ok("已绑定会话；请先在微信向 Bot 发送“状态”以建立聊天".into())
 }
 
-#[tauri::command]
-pub(crate) fn weixin_disconnect(app: AppHandle) -> Result<(), String> {
+async fn notify_lifecycle(binding: &Binding, credential: &str, start: bool) -> Result<(), String> {
+    api_post(
+        &binding.base_url,
+        if start {
+            "ilink/bot/msg/notifystart"
+        } else {
+            "ilink/bot/msg/notifystop"
+        },
+        Some(credential),
+        json!({ "base_info": base_info() }),
+        Duration::from_secs(8),
+    )
+    .await
+    .map(|_| ())
+}
+
+pub(crate) async fn shutdown(app: &AppHandle) {
     let state = app.state::<WeixinState>();
-    {
-        let mut login = state.login.lock().unwrap();
-        *login = None;
-        state.login_generation.fetch_add(1, Ordering::SeqCst);
-    }
+    state.worker_generation.fetch_add(1, Ordering::SeqCst);
+    state.worker_alive.store(false, Ordering::SeqCst);
+    state.outbox_alive.store(false, Ordering::SeqCst);
     if let Some(worker) = state.worker.lock().unwrap().take() {
         worker.abort();
     }
     if let Some(worker) = state.outbox_worker.lock().unwrap().take() {
         worker.abort();
     }
+    if let (Ok(Some(binding)), Ok(credential)) = (load_binding(), token()) {
+        if let Err(error) = notify_lifecycle(&binding, &credential, false).await {
+            tracing::warn!(%error, "failed to notify Weixin channel stop");
+        }
+    }
+}
+
+#[tauri::command]
+pub(crate) async fn weixin_disconnect(app: AppHandle) -> Result<(), String> {
+    let state = app.state::<WeixinState>();
+    {
+        let mut login = state.login.lock().unwrap();
+        *login = None;
+        state.login_generation.fetch_add(1, Ordering::SeqCst);
+    }
+    shutdown(&app).await;
     *app.state::<WeixinState>().last_success.lock().unwrap() = None;
     *app.state::<WeixinState>().last_error.lock().unwrap() = None;
     *app.state::<WeixinState>().outbox_error.lock().unwrap() = None;
@@ -1059,6 +1310,8 @@ pub(crate) fn weixin_disconnect(app: AppHandle) -> Result<(), String> {
         .lock()
         .unwrap()
         .clear();
+    app.state::<WeixinState>().pending.lock().unwrap().clear();
+    app.state::<WeixinState>().output.lock().unwrap().clear();
     let _guard = BINDING_LOCK.get_or_init(|| Mutex::new(())).lock().unwrap();
     crate::org::credential_delete(CREDENTIAL_ACCOUNT)?;
     match std::fs::remove_file(state_path()) {
@@ -1426,6 +1679,9 @@ pub(crate) fn init(app: &AppHandle) {
 
 fn start_worker(app: &AppHandle) {
     let state = app.state::<WeixinState>();
+    let generation = state.worker_generation.fetch_add(1, Ordering::SeqCst) + 1;
+    state.worker_alive.store(false, Ordering::SeqCst);
+    state.outbox_alive.store(false, Ordering::SeqCst);
     if let Some(old) = state.worker.lock().unwrap().take() {
         old.abort();
     }
@@ -1436,15 +1692,32 @@ fn start_worker(app: &AppHandle) {
     *state.last_error.lock().unwrap() = None;
     *state.outbox_error.lock().unwrap() = None;
     *state.paused_until.lock().unwrap() = None;
-    if load_binding().ok().flatten().is_none() || token().is_err() {
+    if matches!(load_binding(), Ok(None)) {
         return;
     }
     let app = app.clone();
     let outbox_app = app.clone();
     *state.worker.lock().unwrap() = Some(tauri::async_runtime::spawn(async move {
+        let _guard = WorkerGuard {
+            app: app.clone(),
+            generation,
+            outbox: false,
+        };
+        app.state::<WeixinState>()
+            .worker_alive
+            .store(true, Ordering::SeqCst);
         worker_loop(app).await;
     }));
     *state.outbox_worker.lock().unwrap() = Some(tauri::async_runtime::spawn(async move {
+        let _guard = WorkerGuard {
+            app: outbox_app.clone(),
+            generation,
+            outbox: true,
+        };
+        outbox_app
+            .state::<WeixinState>()
+            .outbox_alive
+            .store(true, Ordering::SeqCst);
         outbox_loop(outbox_app).await;
     }));
 }
@@ -1459,11 +1732,14 @@ async fn outbox_loop(app: AppHandle) {
         notified.as_mut().enable();
         let binding = match load_binding() {
             Ok(Some(value)) => value,
-            _ => return,
+            Ok(None) => return,
+            Err(error) => {
+                *app.state::<WeixinState>().outbox_error.lock().unwrap() =
+                    Some(format!("读取微信发送队列失败，正在重试：{error}"));
+                tokio::time::sleep(Duration::from_secs(5)).await;
+                continue;
+            }
         };
-        if token().is_err() {
-            return;
-        }
         let pause = app
             .state::<WeixinState>()
             .paused_until
@@ -1478,6 +1754,12 @@ async fn outbox_loop(app: AppHandle) {
         if binding.outbox.is_empty() {
             *app.state::<WeixinState>().outbox_error.lock().unwrap() = None;
             notified.await;
+            continue;
+        }
+        if let Err(error) = token() {
+            *app.state::<WeixinState>().outbox_error.lock().unwrap() =
+                Some(format!("读取微信凭据失败，正在重试：{error}"));
+            tokio::time::sleep(Duration::from_secs(5)).await;
             continue;
         }
         match deliver_outbox_head(&app).await {
@@ -1543,6 +1825,24 @@ async fn deliver_outbox_head(app: &AppHandle) -> Result<(), String> {
         })?;
         return Ok(());
     }
+    if let Some(session_id) = &message.session_id {
+        mutate_binding(|current| {
+            if current.bot_id == binding.bot_id
+                && !current
+                    .outbound_pending
+                    .iter()
+                    .any(|(id, _)| id == &message.client_id)
+            {
+                current
+                    .outbound_pending
+                    .push_back((message.client_id.clone(), session_id.clone()));
+                while current.outbound_pending.len() > MAX_ROUTES {
+                    current.outbound_pending.pop_front();
+                }
+            }
+            Ok(())
+        })?;
+    }
     let response = api_post(
         &binding.base_url,
         "ilink/bot/sendmessage",
@@ -1552,7 +1852,7 @@ async fn deliver_outbox_head(app: &AppHandle) -> Result<(), String> {
                 "from_user_id": "", "to_user_id": binding.user_id,
                 "client_id": message.client_id, "message_type": 2,
                 "message_state": 2,
-                "context_token": binding.context_token.as_ref().or(message.context_token.as_ref()),
+                "context_token": reply_context(&message, &binding),
                 "item_list": [{"type": 1, "text_item": {"text": message.text}}]
             },
             "base_info": base_info()
@@ -1577,12 +1877,9 @@ async fn deliver_outbox_head(app: &AppHandle) -> Result<(), String> {
             .is_some_and(|front| front.client_id == message.client_id)
         {
             current.outbox.pop_front();
-            if let (Some(session_id), Some(message_id)) = (&message.session_id, response_id) {
-                current
-                    .outbound_routes
-                    .push_back((message_id, session_id.clone()));
-                while current.outbound_routes.len() > MAX_ROUTES {
-                    current.outbound_routes.pop_front();
+            if let Some(session_id) = &message.session_id {
+                if let Some(message_id) = response_id {
+                    remember_outbound_route(current, message_id, session_id.clone());
                 }
             }
         }
@@ -1635,10 +1932,17 @@ fn recover_inflight(binding: &Binding) -> Result<(), String> {
 
 async fn worker_loop(app: AppHandle) {
     let mut failures = 0_u32;
+    let mut notified_start = false;
     loop {
         let binding = match load_binding() {
             Ok(Some(value)) => value,
-            _ => return,
+            Ok(None) => return,
+            Err(error) => {
+                *app.state::<WeixinState>().last_error.lock().unwrap() =
+                    Some(format!("读取微信通道配置失败，正在重试：{error}"));
+                tokio::time::sleep(Duration::from_secs(5)).await;
+                continue;
+            }
         };
         let pause = app
             .state::<WeixinState>()
@@ -1653,13 +1957,26 @@ async fn worker_loop(app: AppHandle) {
         }
         if let Err(error) = recover_inflight(&binding) {
             tracing::warn!(%error, "failed to reconcile unfinished Weixin command");
+            *app.state::<WeixinState>().last_error.lock().unwrap() =
+                Some(format!("恢复未完成的微信指令失败，正在重试：{error}"));
             tokio::time::sleep(Duration::from_secs(5)).await;
             continue;
         }
         let token = match token() {
             Ok(value) => value,
-            Err(_) => return,
+            Err(error) => {
+                *app.state::<WeixinState>().last_error.lock().unwrap() =
+                    Some(format!("读取微信凭据失败，正在重试：{error}"));
+                tokio::time::sleep(Duration::from_secs(5)).await;
+                continue;
+            }
         };
+        if !notified_start {
+            match notify_lifecycle(&binding, &token, true).await {
+                Ok(()) => notified_start = true,
+                Err(error) => tracing::warn!(%error, "failed to notify Weixin channel start"),
+            }
+        }
         let response = api_post(
             &binding.base_url,
             "ilink/bot/getupdates",
@@ -1692,14 +2009,13 @@ async fn worker_loop(app: AppHandle) {
                 continue;
             }
         };
-        failures = 0;
-        *app.state::<WeixinState>().last_success.lock().unwrap() = Some(SystemTime::now());
-        *app.state::<WeixinState>().last_error.lock().unwrap() = None;
-        let messages = response
-            .get("msgs")
-            .and_then(Value::as_array)
-            .cloned()
-            .unwrap_or_default();
+        let Some(messages) = response.get("msgs").and_then(Value::as_array) else {
+            *app.state::<WeixinState>().last_error.lock().unwrap() =
+                Some("微信消息响应缺少有效消息列表，正在重试".into());
+            tokio::time::sleep(Duration::from_secs(5)).await;
+            continue;
+        };
+        let messages = messages.clone();
         let mut processed_all = true;
         for message in messages {
             if let Err(error) = process_message(&app, &message).await {
@@ -1709,6 +2025,8 @@ async fn worker_loop(app: AppHandle) {
             }
         }
         if !processed_all {
+            *app.state::<WeixinState>().last_error.lock().unwrap() =
+                Some("处理微信消息失败，正在重试".into());
             tokio::time::sleep(Duration::from_secs(5)).await;
             continue;
         }
@@ -1724,21 +2042,69 @@ async fn worker_loop(app: AppHandle) {
                 Ok(())
             }) {
                 tracing::warn!(%error, "failed to save Weixin cursor");
+                *app.state::<WeixinState>().last_error.lock().unwrap() =
+                    Some(format!("保存微信消息进度失败，正在重试：{error}"));
+                tokio::time::sleep(Duration::from_secs(5)).await;
+                continue;
             }
         }
+        failures = 0;
+        *app.state::<WeixinState>().last_success.lock().unwrap() = Some(SystemTime::now());
+        *app.state::<WeixinState>().last_error.lock().unwrap() = None;
     }
 }
 
-fn message_id(message: &Value) -> Option<String> {
-    let id = |key| {
-        message.get(key).and_then(|value| {
-            value
-                .as_str()
-                .filter(|id| !id.is_empty())
-                .map(str::to_string)
-                .or_else(|| value.as_u64().map(|number| number.to_string()))
-        })
+fn protocol_id(value: &Value) -> Option<String> {
+    value
+        .as_str()
+        .filter(|id| !id.is_empty())
+        .map(str::to_string)
+        .or_else(|| value.as_u64().map(|number| number.to_string()))
+}
+
+fn remember_outbound_route(binding: &mut Binding, message_id: String, session_id: String) {
+    binding.outbound_routes.retain(|(id, _)| id != &message_id);
+    binding.outbound_routes.push_back((message_id, session_id));
+    while binding.outbound_routes.len() > MAX_ROUTES {
+        binding.outbound_routes.pop_front();
+    }
+}
+
+fn reply_context<'a>(message: &'a OutboundText, binding: &'a Binding) -> Option<&'a String> {
+    message
+        .context_token
+        .as_ref()
+        .or(binding.context_token.as_ref())
+}
+
+fn reconcile_bot_echo(binding: &mut Binding, message: &Value) -> bool {
+    let Some(client_id) = message.get("client_id").and_then(Value::as_str) else {
+        return false;
     };
+    let Some((_, session_id)) = binding
+        .outbound_pending
+        .iter()
+        .find(|(id, _)| id == client_id)
+        .cloned()
+    else {
+        return false;
+    };
+    if let Some(message_id) = message.get("message_id").and_then(protocol_id) {
+        remember_outbound_route(binding, message_id, session_id.clone());
+    }
+    if let Some(items) = message.get("item_list").and_then(Value::as_array) {
+        for item in items {
+            if let Some(message_id) = item.get("msg_id").and_then(protocol_id) {
+                remember_outbound_route(binding, message_id, session_id.clone());
+            }
+        }
+    }
+    binding.outbound_pending.retain(|(id, _)| id != client_id);
+    true
+}
+
+fn message_id(message: &Value) -> Option<String> {
+    let id = |key| message.get(key).and_then(protocol_id);
     id("message_id").or_else(|| id("client_id")).or_else(|| {
         Some(format!(
             "seq:{}:{}",
@@ -1767,6 +2133,23 @@ fn quoted_session_marker(reference: &Value) -> Option<String> {
 
 async fn process_message(app: &AppHandle, message: &Value) -> Result<(), String> {
     let mut binding = load_binding()?.ok_or("微信未绑定")?;
+    if message.get("message_type").and_then(Value::as_u64) == Some(2)
+        && message
+            .get("client_id")
+            .and_then(Value::as_str)
+            .is_some_and(|client_id| {
+                binding
+                    .outbound_pending
+                    .iter()
+                    .any(|(id, _)| id == client_id)
+            })
+    {
+        mutate_binding(|current| {
+            reconcile_bot_echo(current, message);
+            Ok(())
+        })?;
+        return Ok(());
+    }
     if message.get("from_user_id").and_then(Value::as_str) != Some(binding.user_id.as_str())
         || message
             .get("group_id")
@@ -1891,12 +2274,7 @@ async fn route_message(
 ) -> Result<(), String> {
     let sessions = accessible_sessions(app, binding);
     if let Some(reference) = reference {
-        let quoted_id = reference.get("svr_id").map(|value| {
-            value
-                .as_str()
-                .map(str::to_string)
-                .unwrap_or_else(|| value.to_string())
-        });
+        let quoted_id = reference.get("svr_id").and_then(protocol_id);
         let mapped = quoted_id.as_deref().and_then(|quoted| {
             binding
                 .outbound_routes
@@ -1911,67 +2289,32 @@ async fn route_message(
                 .collect();
             (matches.len() == 1).then(|| matches[0].session_id.clone())
         });
-        if let Some(target) = mapped
-            .or(marked)
-            .filter(|target| sessions.iter().any(|session| session.session_id == *target))
+        let target = mapped.or(marked);
+        if quoted_id.is_some() && target.is_none() {
+            return Err(
+                "无法识别引用消息所属任务，请先发送“任务”并使用“切换 #编号”选择任务，再发送内容。"
+                    .into(),
+            );
+        }
+        if let Some(target) =
+            target.filter(|target| sessions.iter().any(|session| session.session_id == *target))
         {
             *binding = mutate_binding(|current| {
                 current.active_session = Some(target);
                 Ok(())
             })?;
+        } else if quoted_id.is_some() {
+            return Err("引用消息所属任务已不可通过微信访问，请在桌面检查授权。".into());
         }
     }
     if attachments.is_empty() && (input == "帮助" || input == "/help") {
-        return send_text(binding, "发送“任务”查看可继续的会话，“任务 2”翻页；“切换 编号”进入会话；“工作区”查看新任务可用目录；“新任务：内容”或“新任务 2：内容”创建任务；“状态”查看当前任务；“停止”取消当前执行；“/文件 相对路径”取回工作区文件。普通消息继续当前会话。", None).await;
+        return send_text(binding, "微信继续 · 常用指令\n\n• 任务 / 任务2：查看任务、翻页\n• 切换 #编号：进入已有任务\n• 状态 / 停止：查看或停止当前任务\n\n• 工作区：查看可用目录\n•「新任务：内容」：在默认工作区创建任务\n•「新任务 2：内容」：在指定工作区创建任务\n• /文件 相对路径：取回工作区文件\n\n普通消息会继续当前任务。", None).await;
     }
-    let page = if input == "任务" || input == "/sessions" {
-        Some(1)
-    } else {
-        input
-            .strip_prefix("任务 ")
-            .or_else(|| input.strip_prefix("/sessions "))
-            .and_then(|value| value.trim().parse::<usize>().ok())
-            .filter(|page| *page > 0 && *page < 10_000)
-    };
-    if let Some(page) = page.filter(|_| attachments.is_empty()) {
-        let total_pages = sessions.len().div_ceil(12).max(1);
-        if page > total_pages {
-            return Err(format!("只有 {total_pages} 页任务"));
+    if attachments.is_empty() {
+        if let Some(page) = task_page_command(input)? {
+            let text = format_task_page(&sessions, binding.active_session.as_deref(), page)?;
+            return send_text(binding, &text, None).await;
         }
-        let text = if sessions.is_empty() {
-            "尚无可通过微信访问的会话。请在桌面任务中选择“在微信继续”，或在微信设置中授权工作区。"
-                .into()
-        } else {
-            format!(
-                "可继续的任务（第 {page}/{total_pages} 页）：\n{}{}",
-                sessions
-                    .iter()
-                    .skip((page - 1) * 12)
-                    .take(12)
-                    .map(|s| format!(
-                        "#{} {} · {}{}",
-                        short_id(&s.session_id),
-                        s.title,
-                        PathBuf::from(&s.cwd)
-                            .file_name()
-                            .unwrap_or_default()
-                            .to_string_lossy(),
-                        if binding.active_session.as_deref() == Some(&s.session_id) {
-                            "（当前）"
-                        } else {
-                            ""
-                        }
-                    ))
-                    .collect::<Vec<_>>()
-                    .join("\n"),
-                if page < total_pages {
-                    format!("\n发送“任务 {}”查看下一页。", page + 1)
-                } else {
-                    String::new()
-                }
-            )
-        };
-        return send_text(binding, &text, None).await;
     }
     if let Some(target) = attachments
         .is_empty()
@@ -2027,7 +2370,7 @@ async fn route_message(
     }
     if attachments.is_empty() && (input == "工作区" || input == "/workspaces") {
         let text = if binding.allowed_workspaces.is_empty() {
-            "尚未授权工作区，请在桌面“设置 → 通知 → 微信远程对话”中勾选。".into()
+            "尚未授权工作区，请在桌面“设置 → 消息通道”中勾选。".into()
         } else {
             format!(
                 "可用于新任务的工作区：\n{}",
@@ -2039,7 +2382,11 @@ async fn route_message(
                         "{}. {}{}",
                         index + 1,
                         cwd,
-                        if index == 0 { "（默认）" } else { "" }
+                        if default_workspace(binding) == Some(cwd.as_str()) {
+                            "（默认）"
+                        } else {
+                            ""
+                        }
                     ))
                     .collect::<Vec<_>>()
                     .join("\n")
@@ -2122,21 +2469,22 @@ async fn route_message(
     if input.starts_with("新任务 ") && numbered_prompt.is_none() {
         return Err("请使用“新任务 2：内容”并填写有效工作区编号".into());
     }
-    if let Some((workspace_index, prompt)) =
-        default_prompt.map(|prompt| (1, prompt)).or(numbered_prompt)
+    if let Some((workspace_index, prompt)) = default_prompt
+        .map(|prompt| (None, prompt))
+        .or_else(|| numbered_prompt.map(|(index, prompt)| (Some(index), prompt)))
     {
-        if workspace_index == 0 {
+        if workspace_index == Some(0) {
             return Err("工作区编号从 1 开始".into());
         }
         let prompt = prompt.trim();
         if prompt.is_empty() {
             return Err("新任务内容不能为空".into());
         }
-        let cwd = binding
-            .allowed_workspaces
-            .get(workspace_index.saturating_sub(1))
-            .cloned()
-            .ok_or("工作区编号无效，请发送“工作区”查看可用目录")?;
+        let cwd = match workspace_index {
+            Some(index) => binding.allowed_workspaces.get(index - 1).cloned(),
+            None => default_workspace(binding).map(str::to_string),
+        }
+        .ok_or("工作区编号无效，请发送“工作区”查看可用目录")?;
         ensure_runtime(app).await?;
         let session_id = crate::commands::agent_new_session(
             app.clone(),
@@ -2451,13 +2799,52 @@ async fn send_interaction_text(
 #[cfg(test)]
 mod tests {
     use super::{
-        cdn_url, decrypt_media, encrypt_media, message_id, outbound_segments,
-        quoted_session_marker, reviewable_permission_details, revoke_session_access,
-        validate_base_url, Binding, InboundAttempt, OutboundText,
+        cdn_url, decrypt_media, default_workspace, encrypt_media, format_task_page, message_id,
+        outbound_segments, quoted_session_marker, reconcile_bot_echo, reply_context,
+        reviewable_permission_details, revoke_session_access, task_page_command, validate_base_url,
+        Binding, InboundAttempt, OutboundText,
     };
+    use crate::sessions::SessionSummary;
     use aes::cipher::{BlockEncrypt, KeyInit};
     use base64::Engine;
     use serde_json::json;
+
+    #[test]
+    fn task_pages_accept_compact_and_spaced_commands() {
+        assert_eq!(task_page_command("任务").unwrap(), Some(1));
+        assert_eq!(task_page_command("任务2").unwrap(), Some(2));
+        assert_eq!(task_page_command("任务 2").unwrap(), Some(2));
+        assert_eq!(task_page_command("/sessions 2").unwrap(), Some(2));
+        assert_eq!(task_page_command("任务完成了吗").unwrap(), None);
+        assert!(task_page_command("任务0").is_err());
+        assert!(task_page_command("任务 2x").is_err());
+    }
+
+    #[test]
+    fn task_page_is_scannable_and_shows_usable_navigation() {
+        let sessions: Vec<SessionSummary> = (0..7)
+            .map(|index| {
+                serde_json::from_value(json!({
+                    "sessionId": format!("session-{index:08}"),
+                    "title": if index == 0 { "修复\n 一个 任务".to_string() } else { format!("任务 {index}") },
+                    "cwd": "/repo/日常",
+                    "permissionMode": "ask"
+                }))
+                .unwrap()
+            })
+            .collect();
+        let first = format_task_page(&sessions, Some(&sessions[0].session_id), 1).unwrap();
+        assert!(first.contains("可继续的任务 · 1/2（共 7 个）"));
+        assert!(first.contains("• 【当前】修复 一个 任务\n  #00000000 · 日常"));
+        assert_eq!(first.matches("• ").count(), 5);
+        assert!(first.contains("下一页：发送“任务2”"));
+        assert!(first.contains("切换任务：发送“切换 #编号”"));
+
+        let second = format_task_page(&sessions, None, 2).unwrap();
+        assert_eq!(second.matches("• ").count(), 2);
+        assert!(second.contains("上一页：发送“任务1”"));
+        assert!(!second.contains("下一页："));
+    }
 
     #[test]
     fn remote_permission_requires_complete_parameters() {
@@ -2540,6 +2927,51 @@ mod tests {
     }
 
     #[test]
+    fn default_workspace_migrates_and_delayed_reply_keeps_its_context() {
+        let mut binding = Binding {
+            allowed_workspaces: vec!["/repo/A".into(), "/repo/B".into()],
+            context_token: Some("latest".into()),
+            ..Binding::default()
+        };
+        assert_eq!(default_workspace(&binding), Some("/repo/A"));
+        binding.default_workspace = Some("/repo/B".into());
+        assert_eq!(default_workspace(&binding), Some("/repo/B"));
+        let queued = OutboundText {
+            client_id: "id".into(),
+            text: "reply".into(),
+            session_id: None,
+            context_token: Some("original".into()),
+            request_code: None,
+        };
+        assert_eq!(
+            reply_context(&queued, &binding).map(String::as_str),
+            Some("original")
+        );
+    }
+
+    #[test]
+    fn bot_echo_maps_id_only_quotes_to_the_sent_session() {
+        let mut binding = Binding::default();
+        binding
+            .outbound_pending
+            .push_back(("client-1".into(), "session-1".into()));
+        let echo = json!({
+            "client_id": "client-1", "message_id": 18446744073709551615_u64,
+            "item_list": [{"msg_id": 18446744073709551614_u64}]
+        });
+        assert!(reconcile_bot_echo(&mut binding, &echo));
+        assert!(binding.outbound_pending.is_empty());
+        assert!(binding
+            .outbound_routes
+            .iter()
+            .any(|(id, target)| id == "18446744073709551615" && target == "session-1"));
+        assert!(binding
+            .outbound_routes
+            .iter()
+            .any(|(id, target)| id == "18446744073709551614" && target == "session-1"));
+    }
+
+    #[test]
     fn revoking_handoff_clears_active_session_and_queued_reply() {
         let mut binding = Binding {
             active_session: Some("session".into()),
@@ -2553,10 +2985,31 @@ mod tests {
             context_token: None,
             request_code: None,
         });
-        revoke_session_access(&mut binding, "session").unwrap();
+        revoke_session_access(&mut binding, "session", false).unwrap();
         assert!(binding.active_session.is_none());
         assert!(binding.shared_sessions.is_empty());
         assert!(binding.outbox.is_empty());
+    }
+
+    #[test]
+    fn revoking_redundant_handoff_keeps_active_workspace_session() {
+        let mut binding = Binding {
+            active_session: Some("session".into()),
+            shared_sessions: vec!["session".into()],
+            allowed_workspaces: vec!["/repo".into()],
+            ..Binding::default()
+        };
+        binding.outbox.push_back(OutboundText {
+            client_id: "queued".into(),
+            text: "reply".into(),
+            session_id: Some("session".into()),
+            context_token: None,
+            request_code: None,
+        });
+        revoke_session_access(&mut binding, "session", true).unwrap();
+        assert_eq!(binding.active_session.as_deref(), Some("session"));
+        assert_eq!(binding.outbox.len(), 1);
+        assert!(binding.shared_sessions.is_empty());
     }
 
     #[test]

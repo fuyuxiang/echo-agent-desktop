@@ -50,6 +50,10 @@ vi.mock("@/lib/org-client", () => ({
   listenOrgModelsChanged: vi.fn().mockResolvedValue(() => {}),
 }));
 
+vi.mock("../WeixinChannelPanel", () => ({
+  WeixinChannelPanel: () => <div data-testid="weixin-channel-panel"><h3>微信远程对话</h3></div>,
+}));
+
 import { SettingsPanel } from "../SettingsPanel";
 import { ThemeProvider } from "../ThemeProvider";
 import {
@@ -126,13 +130,14 @@ describe("SettingsPanel", () => {
   it("按使用场景分组全部设置入口，并默认打开模型页", async () => {
     const { container } = renderSettings();
 
-    for (const group of ["通知", "智能体", "应用", "数据与支持"]) {
+    for (const group of ["消息与提醒", "智能体", "应用", "数据与支持"]) {
       expect(screen.getByRole("heading", { name: group, level: 2 })).toBeInTheDocument();
     }
 
-    expect(container.querySelectorAll(".settings-navigation__item")).toHaveLength(12);
+    expect(container.querySelectorAll(".settings-navigation__item")).toHaveLength(13);
     expect(screen.getByRole("button", { name: "用量统计" })).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "通知" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "消息通道" })).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "云存储" })).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "模型" })).toHaveAttribute("aria-current", "page");
     expect(await screen.findByRole("heading", { name: "模型与连接", level: 2 })).toBeInTheDocument();
@@ -172,6 +177,7 @@ describe("SettingsPanel", () => {
 
     const pages = [
       "通知",
+      "消息通道",
       "模型与连接",
       "智能体设置",
       "记忆",
@@ -204,6 +210,7 @@ describe("SettingsPanel", () => {
     fireEvent.click(screen.getByRole("button", { name: "通知渠道" }));
     expect(await screen.findByRole("heading", { name: "通知渠道" })).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "通知" })).toHaveAttribute("aria-current", "page");
+    expect(screen.queryByRole("button", { name: "微信远程对话" })).not.toBeInTheDocument();
 
     fireEvent.click(screen.getByRole("button", { name: "记忆" }));
     fireEvent.click(screen.getByRole("button", { name: "个人记忆" }));
@@ -214,6 +221,27 @@ describe("SettingsPanel", () => {
     fireEvent.click(screen.getByRole("button", { name: "已归档" }));
     expect(await screen.findByRole("heading", { name: "已归档" })).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "数据管理" })).toHaveAttribute("aria-current", "page");
+  });
+
+  it("消息通道独立于通知视图，直接打开时也高亮正确入口", async () => {
+    const { rerender } = render(
+      <ThemeProvider><SettingsPanel open initialSection="weixin-channel" onClose={() => {}} /></ThemeProvider>,
+    );
+    expect(screen.getByRole("button", { name: "消息通道" })).toHaveAttribute("aria-current", "page");
+    expect(screen.getByRole("button", { name: "通知" })).not.toHaveAttribute("aria-current");
+    expect(screen.getByRole("heading", { name: "消息通道", level: 2 })).toBeInTheDocument();
+    expect(screen.getByRole("heading", { name: "微信远程对话", level: 3 })).toBeInTheDocument();
+    expect(screen.getByTestId("weixin-channel-panel")).toBeInTheDocument();
+    expect(screen.queryByRole("group", { name: "通知视图" })).not.toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole("button", { name: "通知" }));
+    expect(await screen.findByRole("heading", { name: "通知中心" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "通知" })).toHaveAttribute("aria-current", "page");
+    expect(screen.queryByTestId("weixin-channel-panel")).not.toBeInTheDocument();
+
+    rerender(<ThemeProvider><SettingsPanel open={false} initialSection="weixin-channel" onClose={() => {}} /></ThemeProvider>);
+    rerender(<ThemeProvider><SettingsPanel open initialSection="weixin-channel" onClose={() => {}} /></ThemeProvider>);
+    expect(screen.getByRole("button", { name: "消息通道" })).toHaveAttribute("aria-current", "page");
   });
 
   it("安全中心说明网页与电脑操作按任务开启，不设置高风险全局默认值", async () => {
