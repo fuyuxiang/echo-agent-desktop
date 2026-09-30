@@ -968,7 +968,7 @@
 .atm-workspace-input__browse:focus-visible { outline: 2px solid var(--atm-border-focus); outline-offset: 2px; }
 .atm-workspace-input__browse:disabled { opacity: 0.6; cursor: not-allowed; }
 .atm-workspace-input__hint { margin-top: 6px; color: var(--atm-text-muted); font-size: 0.75rem; line-height: 1.4; }
-.atm-workspace-input__error { margin-top: 4px; color: var(--echo-color-error, #c53b3b); font-size: 0.75rem; }
+.atm-workspace-input__error { margin-top: 4px; color: var(--echo-status-error); font-size: 0.75rem; }
 .atm-workspace-input__dropdown {
   position: absolute;
   top: 36px;
