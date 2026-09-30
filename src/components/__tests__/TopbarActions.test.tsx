@@ -64,6 +64,10 @@ describe("TopbarActions", () => {
     expect(tooltip).toHaveTextContent("更多操作");
     expect(tooltip.parentElement).toBe(document.body);
     expect(tooltip).toHaveStyle({ position: "fixed", zIndex: "var(--echo-layer-tooltip)" });
+
+    fireEvent.click(trigger);
+    expect(screen.getByRole("menu", { name: "当前会话操作" })).toBeInTheDocument();
+    expect(screen.queryByRole("tooltip")).toBeNull();
   });
 
   it("通过 body portal 以 fixed 浮层渲染，不受顶栏层叠上下文和裁剪影响", () => {

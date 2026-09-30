@@ -12,6 +12,8 @@ import { OrganizationMemoryPanel } from "../../src/components/OrganizationMemory
 import { ChatView } from "../../src/components/ChatView";
 import { SecondarySidebar } from "../../src/components/SecondarySidebar";
 import { Sidebar } from "../../src/components/Sidebar";
+import { WorkspacePicker } from "../../src/components/WorkspacePicker";
+import { GlobalTooltip } from "../../src/components/GlobalTooltip";
 import { TasksPanel } from "../../src/components/TasksPanel";
 import { MeetingMinutesPanel } from "../../src/components/MeetingMinutesPanel";
 import { PermissionPicker } from "../../src/components/PermissionPicker";
@@ -174,6 +176,19 @@ function Fixture() {
   const [createExpertRequested, setCreateExpertRequested] = useState(false);
   const [expertPageOpen, setExpertPageOpen] = useState(false);
   const [cwd, setCwd] = useState("/review/EchoAgent");
+  if (surface === "workspace-picker") return <div style={{ height: "100%", padding: "130px 120px", background: "var(--echo-bg-secondary)" }}>
+    <WorkspacePicker
+      cwd={String.raw`\\?\A:\E\Taurus\Documents\EchoAgent`}
+      workspaces={[
+        { cwd: String.raw`\\?\A:\E\Taurus\Documents\EchoAgent`, sessionCount: 22 },
+        { cwd: String.raw`\\?\A:\E\Taurus\EchoAgentWorkspace\日常`, sessionCount: 34 },
+        { cwd: String.raw`\\?\A:\E\Taurus\EchoAgent\snake`, sessionCount: 5 },
+      ]}
+      onSelectWorkspace={() => {}}
+      menuPlacement="bottom"
+    />
+    <GlobalTooltip />
+  </div>;
   if (surface === "conversation-layout") return <ConversationLayoutFixture />;
   if (surface === "capabilities") return <PlaceholderPage label={label} onNavigate={setLabel} />;
   if (surface === "expert-entry") return <>

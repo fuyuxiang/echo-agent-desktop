@@ -125,7 +125,10 @@ export function GlobalTooltip() {
     const text = element
       ? tooltipText(element, suppressedTitlesRef.current)
       : "";
-    if (!element || !text || !element.isConnected) {
+    if (
+      !element || !text || !element.isConnected
+      || (element.hasAttribute("aria-haspopup") && element.getAttribute("aria-expanded") === "true")
+    ) {
       setActive(null);
       return;
     }
@@ -187,6 +190,9 @@ export function GlobalTooltip() {
     const onFocusIn = (event: FocusEvent) => {
       const target = tooltipTarget(event.target, suppressedTitlesRef.current);
       if (!target) return;
+      // Some menus move focus to an option as they open. Let those menus opt
+      // out of focus hints without disabling their delayed hover hints.
+      if (target.closest("[data-global-tooltip-skip-focus]")) return;
       suppressNativeTitle(target);
       focusedRef.current = target;
       interactionHiddenRef.current = false;
@@ -215,7 +221,7 @@ export function GlobalTooltip() {
     document.addEventListener("focusin", onFocusIn);
     document.addEventListener("focusout", onFocusOut);
     // Opening an action or popover should dismiss its hint immediately.
-    document.addEventListener("click", hideCurrent);
+    document.addEventListener("click", hideCurrent, true);
     document.addEventListener("keydown", onKeyDown);
     window.addEventListener("blur", dismiss);
     return () => {
@@ -223,7 +229,7 @@ export function GlobalTooltip() {
       document.removeEventListener("pointerout", onPointerOut);
       document.removeEventListener("focusin", onFocusIn);
       document.removeEventListener("focusout", onFocusOut);
-      document.removeEventListener("click", hideCurrent);
+      document.removeEventListener("click", hideCurrent, true);
       document.removeEventListener("keydown", onKeyDown);
       window.removeEventListener("blur", dismiss);
       cancelPointerTimer();
@@ -264,18 +270,28 @@ export function GlobalTooltip() {
         return record.attributeName === "title" && record.target.hasAttribute("title");
       });
       for (const element of candidates) suppressNativeTitle(element);
+      if (records.some((record) => (
+        record.type === "attributes"
+        && record.attributeName === "aria-expanded"
+        && record.target instanceof HTMLElement
+        && candidateSet.has(record.target)
+        && record.target.getAttribute("aria-expanded") === "true"
+      ))) {
+        hideCurrent();
+        return;
+      }
       // Suppressing a native title mutates the DOM. Do not let that observer
       // notification bypass the pointer dwell timer.
       if (tooltipTextChanged && pointerTimerRef.current === null) showCurrent();
     });
     observer.observe(document.body, {
       attributes: true,
-      attributeFilter: ["data-tip", "title"],
+      attributeFilter: ["data-tip", "title", "aria-expanded"],
       childList: true,
       subtree: true,
     });
     return () => observer.disconnect();
-  }, [dismiss, showCurrent, suppressNativeTitle]);
+  }, [dismiss, hideCurrent, showCurrent, suppressNativeTitle]);
 
   return active ? (
     <TooltipBubble key={active.key} anchor={active.element} text={active.text} />

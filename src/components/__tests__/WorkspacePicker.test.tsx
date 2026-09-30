@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
-import { fireEvent, render, screen } from "@testing-library/react";
+import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import "@testing-library/jest-dom/vitest";
 
 vi.mock("@/lib/agent-client", () => ({
@@ -7,8 +7,35 @@ vi.mock("@/lib/agent-client", () => ({
 }));
 
 import { WorkspacePicker } from "../WorkspacePicker";
+import { GlobalTooltip } from "../GlobalTooltip";
 
 describe("WorkspacePicker", () => {
+  it("打开目录菜单后清除触发器提示，自动聚焦的选项不覆盖菜单", async () => {
+    render(
+      <>
+        <WorkspacePicker
+          cwd="/work/one"
+          workspaces={[{ cwd: "/work/one", sessionCount: 1 }]}
+          onSelectWorkspace={vi.fn()}
+          menuPlacement="bottom"
+        />
+        <GlobalTooltip />
+      </>,
+    );
+    const trigger = screen.getByRole("button", { name: /工作目录：\/work\/one/ });
+
+    fireEvent.pointerOver(trigger);
+    expect(await screen.findByRole("tooltip")).toHaveTextContent("当前工作目录：/work/one");
+
+    fireEvent.click(trigger);
+    expect(screen.getByRole("menu", { name: "选择工作目录" })).toBeInTheDocument();
+    await waitFor(() => expect(screen.queryByRole("tooltip")).toBeNull());
+
+    const current = screen.getByRole("menuitemradio", { name: /work\/one/ });
+    fireEvent.pointerOver(current);
+    expect(await screen.findByRole("tooltip")).toHaveTextContent("/work/one");
+  });
+
   it("菜单通过 body portal 渲染，不受顶栏 overflow 裁剪", () => {
     render(
       <div data-testid="clipping-bar" style={{ overflow: "hidden" }}>
@@ -46,7 +73,7 @@ describe("WorkspacePicker", () => {
     expect(trigger).toHaveAttribute("data-tip", "当前工作目录：/work/one");
   });
 
-  it("使用有语义菜单支持方向键、Escape 和焦点恢复", () => {
+  it("使用有语义菜单支持方向键、Escape 和焦点恢复", async () => {
     render(
       <WorkspacePicker
         cwd="/work/one"
@@ -64,7 +91,7 @@ describe("WorkspacePicker", () => {
     expect(screen.getByRole("menu", { name: "选择工作目录" })).toBeInTheDocument();
     const current = screen.getByRole("menuitemradio", { name: /work\/one/ });
     const next = screen.getByRole("menuitemradio", { name: /work\/two/ });
-    expect(current).toHaveFocus();
+    await waitFor(() => expect(current).toHaveFocus());
     fireEvent.keyDown(current, { key: "ArrowDown" });
     expect(next).toHaveFocus();
 

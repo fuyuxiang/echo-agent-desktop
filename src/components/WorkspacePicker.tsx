@@ -56,8 +56,13 @@ export function WorkspacePicker({
 
   useEffect(() => {
     if (!open) return;
-    const selected = menuRef.current?.querySelector<HTMLElement>('[role="menuitemradio"][aria-checked="true"]');
-    (selected ?? menuRef.current?.querySelector<HTMLElement>('[role="menuitem"]'))?.focus();
+    // A pointer click can refocus the trigger after React commits the menu.
+    // Move focus once the browser has finished that default action.
+    const frame = window.requestAnimationFrame(() => {
+      const selected = menuRef.current?.querySelector<HTMLElement>('[role="menuitemradio"][aria-checked="true"]');
+      (selected ?? menuRef.current?.querySelector<HTMLElement>('[role="menuitem"]'))?.focus();
+    });
+    return () => window.cancelAnimationFrame(frame);
   }, [open]);
 
   useEffect(() => {
@@ -163,6 +168,7 @@ export function WorkspacePicker({
           ref={menuRef}
           style={menuStyle}
           data-placement={placement ?? undefined}
+          data-global-tooltip-skip-focus=""
           onClick={(event) => event.stopPropagation()}
           onKeyDown={handleMenuKeyDown}
         >
