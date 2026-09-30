@@ -17,6 +17,7 @@ import {
   DeleteIcon,
   ErrorCircleIcon,
   ExpertIcon,
+  FolderOpenIcon,
   GlobeIcon,
   PlayIcon,
   RunningStatusIcon,
@@ -28,7 +29,7 @@ import type {
   AutomationSchedule,
 } from "@/lib/types";
 import type { AgentEntry, SkillInfo } from "@/lib/types";
-import type { WorkspaceInfo } from "@/lib/agent-client";
+import { filesystemPickDirectory, type WorkspaceInfo } from "@/lib/agent-client";
 import {
   CustomSelect,
   IntervalDayChips,
@@ -270,7 +271,13 @@ function WorkspaceInput({
   disabled?: boolean;
 }) {
   const [isOpen, setIsOpen] = useState(false);
+  const [isPicking, setIsPicking] = useState(false);
+  const [pickError, setPickError] = useState("");
   const containerRef = useRef<HTMLDivElement>(null);
+  const matches = workspaces.filter((workspace) => (
+    workspace.cwd !== value
+    && workspace.cwd.toLocaleLowerCase().includes(value.trim().toLocaleLowerCase())
+  )).slice(0, 8);
 
   useEffect(() => {
     if (!isOpen) return;
@@ -281,24 +288,62 @@ function WorkspaceInput({
     return () => document.removeEventListener("mousedown", handler);
   }, [isOpen]);
 
+  const pickFolder = async () => {
+    setIsOpen(false);
+    setPickError("");
+    setIsPicking(true);
+    try {
+      const selected = await filesystemPickDirectory(value.trim() || undefined);
+      if (selected) onChange(selected);
+    } catch (error) {
+      setPickError(`选择文件夹失败：${String(error).replace(/^Error:\s*/, "")}`);
+    } finally {
+      setIsPicking(false);
+    }
+  };
+
   return (
-    <div className="atm-workspace-input" ref={containerRef}>
-      <input
-        type="text"
-        className="atm-modal-input"
-        value={value}
-        disabled={disabled}
-        placeholder=""
-        onChange={(e) => onChange(e.target.value)}
-        onFocus={() => workspaces.length > 0 && setIsOpen(true)}
-      />
-      {isOpen && workspaces.length > 0 && (
+    <div className="atm-workspace-input" ref={containerRef} onBlur={(event) => {
+      if (!containerRef.current?.contains(event.relatedTarget as Node)) setIsOpen(false);
+    }}>
+      <div className="atm-workspace-input__field">
+        <input
+          id="automation-workspace-path"
+          type="text"
+          className="atm-modal-input"
+          value={value}
+          disabled={disabled || isPicking}
+          placeholder="输入已授权的文件夹路径，或从历史目录选择"
+          autoComplete="off"
+          spellCheck={false}
+          onChange={(event) => {
+            onChange(event.target.value);
+            setPickError("");
+            setIsOpen(true);
+          }}
+          onFocus={() => setIsOpen(true)}
+          onKeyDown={(event) => {
+            if (event.key === "Escape") setIsOpen(false);
+          }}
+        />
+        <button
+          type="button"
+          className="atm-workspace-input__browse"
+          disabled={disabled || isPicking}
+          onClick={() => void pickFolder()}
+        >
+          <FolderOpenIcon size="sm" />
+          <span>{isPicking ? "选择中…" : "选择文件夹"}</span>
+        </button>
+      </div>
+      {isOpen && matches.length > 0 && (
         <div className="atm-workspace-input__dropdown">
-          {workspaces.map((w) => (
+          {matches.map((w) => (
             <button
               key={w.cwd}
               type="button"
               className="atm-workspace-input__option"
+              title={w.cwd}
               onClick={() => {
                 onChange(w.cwd);
                 setIsOpen(false);
@@ -310,6 +355,8 @@ function WorkspaceInput({
           ))}
         </div>
       )}
+      <div className="atm-workspace-input__hint">新目录请点“选择文件夹”确认，留空则使用默认工作空间。</div>
+      {pickError && <div className="atm-workspace-input__error" role="alert">{pickError}</div>}
     </div>
   );
 }
@@ -649,7 +696,7 @@ export function AutomationEditPage({
   const yearlySelectedDay = draft.schedule.bymonthday[0] || 0;
   const yearlyMaxDay = getYearlyMaxDay(yearlySelectedMonth || 1);
 
-  const selectedCwd = draft.cwds.split(",").map((c) => c.trim()).filter(Boolean)[0] ?? "";
+  const selectedCwd = draft.cwds;
 
   return (
     <div className="atm-detail-page">
@@ -729,7 +776,7 @@ export function AutomationEditPage({
           />
 
           {/* 工作空间 */}
-          <label className="atm-modal-label">
+          <label className="atm-modal-label" htmlFor="automation-workspace-path">
             工作空间
             <span className="atm-modal-hint atm-modal-hint-inline">(可选)</span>
           </label>

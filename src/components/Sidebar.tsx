@@ -868,6 +868,14 @@ export function Sidebar({
     [taskSessions, filterStatus, filterDate],
   );
   const scopedIndependentCount = taskSessions.filter((session) => !session.archived).length;
+  const visibleProjectRowCount = projects.reduce((count, project) => {
+    if (!expandedProjects[project.id]) return count + 1;
+    const conversationCount = project.conversations.filter((conversation) => (
+      !(sessionSummaryById.get(conversation.sessionId)?.archived ?? conversation.archived)
+      && !hiddenSessionIds.has(conversation.sessionId)
+    )).length;
+    return count + 1 + Math.max(1, conversationCount);
+  }, 0);
 
   return (
     <aside ref={sidebarRef} className="sidebar">
@@ -942,6 +950,7 @@ export function Sidebar({
           </div>
         )}
         {/* 任务分组: 所有未归属项目的会话，cwd 不参与分类。 */}
+        <div className={"sidebar__list-section sidebar__list-section--tasks" + (tasksOpen && filteredIndependent.length > 3 ? " sidebar__list-section--long" : "")}>
         <div className="sidebar__section-head">
           <button
             type="button"
@@ -1016,8 +1025,10 @@ export function Sidebar({
             {sortPinnedFirst(filteredIndependent).map((session) => renderConv(session))}
           </div>
         )}
+        </div>
 
         {/* 项目分组: 仅展示真实项目实体。 */}
+        <div className={"sidebar__list-section sidebar__list-section--projects" + (projectsOpen && visibleProjectRowCount > 3 ? " sidebar__list-section--long" : "")}>
         <button
           type="button"
           className="sidebar__section-label"
@@ -1119,6 +1130,7 @@ export function Sidebar({
             })}
           </div>
         )}
+        </div>
       </div>
 
       <div className="sidebar__footer">

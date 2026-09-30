@@ -17,6 +17,7 @@ vi.mock("@/lib/agent-client", () => ({
   automationRecordsArchive: vi.fn(async () => {}),
   automationRecordsDelete: vi.fn(async () => {}),
   agentListWorkspaces: vi.fn(async () => []),
+  filesystemPickDirectory: vi.fn(async () => null),
   agentAuthStatus: vi.fn(async () => ({
     ready: true,
     providers: [],
@@ -34,6 +35,7 @@ vi.mock("@/lib/agent-client", () => ({
 
 import {
   agentListWorkspaces,
+  filesystemPickDirectory,
   agentAuthStatus,
   agentsList,
   automationsRun,
@@ -48,6 +50,7 @@ beforeEach(() => {
   snapshot = emptySnapshot;
   vi.mocked(automationsSnapshot).mockReset().mockImplementation(async () => snapshot);
   vi.mocked(agentListWorkspaces).mockReset().mockResolvedValue([]);
+  vi.mocked(filesystemPickDirectory).mockReset().mockResolvedValue(null);
   vi.mocked(agentAuthStatus).mockReset().mockResolvedValue({
     ready: true,
     providers: [],
@@ -119,6 +122,35 @@ describe("AutomationPanel（截图 1/3 空态）", () => {
     expect(screen.getByText(/技能/)).toBeInTheDocument();
     expect(screen.getByText("召唤专家")).toBeInTheDocument();
     expect(screen.getByText("默认权限")).toBeInTheDocument();
+  });
+
+  it("工作空间可输入路径并通过系统目录选择授权新路径", async () => {
+    vi.mocked(agentListWorkspaces).mockResolvedValue([{ cwd: "/recent", sessionCount: 2 }]);
+    vi.mocked(filesystemPickDirectory).mockResolvedValue("/new/custom");
+    vi.mocked(providersList).mockResolvedValue({ providers: [], models: [{ id: "ready-model", label: "可用模型" }] } as never);
+    vi.mocked(agentAuthStatus).mockResolvedValue({
+      ready: true, providers: ["ready-model"], runtimeReady: true,
+      synchronized: true, runtimeModels: ["ready-model"], defaultModelId: "ready-model",
+    });
+    render(<AutomationPanel cwd="/recent" />);
+    fireEvent.click(await screen.findByText("+ 添加自动化"));
+
+    const input = document.querySelector("#automation-workspace-path") as HTMLInputElement;
+    expect(input.value).toBe("/recent");
+    fireEvent.focus(input);
+    expect(screen.queryByRole("button", { name: /recent/ })).not.toBeInTheDocument();
+
+    fireEvent.change(input, { target: { value: "/new/custom" } });
+    expect(input.value).toBe("/new/custom");
+    fireEvent.click(screen.getByRole("button", { name: "选择文件夹" }));
+    await waitFor(() => expect(filesystemPickDirectory).toHaveBeenCalledWith("/new/custom"));
+    expect(input.value).toBe("/new/custom");
+
+    fireEvent.change(document.querySelector(".atm-modal-input") as HTMLInputElement, { target: { value: "自定义目录任务" } });
+    fireEvent.change(document.querySelector(".atm-prompt-textarea") as HTMLTextAreaElement, { target: { value: "运行任务" } });
+    fireEvent.click(screen.getByRole("button", { name: "保存" }));
+    await waitFor(() => expect(automationsSave).toHaveBeenCalledTimes(1));
+    expect(vi.mocked(automationsSave).mock.calls[0][0].cwds).toBe("/new/custom");
   });
 
   it("引用目录分项失败时保留成功数据并可重试，不伪装空状态", async () => {

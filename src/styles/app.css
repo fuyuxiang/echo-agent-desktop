@@ -7825,10 +7825,49 @@ button.diff__path {
 }
 .sidebar__content {
   flex: 1;
-  overflow-y: auto;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  /* Each list scrolls independently; keep the filter popover unclipped. */
+  overflow: visible;
   /* 与 .sidebar__nav 保持一致的水平内边距,使「任务/空间」分组与「新建任务」对齐 */
   padding: 0 12px;
   box-sizing: border-box;
+}
+.sidebar__list-section {
+  display: flex;
+  flex: 0 1 auto;
+  flex-direction: column;
+  min-height: 0;
+}
+/* Keep short sections at their natural height; divide the rest between long lists. */
+.sidebar__list-section--long {
+  flex: 1 1 0;
+  min-height: min(148px, calc(50% - 15px));
+}
+.sidebar__list-section--projects {
+  margin-top: 4px;
+  padding-top: 4px;
+  border-top: 1px solid var(--ui-line, var(--echo-border-default));
+}
+.sidebar__list-section > .sidebar__section-head,
+.sidebar__list-section > .sidebar__section-label {
+  flex: none;
+}
+.sidebar__list-section > .sidebar__group {
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow-x: hidden;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  scrollbar-width: thin;
+  scrollbar-color: color-mix(in srgb, var(--echo-text-weak) 35%, transparent) transparent;
+}
+.sidebar__list-section > .sidebar__group::-webkit-scrollbar { width: 6px; }
+.sidebar__list-section > .sidebar__group::-webkit-scrollbar-track { background: transparent; }
+.sidebar__list-section > .sidebar__group::-webkit-scrollbar-thumb {
+  border-radius: 6px;
+  background: color-mix(in srgb, var(--echo-text-weak) 35%, transparent);
 }
 .sidebar__section-label {
   display: flex;

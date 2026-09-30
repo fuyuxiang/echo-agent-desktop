@@ -16,6 +16,7 @@ const BINARY_PREVIEW_MAX_BYTES: usize = 1024 * 1024;
 const DIRECTORY_LIST_MAX_ENTRIES: usize = 2_000;
 const TEXT_WRITE_MAX_BYTES: usize = 16 * 1024 * 1024;
 const MAX_AUTHORIZED_ROOTS: usize = 512;
+const MAX_PICKED_WORKSPACE_GRANTS_BYTES: u64 = 512 * 1024;
 const MAX_AUTHORIZED_FILES: usize = 2_048;
 const MAX_TRUSTED_PACKAGE_SOURCES: usize = 2_048;
 const MAX_CONFIGURED_SKILL_SOURCES: usize = 512;
@@ -36,6 +37,7 @@ pub(crate) const MAX_ATTACHMENT_TOTAL_BYTES: u64 = 64 * 1024 * 1024;
 #[derive(Debug, Default)]
 pub struct FilesystemAccess {
     roots: Mutex<HashSet<PathBuf>>,
+    picked_workspace_grants: Mutex<()>,
     files: Mutex<HashSet<PathBuf>>,
     /// Canonical application-owned attachment store. Files inside this one
     /// narrow root are authorized by containment instead of consuming the
@@ -43,6 +45,25 @@ pub struct FilesystemAccess {
     managed_attachment_root: Mutex<Option<PathBuf>>,
     package_sources: Mutex<HashSet<PathBuf>>,
     configured_skill_sources: Mutex<HashMap<PathBuf, String>>,
+}
+
+fn picked_workspace_grants_path() -> PathBuf {
+    crate::paths::echo_agent_home_dir().join("echoagent-picked-workspaces.json")
+}
+
+fn read_picked_workspace_grants(path: &Path) -> Result<Vec<String>, String> {
+    match std::fs::symlink_metadata(path) {
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(Vec::new()),
+        Err(error) => return Err(format!("无法读取工作区授权记录：{error}")),
+        Ok(_) => {}
+    }
+    let bytes = read_regular_file_bounded(path, MAX_PICKED_WORKSPACE_GRANTS_BYTES)?;
+    let grants: Vec<String> = serde_json::from_slice(&bytes)
+        .map_err(|error| format!("工作区授权记录格式错误：{error}"))?;
+    if grants.len() > MAX_AUTHORIZED_ROOTS {
+        return Err("工作区授权记录超过安全上限".into());
+    }
+    Ok(grants)
 }
 
 impl FilesystemAccess {
@@ -69,6 +90,19 @@ impl FilesystemAccess {
                     let _ = access.authorize_workspace(root);
                 }
             }
+        }
+
+        // A folder chosen for an automation may not have a session yet. Keep
+        // that native picker grant across restarts so scheduled runs can use it.
+        match read_picked_workspace_grants(&picked_workspace_grants_path()) {
+            Ok(grants) => {
+                for root in grants {
+                    if let Err(error) = access.authorize_workspace(&root) {
+                        tracing::warn!(%error, root, "skipping unavailable picked workspace");
+                    }
+                }
+            }
+            Err(error) => tracing::warn!(%error, "failed to restore picked workspaces"),
         }
 
         access
@@ -217,6 +251,26 @@ impl FilesystemAccess {
             return Err(format!("已授权工作区不能超过 {MAX_AUTHORIZED_ROOTS} 个"));
         }
         roots.insert(canonical.clone());
+        Ok(canonical)
+    }
+
+    fn authorize_picked_workspace_at(&self, root: &str, path: &Path) -> Result<PathBuf, String> {
+        let _guard = self
+            .picked_workspace_grants
+            .lock()
+            .map_err(|_| "工作区授权状态已损坏".to_string())?;
+        let canonical = self.authorize_workspace(root)?;
+        let mut grants = read_picked_workspace_grants(path)?;
+        let canonical_string = canonical.to_string_lossy().into_owned();
+        if !grants.iter().any(|entry| entry == &canonical_string) {
+            if grants.len() >= MAX_AUTHORIZED_ROOTS {
+                return Err(format!("已授权工作区不能超过 {MAX_AUTHORIZED_ROOTS} 个"));
+            }
+            grants.push(canonical_string);
+            let body = serde_json::to_vec(&grants)
+                .map_err(|error| format!("序列化工作区授权失败：{error}"))?;
+            crate::paths::write_private_file(path, &body)?;
+        }
         Ok(canonical)
     }
 
@@ -763,14 +817,27 @@ fn validated_external_url(url: &str) -> Result<url::Url, String> {
 pub async fn filesystem_pick_directory(
     app: tauri::AppHandle,
     access: State<'_, FilesystemAccess>,
+    suggested_path: Option<String>,
 ) -> Result<Option<String>, String> {
     let (sender, receiver) = tokio::sync::oneshot::channel();
-    app.dialog()
+    let mut dialog = app
+        .dialog()
         .file()
-        .set_title("选择 EchoAgent 可访问的文件夹")
-        .pick_folder(move |selection| {
-            let _ = sender.send(selection);
-        });
+        .set_title("选择 EchoAgent 可访问的文件夹");
+    if let Some(suggested) = suggested_path {
+        let path = PathBuf::from(suggested.trim());
+        let directory = if path.is_dir() {
+            Some(path.as_path())
+        } else {
+            path.parent().filter(|parent| parent.is_dir())
+        };
+        if let Some(directory) = directory {
+            dialog = dialog.set_directory(directory);
+        }
+    }
+    dialog.pick_folder(move |selection| {
+        let _ = sender.send(selection);
+    });
     let Some(selection) = receiver
         .await
         .map_err(|_| "目录选择对话框意外关闭".to_string())?
@@ -780,7 +847,8 @@ pub async fn filesystem_pick_directory(
     let path = selection
         .into_path()
         .map_err(|error| format!("选中的目录不是本地路径：{error}"))?;
-    let canonical = access.authorize_workspace(&path.to_string_lossy())?;
+    let canonical = access
+        .authorize_picked_workspace_at(&path.to_string_lossy(), &picked_workspace_grants_path())?;
     Ok(Some(canonical.to_string_lossy().into_owned()))
 }
 
@@ -1534,6 +1602,51 @@ pub fn open_echo_agent_data_dir() -> Result<(), String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn native_picked_workspace_grant_is_durable_and_deduplicated() {
+        let tmp = tempfile::tempdir().unwrap();
+        let workspace = tmp.path().join("automation-workspace");
+        std::fs::create_dir_all(&workspace).unwrap();
+        let grant_file = tmp.path().join("picked-workspaces.json");
+        let access = FilesystemAccess::default();
+        assert!(access
+            .require_workspace(&workspace.to_string_lossy())
+            .is_err());
+
+        let canonical = access
+            .authorize_picked_workspace_at(&workspace.to_string_lossy(), &grant_file)
+            .unwrap();
+        access
+            .authorize_picked_workspace_at(&workspace.to_string_lossy(), &grant_file)
+            .unwrap();
+        let grants = read_picked_workspace_grants(&grant_file).unwrap();
+        assert_eq!(grants, vec![canonical.to_string_lossy().into_owned()]);
+
+        let restored = FilesystemAccess::default();
+        for grant in grants {
+            restored.authorize_workspace(&grant).unwrap();
+        }
+        assert_eq!(
+            restored
+                .require_workspace(&workspace.to_string_lossy())
+                .unwrap(),
+            canonical
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn picked_workspace_grants_reject_symlinked_records() {
+        use std::os::unix::fs::symlink;
+
+        let tmp = tempfile::tempdir().unwrap();
+        let target = tmp.path().join("target.json");
+        let link = tmp.path().join("grants.json");
+        std::fs::write(&target, "[]").unwrap();
+        symlink(&target, &link).unwrap();
+        assert!(read_picked_workspace_grants(&link).is_err());
+    }
 
     // --- resolve_path ---
 

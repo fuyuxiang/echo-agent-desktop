@@ -1729,8 +1729,10 @@ export async function notificationClear(): Promise<void> {
 // ---------- export ----------
 
 /** Select and authorize a local directory in one native backend operation. */
-export async function filesystemPickDirectory(): Promise<string | null> {
-  return invoke<string | null>("filesystem_pick_directory");
+export async function filesystemPickDirectory(suggestedPath?: string): Promise<string | null> {
+  return suggestedPath
+    ? invoke<string | null>("filesystem_pick_directory", { suggestedPath })
+    : invoke<string | null>("filesystem_pick_directory");
 }
 
 /** Read a bounded UTF-8 text file from an authorized workspace. */

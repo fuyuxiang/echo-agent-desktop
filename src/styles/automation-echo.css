@@ -946,9 +946,32 @@
 
 /* 工作空间输入（全宽输入框 + 下拉建议） */
 .atm-workspace-input { position: relative; }
+.atm-workspace-input__field { display: flex; align-items: center; gap: 8px; }
+.atm-workspace-input__field .atm-modal-input { flex: 1; min-width: 0; }
+.atm-workspace-input__browse {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  height: 32px;
+  flex: none;
+  padding: 0 12px;
+  border: 1px solid var(--atm-border);
+  border-radius: 8px;
+  background: var(--atm-surface);
+  color: var(--atm-text-primary);
+  font: inherit;
+  font-size: 0.8125rem;
+  cursor: pointer;
+}
+.atm-workspace-input__browse:hover:not(:disabled) { background: var(--atm-surface-hover); }
+.atm-workspace-input__browse:focus-visible { outline: 2px solid var(--atm-border-focus); outline-offset: 2px; }
+.atm-workspace-input__browse:disabled { opacity: 0.6; cursor: not-allowed; }
+.atm-workspace-input__hint { margin-top: 6px; color: var(--atm-text-muted); font-size: 0.75rem; line-height: 1.4; }
+.atm-workspace-input__error { margin-top: 4px; color: var(--echo-color-error, #c53b3b); font-size: 0.75rem; }
 .atm-workspace-input__dropdown {
   position: absolute;
-  top: calc(100% + 4px);
+  top: 36px;
   left: 0;
   right: 0;
   z-index: 100;

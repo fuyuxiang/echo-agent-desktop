@@ -8,6 +8,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import assert from "node:assert/strict";
 import { validateConversationLayout } from "./validate-conversation-layout.mjs";
+import { validateSidebarScroll } from "./validate-sidebar-scroll.mjs";
 
 const output = mkdtempSync(join(tmpdir(), "echo-ui-surfaces-"));
 console.log(`UI screenshots: ${output}`);
@@ -359,8 +360,21 @@ try {
   assert.equal(await page.getByRole("tooltip").count(), 0, "keyboard opening must not cover workspace choices");
   layouts += 1;
   layouts += await validateConversationLayout(page, output);
+  layouts += await validateSidebarScroll(page, output);
+  await page.setViewportSize({ width: 1024, height: 720 });
+  await page.goto("http://127.0.0.1:1439/__ui-review?surface=automation-edit");
+  await page.locator("#automation-workspace-path").focus();
+  assert.equal(await page.locator(".atm-workspace-input__dropdown").count(), 0, "selected workspace should not suggest itself on focus");
+  const workspaceRow = await page.evaluate(() => {
+    const input = document.querySelector("#automation-workspace-path").getBoundingClientRect();
+    const browse = document.querySelector(".atm-workspace-input__browse").getBoundingClientRect();
+    return { inputRight: input.right, browseLeft: browse.left, browseRight: browse.right, viewportWidth: innerWidth };
+  });
+  assert.ok(workspaceRow.inputRight < workspaceRow.browseLeft && workspaceRow.browseRight < workspaceRow.viewportWidth, "workspace picker should fit beside the path");
+  await page.screenshot({ path: join(output, "automation-workspace-input.png") });
+  layouts += 1;
   assert.deepEqual(errors, [], "browser runtime errors");
-  console.log(JSON.stringify({ passed: true, screenshots: output, layouts, interactions: ["meeting source selection", "organization document preview", "conversation question navigation", "memory", "notification", "storage", "expert creation", "expert entry and refresh", "extension navigation", "font scaling", "project keyboard navigation", "workspace menu tooltip dismissal", "cross-session scroll restoration", "task panel docking", "sidebar font scaling and hover"] }, null, 2));
+  console.log(JSON.stringify({ passed: true, screenshots: output, layouts, interactions: ["meeting source selection", "organization document preview", "conversation question navigation", "memory", "notification", "storage", "expert creation", "expert entry and refresh", "extension navigation", "font scaling", "project keyboard navigation", "workspace menu tooltip dismissal", "cross-session scroll restoration", "task panel docking", "sidebar font scaling and hover", "independent sidebar list scrolling"] }, null, 2));
 } finally {
   await browser?.close();
   await server.close();

@@ -12,6 +12,9 @@ import { OrganizationMemoryPanel } from "../../src/components/OrganizationMemory
 import { ChatView } from "../../src/components/ChatView";
 import { SecondarySidebar } from "../../src/components/SecondarySidebar";
 import { Sidebar } from "../../src/components/Sidebar";
+import { AutomationEditPage } from "../../src/components/automation/AutomationEditPage";
+import { buildDraft } from "../../src/components/automation/schedule-utils";
+import { createAutomationTemplates } from "../../src/components/automation/template-config";
 import { WorkspacePicker } from "../../src/components/WorkspacePicker";
 import { GlobalTooltip } from "../../src/components/GlobalTooltip";
 import { TasksPanel } from "../../src/components/TasksPanel";
@@ -19,6 +22,7 @@ import { MeetingMinutesPanel } from "../../src/components/MeetingMinutesPanel";
 import { PermissionPicker } from "../../src/components/PermissionPicker";
 import { useSessionStore } from "../../src/stores/session-store";
 import { useSessionsStore } from "../../src/stores/sessions-store";
+import { useProjectsStore } from "../../src/stores/projects-store";
 import "../../src/styles/global.css";
 import "../../src/styles/app.css";
 import "../../src/styles/automation-echo.css";
@@ -76,6 +80,33 @@ if (["conversation", "conversation-layout"].includes(query.get("surface") ?? "")
     { sessionId: "review-plugin", title: "添加搜索插件并检查连接配置", cwd: "", status: "failed", updatedAt: new Date(Date.now() - 48 * 3600000).toISOString() },
     { sessionId: "review-writing", title: "部署 writing-dna skill 与验证", cwd: "", status: "completed", updatedAt: new Date(Date.now() - 72 * 3600000).toISOString() },
   ], tasksOpen: true, loading: false, currentSessionId: "review-conversation" });
+}
+if (query.get("surface") === "sidebar-scroll") {
+  const variant = query.get("variant") ?? "both";
+  const taskCount = ["projects", "short"].includes(variant) ? 2 : 54;
+  const projectCount = ["tasks", "short"].includes(variant) ? 2 : 18;
+  useSessionsStore.setState({
+    independent: Array.from({ length: taskCount }, (_, index) => ({
+      sessionId: `sidebar-task-${index}`,
+      title: `任务 ${String(index + 1).padStart(2, "0")} · 检查目录与列表滚动`,
+      cwd: "/review/EchoAgent",
+      status: "completed" as const,
+      updatedAt: new Date(Date.now() - index * 3600000).toISOString(),
+    })),
+    tasksOpen: true,
+    projectsOpen: true,
+    loading: false,
+    currentSessionId: "sidebar-task-0",
+  });
+  useProjectsStore.setState({
+    projects: Array.from({ length: projectCount }, (_, index) => ({
+      id: `sidebar-project-${index}`,
+      name: `项目 ${String(index + 1).padStart(2, "0")} · EchoAgent 工作区`,
+      cwd: `/review/project-${index}`,
+      createdAt: new Date().toISOString(),
+      connectors: [], experts: [], skills: [], plans: [], tasks: [], assets: [], members: [], conversations: [],
+    })),
+  });
 }
 const callbacks = new Map();
 Object.assign(window, {
@@ -176,6 +207,16 @@ function Fixture() {
   const [createExpertRequested, setCreateExpertRequested] = useState(false);
   const [expertPageOpen, setExpertPageOpen] = useState(false);
   const [cwd, setCwd] = useState("/review/EchoAgent");
+  const [automationDraft, setAutomationDraft] = useState(() => buildDraft(
+    createAutomationTemplates()[0], "/Users/review/Documents/EchoAgent",
+  ));
+  if (surface === "automation-edit") return <div className="automation-panel echo-agent-automation"><AutomationEditPage
+    mode="create" draft={automationDraft} setDraft={setAutomationDraft}
+    saving={false} workspaces={[{ cwd: "/Users/review/Documents/EchoAgent", sessionCount: 9 }]}
+    models={[]} skills={[]} experts={[]} connectors={[]} records={[]}
+    onSave={() => {}} onClose={() => {}} onArchiveRecord={() => {}}
+    onRetryRecord={() => {}} onDeleteRecord={() => {}}
+  /></div>;
   if (surface === "workspace-picker") return <div style={{ height: "100%", padding: "130px 120px", background: "var(--echo-bg-secondary)" }}>
     <WorkspacePicker
       cwd={String.raw`\\?\A:\E\Taurus\Documents\EchoAgent`}
@@ -188,6 +229,14 @@ function Fixture() {
       menuPlacement="bottom"
     />
     <GlobalTooltip />
+  </div>;
+  if (surface === "sidebar-scroll") return <div style={{ display: "flex", height: "100%" }}>
+    <Sidebar
+      activeNav="新建任务" onNewSession={() => {}} onSelect={() => {}} onNavigate={() => {}}
+      onOpenSettings={() => {}} onOpenSearch={() => {}} onToggleCollapse={() => {}}
+      onPlaceholder={() => {}}
+    />
+    <main style={{ flex: 1, background: "var(--echo-bg-secondary)" }} />
   </div>;
   if (surface === "conversation-layout") return <ConversationLayoutFixture />;
   if (surface === "capabilities") return <PlaceholderPage label={label} onNavigate={setLabel} />;
