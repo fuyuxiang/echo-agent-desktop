@@ -19,7 +19,10 @@ export function reviewOutput(fallback) {
   return output;
 }
 
-export async function createUiReviewServer(port = 1439) {
+export async function createUiReviewServer(port = 1439, {
+  freezeMotion = true,
+  fixture = "/scripts/fixtures/ui-surfaces.tsx",
+} = {}) {
   const baseline = process.env.UI_REVIEW_BASELINE === "1";
   const originalSources = new Map();
   const server = await createServer({
@@ -36,13 +39,35 @@ export async function createUiReviewServer(port = 1439) {
     } }, { name: "isolated-ui-review", configureServer(server) {
       server.middlewares.use((request, response, next) => {
         if (!request.url?.startsWith("/__ui-review")) return next();
-        const html = `<!doctype html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><style>*{box-sizing:border-box}*,*::before,*::after{animation:none!important;transition:none!important}html,body,#root{width:100%;height:100%;margin:0}body{overflow:hidden;background:var(--echo-bg-secondary);font:13px -apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif}</style></head><body><div id="root"></div><script type="module" src="/scripts/fixtures/ui-surfaces.tsx"></script></body></html>`;
+        // Screenshot fixtures can freeze motion; rendering regressions must
+        // exercise production transitions and prefers-reduced-motion instead.
+        const motionCss = freezeMotion ? "*,*::before,*::after{animation:none!important;transition:none!important}" : "";
+        const html = `<!doctype html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><style>*{box-sizing:border-box}${motionCss}html,body,#root{width:100%;height:100%;margin:0}body{overflow:hidden;background:var(--echo-bg-secondary);font:13px -apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif}</style></head><body><div id="root"></div><script type="module" src="${fixture}"></script></body></html>`;
         void server.transformIndexHtml(request.url, html).then(result => {
           response.setHeader("Content-Type", "text/html"); response.end(result);
         }).catch(next);
       });
     } }],
   });
-  await server.listen();
+  try {
+    if (port === 0) {
+      // Vite 5 treats a configured zero as its default port. Listen on the
+      // underlying server instead so the OS allocates and holds an ephemeral
+      // port, without the race of probing an unused port and reopening it.
+      await new Promise((resolve, reject) => {
+        const http = server.httpServer;
+        http.once("error", reject);
+        http.listen(0, "127.0.0.1", () => {
+          http.removeListener("error", reject);
+          resolve();
+        });
+      });
+    } else {
+      await server.listen();
+    }
+  } catch (error) {
+    await server.close();
+    throw error;
+  }
   return server;
 }

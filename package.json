@@ -24,6 +24,7 @@
     "setup:mac": "bash scripts/setup.sh",
     "test": "vitest run",
     "test:ui": "node scripts/validate-ui-surfaces.mjs",
+    "test:mermaid": "node scripts/validate-mermaid-render.mjs",
     "git:push": "bash scripts/git-push.sh",
     "git:push:tags": "bash scripts/git-push.sh --tags"
   },

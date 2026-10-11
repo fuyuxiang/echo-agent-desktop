@@ -217,7 +217,7 @@ export const MarkdownPreMermaid = memo(function MarkdownPreMermaid({
         {showSource ? (
           <pre className="md-code-pre md-mermaid-source">
             {children ?? <code className="language-mermaid">{code}</code>}
-            {error ? <div className="md-mermaid-error">Mermaid 渲染失败: {error}</div> : null}
+            {error ? <div className="md-mermaid-error" role="alert">图表暂时无法显示，已保留只读源码，可复制检查，或让助手修正后重新生成图表。<br />{error}</div> : null}
           </pre>
         ) : rendering ? (
           <div className="md-mermaid-loading">正在渲染图表…</div>

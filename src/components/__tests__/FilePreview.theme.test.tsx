@@ -5,7 +5,10 @@ import { FilePreview } from "../FilePreview";
 
 vi.mock("mermaid", () => ({
   default: {
-    mermaidAPI: { getConfig: vi.fn(() => ({ secure: ["securityLevel"] })) },
+    mermaidAPI: {
+      defaultConfig: { secure: ["securityLevel"] },
+      getConfig: vi.fn(() => ({ secure: ["securityLevel"] })),
+    },
     initialize: vi.fn(),
     render: vi.fn(async () => ({ svg: '<svg xmlns="http://www.w3.org/2000/svg" width="300" height="80" viewBox="0 0 300 80"><text x="10" y="30">示例图表</text></svg>' })),
   },
@@ -31,9 +34,11 @@ describe("FilePreview diagram theme", () => {
   it("文件内图表遵循当前深色主题，并响应应用主题切换", async () => {
     document.documentElement.dataset.theme = "dark";
     render(<FilePreview filename="diagram.md" content={"```mermaid\ngraph LR\n  A --> B\n```"} />);
-    await screen.findByRole("button", { name: "放大预览图表" });
+    // Mermaid is lazy-loaded; allow the full suite's concurrent imports to
+    // settle before asserting the rendered preview and its theme.
+    await screen.findByRole("button", { name: "放大预览图表" }, { timeout: 5_000 });
     expect(mermaid.initialize).toHaveBeenCalledWith(expect.objectContaining({ theme: "dark" }));
     await act(async () => { document.documentElement.dataset.theme = "light"; });
-    await waitFor(() => expect(mermaid.initialize).toHaveBeenLastCalledWith(expect.objectContaining({ theme: "default" })));
-  });
+    await waitFor(() => expect(mermaid.initialize).toHaveBeenLastCalledWith(expect.objectContaining({ theme: "default" })), { timeout: 5_000 });
+  }, 15_000);
 });

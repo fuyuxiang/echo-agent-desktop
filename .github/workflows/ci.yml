@@ -53,6 +53,44 @@ jobs:
       - run: pnpm install --frozen-lockfile
       - run: pnpm build
 
+  mermaid-render:
+    name: Mermaid rendering / ${{ matrix.os }}
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 15
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest]
+    steps:
+      - uses: actions/checkout@v7
+      - uses: pnpm/action-setup@v4
+      - uses: actions/setup-node@v7
+        with:
+          node-version: '22'
+          cache: 'pnpm'
+      - run: pnpm install --frozen-lockfile
+      - name: Install isolated browser review tools
+        shell: bash
+        run: |
+          npm install --prefix "$RUNNER_TEMP/mermaid-review-tools" --no-package-lock --ignore-scripts playwright@1.55.0
+          node "$RUNNER_TEMP/mermaid-review-tools/node_modules/playwright/cli.js" install --with-deps chromium
+      - name: Verify production diagrams and native macOS WKWebView
+        run: pnpm test:mermaid
+        env:
+          PLAYWRIGHT_MODULE: ${{ runner.temp }}/mermaid-review-tools/node_modules/playwright/index.mjs
+          UI_REVIEW_OUTPUT: ${{ runner.temp }}/mermaid-render-evidence
+      - name: Preserve diagram screenshots and geometry
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: mermaid-render-${{ matrix.os }}
+          # Preserve review assets without uploading the large Swift module cache.
+          path: |
+            ${{ runner.temp }}/mermaid-render-evidence/*.png
+            ${{ runner.temp }}/mermaid-render-evidence/*.svg
+            ${{ runner.temp }}/mermaid-render-evidence/*geometry*.json
+          if-no-files-found: ignore
+
   rust:
     runs-on: ubuntu-24.04
     steps:

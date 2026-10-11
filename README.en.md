@@ -98,6 +98,7 @@ See the [automation platform and security guide](docs/automation-platform-suppor
 | --- | --- |
 | `pnpm tauri dev` | Start the full desktop app, preparing Theia and the Office Worker automatically. |
 | `pnpm test` | Run frontend Vitest tests. |
+| `pnpm test:mermaid` | Verify actual diagram rendering, wrapping, preview, copy, download and failure recovery; also test native WKWebView on macOS. |
 | `pnpm build` | Type-check TypeScript and build the production frontend. |
 | `pnpm office:test` | Verify the built-in document generator. |
 | `cargo test --locked --manifest-path src-tauri/Cargo.toml --lib --tests -j 2` | Run Rust unit and integration tests. |
@@ -106,6 +107,8 @@ See the [automation platform and security guide](docs/automation-platform-suppor
 | `pnpm dist:mac` / `pnpm dist:win` | Build an installer on the corresponding platform; production releases require platform signing. |
 
 See the [desktop release guide](docs/desktop-release.en.md) for packaging.
+
+Diagram checks reuse Theia's optional Playwright installation, or accept `PLAYWRIGHT_MODULE` pointing to an independently installed Playwright `index.mjs`. Browser tools are used only for development checks. The checks use an ephemeral local port and the production SVG image to verify text and node bounds, long circular labels, explicit line breaks, multiline Markdown, tree connections, configuration isolation between diagram kinds, preview, source, copy, download, and failure recovery. Set `CHROME_BIN` to select Chromium and `UI_REVIEW_OUTPUT` to choose the screenshot and geometry directory. Native WKWebView checks on macOS require Xcode Command Line Tools and cover the same label boundaries and configuration isolation. CI runs these checks on Windows, macOS, and Linux.
 
 ## Contributing
 

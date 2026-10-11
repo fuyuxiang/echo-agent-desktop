@@ -67,5 +67,5 @@ describe("Mermaid 独立 SVG", () => {
       expect(xml.documentElement.textContent).toContain(label);
     }
     expect(xml.querySelector("style")?.textContent).toContain("PingFang SC");
-  });
+  }, 15_000);
 });

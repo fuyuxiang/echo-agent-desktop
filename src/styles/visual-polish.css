@@ -3168,9 +3168,11 @@ button,
 }
 
 @media (prefers-reduced-motion: reduce) {
-  *,
-  *::before,
-  *::after {
+  /* Mermaid measures transient HTML/SVG in its own offscreen scope. Nonzero
+     transition durations there can capture an intermediate font or shape. */
+  *:not([data-md-mermaid-scope], [data-md-mermaid-scope] *),
+  *:not([data-md-mermaid-scope], [data-md-mermaid-scope] *)::before,
+  *:not([data-md-mermaid-scope], [data-md-mermaid-scope] *)::after {
     scroll-behavior: auto !important;
     transition-duration: 0.01ms !important;
     animation-duration: 0.01ms !important;

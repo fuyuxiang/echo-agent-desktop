@@ -50,4 +50,8 @@ describe("Measured Mermaid mindmap layout", () => {
       expect(Math.abs(first.x - second.x) >= width + 20 || Math.abs(first.y - second.y) >= height + 20).toBe(true);
     }
   });
+
+  it.each([NaN, Infinity, -1, 0])("rejects invalid dimensions (%s) before they corrupt the viewBox", (width) => {
+    expect(() => layoutMindmapTree([{ id: "root", width, height: 48 }], [])).toThrow("节点尺寸无效");
+  });
 });

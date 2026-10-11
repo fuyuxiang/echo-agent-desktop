@@ -98,6 +98,7 @@ EchoAgent 使用 React 18 构建界面，Tauri 2 与 Rust 负责桌面能力、�
 | --- | --- |
 | `pnpm tauri dev` | 启动完整桌面应用，并自动准备 Theia 与 Office Worker。 |
 | `pnpm test` | 运行前端 Vitest 测试。 |
+| `pnpm test:mermaid` | 验证真实图表渲染、换行、预览、复制、下载及失败恢复；macOS 同时检查原生 WKWebView。 |
 | `pnpm build` | TypeScript 类型检查与前端生产构建。 |
 | `pnpm office:test` | 验证内置文档生成器。 |
 | `cargo test --locked --manifest-path src-tauri/Cargo.toml --lib --tests -j 2` | 运行 Rust 单元与集成测试。 |
@@ -106,6 +107,8 @@ EchoAgent 使用 React 18 构建界面，Tauri 2 与 Rust 负责桌面能力、�
 | `pnpm dist:mac` / `pnpm dist:win` | 在对应平台构建发行安装包；正式发行需平台签名。 |
 
 发行步骤见 [桌面发行说明](docs/desktop-release.md)。
+
+图表验收复用 Theia 的可选 Playwright 安装，也可通过 `PLAYWRIGHT_MODULE` 指向独立安装的 Playwright `index.mjs`。浏览器工具仅用于开发验证。验收使用随机本地端口和实际生产 SVG 图片，检查文字与节点边界、长圆形标签、显式换行、Markdown 多行、树连接、图表类型切换后的配置隔离，以及预览、源码、复制、下载和失败恢复。可用 `CHROME_BIN` 指定 Chromium 可执行文件、`UI_REVIEW_OUTPUT` 指定截图与几何数据目录；macOS 需要 Xcode Command Line Tools，原生 WKWebView 也会检查这些标签边界及配置隔离。CI 在 Windows、macOS 和 Linux 上运行该检查。
 
 ## 参与贡献
 

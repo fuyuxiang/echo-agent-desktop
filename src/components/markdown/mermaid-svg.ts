@@ -6,6 +6,8 @@
  */
 export type MermaidDiagramKind = "mindmap" | "flowchart" | "other";
 
+export const MINDMAP_LABEL_MAX_WIDTH = 240;
+
 export function detectMermaidDiagramKind(source: string): MermaidDiagramKind {
   const firstLine = source.trimStart()
     .replace(/^---\s*\r?\n[\s\S]*?\r?\n---\s*(?:\r?\n|$)/u, "")
@@ -31,6 +33,13 @@ export function createMermaidConfig(
   protectedKeys.add("securityLevel");
   protectedKeys.add("fontFamily");
   protectedKeys.add("useMaxWidth");
+  if (kind === "mindmap") {
+    // The layout and its embedded label CSS form one measurement contract.
+    // Replacing either through an init directive would undo wrapping before
+    // shape sizing, or make the exported image differ from the measured DOM.
+    protectedKeys.add("layout");
+    protectedKeys.add("themeCSS");
+  }
 
   return {
     startOnLoad: false,
@@ -50,7 +59,7 @@ export function createMermaidConfig(
     },
     mindmap: {
       useMaxWidth: false,
-      maxNodeWidth: 240,
+      maxNodeWidth: MINDMAP_LABEL_MAX_WIDTH,
       padding: 12,
     },
   };
@@ -80,7 +89,13 @@ function createMindmapTheme(theme: "light" | "dark") {
     themeCSS: accents.map((color, index) => `.section-edge-${index}{stroke:${color};}
       .mindmap-node.section-${index} rect,.mindmap-node.section-${index} path{stroke:${color};stroke-width:1px;}`)
       .join("\n") + `\n.edge{stroke-width:1.8px;}.edge-depth-1{stroke-width:3px;}
-      .section-root .nodeLabel{font-weight:600;}`,
+      .section-root .nodeLabel{font-weight:600;}
+      /* This must be embedded in the SVG, and active before insertNode measures
+         the label. Do not use the mixed-case foreignObject type in selectors:
+         Mermaid's sanitizer lowercases it, which fails in standalone XML. */
+      .nodes .label div{display:inline-block!important;width:auto!important;
+        max-width:${MINDMAP_LABEL_MAX_WIDTH}px!important;white-space:pre-wrap!important;
+        overflow-wrap:anywhere!important;word-break:normal!important;text-align:center!important;}`,
   };
 }
 
@@ -124,7 +139,53 @@ export function normalizeStandaloneMermaidSvg(svg: string): string {
       : attributes.replace(styleMatch[0], "");
   }
 
-  return svg.replace(root[0], `<svg${attributes}>`);
+  const normalized = svg.replace(root[0], `<svg${attributes}>`);
+  return /\bclass\s*=\s*["'][^"']*\bmindmapDiagram\b/iu.test(attributes)
+    ? padMindmapLabelBoxes(normalized)
+    : normalized;
+}
+
+function padMindmapLabelBoxes(svg: string): string {
+  // Mermaid sanitizes its SVG as HTML. XHTML labels can therefore contain
+  // HTML void elements such as <br> rather than XML's <br/>. Serialize the
+  // same inert HTML/SVG tree used for measurement before decoding it as an
+  // image; a text replacement would also change escaped code or CSS strings.
+  const template = document.createElement("template");
+  template.innerHTML = svg;
+  const root = template.content.firstElementChild;
+  if (root?.localName !== "svg" || root.namespaceURI !== "http://www.w3.org/2000/svg"
+    || template.content.childElementCount !== 1) {
+    throw new Error("图表生成了无效的 SVG，请检查图表源码");
+  }
+  // HTML parsing treats xmlns on XHTML elements as an ordinary attribute.
+  // XMLSerializer supplies their actual namespace; retaining the ordinary
+  // declaration can produce duplicate xmlns attributes (notably in jsdom).
+  for (const element of [root, ...root.querySelectorAll("*")]) {
+    const namespace = element.getAttributeNode("xmlns");
+    if (namespace && namespace.namespaceURI !== "http://www.w3.org/2000/xmlns/") {
+      element.removeAttribute("xmlns");
+    }
+  }
+  const xml = new DOMParser().parseFromString(new XMLSerializer().serializeToString(root), "image/svg+xml");
+  if (xml.querySelector("parsererror")) throw new Error("图表生成了无效的 SVG，请检查图表源码");
+  for (const box of xml.querySelectorAll(".nodes .label > foreignObject")) {
+    if (box.hasAttribute("data-md-label-padding")) continue;
+    const width = Number(box.getAttribute("width"));
+    const height = Number(box.getAttribute("height"));
+    if (!Number.isFinite(width) || !Number.isFinite(height) || width < 0 || height < 0) {
+      throw new Error("图表标签尺寸无效，请检查图表源码");
+    }
+    // Empty labels are valid. Leave their zero-size box alone.
+    if (!width || !height) continue;
+    const slack = Math.max(8, Math.ceil(width * 0.06));
+    box.setAttribute("width", formatNumber(width + slack));
+    box.setAttribute("height", formatNumber(Math.ceil(height) + 2));
+    box.setAttribute("data-md-label-padding", String(slack));
+    // Preserve the label's original transform and natural content width.
+    // Padding the clipping viewport after layout must not move the text or
+    // enlarge the card, especially for short identifiers.
+  }
+  return new XMLSerializer().serializeToString(xml);
 }
 
 function formatNumber(value: number): string {
