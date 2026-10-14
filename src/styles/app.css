@@ -6577,9 +6577,9 @@ button.diff__path {
 }
 .meeting-primary { color: white; border-color: var(--echo-accent); background: var(--echo-accent); }
 .meeting-primary:hover:not(:disabled) { filter: brightness(1.06); }
-.meeting-secondary:hover:not(:disabled),.meeting-detail__actions button:hover,.meeting-content-toolbar button:hover { background: var(--echo-bg-hover); }
+.meeting-secondary:hover:not(:disabled),.meeting-detail__actions button:hover:not(:disabled),.meeting-content-toolbar button:hover:not(:disabled) { background: var(--echo-bg-hover); }
 .meeting-danger,.meeting-detail__actions .is-danger { color: #d44; }
-.meeting-primary:disabled,.meeting-secondary:disabled,.meeting-danger:disabled,.meeting-detail__actions button:disabled { opacity: .48; cursor: not-allowed; }
+.meeting-primary:disabled,.meeting-secondary:disabled,.meeting-danger:disabled,.meeting-detail__actions button:disabled,.meeting-content-toolbar button:disabled,.meeting-draft-notice button:disabled { opacity: .48; cursor: not-allowed; }
 .meeting-recorder {
   margin: 0 32px 18px;
   padding: 13px 14px;
@@ -6637,7 +6637,8 @@ button.diff__path {
 .meeting-tabs button span { margin-left: 3px; color: var(--echo-text-tertiary); }
 .meeting-tab-content { min-height: 0; flex: 1; overflow-y: auto; }
 .meeting-minutes,.meeting-transcript { max-width: 920px; margin: 0 auto; padding: 18px 26px 50px; }
-.meeting-content-toolbar { min-height: 34px; margin-bottom: 14px; display: flex; justify-content: flex-end; align-items: center; gap: 6px; }
+.meeting-content-toolbar { min-height: 34px; margin-bottom: 14px; display: flex; flex-wrap: wrap; justify-content: flex-end; align-items: center; gap: 6px; }
+.meeting-content-toolbar > button { flex-shrink: 0; }
 .meeting-content-toolbar > span { margin-right: auto; color: var(--echo-text-tertiary); font-size: 0.6875rem; }
 .meeting-transcript__rows { display: grid; gap: 8px; }
 .meeting-transcript__row { display: grid; grid-template-columns: 72px 100px minmax(0, 1fr); gap: 8px; align-items: start; padding: 9px; border: 1px solid transparent; border-radius: 9px; }
@@ -15626,6 +15627,11 @@ body:has([aria-modal="true"]) .global-tooltip:not(.global-tooltip--dialog) {
 
 .meeting-minutes__editor textarea { box-sizing: border-box; display: block; width: 100%; margin-bottom: 12px; padding: 12px; resize: vertical; font: inherit; color: var(--echo-text-primary); background: var(--echo-bg-primary); border: 1px solid var(--echo-border); border-radius: 8px; }
 .meeting-minutes__editor > button { margin-right: 10px; }
+.meeting-draft-notice { margin: 0 22px 14px; padding: 12px 14px; border: 1px solid var(--echo-border); border-radius: 10px; background: var(--echo-bg-secondary); font-size: 0.75rem; }
+.meeting-draft-notice p { margin: 0 0 10px; color: var(--echo-text-primary); line-height: 1.6; }
+.meeting-draft-notice > div { display: flex; flex-wrap: wrap; gap: 8px; }
+.meeting-draft-notice button { padding: 6px 10px; border: 1px solid var(--echo-border); border-radius: 6px; color: var(--echo-text-primary); background: var(--echo-bg-primary); }
+.meeting-draft-hint { margin: 8px 0 12px; color: var(--echo-text-secondary); font-size: 0.75rem; }
 .meeting-processing-model { flex-wrap: wrap; gap: 8px; }
 .meeting-processing-model label { display: grid; gap: 6px; width: min(100%, 320px); font-size: .75rem; }
 .meeting-processing-model select { min-width: 0; width: 100%; height: 36px; padding: 0 10px; color: var(--echo-text-primary); background: var(--echo-bg-primary); border: 1px solid var(--echo-border); border-radius: 8px; }

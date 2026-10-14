@@ -66,6 +66,11 @@ export interface MeetingRecord {
   error?: string;
 }
 
+export interface MeetingEditBase {
+  transcript: TranscriptSegment[];
+  minutes: string | null;
+}
+
 export function meetingCreate(title: string, modelId: string, providerId: string, captureSource: RecordingSource = "microphone"): Promise<MeetingRecord> {
   return invoke("meeting_create", { title, modelId, providerId, captureSource });
 }
@@ -146,13 +151,14 @@ export function meetingRegenerateMinutes(meetingId: string, binding?: MeetingMod
 
 export function meetingUpdate(
   meetingId: string,
-  update: { title?: string; transcript?: TranscriptSegment[]; minutes?: string },
+  update: { title?: string; transcript?: TranscriptSegment[]; minutes?: string; expectedContent?: MeetingEditBase },
 ): Promise<MeetingRecord> {
   return invoke("meeting_update", {
     meetingId,
     title: update.title ?? null,
     transcript: update.transcript ?? null,
     minutes: update.minutes ?? null,
+    expectedContent: update.expectedContent ?? null,
   });
 }
 
@@ -219,6 +225,9 @@ class MeetingRecorder {
   private nativePoll: number | null = null;
   private nativePollBusy = false;
   private starting = false;
+  private startOperation: Promise<MeetingRecord> | null = null;
+  private startAttempt: { cancelled: boolean } | null = null;
+  private exitPreparing = false;
   private stopOperation: Promise<MeetingRecord> | null = null;
   private pauseOperation: Promise<void> | null = null;
   private snapshot: RecorderSnapshot = {
@@ -246,34 +255,59 @@ class MeetingRecorder {
     for (const listener of this.listeners) listener(this.snapshot);
   }
 
-  async start(title: string, modelId: string, providerId: string, source: RecordingSource = "microphone"): Promise<MeetingRecord> {
-    if (this.snapshot.active || this.starting) throw new Error("已有会议正在录音，请先结束当前录音");
+  start(title: string, modelId: string, providerId: string, source: RecordingSource = "microphone"): Promise<MeetingRecord> {
+    if (this.exitPreparing) return Promise.reject(new Error("应用正在准备退出，暂不能开始录音"));
+    if (this.snapshot.active || this.starting || this.stopOperation) return Promise.reject(new Error("已有会议正在录音，请先结束当前录音"));
+    const attempt = { cancelled: false };
+    this.startAttempt = attempt;
     this.starting = true;
-    this.publish({ error: null });
-    try {
-      // A connection may have changed since the panel's readiness check.
-      await meetingCheckConnection(modelId, providerId);
-      if (source !== "microphone") {
-        let meeting: MeetingRecord | null = null;
-        try {
-          meeting = await meetingCreate(title, modelId, providerId, source);
-          const status = await meetingCaptureStart(meeting.id, source);
-          this.publish({ meeting, active: true, paused: status.paused, level: status.level, error: status.error ?? null, source, pendingSave: status.pendingSave ?? false });
-          this.startNativePolling();
-          return meeting;
-        } catch (error) {
-          if (meeting) await meetingDelete(meeting.id).catch(() => undefined);
-          throw error;
-        }
-      }
-      if (!navigator.mediaDevices?.getUserMedia) throw new Error("当前系统不支持麦克风录音");
-      return await this.startMicrophone(title, modelId, providerId);
-    } finally {
+    this.startOperation = this.startRecording(title, modelId, providerId, source, attempt).finally(() => {
       this.starting = false;
-    }
+      this.startOperation = null;
+      this.startAttempt = null;
+    });
+    return this.startOperation;
   }
 
-  private async startMicrophone(title: string, modelId: string, providerId: string): Promise<MeetingRecord> {
+  /** Freeze admission before inspecting the snapshot, then settle any startup. */
+  async prepareForExit(): Promise<void> {
+    this.exitPreparing = true;
+    if (this.startAttempt) this.startAttempt.cancelled = true;
+    await this.startOperation?.catch(() => undefined);
+  }
+
+  resumeAfterExitFailure(): void {
+    this.exitPreparing = false;
+  }
+
+  private ensureStartAllowed(attempt: { cancelled: boolean }): void {
+    if (attempt.cancelled || this.exitPreparing) throw new Error("录音启动已取消：应用正在准备退出");
+  }
+
+  private async startRecording(title: string, modelId: string, providerId: string, source: RecordingSource, attempt: { cancelled: boolean }): Promise<MeetingRecord> {
+    this.publish({ error: null });
+    // A connection may have changed since the panel's readiness check.
+    await meetingCheckConnection(modelId, providerId);
+    this.ensureStartAllowed(attempt);
+    if (source !== "microphone") {
+      let meeting: MeetingRecord | null = null;
+      try {
+        meeting = await meetingCreate(title, modelId, providerId, source);
+        this.ensureStartAllowed(attempt);
+        const status = await meetingCaptureStart(meeting.id, source);
+        this.publish({ meeting, active: true, paused: status.paused, level: status.level, error: status.error ?? null, source, pendingSave: status.pendingSave ?? false });
+        this.startNativePolling();
+        return meeting;
+      } catch (error) {
+        if (meeting) await meetingDelete(meeting.id).catch(() => undefined);
+        throw error;
+      }
+    }
+    if (!navigator.mediaDevices?.getUserMedia) throw new Error("当前系统不支持麦克风录音");
+    return this.startMicrophone(title, modelId, providerId, attempt);
+  }
+
+  private async startMicrophone(title: string, modelId: string, providerId: string, attempt: { cancelled: boolean }): Promise<MeetingRecord> {
     const stream = await navigator.mediaDevices.getUserMedia({
       audio: {
         channelCount: 1,
@@ -284,7 +318,9 @@ class MeetingRecorder {
     });
     let meeting: MeetingRecord | null = null;
     try {
+      this.ensureStartAllowed(attempt);
       meeting = await meetingCreate(title, modelId, providerId, "microphone");
+      this.ensureStartAllowed(attempt);
       const context = new AudioContext();
       const source = context.createMediaStreamSource(stream);
       // ScriptProcessor remains the most consistently available PCM callback
@@ -316,10 +352,11 @@ class MeetingRecorder {
   }
 
   async syncNative(): Promise<void> {
-    if (this.snapshot.active || this.starting) return;
+    if (this.snapshot.active || this.starting || this.exitPreparing) return;
     const status = await meetingCaptureStatus();
     if (!status) return;
     const meeting = await meetingGet(status.meetingId);
+    if (this.snapshot.active || this.starting || this.exitPreparing) return;
     const source = meeting.captureSource === "both" ? "both" : "system";
     this.publish({ meeting, active: true, paused: status.paused, level: status.level, error: status.error ?? null, source, pendingSave: status.pendingSave ?? false });
     this.startNativePolling();
@@ -447,6 +484,7 @@ class MeetingRecorder {
     // capture or race a pending disk write.
     this.stopOperation ??= Promise.resolve()
       .then(async () => {
+        await this.startOperation?.catch(() => undefined);
         if (this.pauseOperation) await this.pauseOperation.catch(() => undefined);
         return this.finishRecording();
       })

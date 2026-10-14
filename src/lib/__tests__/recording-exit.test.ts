@@ -1,5 +1,5 @@
 import { beforeEach, expect, it, vi } from "vitest";
-vi.mock("../meeting-minutes", () => ({ meetingRecorder: { current: vi.fn(), stop: vi.fn() } }));
+vi.mock("../meeting-minutes", () => ({ meetingRecorder: { current: vi.fn(), stop: vi.fn(), prepareForExit: vi.fn(), resumeAfterExitFailure: vi.fn() } }));
 vi.mock("@tauri-apps/api/core", () => ({ invoke: vi.fn() }));
 import { invoke } from "@tauri-apps/api/core";
 import { meetingRecorder } from "../meeting-minutes";
@@ -53,9 +53,7 @@ it("超时请求的迟到保存和错误不影响下一次退出请求", async (
   expect(preparing).toHaveBeenLastCalledWith(true);
   exit.prepare({ requestId: "old" }, true);
   resolveSecond({} as never);
-  await Promise.resolve();
-  await Promise.resolve();
-  expect(invoke).toHaveBeenCalledWith("desktop_exit_prepared", { requestId: "new", error: null });
+  await vi.waitFor(() => expect(invoke).toHaveBeenCalledWith("desktop_exit_prepared", { requestId: "new", error: null }));
 });
 it("已保存阶段的重挂载快照不重复停止录音", () => {
   const preparing = vi.fn();

@@ -94,6 +94,42 @@ describe("OrganizationMemoryPanel", () => {
     expect(onStartConversation).toHaveBeenCalledOnce();
   });
 
+  it("原生登录事件先于 IPC 返回时仍加载工作区及写入范围", async () => {
+    const signedIn = await api.orgSession();
+    api.orgSession.mockResolvedValue({ loggedIn: false, serverUrl: signedIn.serverUrl, username: "alice" });
+    let completeLogin!: (session: typeof signedIn) => void;
+    api.orgLogin.mockReturnValue(new Promise((resolve) => { completeLogin = resolve; }));
+    render(<OrganizationMemoryPanel />);
+    await screen.findByLabelText("密码");
+    fireEvent.change(screen.getByLabelText("密码"), { target: { value: "test-password" } });
+    fireEvent.click(screen.getByRole("button", { name: "安全登录" }));
+    act(() => useOrgSessionStore.getState().setSession(signedIn));
+    await waitFor(() => expect(api.orgListDocuments).toHaveBeenCalled());
+    await act(async () => completeLogin(signedIn));
+    fireEvent.click(screen.getByRole("button", { name: /^文档/ }));
+    expect(await screen.findByText("团队文档")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "上传文档" })).toBeEnabled();
+  });
+
+  it("登录返回前已退出时，迟到的成功结果不能重新登录或恢复旧文档", async () => {
+    const signedIn = await api.orgSession();
+    api.orgSession.mockResolvedValue({ loggedIn: false, serverUrl: signedIn.serverUrl, username: "alice" });
+    let completeLogin!: (session: typeof signedIn) => void;
+    api.orgLogin.mockReturnValue(new Promise((resolve) => { completeLogin = resolve; }));
+    render(<OrganizationMemoryPanel />);
+    await screen.findByLabelText("密码");
+    fireEvent.change(screen.getByLabelText("密码"), { target: { value: "test-password" } });
+    fireEvent.click(screen.getByRole("button", { name: "安全登录" }));
+    act(() => {
+      useOrgSessionStore.getState().setSession(signedIn);
+      useOrgSessionStore.getState().clearSession();
+    });
+    await act(async () => completeLogin(signedIn));
+    expect(await screen.findByLabelText("密码")).toBeInTheDocument();
+    expect(screen.queryByText("团队文档")).toBeNull();
+    expect(useOrgSessionStore.getState().session?.loggedIn).toBe(false);
+  });
+
   it("账号切换后丢弃旧账号的迟到列表和预览", async () => {
     let resolvePreview!: (value: { kind: "text"; content: string }) => void;
     api.orgPreviewDocument.mockReturnValue(new Promise((resolve) => { resolvePreview = resolve; }));

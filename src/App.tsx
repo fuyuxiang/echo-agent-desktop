@@ -968,6 +968,9 @@ function Shell() {
           },
           onAgentDied: ({ reason }) => {
             console.error('[EchoAgent] Agent thread died:', reason);
+            // A replacement Runtime has no loaded sessions, even though the
+            // renderer retains their transcripts and catalog entries.
+            runtimeRecoveryRequested.current = true;
             const message = `AI 引擎异常退出：${reason}。可以重试初始化，已有会话会保留。`;
             setInitError(message);
             enqueueToast(`⚠️ ${message}`, [], 8000);
@@ -1056,6 +1059,8 @@ function Shell() {
             if (sessionsStore.getState().currentSessionId === entry.sessionId && !sessionsStore.getState().deletedSessionIds.includes(entry.sessionId)) {
               sessionsStore.getState().upsert({ sessionId: entry.sessionId, currentModelId: loadedModel ?? entry.currentModelId });
             }
+          } else if (sessionId && !sessionsStore.getState().deletedSessionIds.includes(sessionId)) {
+            throw new Error("无法确定当前会话的工作目录，请从任务列表重新打开会话后重试。");
           }
           runtimeRecoveryRequested.current = false;
           setInit(result);

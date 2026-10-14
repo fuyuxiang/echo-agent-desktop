@@ -3,7 +3,7 @@
 //! Audio is normalized to mono 16 kHz PCM WAV and split into bounded seven
 //! minute requests.  API credentials never leave the native process.
 
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::fs::{self, File, OpenOptions};
 use std::io::{BufReader, BufWriter, Read, Seek, SeekFrom, Write};
 use std::path::{Path, PathBuf};
@@ -66,7 +66,7 @@ fn is_job_active(meeting_id: &str) -> Result<bool, String> {
         .map_err(|_| "会议任务状态不可用，请重启应用后重试".to_string())
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct TranscriptSegment {
     pub id: usize,
@@ -74,6 +74,20 @@ pub struct TranscriptSegment {
     pub end: f64,
     pub speaker: String,
     pub text: String,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct MeetingEditBase {
+    transcript: Vec<TranscriptSegment>,
+    minutes: Option<String>,
+}
+
+fn check_edit_base(record: &MeetingRecord, base: &MeetingEditBase) -> Result<(), String> {
+    if record.transcript != base.transcript || record.minutes != base.minutes {
+        return Err("会议内容已更新，请刷新后合并校对再保存；当前修改尚未覆盖已保存内容".into());
+    }
+    Ok(())
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -730,9 +744,18 @@ async fn transcribe_chunk(
     serde_json::from_slice(&bytes).map_err(|error| format!("解析转写服务响应失败：{error}"))
 }
 
-fn normalize_transcript(chunks: &[(MeetingChunk, AsrResponse)]) -> Vec<TranscriptSegment> {
+fn normalize_transcript(
+    chunks: &[(MeetingChunk, AsrResponse)],
+    saved: &[TranscriptSegment],
+) -> Vec<TranscriptSegment> {
     let mut output = Vec::new();
     let mut last_end = 0.0f64;
+    // Cached ASR ranges stay stable across retries, unlike sequential IDs.
+    // Preserve saved corrections even if a recovered earlier chunk overlaps.
+    let mut corrections: HashMap<_, _> = saved
+        .iter()
+        .map(|segment| ((segment.start.to_bits(), segment.end.to_bits()), segment))
+        .collect();
     for (chunk, response) in chunks {
         let fallback = if response.segments.is_empty() && !response.text.trim().is_empty() {
             vec![AsrSegment {
@@ -747,18 +770,23 @@ fn normalize_transcript(chunks: &[(MeetingChunk, AsrResponse)]) -> Vec<Transcrip
         for segment in response.segments.iter().chain(fallback.iter()) {
             let start = chunk.start + segment.start;
             let end = chunk.start + segment.end;
-            // A two-second overlap protects words at a cut. Fully-contained
-            // duplicates are discarded; partially overlapping speech remains
-            // editable rather than being silently truncated.
-            if end <= last_end + 0.05 || segment.text.trim().is_empty() {
+            let correction = corrections.remove(&(start.to_bits(), end.to_bits()));
+            // A two-second overlap protects words at a cut. Discard contained
+            // ASR duplicates unless they carry saved corrections. Overlapping
+            // speech remains editable rather than being silently truncated.
+            if (end <= last_end + 0.05 && correction.is_none()) || segment.text.trim().is_empty() {
                 continue;
             }
             output.push(TranscriptSegment {
                 id: output.len(),
                 start,
                 end,
-                speaker: segment.speaker.clone().unwrap_or_else(|| "S1".into()),
-                text: segment.text.trim().to_string(),
+                speaker: correction
+                    .map(|saved| saved.speaker.clone())
+                    .unwrap_or_else(|| segment.speaker.clone().unwrap_or_else(|| "S1".into())),
+                text: correction
+                    .map(|saved| saved.text.clone())
+                    .unwrap_or_else(|| segment.text.trim().to_string()),
             });
             last_end = last_end.max(end);
         }
@@ -958,8 +986,8 @@ pub async fn meeting_process(
     let provider = processing_provider(&mut record, model_id, provider_id)?;
     record.status = "transcribing".into();
     record.error = None;
-    record.transcript.clear();
-    record.transcript_text = None;
+    // Keep the last durable transcript while processing; a crash or failure
+    // must not erase saved corrections before a replacement is persisted.
     record.minutes = None;
     let paths = prepare_chunks(&mut record)?;
     save_meeting(&record)?;
@@ -1023,7 +1051,7 @@ pub async fn meeting_process(
         }
     }
     completed.sort_by_key(|(chunk, _)| chunk.index);
-    record.transcript = normalize_transcript(&completed);
+    record.transcript = normalize_transcript(&completed, &record.transcript);
     let transcript = transcript_as_text(&record.transcript);
     record.transcript_text = Some(transcript.clone());
     if let Some(error) = first_error {
@@ -1105,9 +1133,13 @@ pub fn meeting_update(
     title: Option<String>,
     transcript: Option<Vec<TranscriptSegment>>,
     minutes: Option<String>,
+    expected_content: Option<MeetingEditBase>,
 ) -> Result<MeetingRecord, String> {
     let _job = MeetingJobGuard::acquire(&meeting_id)?;
     let mut record = read_meeting(&meeting_id)?;
+    if let Some(base) = expected_content {
+        check_edit_base(&record, &base)?;
+    }
     if let Some(title) = title {
         record.title = safe_title(&title);
     }
@@ -1123,7 +1155,18 @@ pub fn meeting_update(
         record.transcript = transcript;
         record.transcript_text = Some(transcript_as_text(&record.transcript));
         record.minutes = None;
-        record.status = "transcribed".into();
+        record.status = if record.status == "partial"
+            || record.status == "transcribing"
+            || record
+                .chunks
+                .iter()
+                .any(|chunk| chunk.status != "completed")
+        {
+            "partial"
+        } else {
+            "transcribed"
+        }
+        .into();
     }
     if let Some(minutes) = minutes {
         if minutes.trim().is_empty() || minutes.len() > 2 * 1024 * 1024 {
@@ -1356,6 +1399,42 @@ mod tests {
     }
 
     #[test]
+    fn saved_corrections_survive_recovered_earlier_and_overlapping_chunks() {
+        let saved = vec![TranscriptSegment {
+            id: 0,
+            start: 1.0,
+            end: 2.0,
+            speaker: "张三".into(),
+            text: "已保存的人工校对".into(),
+        }];
+        let chunk = |index, start, end| MeetingChunk {
+            index,
+            start,
+            end,
+            status: "completed".into(),
+            trace_id: None,
+            error: None,
+        };
+        let response = |text: &str| AsrResponse {
+            text: text.into(),
+            segments: vec![],
+            trace_id: None,
+        };
+        for prefix_end in [1.0, 3.0] {
+            let chunks = vec![
+                (chunk(0, 0.0, prefix_end), response("新恢复的前段")),
+                (chunk(1, 1.0, 2.0), response("缓存中的未校对原文")),
+            ];
+            let result = normalize_transcript(&chunks, &saved);
+            assert_eq!(result.len(), 2);
+            assert_eq!(result[0].text, "新恢复的前段");
+            assert_eq!(result[1].id, 1);
+            assert_eq!(result[1].text, saved[0].text);
+            assert_eq!(result[1].speaker, saved[0].speaker);
+        }
+    }
+
+    #[test]
     fn edited_minutes_survive_a_native_record_reload() {
         let directory = tempfile::tempdir().unwrap();
         let output = std::process::Command::new(std::env::current_exe().unwrap())
@@ -1384,12 +1463,30 @@ mod tests {
         let record = test_record(meetings_root().join("录音.wav"));
         save_meeting(&record).unwrap();
         let markdown = "# 校对纪要\n\n| 事项 | 负责人 |\n| --- | --- |\n| 验收 | 张三 |";
-        let updated = meeting_update(record.id.clone(), None, None, Some(markdown.into())).unwrap();
+        let updated =
+            meeting_update(record.id.clone(), None, None, Some(markdown.into()), None).unwrap();
         assert_eq!(updated.status, "completed");
         let reloaded = read_meeting(&record.id).unwrap();
         assert_eq!(reloaded.minutes.as_deref(), Some(markdown));
         assert_eq!(export_text(&reloaded, "minutes").unwrap().2, markdown);
-        assert!(meeting_update(record.id.clone(), None, None, Some(" ".into())).is_err());
+        let stale = MeetingEditBase {
+            transcript: record.transcript.clone(),
+            minutes: record.minutes.clone(),
+        };
+        let error = meeting_update(
+            record.id.clone(),
+            None,
+            None,
+            Some("迟到的旧草稿".into()),
+            Some(stale),
+        )
+        .unwrap_err();
+        assert!(error.contains("会议内容已更新"));
+        assert_eq!(
+            read_meeting(&record.id).unwrap().minutes.as_deref(),
+            Some(markdown)
+        );
+        assert!(meeting_update(record.id.clone(), None, None, Some(" ".into()), None).is_err());
         assert_eq!(
             read_meeting(&record.id).unwrap().minutes.as_deref(),
             Some(markdown)
@@ -1555,6 +1652,39 @@ mod tests {
             .contains("completed chunk text"));
         assert!(chunks.join("chunk-0000.json").is_file());
         assert_eq!(saved.chunks[1].status, "failed");
+        let mut corrected = saved.transcript.clone();
+        corrected[0].text = "保存后重试也不能丢失的校对".into();
+        corrected[0].speaker = "张三".into();
+        let edited = meeting_update(
+            saved.id.clone(),
+            None,
+            Some(corrected.clone()),
+            None,
+            Some(MeetingEditBase {
+                transcript: saved.transcript,
+                minutes: saved.minutes,
+            }),
+        )
+        .unwrap();
+        assert_eq!(
+            edited.status, "partial",
+            "saving must keep the retry action available"
+        );
+        fs::set_permissions(&failing_chunk, fs::Permissions::from_mode(0o000)).unwrap();
+        let retry = meeting_process(edited.id.clone(), None, None).await;
+        fs::set_permissions(&failing_chunk, fs::Permissions::from_mode(0o600)).unwrap();
+        assert!(retry.unwrap_err().contains("第 2 段"));
+        assert_eq!(read_meeting(&edited.id).unwrap().transcript, corrected);
+        // A crash can leave every cache complete before the final assembly.
+        // Correcting that interrupted snapshot must still allow assembly retry.
+        let mut interrupted = read_meeting(&edited.id).unwrap();
+        interrupted.status = "transcribing".into();
+        for chunk in &mut interrupted.chunks {
+            chunk.status = "completed".into();
+        }
+        save_meeting(&interrupted).unwrap();
+        let edited = meeting_update(interrupted.id, None, Some(corrected), None, None).unwrap();
+        assert_eq!(edited.status, "partial");
     }
 
     #[test]

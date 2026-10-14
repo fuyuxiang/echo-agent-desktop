@@ -61,6 +61,76 @@ describe("native meeting recorder", () => {
     expect(meetingRecorder.current()).toMatchObject({ active: false, source: null });
   });
 
+  it("退出先等待连接检查结束并取消启动，退出失败后可重新开始录音", async () => {
+    let release!: () => void;
+    const pending = new Promise<void>((resolve) => { release = resolve; });
+    mocks.invoke.mockImplementation(async (command: string) => {
+      if (command === "meeting_check_connection") { await pending; return; }
+      if (command === "meeting_create") return record;
+      if (command === "meeting_capture_start") return { meetingId: record.id, active: true };
+      if (command === "meeting_capture_stop") return { ...record, status: "recorded" };
+    });
+    const { meetingRecorder } = await import("../meeting-minutes");
+    const { saveRecordingBeforeExit } = await import("../recording-exit");
+    const started = meetingRecorder.start(record.title, record.modelId, record.providerId, "both").catch((error) => error);
+    let exitFinished = false;
+    const exit = saveRecordingBeforeExit().then(() => { exitFinished = true; });
+    await Promise.resolve();
+    expect(exitFinished).toBe(false);
+    await expect(meetingRecorder.start(record.title, record.modelId, record.providerId, "both")).rejects.toThrow("正在准备退出");
+    release();
+    expect(await started).toBeInstanceOf(Error);
+    await exit;
+    expect(meetingRecorder.current().active).toBe(false);
+    expect(mocks.invoke.mock.calls.some(([command]) => command === "meeting_capture_start")).toBe(false);
+    meetingRecorder.resumeAfterExitFailure();
+    await meetingRecorder.start(record.title, record.modelId, record.providerId, "both");
+    await meetingRecorder.stop();
+  });
+
+  it("原生采集已发起时，退出等待其启动结果并保存同一录音一次", async () => {
+    let release!: () => void;
+    const pending = new Promise<void>((resolve) => { release = resolve; });
+    mocks.invoke.mockImplementation(async (command: string) => {
+      if (command === "meeting_create") return record;
+      if (command === "meeting_capture_start") { await pending; return { meetingId: record.id, active: true, paused: false }; }
+      if (command === "meeting_capture_stop") return { ...record, status: "recorded", recordedSamples: 160 };
+    });
+    const { meetingRecorder } = await import("../meeting-minutes");
+    const { saveRecordingBeforeExit } = await import("../recording-exit");
+    const started = meetingRecorder.start(record.title, record.modelId, record.providerId, "both");
+    await vi.waitFor(() => expect(mocks.invoke).toHaveBeenCalledWith("meeting_capture_start", expect.anything()));
+    const exit = saveRecordingBeforeExit();
+    release();
+    await Promise.all([started, exit]);
+    expect(meetingRecorder.current()).toMatchObject({ active: false, pendingSave: false });
+    expect(mocks.invoke.mock.calls.filter(([command]) => command === "meeting_capture_stop")).toHaveLength(1);
+  });
+
+  it("麦克风授权迟到时释放设备，退出请求结束后也不复活已取消的启动", async () => {
+    let release!: (stream: MediaStream) => void;
+    const stop = vi.fn();
+    Object.defineProperty(navigator, "mediaDevices", { configurable: true, value: {
+      getUserMedia: vi.fn(() => new Promise<MediaStream>((resolve) => { release = resolve; })),
+    } });
+    const { meetingRecorder } = await import("../meeting-minutes");
+    const { saveRecordingBeforeExit } = await import("../recording-exit");
+    try {
+      const started = meetingRecorder.start(record.title, record.modelId, record.providerId).catch((error) => error);
+      await vi.waitFor(() => expect(release).toBeDefined());
+      const exit = saveRecordingBeforeExit();
+      meetingRecorder.resumeAfterExitFailure();
+      release({ getTracks: () => [{ stop }] } as unknown as MediaStream);
+      expect(await started).toBeInstanceOf(Error);
+      await exit;
+      expect(stop).toHaveBeenCalledOnce();
+      expect(meetingRecorder.current().active).toBe(false);
+      expect(mocks.invoke.mock.calls.some(([command]) => command === "meeting_create")).toBe(false);
+    } finally {
+      Reflect.deleteProperty(navigator, "mediaDevices");
+    }
+  });
+
   it("waits for an in-flight pause before exit finalizes the recording", async () => {
     let release!: () => void;
     const pending = new Promise<void>((resolve) => { release = resolve; });

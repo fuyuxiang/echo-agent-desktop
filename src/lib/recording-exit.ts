@@ -6,6 +6,7 @@ export interface DesktopExitFailure { requestId?: string | null; message: string
 
 /** A stopped empty recording has no buffered data to lose. A failed save does. */
 export async function saveRecordingBeforeExit(): Promise<void> {
+  await meetingRecorder.prepareForExit();
   const snapshot = meetingRecorder.current();
   if (!snapshot.active && !snapshot.pendingSave) return;
   try {
@@ -36,6 +37,7 @@ export function createExitPreparationController(callbacks: {
     }
     if (active) rememberClosed(active);
     active = null;
+    meetingRecorder.resumeAfterExitFailure();
     callbacks.preparing(false);
     callbacks.failed(notice.message);
   };
@@ -53,7 +55,10 @@ export function createExitPreparationController(callbacks: {
     if (active === notice.requestId) return;
     active = notice.requestId;
     callbacks.preparing(true);
-    if (notice.recordingSaved) return;
+    if (notice.recordingSaved) {
+      void meetingRecorder.prepareForExit();
+      return;
+    }
     const id = notice.requestId;
     void saveRecordingBeforeExit().then(
       () => acknowledge(id, null),
@@ -65,6 +70,6 @@ export function createExitPreparationController(callbacks: {
   return {
     prepare,
     fail,
-    dispose: () => { disposed = true; active = null; },
+    dispose: () => { disposed = true; active = null; meetingRecorder.resumeAfterExitFailure(); },
   };
 }

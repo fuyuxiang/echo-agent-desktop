@@ -61,7 +61,7 @@ import {
   type MemoryPromotion,
   type Submission,
 } from "@/lib/org-client";
-import { useOrgSessionStore } from "@/stores/org-session-store";
+import { organizationSessionBoundary, useOrgSessionStore } from "@/stores/org-session-store";
 import { filesystemPickDirectory, filesystemPickFiles } from "@/lib/agent-client";
 import { FilePreview } from "./FilePreview";
 import { useModalFocus } from "@/lib/use-modal-focus";
@@ -213,6 +213,7 @@ export function OrganizationMemoryPanel({
   const [memoryWorkspace, setMemoryWorkspace] = useState("");
   const [memoryValidUntil, setMemoryValidUntil] = useState("");
   const workspaceGeneration = useRef(0);
+  const workspaceLoad = useRef<{ boundary: number; promise: Promise<void> } | null>(null);
   const previewGeneration = useRef(0);
   const currentBoundary = () => useOrgSessionStore.getState().boundaryRevision;
   const isCurrentBoundary = (revision: number) => currentBoundary() === revision;
@@ -224,6 +225,7 @@ export function OrganizationMemoryPanel({
 
   const clearWorkspace = useCallback(() => {
     workspaceGeneration.current += 1;
+    workspaceLoad.current = null;
     previewGeneration.current += 1;
     setScopes([]);
     setSelectedScope("");
@@ -252,6 +254,7 @@ export function OrganizationMemoryPanel({
     setMemoryOutcome("");
     setMemoryWorkspace("");
     setMemoryValidUntil("");
+    setPassword("");
     setTab("overview");
   }, []);
 
@@ -259,54 +262,61 @@ export function OrganizationMemoryPanel({
     if (mirroredSession) setSession(mirroredSession);
   }, [mirroredSession]);
 
-  const loadWorkspace = useCallback(async () => {
+  const loadWorkspace = useCallback((): Promise<void> => {
     const boundary = useOrgSessionStore.getState().boundaryRevision;
+    if (workspaceLoad.current?.boundary === boundary) return workspaceLoad.current.promise;
     const generation = ++workspaceGeneration.current;
     const isCurrent = () => useOrgSessionStore.getState().boundaryRevision === boundary
       && workspaceGeneration.current === generation;
-    const nextScopes = await orgListScopes();
-    if (!isCurrent()) return;
-    const activeScope = nextScopes.some((scope) => scope.id === selectedScopeRef.current)
-      ? selectedScopeRef.current : "";
-    selectedScopeRef.current = activeScope;
-    const [docs, nextSkills, docSubs, skillSubs, nextMemories, promotions] = await Promise.all([
-      orgListDocuments(activeScope || undefined),
-      orgListSkills(),
-      orgDocumentSubmissionsMinePage(),
-      orgSkillSubmissionsMine(),
-      orgListMemories(),
-      orgMemoryPromotionsMine(),
-    ]);
-    if (!isCurrent()) return;
-    setScopes(nextScopes);
-    if (selectedScopeRef.current === activeScope) {
-      setDocuments(docs.items);
-      setDocumentTotal(docs.total);
-      setDocumentPage(1);
-      setSelectedScope(activeScope);
-    }
-    setSkills(nextSkills);
-    setDocumentSubmissions(docSubs.items);
-    setSubmissionTotal(docSubs.total);
-    setSubmissionPage(1);
-    setSkillSubmissions(skillSubs);
-    setMemories(nextMemories);
-    setMemoryPromotions(promotions.filter((item) => item.payloadType === "memory"));
-    setWriteScope((current) => nextScopes.some((scope) => scope.id === current && scope.canPublishDocuments !== false)
-      ? current
-      : nextScopes.find((scope) => scope.kind === "personal")?.id || nextScopes[0]?.id || "");
-    setPublishScope((current) => nextScopes.some((scope) => scope.id === current && scope.kind !== "personal")
-      ? current
-      : nextScopes.find((scope) => scope.kind === "team")?.id || nextScopes.find((scope) => scope.kind === "org")?.id || "");
+    const promise = (async () => {
+      const nextScopes = await orgListScopes();
+      if (!isCurrent()) return;
+      const activeScope = nextScopes.some((scope) => scope.id === selectedScopeRef.current)
+        ? selectedScopeRef.current : "";
+      selectedScopeRef.current = activeScope;
+      const [docs, nextSkills, docSubs, skillSubs, nextMemories, promotions] = await Promise.all([
+        orgListDocuments(activeScope || undefined),
+        orgListSkills(),
+        orgDocumentSubmissionsMinePage(),
+        orgSkillSubmissionsMine(),
+        orgListMemories(),
+        orgMemoryPromotionsMine(),
+      ]);
+      if (!isCurrent()) return;
+      setScopes(nextScopes);
+      if (selectedScopeRef.current === activeScope) {
+        setDocuments(docs.items);
+        setDocumentTotal(docs.total);
+        setDocumentPage(1);
+        setSelectedScope(activeScope);
+      }
+      setSkills(nextSkills);
+      setDocumentSubmissions(docSubs.items);
+      setSubmissionTotal(docSubs.total);
+      setSubmissionPage(1);
+      setSkillSubmissions(skillSubs);
+      setMemories(nextMemories);
+      setMemoryPromotions(promotions.filter((item) => item.payloadType === "memory"));
+      setWriteScope((current) => nextScopes.some((scope) => scope.id === current && scope.canPublishDocuments !== false)
+        ? current
+        : nextScopes.find((scope) => scope.kind === "personal")?.id || nextScopes[0]?.id || "");
+      setPublishScope((current) => nextScopes.some((scope) => scope.id === current && scope.kind !== "personal")
+        ? current
+        : nextScopes.find((scope) => scope.kind === "team")?.id || nextScopes.find((scope) => scope.kind === "org")?.id || "");
+    })().finally(() => {
+      if (workspaceLoad.current?.promise === promise) workspaceLoad.current = null;
+    });
+    workspaceLoad.current = { boundary, promise };
+    return promise;
   }, []);
 
   useEffect(() => useOrgSessionStore.subscribe((next, previous) => {
     if (next.boundaryRevision === previous.boundaryRevision) return;
     clearWorkspace();
     if (!next.session?.loggedIn) setLoading(false);
-    // A native permission/account event can arrive while this page is open.
-    // Initial hydration and explicit login already load their own workspace.
-    if (next.session?.loggedIn && previous.session?.loggedIn) {
+    // Native login events arrive before the login IPC result. Every signed-in
+    // boundary needs a workspace; concurrent callers share its current load.
+    if (next.session?.loggedIn) {
       void loadWorkspace().catch((reason) => {
         if (useOrgSessionStore.getState().boundaryRevision === next.boundaryRevision) {
           setError(String(reason));
@@ -400,7 +410,8 @@ export function OrganizationMemoryPanel({
     setError(null);
     try {
       const next = await orgLogin(serverUrl, username, password);
-      if (!isCurrentBoundary(boundary)) return;
+      if (!isCurrentBoundary(boundary)
+        && organizationSessionBoundary(useOrgSessionStore.getState().session) !== organizationSessionBoundary(next)) return;
       setSession(next);
       mirrorOrgSession(next);
       setPassword("");

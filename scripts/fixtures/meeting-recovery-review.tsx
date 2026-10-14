@@ -12,6 +12,7 @@ import "../../src/styles/form-controls.css";
 
 const query = new URLSearchParams(location.search);
 const scenario = query.get("scenario") ?? "history";
+const draftScenario = scenario.startsWith("draft-");
 localStorage.setItem("echoagent.theme", query.get("theme") ?? "light");
 let record: MeetingRecord = {
   id: "meeting-recovery-review",
@@ -29,6 +30,13 @@ let record: MeetingRecord = {
   transcriptText: scenario === "minutes" ? "已保存的中文转写" : undefined,
   chunks: [],
   error: scenario === "history" ? "原会议连接已被删除，请重新选择会议模型" : undefined,
+};
+if (draftScenario) record = {
+  ...record,
+  modelId: "review/MiniMax-M3", providerId: "review", error: undefined,
+  status: scenario === "draft-recovery" ? "partial" : "completed",
+  transcript: [{ id: 0, start: 30, end: 60, speaker: "说话人1", text: "已经完成的转写段落" }],
+  minutes: scenario === "draft-recovery" ? null : "# 原会议纪要\n\n尚未校对的内容。",
 };
 let nativeCapture = scenario === "pending-save";
 let probes = 0;
@@ -53,11 +61,18 @@ Object.assign(window, {
         case "meeting_job_active": return false;
         case "meeting_check_connection": {
           probes += 1;
-          if (scenario === "minutes" || (args.modelId === "review/MiniMax-M3" && probes === 1)) throw new Error("当前连接没有可用的转写接口，请重试或更换模型");
+          if (scenario === "minutes" || (!draftScenario && args.modelId === "review/MiniMax-M3" && probes === 1)) throw new Error("当前连接没有可用的转写接口，请重试或更换模型");
           return;
         }
         case "meeting_process": {
           record = { ...record, modelId: String(args.modelId), providerId: String(args.providerId) };
+          if (scenario === "draft-recovery") {
+            record = { ...record, status: "completed", transcript: [
+              { id: 0, start: 0, end: 30, speaker: "说话人1", text: "重试恢复的新段落" },
+              { ...record.transcript[0], id: 1 },
+            ], minutes: "# 重试后会议纪要\n\n录音已全部恢复。" };
+            return record;
+          }
           processing += 1;
           if (processing === 1) {
             record = { ...record, status: "partial", error: "转写服务暂时不可用，已完成的分片保存在本机" };
@@ -68,6 +83,17 @@ Object.assign(window, {
         }
         case "meeting_regenerate_minutes": {
           record = { ...record, modelId: String(args.modelId), providerId: String(args.providerId), status: "completed", minutes: "# 现有转写纪要\n\n语音接口不可用时，仍可使用已保存转写生成纪要。", error: undefined };
+          return record;
+        }
+        case "meeting_update": {
+          const base = args.expectedContent as { transcript: MeetingRecord["transcript"]; minutes: string | null };
+          if (!base || JSON.stringify(base.transcript) !== JSON.stringify(record.transcript) || base.minutes !== (record.minutes ?? null)) {
+            throw new Error("会议内容已更新，请刷新后合并校对再保存；当前修改尚未覆盖已保存内容");
+          }
+          record = { ...record,
+            transcript: (args.transcript as MeetingRecord["transcript"] | null) ?? record.transcript,
+            minutes: args.transcript ? null : (args.minutes as string | null) ?? record.minutes,
+          };
           return record;
         }
         case "meeting_capture_stop": {

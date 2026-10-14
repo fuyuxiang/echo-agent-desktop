@@ -38,6 +38,9 @@ vi.mock("@/lib/meeting-minutes", () => ({
 }));
 
 import { MeetingMinutesPanel } from "../MeetingMinutesPanel";
+import { meetingDrafts } from "@/lib/meeting-drafts";
+
+beforeEach(() => meetingDrafts.clear());
 
 const models = [
   { id: "personal/MiniMax-M3", label: "个人 MiniMax", providerId: "personal", providerKind: "custom", source: "personal" as const },
@@ -190,8 +193,112 @@ describe("meeting content preservation", () => {
     fireEvent.change(screen.getByRole("textbox", { name: "编辑会议纪要" }), { target: { value: edited.minutes } });
     mocks.meetingList.mockResolvedValue([edited]);
     fireEvent.click(screen.getByRole("button", { name: "保存纪要" }));
-    await waitFor(() => expect(mocks.meetingUpdate).toHaveBeenCalledWith("historic", { minutes: edited.minutes }));
+    await waitFor(() => expect(mocks.meetingUpdate).toHaveBeenCalledWith("historic", expect.objectContaining({ minutes: edited.minutes,
+      expectedContent: { transcript: historic.transcript, minutes: historic.minutes } })));
     await waitFor(() => expect(screen.queryByRole("textbox", { name: "编辑会议纪要" })).toBeNull());
     expect(screen.getByText("已校对纪要")).toBeInTheDocument();
+  });
+
+  it("重试部分转写后合并新增段落及原校对，并提交完整内容", async () => {
+    const partial = { ...historic, id: "partial-retry", status: "partial", minutes: undefined };
+    const completed = { ...partial, status: "completed", minutes: "# 新纪要", transcript: [
+      ...partial.transcript, { id: 1, start: 1, end: 2, text: "新增转写", speaker: "说话人2" },
+    ] };
+    mocks.meetingList.mockResolvedValue([partial]);
+    mocks.meetingJobActive.mockResolvedValue(false);
+    mocks.meetingProcess.mockImplementationOnce(async () => {
+      mocks.meetingList.mockResolvedValue([completed]); return completed;
+    });
+    mocks.meetingUpdate.mockResolvedValue({ ...completed, minutes: undefined });
+    render(<MeetingMinutesPanel models={models.slice(0, 1)} />);
+    await screen.findByRole("heading", { name: partial.title });
+    await screen.findByText("转写接口已就绪");
+    fireEvent.click(screen.getByRole("button", { name: /完整转写/ }));
+    fireEvent.change(screen.getByRole("textbox", { name: "第 1 段转写" }), { target: { value: "人工校对" } });
+    fireEvent.click(screen.getByRole("button", { name: "开始转写并生成纪要" }));
+    await screen.findByText("新纪要");
+    expect(screen.getByRole("button", { name: "导出 Word" })).toBeDisabled();
+    expect(screen.getByRole("button", { name: "重新生成" })).toBeDisabled();
+    expect(screen.getByRole("button", { name: "编辑纪要" })).toBeDisabled();
+    expect(screen.getByText(/转写校对尚未保存/)).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: /完整转写/ }));
+    expect(screen.getByRole("textbox", { name: "第 1 段转写" })).toHaveValue("人工校对");
+    expect(screen.getByRole("textbox", { name: "第 2 段转写" })).toHaveValue("新增转写");
+    fireEvent.click(screen.getByRole("button", { name: "保存校对" }));
+    await waitFor(() => expect(mocks.meetingUpdate).toHaveBeenCalledWith(partial.id, {
+      transcript: [{ ...completed.transcript[0], text: "人工校对" }, completed.transcript[1]],
+      expectedContent: { transcript: completed.transcript, minutes: completed.minutes },
+    }));
+  });
+
+  it("历史记录已保存纪要但仍有失败分片时继续提供转写重试", async () => {
+    mocks.meetingList.mockResolvedValue([{ ...historic, status: "completed", chunks: [
+      { index: 0, start: 0, end: 1, status: "completed" },
+      { index: 1, start: 1, end: 2, status: "failed", error: "连接中断" },
+    ] }]);
+    render(<MeetingMinutesPanel models={models.slice(0, 1)} />);
+    await screen.findByRole("heading", { name: historic.title });
+    await waitFor(() => expect(screen.getByRole("button", { name: "开始转写并生成纪要" })).toBeEnabled());
+  });
+
+  it("重新生成纪要后显示新预览和草稿冲突，明确选择后才编辑旧草稿", async () => {
+    const original = { ...historic, id: "regenerated-draft" };
+    const regenerated = { ...original, minutes: "# 最新纪要" };
+    mocks.meetingList.mockResolvedValue([original]);
+    mocks.meetingRegenerateMinutes.mockImplementationOnce(async () => {
+      mocks.meetingList.mockResolvedValue([regenerated]); return regenerated;
+    });
+    render(<MeetingMinutesPanel models={models.slice(0, 1)} />);
+    await screen.findByRole("heading", { name: original.title });
+    fireEvent.click(screen.getByRole("button", { name: "编辑纪要" }));
+    fireEvent.change(screen.getByRole("textbox", { name: "编辑会议纪要" }), { target: { value: "旧版人工纪要" } });
+    expect(screen.getByRole("button", { name: "导出 Word" })).toBeDisabled();
+    fireEvent.click(screen.getByRole("button", { name: "返回预览（保留草稿）" }));
+    fireEvent.click(screen.getByRole("button", { name: "重新生成" }));
+    await screen.findByText("最新纪要");
+    expect(screen.getByRole("alert")).toHaveTextContent("原纪要草稿已保留");
+    expect(screen.getByRole("button", { name: "编辑纪要" })).toBeDisabled();
+    fireEvent.click(screen.getByRole("button", { name: "保留原草稿并编辑" }));
+    expect(screen.getByRole("textbox", { name: "编辑会议纪要" })).toHaveValue("旧版人工纪要");
+    fireEvent.click(screen.getByRole("button", { name: "返回预览（保留草稿）" }));
+    expect(screen.getByText("最新纪要")).toBeInTheDocument();
+  });
+
+  it("保存前内容已变化时重新读取并保留冲突草稿，不自动覆盖", async () => {
+    const original = { ...historic, id: "changed-on-save" };
+    const latest = { ...original, transcript: [{ ...historic.transcript[0], text: "最新服务端转写" }] };
+    mocks.meetingList.mockResolvedValue([original]);
+    mocks.meetingUpdate.mockImplementationOnce(async () => {
+      mocks.meetingList.mockResolvedValue([latest]);
+      throw new Error("会议内容已更新，请刷新后合并校对再保存");
+    });
+    render(<MeetingMinutesPanel models={models.slice(0, 1)} />);
+    await screen.findByRole("heading", { name: original.title });
+    fireEvent.click(screen.getByRole("button", { name: /完整转写/ }));
+    fireEvent.change(screen.getByRole("textbox", { name: "第 1 段转写" }), { target: { value: "人工校对" } });
+    fireEvent.click(screen.getByRole("button", { name: "保存校对" }));
+    await screen.findByText(/最新转写与原校对草稿有冲突/);
+    expect(screen.getByRole("button", { name: "保存校对" })).toBeDisabled();
+    expect(screen.getByRole("textbox", { name: "第 1 段转写" })).toHaveValue("人工校对");
+    expect(screen.getByRole("textbox", { name: "第 1 段转写" })).toBeDisabled();
+    fireEvent.click(screen.getByRole("button", { name: "舍弃校对，使用最新转写" }));
+    expect(screen.getByRole("textbox", { name: "第 1 段转写" })).toHaveValue("最新服务端转写");
+    expect(screen.getByRole("textbox", { name: "第 1 段转写" })).toBeEnabled();
+    expect(mocks.meetingUpdate).toHaveBeenCalledTimes(1);
+  });
+
+  it("保存期间锁定校对输入，写入失败后恢复编辑并保留内容", async () => {
+    let failSave!: (error: Error) => void;
+    mocks.meetingUpdate.mockReturnValueOnce(new Promise((_, reject) => { failSave = reject; }));
+    render(<MeetingMinutesPanel models={models.slice(0, 1)} />);
+    await screen.findByRole("heading", { name: historic.title });
+    fireEvent.click(screen.getByRole("button", { name: /完整转写/ }));
+    const input = screen.getByRole("textbox", { name: "第 1 段转写" });
+    fireEvent.change(input, { target: { value: "不能丢失的校对" } });
+    fireEvent.click(screen.getByRole("button", { name: "保存校对" }));
+    expect(input).toBeDisabled();
+    await act(async () => failSave(new Error("磁盘已满")));
+    await waitFor(() => expect(input).toBeEnabled());
+    expect(input).toHaveValue("不能丢失的校对");
   });
 });

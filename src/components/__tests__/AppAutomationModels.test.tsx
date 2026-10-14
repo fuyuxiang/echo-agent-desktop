@@ -9,6 +9,7 @@ vi.mock("@tauri-apps/api/event", () => ({ listen: vi.fn(async () => () => {}) })
 const recorder = vi.hoisted(() => ({
   current: vi.fn(), stop: vi.fn(), subscribe: vi.fn(() => () => {}),
   syncNative: vi.fn(async () => {}), setPaused: vi.fn(async () => {}),
+  prepareForExit: vi.fn(async () => {}), resumeAfterExitFailure: vi.fn(),
 }));
 vi.mock("@/lib/meeting-minutes", async (original) => ({
   ...await original<object>(), meetingRecorder: recorder,
@@ -192,6 +193,39 @@ describe("自动化会话模型同步", () => {
     await screen.findByText("首页");
     expect(client.agentInit).toHaveBeenCalledTimes(2);
     expect(useSessionsStore.getState().independent.some((entry) => entry.sessionId === "auto-1")).toBe(true);
+  });
+
+  it("崩溃恢复先加载当前会话，加载完成后才允许继续发送", async () => {
+    await start();
+    created("model-a");
+    fireEvent.click(screen.getByText("打开自动化"));
+    await waitFor(() => expect(screen.getByText("追问")).toBeEnabled());
+    let finishLoad!: (model: string) => void;
+    vi.mocked(client.agentLoadSession).mockImplementationOnce(() => new Promise((resolve) => { finishLoad = resolve; }));
+    vi.mocked(client.agentListAllSessions).mockResolvedValue([...useSessionsStore.getState().independent]);
+    act(() => handlers.onAgentDied?.({ reason: "isolated crash" }));
+    fireEvent.click(await screen.findByRole("button", { name: "重试初始化" }));
+    await waitFor(() => expect(client.agentLoadSession).toHaveBeenCalledTimes(2));
+    expect(screen.queryByText("追问")).toBeNull();
+    await act(async () => finishLoad("model-a"));
+    await waitFor(() => expect(screen.getByText("追问")).toBeEnabled());
+    fireEvent.click(screen.getByText("追问"));
+    expect(client.agentSend).toHaveBeenCalledWith("auto-1", "继续解释", [], "继续解释", expect.any(String));
+  });
+
+  it("会话恢复失败后保留上下文，并能再次重试恢复", async () => {
+    await start(); created("model-a");
+    fireEvent.click(screen.getByText("打开自动化"));
+    await waitFor(() => expect(screen.getByText("追问")).toBeEnabled());
+    vi.mocked(client.agentListAllSessions).mockResolvedValue([...useSessionsStore.getState().independent]);
+    vi.mocked(client.agentLoadSession).mockRejectedValueOnce(new Error("会话读取暂时失败"));
+    act(() => handlers.onAgentDied?.({ reason: "isolated crash" }));
+    fireEvent.click(await screen.findByRole("button", { name: "重试初始化" }));
+    await screen.findByText(/会话读取暂时失败/);
+    expect(useSessionsStore.getState().currentSessionId).toBe("auto-1");
+    fireEvent.click(screen.getByRole("button", { name: "重试初始化" }));
+    await waitFor(() => expect(screen.getByText("追问")).toBeEnabled());
+    expect(client.agentLoadSession).toHaveBeenCalledTimes(3);
   });
 
   it("定时任务运行事件不会把用户已暂停的会话改回运行中", async () => {
