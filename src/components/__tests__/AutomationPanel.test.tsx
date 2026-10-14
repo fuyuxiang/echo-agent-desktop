@@ -71,12 +71,12 @@ describe("AutomationPanel（截图 1/3 空态）", () => {
     render(<AutomationPanel />);
     expect(screen.getByText("定时任务")).toBeInTheDocument();
     expect(screen.getByText("运行记录")).toBeInTheDocument();
-    await waitFor(() => expect(screen.getByText("创建定时任务，按计划处理重复工作")).toBeInTheDocument());
+    await waitFor(() => expect(screen.getByText("开启你的第一个自动化任务吧")).toBeInTheDocument());
   });
 
   it("定时任务空态：hero 文案 + 添加按钮 + 12 个模板", async () => {
     render(<AutomationPanel />);
-    await waitFor(() => expect(screen.getByText("创建定时任务，按计划处理重复工作")).toBeInTheDocument());
+    await waitFor(() => expect(screen.getByText("开启你的第一个自动化任务吧")).toBeInTheDocument());
     expect(screen.getByText("+ 添加自动化")).toBeInTheDocument();
     expect(screen.getByText("自动化任务模版")).toBeInTheDocument();
     expect(screen.getByText("每日 AI 新闻推送")).toBeInTheDocument();
@@ -95,10 +95,10 @@ describe("AutomationPanel（截图 1/3 空态）", () => {
 
     const alert = await screen.findByRole("alert");
     expect(alert).toHaveTextContent("自动化数据加载失败：快照损坏");
-    expect(screen.queryByText("创建定时任务，按计划处理重复工作")).not.toBeInTheDocument();
+    expect(screen.queryByText("开启你的第一个自动化任务吧")).not.toBeInTheDocument();
 
     fireEvent.click(screen.getByRole("button", { name: "重试" }));
-    expect(await screen.findByText("创建定时任务，按计划处理重复工作")).toBeInTheDocument();
+    expect(await screen.findByText("开启你的第一个自动化任务吧")).toBeInTheDocument();
   });
 
   it("点击「+ 添加自动化」进入表单（截图 2 字段）", async () => {

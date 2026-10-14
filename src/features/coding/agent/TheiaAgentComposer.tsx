@@ -152,7 +152,7 @@ export function TheiaAgentComposer({
                 ? "可写入草稿，验证完成后手动发送…"
                 : streaming
                   ? "可写入草稿，本轮完成后手动发送…"
-                  : "补充开发要求，或描述当前代码需要修改的内容…"}
+                  : "给 Agent 补充要求或让它修改当前代码…"}
           aria-label={task ? "补充开发要求" : "任务描述"}
           disabled={sessionUnavailable || sending}
         />

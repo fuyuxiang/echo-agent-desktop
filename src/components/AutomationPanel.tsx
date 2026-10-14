@@ -976,7 +976,7 @@ export function AutomationPanel({
               <div className="atm-empty-state-icon">
                 <AutomationEmptyAlarmIcon width={48} height={48} />
               </div>
-              <div className="atm-empty-state-text">创建定时任务，按计划处理重复工作</div>
+              <div className="atm-empty-state-text">开启你的第一个自动化任务吧</div>
               <div className="atm-empty-state-actions">
                 <button type="button" className="atm-empty-action-btn" onClick={() => handleCreate()}>
                   + 添加自动化

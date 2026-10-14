@@ -230,7 +230,7 @@ export function RewindBar({
             </div>
           )}
           {!loading && !loadError && points.length === 0 && (
-            <div className="rewind-bar__empty">暂无回溯点。执行任务后，可在这里查看可用的回退记录。</div>
+            <div className="rewind-bar__empty">还没有回溯点，走几步再回头看。</div>
           )}
           <ul className="rewind-bar__timeline">
             {points.map((p) => (

@@ -1273,7 +1273,7 @@ export function Composer({
               : apiReady
               ? sceneTag
                 ? "" // 有操作类型标签时不显示占位文案(匹配 EchoAgent)
-                : placeholder ?? "描述需要完成的任务；输入 @ 引用文件或代码符号，/ 选择技能或指令"
+                : placeholder ?? "想让我帮你完成什么？@ 引用文件或代码符号，/ 选择技能或指令"
               : ""
           }
           onChange={(e) => {
