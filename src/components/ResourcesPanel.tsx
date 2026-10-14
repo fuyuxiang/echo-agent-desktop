@@ -213,7 +213,7 @@ export function ResourcesPanel({ cwd, sessionId, onToast }: ResourcesPanelProps)
 
   const handleFlush = useCallback(async () => {
     if (!sessionId) {
-      onToast?.("立即落盘需要一个已打开的会话");
+      onToast?.("请先打开任务会话，再提取会话摘要");
       return;
     }
     setBusy(true);
@@ -222,7 +222,7 @@ export function ResourcesPanel({ cwd, sessionId, onToast }: ResourcesPanelProps)
       onToast?.(completed ? "提取已执行；若有可复用内容，可在会话摘要中查看" : "本次提取未完成，请稍后重试");
       await latestReload.current();
     } catch (error) {
-      onToast?.(`落盘失败：${errorText(error)}`);
+      onToast?.(`提取摘要失败：${errorText(error)}`);
     } finally {
       setBusy(false);
     }

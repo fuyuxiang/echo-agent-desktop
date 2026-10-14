@@ -192,10 +192,10 @@ export function ProjectDetailView({
     && live.connectors.length === 0
     && !hasInstructionsOnly;
   const projectHeaderAria = hasInstructionsOnly
-    ? `项目「${live.name}」本次使用项目指令`
+    ? `项目「${live.name}」已配置项目指令`
     : hasNoContract
-      ? `项目「${live.name}」本次未配置项目上下文`
-      : `项目「${live.name}」本次使用 ${live.experts.length} 个 Agent、${live.skills.length} 个 Skill、${live.connectors.length} 个 MCP`;
+      ? `项目「${live.name}」尚未配置指令、专家、技能或连接器`
+      : `项目「${live.name}」已配置 ${live.experts.length} 个专家、${live.skills.length} 个技能、${live.connectors.length} 个连接器`;
 
   return (
     <div className="pd-page">
@@ -282,23 +282,23 @@ export function ProjectDetailView({
               </span>
               <span className="pd-composer-header__name">{live.name}</span>
               <span className="pd-composer-header__sep" aria-hidden="true">·</span>
-              <span className="pd-composer-header__label">本次使用：</span>
+              <span className="pd-composer-header__label">项目配置：</span>
               {hasInstructionsOnly ? (
                 <span className="pd-composer-header__count pd-composer-header__count--active">项目指令</span>
               ) : hasNoContract ? (
-                <span className="pd-composer-header__count">未配置项目上下文</span>
+                <span className="pd-composer-header__count">尚未配置任务参考信息</span>
               ) : (
                 <>
                   <span className={`pd-composer-header__count${live.experts.length > 0 ? " pd-composer-header__count--active" : ""}`}>
-                    {live.experts.length} Agent
+                    {live.experts.length} 专家
                   </span>
                   <span className="pd-composer-header__sep" aria-hidden="true">·</span>
                   <span className={`pd-composer-header__count${live.skills.length > 0 ? " pd-composer-header__count--active" : ""}`}>
-                    {live.skills.length} Skill
+                    {live.skills.length} 技能
                   </span>
                   <span className="pd-composer-header__sep" aria-hidden="true">·</span>
                   <span className={`pd-composer-header__count${live.connectors.length > 0 ? " pd-composer-header__count--active" : ""}`}>
-                    {live.connectors.length} MCP
+                    {live.connectors.length} 连接器
                   </span>
                 </>
               )}
@@ -310,7 +310,7 @@ export function ProjectDetailView({
               streaming={false}
               onSend={(text, attachments) => handleComposerSend(text, projectModelId!, attachments)}
               onCancel={() => { /* 项目页 composer 不流式,onCancel 为 Composer prop 必传的占位。 */ }}
-              placeholder="输入项目任务或附件（Shift+Enter 换行）"
+              placeholder="描述项目任务，可添加文件作为参考（Shift+Enter 换行）"
               apiReady={!!projectModelId && models.length > 0}
               setupHint={
                 models.length === 0
@@ -466,7 +466,7 @@ function ConfigDrawer({
               value={instructionDraft}
               maxLength={128_000}
               onChange={(e) => setInstructionDraft(e.target.value)}
-              placeholder="设定项目背景与规范，让 AI 与你高效协作…"
+              placeholder="填写项目目标、背景、工作规范和交付要求…"
               data-modal-initial-focus
             />
           )}

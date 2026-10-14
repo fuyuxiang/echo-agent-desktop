@@ -26,7 +26,7 @@ function diffMsg(path: string, old: string, ne: string): ChatMessage {
 describe("FileChangesPanel", () => {
   it("无 diff 时给出明确空状态", () => {
     render(<FileChangesPanel messages={[]} />);
-    expect(screen.getByText("还没有文件变更——需要动手时，结果会列在这里。")).toBeInTheDocument();
+    expect(screen.getByText("暂无文件变更。任务修改文件后，可在这里查看变更记录。")).toBeInTheDocument();
   });
 
   it("渲染标题 + 文件数 + 增删汇总", () => {

@@ -139,7 +139,7 @@ describe("KnowledgeBasePanel", () => {
     fireEvent.change(await screen.findByRole("textbox", { name: "搜索知识库" }), {
       target: { value: "不存在" },
     });
-    await waitFor(() => expect(screen.getByText("无匹配结果")).toBeInTheDocument());
+    await waitFor(() => expect(screen.getByText("未找到相关内容，请尝试其他关键词")).toBeInTheDocument());
   });
 
   it("搜索结果是键盘可达的原生按钮", async () => {
@@ -184,7 +184,7 @@ describe("KnowledgeBasePanel", () => {
     expect(await screen.findByRole("button", { name: "打开知识条目：可用结果" })).toBeInTheDocument();
     expect(screen.getByRole("alert")).toHaveTextContent("部分知识源搜索失败");
     expect(screen.getByRole("alert")).toHaveTextContent("云端文档：连接超时");
-    expect(screen.queryByText("无匹配结果")).toBeNull();
+    expect(screen.queryByText("未找到相关内容，请尝试其他关键词")).toBeNull();
     expect(screen.getByRole("button", { name: "重试搜索" })).toBeInTheDocument();
   });
 
@@ -207,7 +207,7 @@ describe("KnowledgeBasePanel", () => {
     });
 
     expect(await screen.findByRole("alert")).toHaveTextContent("所有知识源搜索失败");
-    expect(screen.queryByText("无匹配结果")).toBeNull();
+    expect(screen.queryByText("未找到相关内容，请尝试其他关键词")).toBeNull();
     fireEvent.click(screen.getByRole("button", { name: "重试搜索" }));
 
     expect(await screen.findByRole("button", { name: "打开知识条目：已恢复文档" })).toBeInTheDocument();
@@ -286,7 +286,7 @@ describe("KnowledgeBasePanel", () => {
 
     fireEvent.click(screen.getByRole("button", { name: "移除知识源 可更新知识源" }));
     await waitFor(() => expect(screen.queryByText("新索引内容")).toBeNull());
-    expect(await screen.findByText("无匹配结果")).toBeInTheDocument();
+    expect(await screen.findByText("未找到相关内容，请尝试其他关键词")).toBeInTheDocument();
   });
 
   it("索引重建部分失败显示失败源及可重试入口，不误报全部成功", async () => {

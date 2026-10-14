@@ -527,7 +527,7 @@ function ArtifactsNavList({
   if (artifacts.length === 0) {
     return (
       <p className="tool-side-panel__empty">
-        本会话还没有可展示的文件产物。工具写入/修改文件后会出现在这里。
+        本任务暂无可展示的文件。工具写入或修改文件后，相关记录会显示在这里。
       </p>
     );
   }

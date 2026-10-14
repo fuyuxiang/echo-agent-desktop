@@ -71,7 +71,7 @@ export function AutomationPermissionConfirmDialog({
           你手动选择了完全访问权限。这不是默认选项，它意味着 AI 可以在无人值守时直接：
         </p>
         <ul className="automation-permission-confirm__list">
-          <li>写入 / 修改 / 删除工作空间内文件</li>
+          <li>写入、修改或删除工作目录内的文件</li>
           <li>自动批准运行过程中工具和连接器发起的可允许请求</li>
           <li>执行 Bash 命令、网络请求等敏感操作</li>
         </ul>
@@ -106,7 +106,7 @@ export function AutomationPermissionConfirmDialog({
               disabled={!acknowledged}
               onClick={handleConfirm}
             >
-              确认创建
+              确认授权
             </button>
           </div>
         </div>

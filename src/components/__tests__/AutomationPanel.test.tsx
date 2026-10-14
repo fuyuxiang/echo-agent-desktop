@@ -71,12 +71,12 @@ describe("AutomationPanel（截图 1/3 空态）", () => {
     render(<AutomationPanel />);
     expect(screen.getByText("定时任务")).toBeInTheDocument();
     expect(screen.getByText("运行记录")).toBeInTheDocument();
-    await waitFor(() => expect(screen.getByText("开启你的第一个自动化任务吧")).toBeInTheDocument());
+    await waitFor(() => expect(screen.getByText("创建定时任务，按计划处理重复工作")).toBeInTheDocument());
   });
 
   it("定时任务空态：hero 文案 + 添加按钮 + 12 个模板", async () => {
     render(<AutomationPanel />);
-    await waitFor(() => expect(screen.getByText("开启你的第一个自动化任务吧")).toBeInTheDocument());
+    await waitFor(() => expect(screen.getByText("创建定时任务，按计划处理重复工作")).toBeInTheDocument());
     expect(screen.getByText("+ 添加自动化")).toBeInTheDocument();
     expect(screen.getByText("自动化任务模版")).toBeInTheDocument();
     expect(screen.getByText("每日 AI 新闻推送")).toBeInTheDocument();
@@ -95,10 +95,10 @@ describe("AutomationPanel（截图 1/3 空态）", () => {
 
     const alert = await screen.findByRole("alert");
     expect(alert).toHaveTextContent("自动化数据加载失败：快照损坏");
-    expect(screen.queryByText("开启你的第一个自动化任务吧")).not.toBeInTheDocument();
+    expect(screen.queryByText("创建定时任务，按计划处理重复工作")).not.toBeInTheDocument();
 
     fireEvent.click(screen.getByRole("button", { name: "重试" }));
-    expect(await screen.findByText("开启你的第一个自动化任务吧")).toBeInTheDocument();
+    expect(await screen.findByText("创建定时任务，按计划处理重复工作")).toBeInTheDocument();
   });
 
   it("点击「+ 添加自动化」进入表单（截图 2 字段）", async () => {
@@ -107,8 +107,8 @@ describe("AutomationPanel（截图 1/3 空态）", () => {
     fireEvent.click(screen.getByText("+ 添加自动化"));
     await waitFor(() => expect(screen.getByText("添加自动化任务")).toBeInTheDocument());
     expect(screen.getByText("名称")).toBeInTheDocument();
-    expect(screen.getByText("工作空间", { selector: "label" })).toBeInTheDocument();
-    expect(screen.getByText("提示词")).toBeInTheDocument();
+    expect(screen.getByText("工作目录", { selector: "label" })).toBeInTheDocument();
+    expect(screen.getByText("任务要求")).toBeInTheDocument();
     expect(screen.getByText("执行频率")).toBeInTheDocument();
     expect(screen.getByText("周期")).toBeInTheDocument();
     expect(screen.getByText("按间隔")).toBeInTheDocument();
@@ -238,7 +238,7 @@ describe("AutomationPanel（截图 1/3 空态）", () => {
     fireEvent.click(screen.getByRole("button", { name: "保存" }));
 
     expect(automationsSave).not.toHaveBeenCalled();
-    expect(onToast).toHaveBeenCalledWith("Auto 当前没有可用模型，请先在“设置 → 模型与连接”配置模型。");
+    expect(onToast).toHaveBeenCalledWith("当前没有可用的默认模型，请在「设置 → 模型」检查连接。");
   });
 
   it("点击模板卡片预填进入创建表单", async () => {
@@ -295,7 +295,7 @@ describe("AutomationPermissionConfirmDialog 可访问性", () => {
 
     const acknowledgement = within(dialog).getByRole("checkbox", { name: /我已了解风险/ });
     fireEvent.click(acknowledgement);
-    const confirm = within(dialog).getByRole("button", { name: "确认创建" });
+    const confirm = within(dialog).getByRole("button", { name: "确认授权" });
     await waitFor(() => expect(confirm).toBeEnabled());
     confirm.focus();
     fireEvent.keyDown(document, { key: "Tab" });

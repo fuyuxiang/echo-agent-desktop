@@ -158,12 +158,12 @@ export function HomePage({
           />
           {creatingSession && (
             <div className="home__send-status" role="status" aria-live="polite">
-              正在创建 Agent 会话…
+              正在创建任务…
             </div>
           )}
           {!creatingSession && sendError && (
             <div className="home__send-error" role="alert">
-              创建会话失败：{sendError}
+              任务创建失败，请重试：{sendError}
             </div>
           )}
         </section>

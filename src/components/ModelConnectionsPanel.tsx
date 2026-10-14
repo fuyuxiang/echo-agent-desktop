@@ -415,7 +415,7 @@ export function ModelConnectionsPanel({ onModelsChanged }: ModelConnectionsPanel
       <header className="model-connections__header">
         <div>
           <h2>模型与连接</h2>
-          <p>内置对话模型开箱即用。默认顺序：手动指定、组织下发、个人连接、内置 chat-xc。</p>
+          <p>使用内置模型，或连接组织和个人模型服务。自动选择优先级：已设默认、组织模型、个人模型、内置模型（仅限可用模型）。</p>
         </div>
         <button className="echo-button echo-button--primary echo-button--medium" onClick={() => setConnectionEditor("new")}>
           <span className="echo-button__content"><Plus size={15} />添加个人连接</span>

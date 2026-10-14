@@ -114,10 +114,10 @@ describe("专家技能页的组织 Skill 集成", () => {
     render(<SkillsTab pills={null} />);
     await waitFor(() => expect(mocks.listenOrgSkillsChanged).toHaveBeenCalled());
     await act(async () => notify());
-    await screen.findByText("全局目录中还没有技能");
+    await screen.findByText("还没有已安装的技能");
     await act(async () => resolveOld([organizationSkill(false)]));
     expect(screen.queryByText("组织周报")).toBeNull();
-    expect(screen.getByText("全局目录中还没有技能")).toBeInTheDocument();
+    expect(screen.getByText("还没有已安装的技能")).toBeInTheDocument();
   });
 
   it("本地 Skill 可直接选择组织范围并打包上传", async () => {

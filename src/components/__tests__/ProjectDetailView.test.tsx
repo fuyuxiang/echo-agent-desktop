@@ -60,7 +60,7 @@ describe("ProjectDetailView 项目 composer 接入首页 Composer", () => {
     );
     const header = screen.getByRole("status", { name: /项目「发布项目」/ });
     expect(header.textContent).toContain("发布项目");
-    expect(header.textContent).toContain("未配置项目上下文");
+    expect(header.textContent).toContain("尚未配置任务参考信息");
     expect(header.querySelector(".pd-composer-header__count--active")).toBeNull();
   });
 
@@ -76,7 +76,7 @@ describe("ProjectDetailView 项目 composer 接入首页 Composer", () => {
         picker={picker}
       />,
     );
-    const header = screen.getByRole("status", { name: /本次使用项目指令/ });
+    const header = screen.getByRole("status", { name: /已配置项目指令/ });
     expect(header.textContent).toContain("项目指令");
     expect(header.textContent).not.toContain("Agent");
     expect(header.textContent).not.toContain("Skill");
@@ -111,10 +111,10 @@ describe("ProjectDetailView 项目 composer 接入首页 Composer", () => {
         picker={picker}
       />,
     );
-    const header = screen.getByRole("status", { name: /本次使用 1 个 Agent、2 个 Skill、0 个 MCP/ });
-    expect(header.textContent).toContain("1 Agent");
-    expect(header.textContent).toContain("2 Skill");
-    expect(header.textContent).toContain("0 MCP");
+    const header = screen.getByRole("status", { name: /已配置 1 个专家、2 个技能、0 个连接器/ });
+    expect(header.textContent).toContain("1 专家");
+    expect(header.textContent).toContain("2 技能");
+    expect(header.textContent).toContain("0 连接器");
     // Agent/Skill > 0 高亮;MCP = 0 不高亮。
     const activeCounts = header.querySelectorAll(".pd-composer-header__count--active");
     expect(activeCounts.length).toBe(2);

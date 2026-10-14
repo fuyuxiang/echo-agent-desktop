@@ -113,7 +113,7 @@ export function Composer({
   onControl,
   placeholder,
   apiReady = true,
-  setupHint = "请先配置 API Key 开始使用",
+  setupHint = "请先在「设置 → 模型」检查可用模型和连接",
   onOpenSettings,
   onToast,
   showMeta = false,
@@ -1118,7 +1118,7 @@ export function Composer({
         "echo-composer-wrap" + (showMeta ? " echo-composer-wrap--home" : "")
       }
     >
-      {Object.keys(storageErrors).length > 0 && <div role="alert" className="composer-storage-error">本机保存失败，当前输入仍保留在窗口中。请先复制内容或到「设置 → 数据」导出备份，再重试保存。{Object.values(storageErrors)[0]}</div>}
+      {Object.keys(storageErrors).length > 0 && <div role="alert" className="composer-storage-error">本机保存失败，当前输入仍保留在窗口中。请先复制内容或到「设置 → 数据管理 → 备份与目录」导出备份，再重试保存。{Object.values(storageErrors)[0]}</div>}
       <section
         className={composerCls}
         onClick={() => {
@@ -1273,7 +1273,7 @@ export function Composer({
               : apiReady
               ? sceneTag
                 ? "" // 有操作类型标签时不显示占位文案(匹配 EchoAgent)
-                : placeholder ?? "今天帮你做些什么? @ 引用对话文件,/ 调用技能与指令"
+                : placeholder ?? "描述需要完成的任务；输入 @ 引用文件或代码符号，/ 选择技能或指令"
               : ""
           }
           onChange={(e) => {
@@ -1517,7 +1517,7 @@ export function Composer({
                   }}
                   disabled={disabled || !apiReady}
                   aria-label="加入待发送队列"
-                  title="加入待发送队列(agent 完成后自动发送)"
+                  title="加入待发送队列，当前一轮正常结束后自动发送"
                 >
                   +
                 </button>

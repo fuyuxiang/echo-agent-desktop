@@ -140,7 +140,7 @@ describe("知识库端到端冒烟", () => {
 
     // 6. 无命中显示空态。
     fireEvent.change(input, { target: { value: "不存在的内容zzz" } });
-    await waitFor(() => expect(screen.getByText("无匹配结果")).toBeInTheDocument());
+    await waitFor(() => expect(screen.getByText("未找到相关内容，请尝试其他关键词")).toBeInTheDocument());
   });
 
   it("移除已添加的本地知识源后回到未配置态", async () => {

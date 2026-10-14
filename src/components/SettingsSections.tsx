@@ -867,7 +867,7 @@ export function GeneralSettingsPanel() {
       title="系统设置"
       desc="管理窗口、后台运行与 EchoAgent 配置重载。"
     >
-      <SettingsGroup title="窗口与后台运行" desc="控制关闭主窗口时是否保留 Runtime 与后台任务。">
+      <SettingsGroup title="窗口与后台运行" desc="设置关闭主窗口后是否继续执行任务和自动化调度。">
         <div className="settings-row settings-row--comfortable">
           <div className="settings-row__label settings-row__label--stacked">
             <span className="settings-row__name"><AppWindow size={17} />关闭窗口时继续后台运行</span>
@@ -894,7 +894,7 @@ export function GeneralSettingsPanel() {
         )}
         {!closeToTray && !loadingDesktopPreferences && (
           <div className="settings-info-callout settings-info-callout--warn" role="status">
-            关闭主窗口将停止当前 Runtime 和自动化调度。仍可使用最小化保留窗口与任务。
+            关闭主窗口将停止任务执行和自动化调度。如需继续运行，请最小化窗口。
           </div>
         )}
       </SettingsGroup>

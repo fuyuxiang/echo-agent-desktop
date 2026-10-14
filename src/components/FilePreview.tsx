@@ -165,7 +165,7 @@ export function FilePreview({ filename, content, onCopyText, docExtractor }: Fil
       <div className="file-preview__placeholder">
         <FileText size={28} aria-hidden="true" />
         <span className="file-preview__placeholder-text">
-          {previewKindLabel(kind)} 暂不支持内嵌预览,请用本地应用打开。
+          {previewKindLabel(kind)} 暂不支持内嵌预览，请用系统应用打开。
         </span>
       </div>
     </div>

@@ -26,7 +26,7 @@ describe("从对话创建专家", () => {
     fireEvent.click(await screen.findByRole("button", { name: "从专家雇佣" }));
     fireEvent.click(screen.getByRole("button", { name: /模板专家.*模板说明/ }));
     await waitFor(() => expect(screen.getByRole("textbox", { name: "专家名称" })).toHaveValue("模板专家（副本）"));
-    expect(screen.getByRole("textbox", { name: "专家 System Prompt" })).toHaveValue("模板提示词");
+    expect(screen.getByRole("textbox", { name: "专家指令" })).toHaveValue("模板提示词");
     expect(screen.getByRole("textbox", { name: "专家名称" })).toHaveFocus();
   });
 
@@ -54,7 +54,7 @@ describe("从对话创建专家", () => {
     const dialog = await screen.findByRole("dialog", { name: "创建专家" });
     expect(screen.getByRole("heading", { name: "我的专家" })).toBeInTheDocument();
     fireEvent.change(screen.getByRole("textbox", { name: "专家名称" }), { target: { value: "评审专家" } });
-    fireEvent.change(screen.getByRole("textbox", { name: "专家 System Prompt" }), { target: { value: "专家提示词" } });
+    fireEvent.change(screen.getByRole("textbox", { name: "专家指令" }), { target: { value: "专家提示词" } });
     fireEvent.click(dialog.querySelector("button.btn--primary") as HTMLButtonElement);
 
     await waitFor(() => expect(agentsSave).toHaveBeenCalledWith("评审专家", "专家提示词"));

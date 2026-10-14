@@ -72,7 +72,7 @@ const memoryKindLabel: Record<OrgMemoryKind, string> = {
   fact: "事实",
   decision: "决策",
   convention: "规范",
-  pitfall: "踩坑",
+  pitfall: "问题处理经验",
   howto: "操作手册",
 };
 
@@ -705,7 +705,7 @@ export function OrganizationMemoryPanel({
       else await orgArchiveDocument(removeTarget.id);
       setRemoveTarget(null);
       setPreview(null);
-      onToast?.("文档已移出共享与检索；已上传原件仍安全保留在服务器");
+      onToast?.("文档已移出共享与检索；已上传原件仍保留在组织服务器");
       await loadWorkspace();
     } catch (reason) { setError(String(reason)); } finally { setBusy(false); }
   };
@@ -733,7 +733,7 @@ export function OrganizationMemoryPanel({
       setMemoryWorkspace("");
       setMemoryValidUntil("");
       setShowMemoryForm(false);
-      onToast?.("经验候选已提交，审核通过后会进入 Agent 工作上下文");
+      onToast?.("经验已提交，审核通过后可供任务检索和参考");
       await loadWorkspace();
     } catch (reason) {
       setError(String(reason));
@@ -884,7 +884,7 @@ export function OrganizationMemoryPanel({
         <div className="org-login-card">
           <div className="org-login-card__mark"><Building2 size={28} /></div>
           <h1>连接组织</h1>
-          <p>登录企业服务器后，可在授权范围内共享文档、Skills 和经验；Agent 会在执行前自动召回规则、手册与踩坑记录。</p>
+          <p>连接组织服务后，可在授权范围内共享文档、技能和工作经验，为任务执行提供参考。</p>
           <form onSubmit={handleLogin}>
             {session?.requiresReauthentication && (
               <div className="org-memory__reauth" role="status">
@@ -912,10 +912,10 @@ export function OrganizationMemoryPanel({
   const pageTitle = tab === "overview" ? "组织知识"
     : tab === "memories" ? "经验"
       : tab === "documents" ? "文档" : "组织 Skills";
-  const pageDescription = tab === "overview" ? "管理可供 Agent 使用的组织经验、文档与 Skills。"
-    : tab === "memories" ? "沉淀决策、规范、操作手册和踩坑记录，供 Agent 在任务前召回。"
+  const pageDescription = tab === "overview" ? "管理任务可参考的组织经验、文档和技能。"
+    : tab === "memories" ? "记录决策、规范、操作手册和问题处理经验，供任务检索和参考。"
       : tab === "documents" ? "查看、上传和管理组织文档。"
-        : "管理组织 Skill 的提交、安装与同步。";
+        : "提交、安装和同步组织共享技能。";
 
   return (
     <div className="org-memory">

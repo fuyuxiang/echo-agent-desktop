@@ -225,13 +225,13 @@ describe("Theia workbench", () => {
     const { container } = render(<CodingWorkbench cwd="/repo" sessionId="session-1" models={[{ id: "model-1" }]} defaultModelId="model-1" />);
     await screen.findByTitle("Echo Code IDE");
     const composer = container.querySelector(".echo-theia-agent__composer");
-    const textbox = await screen.findByRole("textbox", { name: "给 Agent 的补充要求" });
+    const textbox = await screen.findByRole("textbox", { name: "补充开发要求" });
     fireEvent.change(textbox, { target: { value: "请处理边界情况" } });
     await user.click(screen.getByRole("tab", { name: "任务变更" }));
     expect(composer).toBeInTheDocument();
-    expect(screen.getByRole("textbox", { name: "给 Agent 的补充要求" })).toHaveValue("请处理边界情况");
+    expect(screen.getByRole("textbox", { name: "补充开发要求" })).toHaveValue("请处理边界情况");
     await user.click(screen.getByRole("tab", { name: "验证" }));
-    expect(screen.getByRole("textbox", { name: "给 Agent 的补充要求" })).toHaveValue("请处理边界情况");
+    expect(screen.getByRole("textbox", { name: "补充开发要求" })).toHaveValue("请处理边界情况");
   });
 
   it("opens the delivery report from a named action in the default IDE", async () => {

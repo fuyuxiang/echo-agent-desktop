@@ -64,7 +64,7 @@ export function PluginsPanel({ sessionId, onToast, onBrowseMarket }: PluginsPane
     async (plugin: PluginEntry) => {
       if (actionInFlight.current) return;
       if (!sessionId) {
-        onToast?.("需要先开启一个会话才能操作插件");
+        onToast?.("请先从首页发起任务，再启用或禁用插件");
         return;
       }
       const pluginId = plugin.id ?? plugin.name;
@@ -115,7 +115,7 @@ export function PluginsPanel({ sessionId, onToast, onBrowseMarket }: PluginsPane
 
       {!sessionId && (
         <p className="plugins-panel__hint">
-          ⚠ 启用/禁用插件需要一个活动会话。请先在主页开启对话。
+          启用或禁用插件需要已打开的任务会话，请先从首页发起任务。
         </p>
       )}
 

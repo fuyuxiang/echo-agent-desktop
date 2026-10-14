@@ -255,12 +255,12 @@ export function SkillsTab({ pills, onToast }: Props) {
         )}
 
         {loading && skills.length === 0 ? (
-          <div className="ec-loading">扫描全局技能目录…</div>
+          <div className="ec-loading">正在读取已安装技能…</div>
         ) : error && skills.length === 0 ? null : skills.length === 0 ? (
           <div className="ec-empty">
             <PuzzlePieceIcon size="xl" className="ec-empty-icon" />
-            <p>全局目录中还没有技能</p>
-            <p className="ec-empty-hint">点击右上角「添加技能」，或从组织安装共享 Skill</p>
+            <p>还没有已安装的技能</p>
+            <p className="ec-empty-hint">点击「添加技能」安装本地技能，或在组织页面安装共享技能</p>
           </div>
         ) : visible.length === 0 ? (
           <div className="ec-empty">

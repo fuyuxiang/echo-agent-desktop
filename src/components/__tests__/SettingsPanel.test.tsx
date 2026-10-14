@@ -141,7 +141,7 @@ describe("SettingsPanel", () => {
     expect(screen.getByRole("button", { name: "云存储" })).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "模型" })).toHaveAttribute("aria-current", "page");
     expect(await screen.findByRole("heading", { name: "模型与连接", level: 2 })).toBeInTheDocument();
-    expect(screen.getByText("内置对话模型开箱即用。默认顺序：手动指定、组织下发、个人连接、内置 chat-xc。"))
+    expect(screen.getByText("使用内置模型，或连接组织和个人模型服务。自动选择优先级：已设默认、组织模型、个人模型、内置模型（仅限可用模型）。"))
       .toBeInTheDocument();
   });
 
@@ -424,7 +424,7 @@ describe("SettingsPanel", () => {
       expect(desktopPreferencesSave).toHaveBeenCalledWith(false);
       expect(toggle).not.toBeChecked();
     });
-    expect(screen.getByRole("status")).toHaveTextContent("关闭主窗口将停止当前 Runtime 和自动化调度");
+    expect(screen.getByRole("status")).toHaveTextContent("关闭主窗口将停止任务执行和自动化调度");
     expect(screen.getByText("已关闭后台运行，下次关闭窗口将退出 EchoAgent。")).toBeInTheDocument();
   });
 

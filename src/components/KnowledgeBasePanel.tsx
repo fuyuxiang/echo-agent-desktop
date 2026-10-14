@@ -114,7 +114,7 @@ export function KnowledgeBasePanel({ onOpen, onToast }: KnowledgeBasePanelProps)
   /** 添加本地文件夹知识源:弹出原生目录选择 → 注册 local KbProvider。 */
   const addLocalFolder = async () => {
     if (!isTauriAvailable()) {
-      onToast?.("添加知识源需要桌面环境(Tauri)");
+      onToast?.("请在 EchoAgent 桌面应用中添加本地文件夹");
       return;
     }
     try {
@@ -409,7 +409,7 @@ export function KnowledgeBasePanel({ onOpen, onToast }: KnowledgeBasePanelProps)
             {searching ? (
               <li className="kb-panel__empty" role="status">搜索中…</li>
             ) : results.length === 0 && !searchError ? (
-              <li className="kb-panel__empty">无匹配结果</li>
+              <li className="kb-panel__empty">未找到相关内容，请尝试其他关键词</li>
             ) : (
               results.map((e) => (
                 <li key={`${e.source}:${e.id}`}>

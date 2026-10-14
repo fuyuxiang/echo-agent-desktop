@@ -471,7 +471,7 @@ export function MeetingMinutesPanel({
       <header className="meeting-panel__header">
         <div>
           <h1>录音转写</h1>
-          <p>本地保存完整录音，使用当前连接的语音接口转写并生成可追溯的会议纪要。</p>
+          <p>录音保存在本机；转写服务就绪后，可生成、校对和导出转写文本与会议纪要。</p>
         </div>
         <div className={`meeting-panel__provider${capable ? " is-ready" : ""}`}>
           <span>{capable ? "转写接口已就绪" : !selectedModel ? "需要配置 MiniMax 模型" : connection.state === "checking" ? "正在检测转写接口" : "转写接口不可用"}</span>

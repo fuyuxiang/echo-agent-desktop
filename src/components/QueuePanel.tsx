@@ -54,7 +54,7 @@ export function QueuePanel({
     <div className="queue-panel" role="list" aria-label="待发送队列">
       <div className="queue-panel__head">
         <span>待发送队列({queue.length})</span>
-        <span className="queue-panel__hint">agent 完成回复后自动发送下一条</span>
+        <span className="queue-panel__hint">当前一轮正常结束后，自动发送下一条未暂停的消息</span>
       </div>
       {dialog}
       {queue.some((item) => item.recovery) && <p role="status" className="queue-panel__hint">已恢复上次保留的消息，暂未发送。请检查会话记录后逐条恢复。</p>}

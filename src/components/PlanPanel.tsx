@@ -418,7 +418,7 @@ export function PlanPanel({
         <TaskListIcon size="xl" color="var(--echo-text-tertiary)" />
         <p>计划模式已开启</p>
         <p className="plan-panel__hint">
-          发送一个任务，EchoAgent 会先制定计划再执行。
+          描述任务后，EchoAgent 会先制定计划，待你批准后执行。
         </p>
         {planApproval?.planContent && (
           <pre className="plan-panel__approval-content">{planApproval.planContent}</pre>
@@ -437,7 +437,7 @@ export function PlanPanel({
         <TaskListIcon size="xl" color="var(--echo-text-tertiary)" />
         <p>暂无任务计划</p>
         <p className="plan-panel__hint">
-          EchoAgent 在处理复杂任务时会自动制定计划。
+          开启计划模式后，可先查看并确认计划，再开始执行。
         </p>
       </div>
     );
@@ -513,7 +513,7 @@ export function PlanPanel({
       {/* Completion banner */}
       {allDone && (
         <div className="plan-panel__done-banner">
-          <CheckIcon size="sm" /> 所有任务已完成
+          <CheckIcon size="sm" /> 计划步骤已标记完成，请检查结果
         </div>
       )}
 

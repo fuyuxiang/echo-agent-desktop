@@ -70,7 +70,7 @@ export function MarketplacePanel({ sessionId, onToast }: MarketplacePanelProps) 
 
   const requireSession = (): string | null => {
     if (!sessionId) {
-      onToast?.("需要先开启一个会话才能操作市场");
+      onToast?.("请先从首页发起任务，再安装、更新插件或管理市场源");
       return null;
     }
     return sessionId;

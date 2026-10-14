@@ -355,7 +355,7 @@ function WorkspaceInput({
           ))}
         </div>
       )}
-      <div className="atm-workspace-input__hint">新目录请点“选择文件夹”确认，留空则使用默认工作空间。</div>
+      <div className="atm-workspace-input__hint">新目录请点击「选择文件夹」确认授权；留空则使用默认工作目录。</div>
       {pickError && <div className="atm-workspace-input__error" role="alert">{pickError}</div>}
     </div>
   );
@@ -777,7 +777,7 @@ export function AutomationEditPage({
 
           {/* 工作空间 */}
           <label className="atm-modal-label" htmlFor="automation-workspace-path">
-            工作空间
+            工作目录
             <span className="atm-modal-hint atm-modal-hint-inline">(可选)</span>
           </label>
           <WorkspaceInput
@@ -788,7 +788,7 @@ export function AutomationEditPage({
           />
 
           {/* 提示词 */}
-          <label className="atm-modal-label">提示词</label>
+          <label className="atm-modal-label">任务要求</label>
           <div className="atm-modal-chat-input">
             <textarea
               className="atm-prompt-textarea"
@@ -980,7 +980,7 @@ export function AutomationEditPage({
             <>
               <label className="atm-modal-label">
                 生效日期区间
-                <span className="atm-modal-hint atm-modal-hint-inline">(可选，留空表示始终生效。)</span>
+                <span className="atm-modal-hint atm-modal-hint-inline">（可选，留空则不限制生效日期。）</span>
               </label>
               <ValidityRangePicker
                 startDate={draft.validFromDate}

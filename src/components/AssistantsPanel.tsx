@@ -508,8 +508,8 @@ function ColleagueProfile({
         </div>
       </div>
       <div className="colleague-profile-prompt-section">
-        <h3>System Prompt</h3>
-        <pre className="colleague-profile-prompt">{extractBody(agent.raw) || "（无 system prompt）"}</pre>
+        <h3>专家指令</h3>
+        <pre className="colleague-profile-prompt">{extractBody(agent.raw) || "未设置专家指令"}</pre>
       </div>
       <div className="colleague-profile-actions">
         <button className="btn btn--primary colleague-profile-btn" onClick={onChat}>
@@ -734,10 +734,10 @@ function CreateColleagueDialog({
 
             {/* System Prompt */}
             <div className="create-colleague-field">
-              <label className="create-colleague-label">System Prompt</label>
+              <label className="create-colleague-label">专家指令</label>
               <textarea
                 className="create-colleague-textarea"
-                aria-label="专家 System Prompt"
+                aria-label="专家指令"
                 value={d.systemPrompt}
                 disabled={saving}
                 onChange={(e) => set("systemPrompt", e.target.value)}

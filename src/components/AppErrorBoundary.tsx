@@ -45,7 +45,7 @@ export class AppErrorBoundary extends Component<
       >
         <h1 style={{ fontSize: 20, margin: 0 }}>界面启动失败</h1>
         <p style={{ color: "var(--echo-text-medium, #666660)", margin: 0, maxWidth: 560 }}>
-          EchoAgent 遇到了界面错误，未继续显示空白页。
+          界面加载出现问题。请重新加载；若仍失败，请将下方错误信息提供给技术支持。
         </p>
         <code
           style={{

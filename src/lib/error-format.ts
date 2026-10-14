@@ -196,7 +196,7 @@ export function formatAgentError(raw: string): string | null {
       return "⚠️ API 认证失败。组织托管模型请重新同步组织配置；个人模型请检查「设置 → 模型与连接」中的 API Key。";
     }
     if (lower.includes("connection") || lower.includes("timeout") || lower.includes("econnrefused")) {
-      return "⚠️ 网络连接失败。请检查网络/代理设置，确认 API endpoint 可达。";
+      return "⚠️ 网络连接失败。请检查网络或代理设置，确认模型服务地址可访问。";
     }
     if (lower.includes("429") || lower.includes("rate limit")) {
       return "⚠️ API 速率限制已触发。请等待 1-2 分钟后重试。";
@@ -254,12 +254,12 @@ export function formatAgentError(raw: string): string | null {
 
   // Connection errors
   if (innerMsg.includes("connection") || innerMsg.includes("timeout") || innerMsg.includes("ECONNREFUSED")) {
-    return "⚠️ 网络连接失败。请检查网络/代理设置，确认 API endpoint 可达。";
+    return "⚠️ 网络连接失败。请检查网络或代理设置，确认模型服务地址可访问。";
   }
 
   // Model not found
   if (innerMsg.includes("model") && (innerMsg.includes("not found") || innerMsg.includes("invalid"))) {
-    return `⚠️ 模型不可用: ${innerMsg}。请在 Settings 中检查模型配置。`;
+    return `⚠️ 模型不可用：${innerMsg}。请在「设置 → 模型」检查连接和 Model ID。`;
   }
 
   // Context too long

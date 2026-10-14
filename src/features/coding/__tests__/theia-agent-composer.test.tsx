@@ -61,19 +61,19 @@ describe("TheiaAgentComposer", () => {
   it("keeps a follow-up while streaming, then sends and clears it", async () => {
     const input = props({ task, sessionId: "session-1", streaming: true });
     const { rerender } = render(<TheiaAgentComposer {...input} />);
-    fireEvent.change(screen.getByRole("textbox", { name: "给 Agent 的补充要求" }), { target: { value: "修复边界条件" } });
+    fireEvent.change(screen.getByRole("textbox", { name: "补充开发要求" }), { target: { value: "修复边界条件" } });
     expect(screen.getByRole("button", { name: "发送给 Agent" })).toBeDisabled();
     rerender(<TheiaAgentComposer {...input} streaming={false} />);
     fireEvent.click(screen.getByRole("button", { name: "发送给 Agent" }));
     await waitFor(() => expect(input.onSend).toHaveBeenCalledWith("修复边界条件"));
-    await waitFor(() => expect(screen.getByRole("textbox", { name: "给 Agent 的补充要求" })).toHaveValue(""));
+    await waitFor(() => expect(screen.getByRole("textbox", { name: "补充开发要求" })).toHaveValue(""));
   });
 
   it("accepts a queued file-context prompt without remounting", async () => {
     const input = props({ task, sessionId: "session-1", contextPaths: ["src/order.ts"] });
     render(<TheiaAgentComposer {...input} />);
     act(() => useAiDraftStore.getState().setDraft({ prompt: "解释这个文件", contextPaths: ["src/order.ts"], source: "context-menu" }));
-    await waitFor(() => expect(screen.getByRole("textbox", { name: "给 Agent 的补充要求" })).toHaveValue("解释这个文件"));
+    await waitFor(() => expect(screen.getByRole("textbox", { name: "补充开发要求" })).toHaveValue("解释这个文件"));
     expect(input.onDraftContextPaths).toHaveBeenCalledWith(["src/order.ts"]);
     fireEvent.click(screen.getByRole("button", { name: "移除上下文 src/order.ts" }));
     expect(input.onRemoveContext).toHaveBeenCalledWith("src/order.ts");

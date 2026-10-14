@@ -12,15 +12,15 @@ export const SKILL_CAPABILITY_PRESENTATION: Record<
 > = {
   instruction_only: {
     label: "仅工作流",
-    help: "这是提示词/工作流 Skill，没有声明可预检的确定性执行入口。",
+    help: "该技能提供任务指引，未声明可在运行前检查的执行入口。",
   },
   ready: {
     label: "可执行 · 就绪",
-    help: "执行入口和本机依赖已就绪；运行时仍会经过 Agent 权限审批与沙箱。",
+    help: "执行入口和本机依赖已就绪；执行时仍受操作授权和沙箱限制。",
   },
   missing_dependencies: {
     label: "缺少依赖",
-    help: "已安装 Skill，但本机缺少其声明的运行命令、工具或连接器。",
+    help: "技能已安装，但本机缺少其要求的运行命令、工具或连接器。",
   },
   configuration_required: {
     label: "待连接/授权",

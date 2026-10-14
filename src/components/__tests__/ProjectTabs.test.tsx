@@ -570,7 +570,7 @@ describe("项目计划/任务与 Agent 会话闭环", () => {
       />,
     );
     fireEvent.click(screen.getByRole("button", { name: /指令/ }));
-    const input = screen.getByPlaceholderText("设定项目背景与规范，让 AI 与你高效协作…");
+    const input = screen.getByPlaceholderText("填写项目目标、背景、工作规范和交付要求…");
     fireEvent.change(input, { target: { value: "只在完成时保存" } });
     expect(useProjectsStore.getState().projects[0].instructions).toBeUndefined();
 

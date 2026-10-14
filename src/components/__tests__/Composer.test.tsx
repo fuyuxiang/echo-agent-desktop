@@ -28,7 +28,7 @@ describe("Composer", () => {
     const onOpenSettings = vi.fn();
     render(<Composer {...base} apiReady={false} onOpenSettings={onOpenSettings} />);
     expect(screen.getByRole("textbox")).toBeDisabled();
-    fireEvent.click(screen.getByText(/请先配置 API Key/));
+    fireEvent.click(screen.getByText(/请先在「设置 → 模型」检查可用模型和连接/));
     expect(onOpenSettings).toHaveBeenCalled();
   });
 
@@ -43,7 +43,7 @@ describe("Composer", () => {
   it("配置提示支持键盘打开设置", () => {
     const onOpenSettings = vi.fn();
     render(<Composer {...base} apiReady={false} onOpenSettings={onOpenSettings} />);
-    fireEvent.keyDown(screen.getByRole("button", { name: "请先配置 API Key 开始使用" }), { key: "Enter" });
+    fireEvent.keyDown(screen.getByRole("button", { name: "请先在「设置 → 模型」检查可用模型和连接" }), { key: "Enter" });
     expect(onOpenSettings).toHaveBeenCalledOnce();
   });
 

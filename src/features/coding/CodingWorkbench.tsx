@@ -1187,7 +1187,7 @@ export function CodingWorkbench({
         <div className="coding-workbench__welcome">
           <FolderGit2 size={32} />
           <h1>打开代码库开始开发</h1>
-          <p>在同一个工作台里理解代码、交给 Agent 实现、审阅变更并交付。</p>
+          <p>选择代码目录，描述开发目标，查看执行过程、审阅代码变更并验证结果。</p>
           <button
             type="button"
             className="coding-primary-btn"

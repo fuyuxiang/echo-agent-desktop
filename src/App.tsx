@@ -1114,7 +1114,7 @@ function Shell() {
     ? activeSessionModelId !== undefined
     : newSessionModelId !== undefined;
   const chatReady = !!init?.auth.ready && !!activeSessionModelId && !modelSwitching && !sessionLoading;
-  const runtimeSetupHint = init?.auth.reason ?? "请先在「设置 → 模型」配置 API Key";
+  const runtimeSetupHint = init?.auth.reason ?? "请先在「设置 → 模型」检查可用模型和连接";
   const chatSetupHint = sessionLoading
     ? "正在加载会话信息…"
     : modelSwitching
@@ -2910,12 +2910,12 @@ function Shell() {
               </button>
             </div>
           ) : !init ? (
-            <div className="app__notice">正在本地初始化 agent…</div>
+            <div className="app__notice">正在准备任务执行环境…</div>
           ) : !init.ok ? (
             <div className="app__notice app__notice--err">
-              EchoAgent 未就绪:{init.auth.reason ?? "未知原因"}
+              EchoAgent 尚未就绪：{init.auth.reason ?? "未知原因"}
               <br />
-              请在「设置 → 模型」配置模型厂商和 API Key。
+              请在「设置 → 模型」检查可用模型和连接。
             </div>
           ) : codingWorkspaceActive ? null : (
             <Suspense fallback={<div className="app__notice" role="status">正在加载界面…</div>}>

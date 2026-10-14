@@ -131,7 +131,7 @@ function automationModelError(
   if (!draft.modelId) {
     return autoModelId
       ? null
-      : "Auto 当前没有可用模型，请先在“设置 → 模型与连接”配置模型。";
+      : "当前没有可用的默认模型，请在「设置 → 模型」检查连接。";
   }
   return models.some((model) => model.id === draft.modelId)
     ? null
@@ -349,7 +349,7 @@ export function AutomationPanel({
       const [catalog, auth] = modelResult.value;
       const options = filterModelsByRuntimeCatalog(flattenModels(catalog), auth.runtimeModels);
       setModels(options);
-      setModelRuntimeError(auth.ready ? undefined : (auth.reason ?? "Agent Runtime 模型尚未就绪，请稍后重试。"));
+      setModelRuntimeError(auth.ready ? undefined : (auth.reason ?? "任务模型尚未就绪，请稍后重试或检查模型连接。"));
       setAutoModelId(
         auth.ready && options.some((model) => model.id === auth.defaultModelId)
           ? auth.defaultModelId
@@ -976,7 +976,7 @@ export function AutomationPanel({
               <div className="atm-empty-state-icon">
                 <AutomationEmptyAlarmIcon width={48} height={48} />
               </div>
-              <div className="atm-empty-state-text">开启你的第一个自动化任务吧</div>
+              <div className="atm-empty-state-text">创建定时任务，按计划处理重复工作</div>
               <div className="atm-empty-state-actions">
                 <button type="button" className="atm-empty-action-btn" onClick={() => handleCreate()}>
                   + 添加自动化
@@ -993,7 +993,7 @@ export function AutomationPanel({
           <div className="atm-task-list">
             {scheduledAutomations.length > 0 && (
               <div className="atm-background-notice" role="status">
-                自动化正在后台调度。关闭窗口后会驻留系统托盘，并在开机登录时自动启动；从托盘选择“退出 EchoAgent”会停止本次运行。
+                定时任务需要 EchoAgent 持续运行。关闭窗口后能否继续运行取决于「设置 → 系统设置」中的后台运行选项；完全退出会停止任务和调度。有启用任务时会尝试设置开机启动。
               </div>
             )}
             {filteredScheduled.length > 0 && <div className="atm-task-group-label">当前</div>}

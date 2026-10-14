@@ -290,7 +290,7 @@ page.setDefaultNavigationTimeout(60000);
   await page.getByRole("dialog", { name: "创建专家" }).waitFor();
   await page.getByRole("textbox", { name: "专家名称" }).fill("评审专家");
   await page.getByRole("textbox", { name: "专家描述" }).fill("检查产品与实现的一致性");
-  await page.getByRole("textbox", { name: "专家 System Prompt" }).fill("仔细检查需求和代码，给出可验证的结论。");
+  await page.getByRole("textbox", { name: "专家指令" }).fill("仔细检查需求和代码，给出可验证的结论。");
   await page.getByRole("dialog", { name: "创建专家" }).getByRole("button", { name: "创建", exact: true }).click();
   await page.getByRole("button", { name: "查看专家 评审专家 详情" }).waitFor();
   for (const label of ["技能", "连接器", "插件", "浏览市场", "专家"]) {
@@ -329,7 +329,7 @@ page.setDefaultNavigationTimeout(60000);
   await createDialog.waitFor();
   assert.equal(await page.getByRole("navigation", { name: "扩展管理" }).count(), 1);
   await createDialog.getByRole("textbox", { name: "专家名称" }).fill("入口验证专家");
-  await createDialog.getByRole("textbox", { name: "专家 System Prompt" }).fill("帮助验证专家创建入口。");
+  await createDialog.getByRole("textbox", { name: "专家指令" }).fill("帮助验证专家创建入口。");
   await createDialog.getByRole("button", { name: "创建", exact: true }).click();
   await page.getByRole("button", { name: "查看专家 入口验证专家 详情" }).waitFor();
   await page.getByRole("button", { name: "返回对话" }).click();

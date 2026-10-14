@@ -228,7 +228,7 @@ describe("ProjectsPanel 项目操作菜单", () => {
     fireEvent.change(within(dialog).getByRole("combobox", { name: "默认执行模型" }), {
       target: { value: "model-b" },
     });
-    fireEvent.click(within(dialog).getByRole("button", { name: "确定" }));
+    fireEvent.click(within(dialog).getByRole("button", { name: "创建项目" }));
 
     await waitFor(() => expect(useProjectsStore.getState().projects[0]).toMatchObject({
       name: "模型定制项目",

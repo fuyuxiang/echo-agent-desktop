@@ -194,7 +194,7 @@ export function ProjectsPanel({
     <div className="project-page">
       {persistError && (
         <div className="project-persist-alert" role="alert">
-          <span>项目已保存在本机缓存，但后端落盘失败：{persistError}</span>
+          <span>项目已保存在本机缓存，但项目文件保存失败，请重试：{persistError}</span>
           <button type="button" onClick={retryPersist} disabled={persisting}>
             {persisting ? "重试中…" : "重试"}
           </button>
@@ -203,7 +203,7 @@ export function ProjectsPanel({
       <section className="project-hero">
         <div className="project-hero__text">
           <h1 className="project-hero__title">项目</h1>
-          <p className="project-hero__subtitle">围绕目标组织上下文、对话与交付资产</p>
+          <p className="project-hero__subtitle">集中管理项目资料、任务对话和交付成果</p>
           <button ref={createButtonRef} type="button" className="project-hero__create" onClick={() => setCreate({})}>
             <AddIcon size="sm" />
             <span>新建项目</span>
@@ -753,7 +753,7 @@ function CreateProjectDialog({
               value={instructions}
               onChange={(e) => setInstructions(e.target.value)}
               rows={5}
-              placeholder="提供当前项目的背景信息和规范，让 EchoAgent 的回复更精准、更符合要求。比如：项目目标、团队习惯、风格偏好、输出约束等"
+              placeholder="填写项目目标、背景、工作规范和交付要求，供项目任务参考"
             />
           </div>
 
@@ -765,7 +765,7 @@ function CreateProjectDialog({
         <div className="create-colleague-footer create-project-footer">
           <span className="proj-version-note">切换模板将替换指令及连接器、专家和技能配置。</span>
           <button className="btn btn--ghost" onClick={cancel}>取消</button>
-          <button className="btn btn--primary" onClick={submit} disabled={!name.trim()}>确定</button>
+          <button className="btn btn--primary" onClick={submit} disabled={!name.trim()}>创建项目</button>
         </div>
       </div>
 
