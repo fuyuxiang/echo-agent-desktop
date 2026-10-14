@@ -8,6 +8,7 @@ import { join } from "node:path";
 import assert from "node:assert/strict";
 import { validateConversationLayout } from "./validate-conversation-layout.mjs";
 import { validateSidebarScroll } from "./validate-sidebar-scroll.mjs";
+import { validateOfficeExportMenu } from "./validate-office-export-menu.mjs";
 
 const output = reviewOutput(mkdtempSync(join(tmpdir(), "echo-ui-surfaces-")));
 console.log(`UI screenshots: ${output}`);
@@ -120,6 +121,7 @@ page.setDefaultNavigationTimeout(60000);
         await page.locator(".msg-wrap--jump-target", { hasText: "检查蓝牙遥控器" }).waitFor();
         assert.equal(await dialog.count(), 0);
         await page.getByRole("button", { name: "回到最新消息并恢复自动跟随" }).click();
+        layouts += await validateOfficeExportMenu(page, output, { width, height, theme });
         continue;
       }
       if (surface === "meeting") {
@@ -391,7 +393,7 @@ page.setDefaultNavigationTimeout(60000);
   await page.screenshot({ path: join(output, "automation-workspace-input.png") });
   layouts += 1;
   assert.deepEqual(errors, [], "browser runtime errors");
-  console.log(JSON.stringify({ passed: true, screenshots: output, layouts, interactions: ["meeting source selection", "organization document preview", "conversation question navigation", "memory", "notification", "storage", "expert creation", "expert entry and refresh", "extension navigation", "font scaling", "project keyboard navigation", "workspace menu tooltip dismissal", "cross-session scroll restoration", "task panel docking", "sidebar font scaling and hover", "independent sidebar list scrolling"] }, null, 2));
+  console.log(JSON.stringify({ passed: true, screenshots: output, layouts, interactions: ["meeting source selection", "organization document preview", "conversation question navigation", "office export scope, keyboard navigation and font scaling", "memory", "notification", "storage", "expert creation", "expert entry and refresh", "extension navigation", "font scaling", "project keyboard navigation", "workspace menu tooltip dismissal", "cross-session scroll restoration", "task panel docking", "sidebar font scaling and hover", "independent sidebar list scrolling"] }, null, 2));
 } finally {
   await browser?.close();
   await server.close();

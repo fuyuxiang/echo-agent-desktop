@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
-import { fireEvent, render, screen } from "@testing-library/react";
+import { act, fireEvent, render, screen } from "@testing-library/react";
 import { PluginsPanel } from "../PluginsPanel";
 import { pluginsList } from "@/lib/agent-client";
 
@@ -34,5 +34,18 @@ describe("PluginsPanel load states", () => {
     expect(await screen.findByRole("alert")).toHaveTextContent("下方保留上次加载的结果");
     expect(screen.getByText("评审插件")).toBeInTheDocument();
     expect(screen.queryByText("暂无插件。")).toBeNull();
+  });
+
+  it("discards a previous project's delayed plugin list after switching sessions", async () => {
+    let resolveOld!: (value: { plugins: { name: string; enabled: boolean; trusted: boolean }[] }) => void;
+    vi.mocked(pluginsList)
+      .mockReturnValueOnce(new Promise((resolve) => { resolveOld = resolve; }))
+      .mockResolvedValueOnce({ plugins: [{ name: "当前项目插件", enabled: true, trusted: true }] });
+    const { rerender } = render(<PluginsPanel sessionId="old-session" />);
+    rerender(<PluginsPanel sessionId="new-session" />);
+    expect(await screen.findByText("当前项目插件")).toBeInTheDocument();
+    await act(async () => resolveOld({ plugins: [{ name: "旧项目插件", enabled: true, trusted: true }] }));
+    expect(screen.queryByText("旧项目插件")).toBeNull();
+    expect(screen.getByText("当前项目插件")).toBeInTheDocument();
   });
 });

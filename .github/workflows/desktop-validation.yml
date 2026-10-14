@@ -59,7 +59,7 @@ jobs:
           PUPPETEER_SKIP_DOWNLOAD: '1'
       - run: node vendor/theia-platform/node_modules/playwright/cli.js install chromium
       - run: node scripts/validate-theia-runtime.mjs
-      - run: cargo test --locked --manifest-path src-tauri/Cargo.toml --lib --tests -j 2
+      - run: pnpm test:rust
         env:
           ECHO_VALIDATE_LONG_PATHS: ${{ runner.os == 'Windows' && '1' || '0' }}
       - name: Start packaged macOS WebView, IDE and native IPC

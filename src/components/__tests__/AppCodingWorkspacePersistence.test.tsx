@@ -15,8 +15,11 @@ vi.mock("../ThemeProvider", () => ({ ThemeProvider: ({ children }: { children: R
 vi.mock("../TitleBar", () => ({ TitleBar: () => null }));
 vi.mock("../HomePage", () => ({ HomePage: () => <div>首页</div> }));
 vi.mock("../PlaceholderPage", () => ({
-  PlaceholderPage: ({ label, onRegisterCodingLeaveGuard }: {
+  PlaceholderPage: ({ label, cwd, codingWorkspaces = [], onSelectWorkspace, onRegisterCodingLeaveGuard }: {
     label: string;
+    cwd?: string;
+    codingWorkspaces?: Array<{ cwd: string; sessionCount: number; lastTitle?: string }>;
+    onSelectWorkspace?: (cwd: string) => void;
     onRegisterCodingLeaveGuard?: (guard: (() => Promise<boolean>) | null) => void;
   }) => {
     useEffect(() => {
@@ -25,7 +28,11 @@ vi.mock("../PlaceholderPage", () => ({
       return () => onRegisterCodingLeaveGuard?.(null);
     }, [label, onRegisterCodingLeaveGuard]);
     return label === "代码开发"
-      ? <div data-testid="coding-frame">IDE</div>
+      ? <div data-testid="coding-frame">IDE<span data-testid="coding-cwd">{cwd}</span>
+        <output data-testid="coding-projects">{JSON.stringify(codingWorkspaces)}</output>
+        <button onClick={() => onSelectWorkspace?.("/isolated-worktree")}>打开并行工作树</button>
+        {codingWorkspaces.map(workspace => <button key={workspace.cwd} onClick={() => onSelectWorkspace?.(workspace.cwd)}>切回 {workspace.cwd}</button>)}
+      </div>
       : <div>项目页面</div>;
   },
 }));
@@ -68,6 +75,20 @@ beforeEach(() => {
 });
 
 describe("代码开发页面生命周期", () => {
+  it("keeps the implicit original repository reachable and persistent after opening a worktree", async () => {
+    render(<App />);
+    await screen.findByText("首页");
+    fireEvent.click(screen.getByText("打开代码开发"));
+    await waitFor(() => expect(screen.getByTestId("coding-cwd")).toHaveTextContent("/repo"));
+    fireEvent.click(screen.getByText("打开并行工作树"));
+    await waitFor(() => expect(screen.getByTestId("coding-cwd")).toHaveTextContent("/isolated-worktree"));
+    const projects = JSON.parse(screen.getByTestId("coding-projects").textContent!);
+    expect(projects.map((workspace: { cwd: string }) => workspace.cwd)).toEqual(["/isolated-worktree", "/repo"]);
+    await waitFor(() => expect(JSON.parse(localStorage.getItem("echo-coding-workspaces")!)).toEqual(projects));
+    fireEvent.click(screen.getByText("切回 /repo"));
+    await waitFor(() => expect(screen.getByTestId("coding-cwd")).toHaveTextContent("/repo"));
+    expect(new Set(JSON.parse(screen.getByTestId("coding-projects").textContent!).map((workspace: { cwd: string }) => workspace.cwd)).size).toBe(2);
+  });
   it("returns to the existing IDE surface after navigating to another page", async () => {
     render(<App />);
     await screen.findByText("首页");
@@ -84,5 +105,16 @@ describe("代码开发页面生命周期", () => {
     fireEvent.click(screen.getByText("打开代码开发"));
     await waitFor(() => expect(surface).not.toHaveAttribute("hidden"));
     expect(screen.getByTestId("coding-frame")).toBe(frame);
+  });
+
+  it("retains existing original workspace metadata when adding an implicit project", async () => {
+    const original = { cwd: "/repo", sessionCount: 7, lastTitle: "中文原项目" };
+    vi.mocked(client.agentListWorkspaces).mockResolvedValue([original]);
+    render(<App />);
+    await waitFor(() => expect(useSessionsStore.getState().workspaces).toContainEqual(original));
+    fireEvent.click(screen.getByText("打开代码开发"));
+    await screen.findByTestId("coding-frame");
+    fireEvent.click(screen.getByText("打开并行工作树"));
+    await waitFor(() => expect(JSON.parse(screen.getByTestId("coding-projects").textContent!)).toContainEqual(original));
   });
 });

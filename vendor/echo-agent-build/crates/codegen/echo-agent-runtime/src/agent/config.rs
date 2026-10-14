@@ -946,11 +946,15 @@ impl PluginsConfig {
     pub(crate) fn to_discovery_config(
         &self,
     ) -> echo_agent_core::plugins::discovery::DiscoveryConfig {
+        let (disabled_marketplace_sources, disabled_marketplace_source_aliases) =
+            crate::plugin::marketplace_source_revocations();
         echo_agent_core::plugins::discovery::DiscoveryConfig {
             cli_plugin_dirs: self.cli_plugin_dirs.clone(),
             config_paths: self.paths.iter().map(std::path::PathBuf::from).collect(),
             disabled: self.disabled.clone(),
             enabled: self.enabled.clone(),
+            disabled_marketplace_sources,
+            disabled_marketplace_source_aliases,
         }
     }
 }
@@ -1213,6 +1217,13 @@ pub struct MarketplaceConfig {
     /// `[[marketplace.sources]]` entries.
     #[serde(default)]
     pub sources: Vec<MarketplaceSourceEntry>,
+    /// Source identities revoked in this Echo profile. External compatibility
+    /// settings and installed files remain read-only discovery inputs.
+    #[serde(default)]
+    pub disabled_sources: Vec<String>,
+    /// Local logical alias -> canonical identity captured at revocation.
+    #[serde(default)]
+    pub disabled_source_aliases: std::collections::BTreeMap<String, String>,
     /// Written/read out-of-band by `extensions::marketplace`, opaque so a wrong-typed value can't fail load.
     #[serde(default)]
     pub official_marketplace_auto_installed: Option<toml::Value>,

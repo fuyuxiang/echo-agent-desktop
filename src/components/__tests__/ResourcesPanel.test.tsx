@@ -78,6 +78,29 @@ describe("ResourcesPanel", () => {
     await waitFor(() => expect(api.memoryFlush).toHaveBeenCalledWith("session-1"));
   });
 
+  it("切换工作区保留未保存草稿，并保存到原工作区", async () => {
+    api.memoryList.mockResolvedValue([]);
+    const { rerender } = render(<ResourcesPanel cwd="/original-project" sessionId="session-a" />);
+    fireEvent.click(await screen.findByRole("button", { name: "追加记忆到文档" }));
+    fireEvent.change(screen.getByRole("textbox", { name: "记忆内容" }), { target: { value: "原项目发布规范" } });
+    rerender(<ResourcesPanel cwd="/other-project" sessionId="session-b" />);
+    expect(screen.getByRole("textbox", { name: "记忆内容" })).toHaveValue("原项目发布规范");
+    expect(screen.getByText("此草稿保存到工作区：/original-project")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "AI 整理" })).toBeDisabled();
+    fireEvent.click(screen.getByRole("button", { name: "添加" }));
+    await waitFor(() => expect(api.memoryAppend).toHaveBeenCalledWith("workspace", "原项目发布规范", "/original-project"));
+  });
+
+  it("新工作区加载期间不显示可编辑的旧工作区记忆", async () => {
+    api.memoryList.mockResolvedValueOnce([{ ...GLOBAL_ENTRY, scope: "workspace", content: "旧工作区规范" }])
+      .mockReturnValueOnce(new Promise(() => {}));
+    const { rerender } = render(<ResourcesPanel cwd="/original-project" />);
+    await screen.findByText("旧工作区规范");
+    rerender(<ResourcesPanel cwd="/other-project" />);
+    expect(screen.queryByText("旧工作区规范")).toBeNull();
+    expect(screen.queryByTitle("编辑")).toBeNull();
+  });
+
   it("提取被跳过时不显示保存成功", async () => {
     const onToast = vi.fn();
     api.memoryFlush.mockResolvedValueOnce(false);

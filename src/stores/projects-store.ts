@@ -223,6 +223,8 @@ interface ProjectsState {
   removeConversation: (id: string, sessionId: string) => void;
   /** Move a catalog task into one project without changing the runtime session. */
   moveSessionToProject: (id: string, session: SessionSummary) => Promise<void>;
+  /** Link a copied session to its source project without cloning work items. */
+  associateForkWithSourceProject: (sourceSessionId: string, fork: SessionSummary) => Promise<string | null>;
   /** Remove a session from one project without deleting the underlying history. */
   detachSessionFromProject: (id: string, sessionId: string) => Promise<void>;
   setProjectContextPending: (id: string, sessionId: string, pending: boolean) => void;
@@ -401,6 +403,40 @@ export const useProjectsStore = create<ProjectsState>((set, get) => {
       } : project);
       await commitMembership(next);
     },
+    associateForkWithSourceProject: async (sourceSessionId, fork) => {
+      if (!fork.sessionId || fork.sessionId === sourceSessionId || fork.hidden || fork.sessionKind === "subagent") {
+        throw new Error("分叉会话标识无效");
+      }
+      const projects = get().projects;
+      const owns = (project: ProjectMeta, sessionId: string) => (
+        project.conversations.some((item) => item.sessionId === sessionId)
+        || project.plans.some((item) => item.sessionId === sessionId)
+        || project.tasks.some((item) => item.sessionId === sessionId)
+      );
+      const sources = projects.filter((project) => owns(project, sourceSessionId));
+      if (sources.length === 0) return null;
+      if (sources.length !== 1) throw new Error("源会话的项目归属冲突，请先检查项目关联");
+      if (projects.some((project) => owns(project, fork.sessionId))) {
+        throw new Error("分叉会话已归属项目");
+      }
+      const source = sources[0];
+      const conversation = source.conversations.find((item) => item.sessionId === sourceSessionId);
+      const next = projects.map((project) => project.id === source.id ? {
+        ...project,
+        conversations: [{
+          sessionId: fork.sessionId,
+          title: fork.title || "未命名会话",
+          createdAt: new Date().toISOString(),
+          modelId: fork.currentModelId,
+          archived: !!fork.archived,
+          // Work-item-only legacy references have no context provenance;
+          // their new conversation receives the current contract once.
+          pendingProjectContext: conversation ? !!conversation.pendingProjectContext : true,
+        }, ...project.conversations],
+      } : project);
+      await commitMembership(next);
+      return source.id;
+    },
     detachSessionFromProject: async (id, sessionId) => {
       const projects = get().projects;
       const project = projects.find((item) => item.id === id);
@@ -565,20 +601,55 @@ export const useProjectsStore = create<ProjectsState>((set, get) => {
  */
 export async function hydrateProjectsFromBackend(): Promise<void> {
   const cached = useProjectsStore.getState().projects;
+  const revision = persistRevision;
   let hasPendingSync = false;
   try { hasPendingSync = window.localStorage.getItem(DIRTY_KEY) === "1"; } catch { /* cache unavailable */ }
   if (hasPendingSync) {
-    await projectsSave(cached);
-    try { window.localStorage.removeItem(DIRTY_KEY); } catch { /* cache unavailable */ }
-    useProjectsStore.setState({ persisting: false, persistError: null });
+    // Use the normal write queue: a startup retry must never finish after and
+    // overwrite a more recent user edit or clear its dirty-cache marker.
+    await persist(cached);
     return;
   }
   const backend = await projectsLoad<ProjectMeta>();
-  if (backend.length === 0 && cached.length > 0) {
-    await projectsSave(cached);
+  const latest = useProjectsStore.getState().projects;
+  const normalized = backend.map(normalize).filter(Boolean) as ProjectMeta[];
+  if (revision !== persistRevision || latest !== cached) {
+    // Startup is asynchronous and the cached project UI is already usable.
+    // Rebase only edits made since the read began, retaining backend-only rows
+    // and fields while honoring new/deleted projects and explicit local edits.
+    const baseById = new Map(cached.map((project) => [project.id, project]));
+    const localById = new Map(latest.map((project) => [project.id, project]));
+    const backendById = new Map(normalized.map((project) => [project.id, project]));
+    const merged: ProjectMeta[] = [];
+    for (const local of latest) {
+      const base = baseById.get(local.id);
+      const stored = backendById.get(local.id);
+      if (!base) { merged.push(local); continue; }
+      if (!stored) {
+        if (JSON.stringify(base) !== JSON.stringify(local) || backend.length === 0) merged.push(local);
+        continue;
+      }
+      const result = { ...stored } as Record<string, unknown>;
+      const initial = base as unknown as Record<string, unknown>;
+      const updated = local as unknown as Record<string, unknown>;
+      for (const key of new Set([...Object.keys(initial), ...Object.keys(updated)])) {
+        if (JSON.stringify(initial[key]) === JSON.stringify(updated[key])) continue;
+        if (key in updated) result[key] = updated[key];
+        else delete result[key];
+      }
+      merged.push(result as unknown as ProjectMeta);
+    }
+    for (const stored of normalized) {
+      if (!localById.has(stored.id) && !baseById.has(stored.id)) merged.push(stored);
+    }
+    useProjectsStore.setState({ projects: merged });
+    await persist(merged);
     return;
   }
-  const normalized = backend.map(normalize).filter(Boolean) as ProjectMeta[];
+  if (backend.length === 0 && cached.length > 0) {
+    await persist(cached);
+    return;
+  }
   useProjectsStore.setState({ projects: normalized });
   saveLocal(normalized);
 }

@@ -1,5 +1,11 @@
 {
   "plugins": {
+    "vscode.git-base": {
+      "sha256": "956c41e4e8377a6b113a6a64fcd5308deaad44a827288f6bfcd5cf1c83037483"
+    },
+    "vscode.git": {
+      "sha256": "44909b81d3266860f02733c08475ab5fc66c0c1d7259b3c1b164e783559d9291"
+    },
     "vscode.javascript": {
       "sha256": "df55b5174c57ec057d78d4b9ddd225cc36095b6fc845f1a0df87f1e13dfb64b2"
     },

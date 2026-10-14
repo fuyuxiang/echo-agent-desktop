@@ -15,7 +15,7 @@ export interface AppUpdateCheck {
 }
 
 export interface AppUpdateProgress {
-  event: "started" | "progress" | "downloaded" | "installed";
+  event: "started" | "progress" | "downloaded" | "installed" | "installer-started";
   downloaded: number;
   total?: number | null;
 }

@@ -1,4 +1,4 @@
-import { memo, useCallback, useEffect, useRef, useState } from "react";
+import { memo, useCallback, useEffect, useId, useRef, useState } from "react";
 import {
   Check,
   ChevronDown,
@@ -139,6 +139,8 @@ export const MessageItem = memo(function MessageItem({
   const exportMenuRef = useRef<HTMLDivElement>(null);
   const exportMenuTriggerRef = useRef<HTMLButtonElement>(null);
   const exportMenuListRef = useRef<HTMLDivElement>(null);
+  const exportDescriptionId = useId();
+  const exportSpreadsheetDescriptionId = useId();
 
   useEffect(() => () => {
     stopSpeakingRef.current?.();
@@ -589,30 +591,41 @@ export const MessageItem = memo(function MessageItem({
                       <ChevronDown size={13} />
                     </button>
                     {exportMenuOpen && (
-                      <div className="msg__copy-menu" role="menu" aria-label="选择导出格式"
-                        ref={exportMenuListRef}
-                        onKeyDown={(event) => {
-                          const items = Array.from(exportMenuListRef.current?.querySelectorAll<HTMLButtonElement>('[role="menuitem"]') ?? []);
-                          const index = items.indexOf(document.activeElement as HTMLButtonElement);
-                          if (event.key === "ArrowDown" || event.key === "ArrowUp") {
-                            event.preventDefault();
-                            const delta = event.key === "ArrowDown" ? 1 : -1;
-                            items[(index + delta + items.length) % items.length]?.focus();
-                          } else if (event.key === "Home" || event.key === "End") {
-                            event.preventDefault();
-                            items[event.key === "Home" ? 0 : items.length - 1]?.focus();
-                          }
-                        }}>
-                        {(["docx", "pdf", "xlsx", "pptx"] as const).map((format) => (
-                          <button
-                            type="button"
-                            role="menuitem"
-                            key={format}
-                            onClick={() => void exportAnswer(format)}
-                          >
-                            <span>{format === "docx" ? "Word" : format === "xlsx" ? "Excel" : format === "pptx" ? "PPT" : "PDF"}</span>
-                          </button>
-                        ))}
+                      <div className="msg__copy-menu msg__export-menu">
+                        <p className="msg__export-note" id={exportDescriptionId}>
+                          公式和 Mermaid 图表以原始文本保留。图表可从图表菜单下载 SVG。
+                        </p>
+                        <p className="msg__export-note" id={exportSpreadsheetDescriptionId}>
+                          Excel：回复含表格时，仅导出表格。
+                        </p>
+                        <div className="msg__export-formats" role="menu" aria-label="选择导出格式"
+                          ref={exportMenuListRef}
+                          onKeyDown={(event) => {
+                            const items = Array.from(exportMenuListRef.current?.querySelectorAll<HTMLButtonElement>('[role="menuitem"]') ?? []);
+                            const index = items.indexOf(document.activeElement as HTMLButtonElement);
+                            if (event.key === "ArrowDown" || event.key === "ArrowUp") {
+                              event.preventDefault();
+                              const delta = event.key === "ArrowDown" ? 1 : -1;
+                              items[(index + delta + items.length) % items.length]?.focus();
+                            } else if (event.key === "Home" || event.key === "End") {
+                              event.preventDefault();
+                              items[event.key === "Home" ? 0 : items.length - 1]?.focus();
+                            }
+                          }}>
+                          {(["docx", "pdf", "xlsx", "pptx"] as const).map((format) => (
+                            <button
+                              type="button"
+                              role="menuitem"
+                              aria-describedby={format === "xlsx"
+                                ? `${exportDescriptionId} ${exportSpreadsheetDescriptionId}`
+                                : exportDescriptionId}
+                              key={format}
+                              onClick={() => void exportAnswer(format)}
+                            >
+                              <span>{format === "docx" ? "Word" : format === "xlsx" ? "Excel" : format === "pptx" ? "PPT" : "PDF"}</span>
+                            </button>
+                          ))}
+                        </div>
                       </div>
                     )}
                   </div>

@@ -18,6 +18,7 @@ pub mod install_registry;
 pub mod local_refresh;
 pub mod manifest;
 pub mod marketplace;
+pub mod marketplace_scope;
 pub mod registry;
 pub mod trust;
 

@@ -6,6 +6,13 @@ import { listen } from "@tauri-apps/api/event";
 
 vi.mock("@tauri-apps/api/core", () => ({ invoke: vi.fn(async () => null) }));
 vi.mock("@tauri-apps/api/event", () => ({ listen: vi.fn(async () => () => {}) }));
+const recorder = vi.hoisted(() => ({
+  current: vi.fn(), stop: vi.fn(), subscribe: vi.fn(() => () => {}),
+  syncNative: vi.fn(async () => {}), setPaused: vi.fn(async () => {}),
+}));
+vi.mock("@/lib/meeting-minutes", async (original) => ({
+  ...await original<object>(), meetingRecorder: recorder,
+}));
 vi.mock("@/lib/kb-source-storage", () => ({ hydrateKnowledgeSources: vi.fn(async () => {}) }));
 vi.mock("@/lib/artifact-catalog", () => ({ indexTaskArtifacts: vi.fn() }));
 vi.mock("@/stores/projects-store", async (original) => ({
@@ -66,6 +73,8 @@ import * as client from "@/lib/agent-client";
 import { useSessionsStore } from "@/stores/sessions-store";
 import { useSessionStore } from "@/stores/session-store";
 import { useProjectsStore } from "@/stores/projects-store";
+import { usePermissionStore } from "@/stores/permission-store";
+import { useQuestionStore } from "@/stores/question-store";
 
 let handlers: Parameters<typeof client.subscribeAgentEvents>[0];
 const auth = { ready: true, runtimeReady: true, synchronized: true, providers: ["model-a", "model-b"], runtimeModels: ["model-a", "model-b"], defaultModelId: "model-b" };
@@ -84,6 +93,9 @@ beforeEach(() => {
   localStorage.clear();
   useSessionsStore.setState(useSessionsStore.getInitialState());
   useSessionStore.setState(useSessionStore.getInitialState());
+  usePermissionStore.getState().clearAll();
+  useQuestionStore.getState().clearAll();
+  recorder.current.mockReturnValue({ meeting: null, active: false, pendingSave: false });
   useProjectsStore.setState({
     ...useProjectsStore.getInitialState(),
     projects: [],
@@ -92,12 +104,96 @@ beforeEach(() => {
   vi.mocked(client.agentAuthStatus).mockResolvedValue(auth);
   vi.mocked(client.providersList).mockResolvedValue({ providers: [], models: [{ modelId: "model-a", name: "模型 A", providerId: "p" }, { modelId: "model-b", name: "模型 B", providerId: "p" }] } as never);
   vi.mocked(client.agentLoadSession).mockResolvedValue("model-a");
+  vi.mocked(client.agentListAllSessions).mockResolvedValue([]);
   vi.mocked(client.subscribeAgentEvents).mockImplementation(async (value) => { handlers = value; return () => {}; });
   vi.mocked(listen).mockImplementation(async () => () => {});
   vi.mocked(invoke).mockImplementation(async (command) => command === "notification_take_pending_opens" ? [] : null);
 });
 
 describe("自动化会话模型同步", () => {
+  it("已删除会话的迟到事件不能重建消息、审批或问题", async () => {
+    await start();
+    created("model-a");
+    act(() => {
+      useSessionsStore.getState().remove("auto-1");
+      useSessionStore.getState().dropSessionCache("auto-1");
+      handlers.onUpdate?.({ __sessionId: "auto-1", sessionUpdate: "agent_message_chunk", content: { type: "text", text: "迟到内容" } } as never);
+      handlers.onComplete?.({ sessionId: "auto-1", stopReason: "end_turn" } as never);
+      handlers.onSummary?.({ sessionId: "auto-1", title: "已删除任务" });
+      handlers.onPermission?.({ sessionId: "auto-1", requestId: "late-permission", options: [] } as never);
+      handlers.onQuestion?.({ sessionId: "auto-1", requestId: "late-question", questions: [] } as never);
+    });
+    expect(useSessionStore.getState().transcripts["auto-1"]).toBeUndefined();
+    expect(usePermissionStore.getState().queues["auto-1"]).toBeUndefined();
+    expect(useQuestionStore.getState().queues["auto-1"]).toBeUndefined();
+    expect(useSessionsStore.getState().independent.some((entry) => entry.sessionId === "auto-1")).toBe(false);
+  });
+
+  it("实际App退出监听将保存失败关联请求ID，并在失败后解除遮罩", async () => {
+    const desktop = new Map<string, (payload: unknown) => void>();
+    vi.mocked(listen).mockImplementation(async (event, handler) => {
+      desktop.set(event, (payload) => handler({ payload } as never));
+      return () => {};
+    });
+    vi.mocked(invoke).mockImplementation(async (command) => command === "desktop_exit_prepared" ? true
+      : command === "notification_take_pending_opens" ? [] : null);
+    recorder.current.mockReturnValue({ meeting: { id: "m" }, active: true, pendingSave: true });
+    recorder.stop.mockRejectedValueOnce(new Error("磁盘已满"));
+    await start();
+    await waitFor(() => expect(invoke).toHaveBeenCalledWith("desktop_exit_listener_ready"));
+    act(() => desktop.get("desktop://prepare-exit")?.({ requestId: "recording-exit" }));
+    await waitFor(() => expect(invoke).toHaveBeenCalledWith("desktop_exit_prepared", { requestId: "recording-exit", error: "磁盘已满" }));
+    expect(screen.getByText("正在保存录音与任务数据并准备退出…")).toBeInTheDocument();
+    act(() => desktop.get("desktop://exit-failed")?.({ requestId: "recording-exit", message: "未退出：录音保存失败" }));
+    expect(screen.queryByText("正在保存录音与任务数据并准备退出…")).toBeNull();
+    expect(await screen.findByText("未退出：录音保存失败")).toBeInTheDocument();
+  });
+
+  it("实际App监听注册后重放已挂起退出请求，不漏掉早期通知", async () => {
+    vi.mocked(invoke).mockImplementation(async (command) => command === "desktop_exit_listener_ready"
+      ? { requestId: "early-exit", recordingSaved: false }
+      : command === "desktop_exit_prepared" ? true
+      : command === "notification_take_pending_opens" ? [] : null);
+    await start();
+    await waitFor(() => expect(invoke).toHaveBeenCalledWith("desktop_exit_prepared", { requestId: "early-exit", error: null }));
+    expect(screen.getByText("正在保存录音与任务数据并准备退出…")).toBeInTheDocument();
+    expect(recorder.stop).not.toHaveBeenCalled();
+  });
+
+  it("安装失败后的Runtime恢复重新加载当前任务而非仅刷新模型", async () => {
+    const desktop = new Map<string, () => void>();
+    vi.mocked(listen).mockImplementation(async (event, handler) => {
+      desktop.set(event, () => handler({ payload: null } as never));
+      return () => {};
+    });
+    await start();
+    created("model-a");
+    act(() => {
+      useSessionsStore.getState().setCurrent("auto-1");
+      useSessionStore.getState().setSession("auto-1");
+    });
+    vi.mocked(client.agentListAllSessions).mockResolvedValue([...useSessionsStore.getState().independent]);
+    act(() => desktop.get("desktop://runtime-restart-required")?.());
+    await waitFor(() => expect(client.agentInit).toHaveBeenCalledTimes(2));
+    await waitFor(() => expect(client.agentLoadSession).toHaveBeenCalledWith("auto-1", "/workspace"));
+    expect(useSessionsStore.getState().currentSessionId).toBe("auto-1");
+  });
+
+  it("引擎异常退出后可在原应用重试初始化，并保留会话目录", async () => {
+    await start();
+    created("model-a");
+    act(() => handlers.onAgentDied?.({ reason: "isolated runtime failure" }));
+    const retry = await screen.findByRole("button", { name: "重试初始化" });
+    expect(useSessionsStore.getState().independent.find((entry) => entry.sessionId === "auto-1")?.status).toBe("failed");
+    // Reinitialization reloads the durable native catalog, rather than treating
+    // renderer state as the only copy of an actual saved session.
+    vi.mocked(client.agentListAllSessions).mockResolvedValue([...useSessionsStore.getState().independent]);
+    fireEvent.click(retry);
+    await screen.findByText("首页");
+    expect(client.agentInit).toHaveBeenCalledTimes(2);
+    expect(useSessionsStore.getState().independent.some((entry) => entry.sessionId === "auto-1")).toBe(true);
+  });
+
   it("定时任务运行事件不会把用户已暂停的会话改回运行中", async () => {
     await start();
     act(() => useSessionsStore.getState().upsert({

@@ -81,4 +81,13 @@ describe("FindReferencesView", () => {
       expect(screen.getByText(/未找到 `missing` 的引用/)).toBeInTheDocument(),
     );
   });
+
+  it("索引读取暂时失败后可原位重试相同符号", async () => {
+    vi.mocked(codingApi.refsFind).mockRejectedValueOnce(new Error("索引暂时不可用")).mockResolvedValueOnce([makeHit()]);
+    render(<FindReferencesView root="/repo" symbol="authenticate" onOpenSymbol={vi.fn()} />);
+    fireEvent.click(await screen.findByRole("button", { name: "重试引用搜索" }));
+    expect(await screen.findByText("src/api/auth.ts")).toBeInTheDocument();
+    expect(codingApi.refsFind).toHaveBeenCalledTimes(2);
+    expect(screen.queryByRole("alert")).not.toBeInTheDocument();
+  });
 });

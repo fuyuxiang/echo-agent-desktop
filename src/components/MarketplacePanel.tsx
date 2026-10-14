@@ -179,7 +179,7 @@ export function MarketplacePanel({ sessionId, onToast }: MarketplacePanelProps) 
       if (!sid) return;
       requestConfirmation({
         title: `移除市场源“${source.sourceName}”？`,
-        description: "市场源配置将从本机移除，已安装的插件不会被删除。",
+        description: "将从当前 Echo 配置撤销该市场源，并卸载从该源安装在 Echo 管理目录中的插件。其他应用的配置和文件将保留。",
         confirmLabel: "移除源",
         danger: true,
         action: async () => {
@@ -249,7 +249,7 @@ export function MarketplacePanel({ sessionId, onToast }: MarketplacePanelProps) 
 
   const totalPlugins = allPlugins.length;
   const installedCount = allPlugins.filter(
-    ({ plugin }) => plugin.installStatus === "installed",
+    ({ plugin }) => plugin.installStatus === "installed" || plugin.installStatus === "update_available",
   ).length;
 
   return (
@@ -444,7 +444,7 @@ function MarketplacePluginCard({
   onUpdate: () => void;
   onOpenHomepage: () => void;
 }) {
-  const installed = plugin.installStatus === "installed";
+  const installed = plugin.installStatus === "installed" || plugin.installStatus === "update_available";
   return (
     <div className={`mp-plugin ${installed ? "mp-plugin--installed" : ""}`}>
       <div className="mp-plugin__body">

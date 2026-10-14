@@ -322,10 +322,30 @@ pub(super) enum ResumeAction {
     LeaveOnly,
 }
 fn resume_action_for(outcome: PlanApprovalOutcome, feedback: Option<String>) -> ResumeAction {
+    plan_approval_action_for(outcome, feedback, true)
+}
+/// The same approval decision applies to a running turn and a restored plan.
+/// An empty/unavailable plan file does not invalidate explicit user feedback.
+fn plan_approval_action_for(
+    outcome: PlanApprovalOutcome,
+    feedback: Option<String>,
+    has_plan_content: bool,
+) -> ResumeAction {
     match outcome {
         PlanApprovalOutcome::Approved => ResumeAction::LeaveAndImplement,
         PlanApprovalOutcome::Cancelled => {
-            ResumeAction::StayAndRevise(revise_plan_message(feedback.as_deref().unwrap_or("")))
+            let message = if has_plan_content
+                || feedback
+                    .as_deref()
+                    .is_some_and(|value| !value.trim().is_empty())
+            {
+                revise_plan_message(feedback.as_deref().unwrap_or(""))
+            } else {
+                "The user does not want to exit plan mode. \
+                 Continue planning and ask the user what they would like to do."
+                    .to_string()
+            };
+            ResumeAction::StayAndRevise(message)
         }
         PlanApprovalOutcome::Abandoned => ResumeAction::LeaveOnly,
     }
@@ -1460,8 +1480,12 @@ impl SessionActor {
                 .request_plan_approval(&tool_call_id, plan_content.clone())
                 .await;
             match resp {
-                Ok(parsed) => match PlanApprovalOutcome::from_response(&parsed) {
-                    PlanApprovalOutcome::Abandoned => {
+                Ok(parsed) => match plan_approval_action_for(
+                    PlanApprovalOutcome::from_response(&parsed),
+                    parsed.feedback,
+                    plan_content.is_some(),
+                ) {
+                    ResumeAction::LeaveOnly => {
                         tracing::info!("[exit_plan_mode] user abandoned plan — deactivating");
                         self.leave_plan_mode_to_default();
                         let message = format!(
@@ -1482,14 +1506,7 @@ impl SessionActor {
                         self.chat_state_handle.push_tool_result(tool_chat);
                         return Ok(Err(ToolLoop::Continue));
                     }
-                    PlanApprovalOutcome::Cancelled => {
-                        let message = if plan_content.is_some() {
-                            revise_plan_message(parsed.feedback.as_deref().unwrap_or(""))
-                        } else {
-                            "The user does not want to exit plan mode. \
-                             Continue planning and ask the user what they would like to do."
-                                .to_string()
-                        };
+                    ResumeAction::StayAndRevise(message) => {
                         let tool_update = acp::ToolCallUpdate::new(
                             tool_call_id.clone(),
                             acp::ToolCallUpdateFields::new()
@@ -1504,7 +1521,7 @@ impl SessionActor {
                         self.chat_state_handle.push_tool_result(tool_chat);
                         return Ok(Err(ToolLoop::Continue));
                     }
-                    PlanApprovalOutcome::Approved => {
+                    ResumeAction::LeaveAndImplement => {
                         tracing::info!("[exit_plan_mode] user approved — executing tool");
                     }
                 },
@@ -3326,8 +3343,8 @@ mod plan_mode_edit_gate_tests {
 #[cfg(test)]
 mod plan_approval_helper_tests {
     use super::{
-        PlanApprovalOutcome, ResumeAction, ext_method_no_client, resume_action_for,
-        revise_plan_message,
+        PlanApprovalOutcome, ResumeAction, ext_method_no_client, plan_approval_action_for,
+        resume_action_for, revise_plan_message,
     };
     use echo_agent_tools::implementations::echo_agent_build::exit_plan_mode::ExitPlanModeExtResponse;
     fn resp(outcome: &str) -> ExitPlanModeExtResponse {
@@ -3386,6 +3403,53 @@ mod plan_approval_helper_tests {
         match resume_action_for(PlanApprovalOutcome::Cancelled, Some("tweak it".into())) {
             ResumeAction::StayAndRevise(text) => assert!(text.contains("tweak it")),
             other => panic!("expected StayAndRevise, got {other:?}"),
+        }
+    }
+    #[test]
+    fn cancelled_plan_without_content_preserves_feedback_and_stays_in_plan_mode() {
+        let response: ExitPlanModeExtResponse = serde_json::from_value(serde_json::json!({
+            "outcome": "cancelled",
+            "feedback": "请将计划改为先核验备份，再处理文件；暂不要开始新步骤。"
+        }))
+        .unwrap();
+        let action = plan_approval_action_for(
+            PlanApprovalOutcome::from_response(&response),
+            response.feedback,
+            false,
+        );
+        let ResumeAction::StayAndRevise(message) = action else {
+            panic!("request changes must remain in plan mode");
+        };
+        assert!(message.contains("先核验备份，再处理文件"));
+        assert!(message.contains("暂不要开始新步骤"));
+        assert!(message.contains("The user said:"));
+    }
+    #[test]
+    fn cancelled_plan_without_content_or_feedback_keeps_existing_prompt() {
+        for feedback in [None, Some("   ".to_string())] {
+            assert_eq!(plan_approval_action_for(PlanApprovalOutcome::Cancelled, feedback, false),
+                ResumeAction::StayAndRevise("The user does not want to exit plan mode. Continue planning and ask the user what they would like to do.".to_string()));
+        }
+    }
+    #[test]
+    fn approved_and_abandoned_actions_do_not_change_without_plan_content() {
+        for has_plan_content in [false, true] {
+            assert_eq!(
+                plan_approval_action_for(
+                    PlanApprovalOutcome::Approved,
+                    Some("unused".into()),
+                    has_plan_content
+                ),
+                ResumeAction::LeaveAndImplement
+            );
+            assert_eq!(
+                plan_approval_action_for(
+                    PlanApprovalOutcome::Abandoned,
+                    Some("unused".into()),
+                    has_plan_content
+                ),
+                ResumeAction::LeaveOnly
+            );
         }
     }
 }

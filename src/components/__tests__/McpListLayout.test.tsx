@@ -1,9 +1,10 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { render, screen, waitFor } from "@testing-library/react";
+import { act, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import type { McpServerStatusEvent } from "@/lib/agent-client";
 
 const mocks = vi.hoisted(() => ({
   mcpList: vi.fn(),
-  onMcpStatusEvent: vi.fn(async () => () => {}),
+  onMcpStatusEvent: vi.fn(),
 }));
 
 vi.mock("@/stores/session-store", () => {
@@ -51,6 +52,7 @@ function makeEntry(overrides: Partial<McpServerEntry> & { name: string }): McpSe
 describe("MCP 服务管理列表渲染契约", () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    mocks.onMcpStatusEvent.mockReset().mockResolvedValue(() => {});
   });
 
   it("渲染多个条目时,每个条目都包在 .mcp-item-wrap 内且包含开关与名称", async () => {
@@ -105,5 +107,28 @@ describe("MCP 服务管理列表渲染契约", () => {
     render(<McpModal onClose={vi.fn()} />);
     expect(await screen.findByText("暂无 MCP 服务")).toBeInTheDocument();
     expect(document.querySelectorAll(".mcp-item-wrap").length).toBe(0);
+  });
+
+  it("只显示活动会话的诊断事件", async () => {
+    let handler!: (event: McpServerStatusEvent) => void;
+    mocks.onMcpStatusEvent.mockImplementation(async (callback) => { handler = callback; return () => {}; });
+    mocks.mcpList.mockResolvedValue([makeEntry({ name: "demo", displayName: "Current MCP" })]);
+    render(<McpModal onClose={vi.fn()} />);
+    fireEvent.click(await screen.findByText("Current MCP"));
+    act(() => handler({ sessionId: "other-session", name: "demo", source: "local", status: "unavailable", reason: "handshake_failed", detail: "其他任务的诊断" }));
+    expect(screen.queryByText("其他任务的诊断")).toBeNull();
+    act(() => handler({ sessionId: "session-1", name: "demo", source: "local", status: "unavailable", reason: "handshake_failed", detail: "当前任务的诊断" }));
+    expect(screen.getByText("当前任务的诊断")).toBeInTheDocument();
+  });
+
+  it("面板卸载后迟到的监听注册立即注销", async () => {
+    let resolve!: (stop: () => void) => void;
+    const stop = vi.fn();
+    mocks.onMcpStatusEvent.mockReturnValueOnce(new Promise((done) => { resolve = done; }));
+    mocks.mcpList.mockResolvedValue([]);
+    const { unmount } = render(<McpModal onClose={vi.fn()} />);
+    unmount();
+    await act(async () => resolve(stop));
+    expect(stop).toHaveBeenCalledOnce();
   });
 });

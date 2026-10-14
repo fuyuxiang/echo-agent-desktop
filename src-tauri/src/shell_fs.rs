@@ -84,7 +84,7 @@ impl FilesystemAccess {
         // Knowledge sources are also durable user selections. Load this file
         // only once at native startup: a compromised renderer cannot expand
         // the live allow-list merely by rewriting the descriptor store.
-        if let Ok(serde_json::Value::Array(sources)) = crate::org::org_local_kb_sources_get() {
+        if let Ok(serde_json::Value::Array(sources)) = crate::org::read_local_kb_sources() {
             for source in sources {
                 if let Some(root) = source.get("root").and_then(serde_json::Value::as_str) {
                     let _ = access.authorize_workspace(root);

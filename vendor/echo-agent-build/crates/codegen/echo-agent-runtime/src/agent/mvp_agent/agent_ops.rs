@@ -456,6 +456,14 @@ impl MvpAgent {
     pub async fn flush_all_sessions(&self, grace: std::time::Duration) {
         self.activity.flush_all_sessions(grace).await;
     }
+    /// Checked desktop/embedded-host shutdown: only a successful final
+    /// persistence ACK after SessionEnd permits dropping the Runtime.
+    pub async fn flush_all_sessions_checked(
+        &self,
+        grace: std::time::Duration,
+    ) -> Result<(), String> {
+        self.activity.flush_all_sessions_checked(grace).await
+    }
     /// Install the channel that fans new session cwds into the leader's
     /// `ConfigFileWatcher::watch_path`. Called once after
     /// the watcher is constructed in `agent/app.rs`. In simple /

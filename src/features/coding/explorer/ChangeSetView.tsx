@@ -2,6 +2,7 @@ import { useEffect, useState } from "react";
 import { Check, ChevronDown, ChevronRight, FolderGit2, GitCommitHorizontal, LoaderCircle, Merge, RotateCcw, Trash2 } from "lucide-react";
 
 import type { ChangeSet, CommitHunk, FileChange } from "../lib/types";
+import { useCodingActionScope } from "../hooks/useCodingActionScope";
 
 interface ChangeSetViewProps {
   changeSet: ChangeSet | null;
@@ -62,6 +63,7 @@ export function ChangeSetView({
   const [hunkError, setHunkError] = useState<string | null>(null);
   const [loadingHunks, setLoadingHunks] = useState(false);
   const [selectionTaskId, setSelectionTaskId] = useState<string | undefined>();
+  const isCurrent = useCodingActionScope("", changeSet?.taskId);
   const availableKey = availablePaths.join("\0");
   const selectedPaths = availablePaths.filter((path) => !excludedPaths.includes(path));
   useEffect(() => {
@@ -71,6 +73,8 @@ export function ChangeSetView({
       setExpandedPath(null);
       setHunksByPath({});
       setSelectedHunks({});
+      setLoadingHunks(false);
+      setHunkError(null);
       return;
     }
     const currentPaths = availableKey ? availableKey.split("\0") : [];
@@ -104,15 +108,17 @@ export function ChangeSetView({
     setLoadingHunks(true);
     try {
       const hunks = await onLoadHunks(path);
+      if (!isCurrent()) return;
       setHunksByPath((current) => ({ ...current, [path]: hunks }));
       setSelectedHunks((current) => ({
         ...current,
         [path]: (current[path] ?? []).filter((id) => hunks.some((hunk) => hunk.id === id)),
       }));
     } catch (error) {
+      if (!isCurrent()) return;
       setHunkError(String(error).replace(/^Error:\s*/, ""));
     } finally {
-      setLoadingHunks(false);
+      if (isCurrent()) setLoadingHunks(false);
     }
   };
   const filesystemCheckpoint = changeSet?.baselineMode === "filesystem";

@@ -37,6 +37,14 @@ fn required_cwd(cwd: Option<String>) -> String {
         .unwrap_or_else(process_cwd)
 }
 
+fn configured_source_for_skill(path: &str, configured_paths: &[String]) -> Option<String> {
+    configured_paths
+        .iter()
+        .filter(|configured| Path::new(path).starts_with(Path::new(configured)))
+        .max_by_key(|configured| Path::new(configured).components().count())
+        .cloned()
+}
+
 fn connector_state_from_host(
     enabled: bool,
     auth_required: bool,
@@ -282,11 +290,7 @@ pub async fn skills_list_with_tx(
                     skill.version = crate::skill_installer::managed_skill_version(&path);
                     skill.path = crate::skill_installer::managed_skill_directory(&path);
                 } else {
-                    skill.configured_path = configured_paths
-                        .iter()
-                        .filter(|configured| path.starts_with(configured.as_str()))
-                        .max_by_key(|configured| configured.len())
-                        .cloned();
+                    skill.configured_path = configured_source_for_skill(&path, &configured_paths);
                 }
                 skill.capability = Some(crate::skill_installer::inspect_installed_capability(
                     &path,
@@ -407,6 +411,24 @@ mod tests {
         assert_eq!(required_cwd(Some("/tmp/project".into())), "/tmp/project");
         assert!(!required_cwd(None).trim().is_empty());
         assert!(!required_cwd(Some("  ".into())).trim().is_empty());
+    }
+
+    #[test]
+    fn configured_source_matches_path_components_not_neighbor_prefixes() {
+        let paths = vec!["/tmp/skills/review".into()];
+        assert_eq!(
+            configured_source_for_skill("/tmp/skills/review/SKILL.md", &paths),
+            Some("/tmp/skills/review".into())
+        );
+        assert_eq!(
+            configured_source_for_skill("/tmp/skills/reviewer/SKILL.md", &paths),
+            None
+        );
+        let paths = vec!["/tmp/skills".into(), "/tmp/skills/review".into()];
+        assert_eq!(
+            configured_source_for_skill("/tmp/skills/review/SKILL.md", &paths),
+            Some("/tmp/skills/review".into())
+        );
     }
 
     #[test]

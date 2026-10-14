@@ -16,10 +16,12 @@ vi.mock("@/lib/tauri-kb-reader", () => ({
 
 import { KnowledgeBasePanel } from "../KnowledgeBasePanel";
 import { registerKbProvider, resetKbRegistry, listKbProviders, unregisterKbProvider } from "@/lib/knowledge-base";
+import { resetKnowledgeSourceHydration } from "@/lib/kb-source-storage";
 
 describe("KnowledgeBasePanel", () => {
   beforeEach(() => {
     resetKbRegistry();
+    resetKnowledgeSourceHydration();
     localStorage.removeItem("echoagent.knowledge-sources.v1");
     invokeMock.mockReset();
     invokeMock.mockImplementation(async (command: string, args?: { path: string }) => command === "filesystem_resource_identity" ? { id: `test-${args?.path}`, canonicalPath: args?.path } : undefined);
@@ -265,6 +267,39 @@ describe("KnowledgeBasePanel", () => {
     fireEvent.click(refreshBtn);
     await waitFor(() => expect(rebuild).toHaveBeenCalledTimes(1));
     expect(onToast).toHaveBeenCalledWith(expect.stringContaining("5 项"));
+  });
+
+  it("重建索引后刷新当前查询，移除知识源后不再显示旧命中", async () => {
+    let title = "旧索引内容";
+    registerKbProvider({
+      id: "changing", label: "可更新知识源", isEnabled: () => true,
+      list: () => [{ id: "doc", title }],
+      rebuild: async () => { title = "新索引内容"; return 1; },
+    });
+    registerKbProvider({ id: "empty", label: "空知识源", isEnabled: () => true, list: () => [] });
+    render(<KnowledgeBasePanel />);
+    fireEvent.change(await screen.findByRole("textbox", { name: "搜索知识库" }), { target: { value: "内容" } });
+    expect(await screen.findByText("旧索引内容")).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: /刷新索引/ }));
+    expect(await screen.findByText("新索引内容")).toBeInTheDocument();
+    expect(screen.queryByText("旧索引内容")).toBeNull();
+
+    fireEvent.click(screen.getByRole("button", { name: "移除知识源 可更新知识源" }));
+    await waitFor(() => expect(screen.queryByText("新索引内容")).toBeNull());
+    expect(await screen.findByText("无匹配结果")).toBeInTheDocument();
+  });
+
+  it("索引重建部分失败显示失败源及可重试入口，不误报全部成功", async () => {
+    const rebuild = vi.fn().mockRejectedValueOnce(new Error("目录不可读")).mockResolvedValueOnce(1);
+    registerKbProvider({ id: "flaky-index", label: "离线目录", isEnabled: () => true, list: () => [], rebuild });
+    const onToast = vi.fn();
+    render(<KnowledgeBasePanel onToast={onToast} />);
+    fireEvent.click(await screen.findByRole("button", { name: /刷新索引/ }));
+    expect(await screen.findByRole("alert")).toHaveTextContent("离线目录：目录不可读");
+    expect(onToast).not.toHaveBeenCalledWith(expect.stringContaining("已重建索引"));
+    fireEvent.click(screen.getByRole("button", { name: "重试刷新索引" }));
+    await waitFor(() => expect(screen.queryByRole("alert")).toBeNull());
+    expect(rebuild).toHaveBeenCalledTimes(2);
   });
 
   it("无知识源时不显示「刷新索引」按钮", async () => {

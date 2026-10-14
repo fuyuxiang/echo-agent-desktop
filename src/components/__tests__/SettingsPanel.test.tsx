@@ -508,7 +508,7 @@ describe("SettingsPanel", () => {
   });
 
   it("在设置中集中查看、恢复并打开归档会话", async () => {
-    useSessionsStore.setState({
+    useSessionsStore.setState({ deletedSessionIds: [],
       independent: [
         { sessionId: "active", title: "活动任务", cwd: "/home", archived: false },
         { sessionId: "archived", title: "发布复盘", cwd: "/workspace", archived: true, updatedAt: "2026-09-14T08:00:00Z" },
@@ -557,7 +557,7 @@ describe("SettingsPanel", () => {
   });
 
   it("归档管理支持搜索、范围筛选与永久删除确认", async () => {
-    useSessionsStore.setState({
+    useSessionsStore.setState({ deletedSessionIds: [],
       independent: [
         { sessionId: "standalone", title: "独立归档", cwd: "/home", archived: true },
         { sessionId: "project-chat", title: "项目归档", cwd: "/workspace", archived: true },
@@ -599,7 +599,7 @@ describe("SettingsPanel", () => {
   });
 
   it("归档管理通过显式选择安全地批量永久删除当前筛选结果", async () => {
-    useSessionsStore.setState({
+    useSessionsStore.setState({ deletedSessionIds: [],
       independent: [
         { sessionId: "standalone", title: "独立归档", cwd: "/home", archived: true },
         { sessionId: "project-chat", title: "项目归档", cwd: "/workspace", archived: true },
@@ -651,7 +651,7 @@ describe("SettingsPanel", () => {
   });
 
   it("批量恢复发生部分失败时只保留失败项并提供可重试反馈", async () => {
-    useSessionsStore.setState({
+    useSessionsStore.setState({ deletedSessionIds: [],
       independent: [
         { sessionId: "restore-ok", title: "可恢复归档", cwd: "/home", archived: true },
         { sessionId: "restore-failed", title: "恢复失败归档", cwd: "/workspace", archived: true },

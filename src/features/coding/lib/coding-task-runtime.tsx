@@ -24,6 +24,9 @@ interface RuntimeState {
   tasks: Record<string, TrackedTask>;
   settling: Record<string, boolean>;
   activeRunIds: Record<string, string>;
+  verificationBatches: Record<string, string>;
+  claimVerificationBatch: (root: string, taskId: string) => string | null;
+  releaseVerificationBatch: (root: string, taskId: string, owner: string) => void;
   track: (root: string, taskId: string) => void;
   untrack: (root: string, taskId: string) => void;
   setSettling: (root: string, taskId: string, value: boolean) => void;
@@ -34,10 +37,25 @@ export function codingRuntimeKey(root: string, taskId: string): string {
   return JSON.stringify([root, taskId]);
 }
 
-export const useCodingRuntimeStore = create<RuntimeState>((set) => ({
+export const useCodingRuntimeStore = create<RuntimeState>((set, get) => ({
   tasks: {},
   settling: {},
   activeRunIds: {},
+  verificationBatches: {},
+  claimVerificationBatch: (root, taskId) => {
+    const key = codingRuntimeKey(root, taskId);
+    if (get().verificationBatches[key]) return null;
+    const owner = crypto.randomUUID();
+    set((state) => ({ verificationBatches: { ...state.verificationBatches, [key]: owner } }));
+    return owner;
+  },
+  releaseVerificationBatch: (root, taskId, owner) => set((state) => {
+    const key = codingRuntimeKey(root, taskId);
+    if (state.verificationBatches[key] !== owner) return state;
+    const verificationBatches = { ...state.verificationBatches };
+    delete verificationBatches[key];
+    return { verificationBatches };
+  }),
   track: (root, taskId) => set((state) => {
     const key = codingRuntimeKey(root, taskId);
     return state.tasks[key] ? state : { tasks: { ...state.tasks, [key]: { root, taskId } } };
@@ -99,6 +117,7 @@ function CodingTaskRuntime({ root, taskId }: TrackedTask) {
   const verificationKey = useRef<string | null>(null);
   const followupKey = useRef<string | null>(null);
   const repairKey = useRef<string | null>(null);
+  const verificationClaimed = useCodingRuntimeStore((state) => Boolean(state.verificationBatches[codingRuntimeKey(root, taskId)]));
   const refresh = useCallback(async () => {
     const generation = ++refreshGeneration.current;
     const result = await codingApi.orchestratorState(root, taskId);
@@ -162,9 +181,11 @@ function CodingTaskRuntime({ root, taskId }: TrackedTask) {
   }, [refresh, root, sessionId, taskId]);
 
   useEffect(() => {
-    if (!task || task.phase !== "verifying" || settling) return;
+    if (!task || task.phase !== "verifying" || settling || verificationClaimed) return;
     const key = `${root}:${taskId}:${task.updatedAt}`;
     if (verificationKey.current === key) return;
+    const owner = useCodingRuntimeStore.getState().claimVerificationBatch(root, taskId);
+    if (!owner) return;
     verificationKey.current = key;
     void (async () => {
       try {
@@ -190,9 +211,10 @@ function CodingTaskRuntime({ root, taskId }: TrackedTask) {
         await refresh().catch(() => undefined);
       } finally {
         useCodingRuntimeStore.getState().setActiveRunId(root, taskId, null);
+        useCodingRuntimeStore.getState().releaseVerificationBatch(root, taskId, owner);
       }
     })();
-  }, [refresh, root, settling, task, taskId]);
+  }, [refresh, root, settling, task, taskId, verificationClaimed]);
 
   useEffect(() => {
     if (!task?.nextAction || !sessionId || !transcript || restoring || streaming || settling || awaitingPermission || awaitingQuestion) return;

@@ -29,6 +29,7 @@ vi.mock("@/lib/tauri-kb-reader", () => ({
 import { Sidebar } from "../Sidebar";
 import { KnowledgeBasePanel } from "../KnowledgeBasePanel";
 import { resetKbRegistry, listKbProviders } from "@/lib/knowledge-base";
+import { resetKnowledgeSourceHydration } from "@/lib/kb-source-storage";
 
 /** 构造一个单 entry 的 DEFLATE zip 字节。 */
 function buildSingleEntryZip(entryName: string, xml: string): Uint8Array {
@@ -73,6 +74,7 @@ const base = {
 describe("知识库端到端冒烟", () => {
   beforeEach(() => {
     resetKbRegistry();
+    resetKnowledgeSourceHydration();
     localStorage.removeItem("echoagent.knowledge-sources.v1");
     invokeMock.mockReset();
     invokeMock.mockImplementation(async (command: string, args?: { path: string }) => command === "filesystem_resource_identity" ? { id: `test-${args?.path}`, canonicalPath: args?.path } : undefined);

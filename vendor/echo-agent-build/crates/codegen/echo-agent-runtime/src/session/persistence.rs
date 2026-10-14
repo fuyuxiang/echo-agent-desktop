@@ -1,6 +1,7 @@
 // Modified by EchoAgent for the embedded desktop runtime; see ECHOAGENT_VENDOR.md.
 use chrono::{DateTime, Utc};
 use std::borrow::Cow;
+use std::collections::VecDeque;
 use std::io;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
@@ -366,6 +367,11 @@ pub enum PersistenceMsg {
     /// Unlike `Flush` (fire-and-forget), this is a **sync barrier**: the caller's
     /// oneshot only resolves after `flush_pending()` finishes writing to disk.
     FlushAndAck {
+        respond_to: tokio::sync::oneshot::Sender<io::Result<()>>,
+    },
+    /// Checked host teardown: drain retained updates, then confirm local files
+    /// reached the durable sync barrier. Existing CLI/remote flush stays intact.
+    FlushAndSyncAndAck {
         respond_to: tokio::sync::oneshot::Sender<io::Result<()>>,
     },
     ProbeWritable {
@@ -1178,6 +1184,11 @@ impl From<crate::session::storage::AppendUpdateError> for DurableAppendError {
         use crate::session::storage::AppendUpdateError;
         match error {
             AppendUpdateError::NotCommitted(error) => Self::NotCommitted(error),
+            AppendUpdateError::Committed(error)
+                if crate::session::storage::is_committed_barrier_error(&error) =>
+            {
+                Self::AcknowledgementLost(error)
+            }
             AppendUpdateError::Committed(error) => Self::Committed(error),
         }
     }
@@ -1259,10 +1270,20 @@ impl PersistenceHandle {
     }
 }
 
+#[cfg(test)]
 enum PendingAppendOutcome {
     CommittedOk(acp::SessionNotification),
     CommittedErr(acp::SessionNotification, io::Error),
     NotCommittedErr(acp::SessionNotification, io::Error),
+}
+
+#[derive(Clone)]
+enum PendingChatWrite {
+    Append(ConversationItem),
+    Replace(Vec<ConversationItem>),
+    /// A line landed but its bookkeeping/sync failed. Retry the final save,
+    /// never the append, before allowing a later cache operation to overtake it.
+    SyncCommitted,
 }
 
 struct SessionPersistence {
@@ -1270,6 +1291,11 @@ struct SessionPersistence {
     storage: Arc<dyn StorageAdapter>,
     /// Pending ACP notification for merging consecutive text chunks
     pending_notification: Option<acp::SessionNotification>,
+    /// Uncommitted updates retain FIFO order ahead of the newest merge buffer.
+    /// A committed error is removed here, so retry never duplicates its line.
+    pending_updates: VecDeque<SessionUpdate>,
+    pending_chat_writes: VecDeque<PendingChatWrite>,
+    pending_plan_modes: VecDeque<crate::session::plan_mode::PlanModeSnapshot>,
     rx: mpsc::UnboundedReceiver<PersistenceMsg>,
     remote_sync: Option<RemoteSync>,
     /// True only for sessions created this run (not resumed); gates the
@@ -1531,6 +1557,7 @@ impl SessionPersistence {
         self.remote_sync = Some(remote_sync);
     }
 
+    #[cfg(test)]
     fn finish_pending_append(
         notification: acp::SessionNotification,
         result: Result<(), crate::session::storage::AppendUpdateError>,
@@ -1546,27 +1573,89 @@ impl SessionPersistence {
         }
     }
 
-    /// Restore uncommitted failures; sync committed records before returning errors.
-    async fn drain_pending(&mut self) -> Result<(), crate::session::storage::AppendUpdateError> {
+    fn queue_pending_notification(&mut self) {
         if let Some(notification) = self.pending_notification.take() {
-            let result = self
-                .write_update(&SessionUpdate::Acp(Box::new(notification.clone())))
-                .await;
-            match Self::finish_pending_append(notification, result) {
-                PendingAppendOutcome::CommittedOk(notification) => {
-                    self.queue_acp_sync(notification);
+            self.pending_updates
+                .push_back(SessionUpdate::Acp(Box::new(notification)));
+        }
+    }
+
+    async fn drain_updates(&mut self) -> Result<(), crate::session::storage::AppendUpdateError> {
+        while let Some(update) = self.pending_updates.front().cloned() {
+            let result = self.write_update(&update).await;
+            match result {
+                Err(error @ crate::session::storage::AppendUpdateError::NotCommitted(_)) => {
+                    // Keep this record ahead of all subsequent updates.
+                    return Err(error);
                 }
-                PendingAppendOutcome::CommittedErr(notification, error) => {
-                    self.queue_acp_sync(notification);
-                    return Err(crate::session::storage::AppendUpdateError::Committed(error));
-                }
-                PendingAppendOutcome::NotCommittedErr(notification, error) => {
-                    self.pending_notification = Some(notification);
-                    return Err(crate::session::storage::AppendUpdateError::NotCommitted(
-                        error,
-                    ));
+                committed => {
+                    self.pending_updates.pop_front();
+                    if let SessionUpdate::Acp(notification) = update {
+                        self.queue_acp_sync(*notification);
+                    }
+                    // The line landed even if a derived summary write failed.
+                    // Report that error, but never append this record again.
+                    committed?;
                 }
             }
+        }
+        Ok(())
+    }
+
+    /// Restore uncommitted failures; sync committed records before returning errors.
+    async fn drain_pending(&mut self) -> Result<(), crate::session::storage::AppendUpdateError> {
+        self.queue_pending_notification();
+        self.drain_updates().await
+    }
+
+    async fn drain_chat_writes(&mut self) -> io::Result<()> {
+        use crate::session::storage::AppendUpdateError;
+        while let Some(operation) = self.pending_chat_writes.front().cloned() {
+            let result = match operation {
+                PendingChatWrite::Append(message) => {
+                    self.storage
+                        .append_chat_message_commit_aware(&self.info, &message)
+                        .await
+                }
+                // Full-cache replacement is idempotent, including when its
+                // summary update failed after the replacement landed.
+                PendingChatWrite::Replace(messages) => self
+                    .storage
+                    .replace_chat_history(&self.info, &messages)
+                    .await
+                    .map_err(AppendUpdateError::NotCommitted),
+                PendingChatWrite::SyncCommitted => self
+                    .storage
+                    .sync_session_files_checked(&self.info)
+                    .await
+                    .map_err(AppendUpdateError::NotCommitted),
+            };
+            self.observe_append_update(&result);
+            match result {
+                Ok(()) => {
+                    self.pending_chat_writes.pop_front();
+                }
+                Err(AppendUpdateError::NotCommitted(error)) => return Err(error),
+                Err(AppendUpdateError::Committed(error)) => {
+                    self.pending_chat_writes.pop_front();
+                    self.pending_chat_writes
+                        .push_front(PendingChatWrite::SyncCommitted);
+                    return Err(error);
+                }
+            }
+        }
+        Ok(())
+    }
+
+    async fn drain_plan_modes(&mut self) -> io::Result<()> {
+        while let Some(snapshot) = self.pending_plan_modes.front().cloned() {
+            let result = self
+                .storage
+                .write_plan_mode_state(&self.info, &snapshot)
+                .await;
+            self.observe_io(&result);
+            result?;
+            self.pending_plan_modes.pop_front();
         }
         Ok(())
     }
@@ -1575,7 +1664,11 @@ impl SessionPersistence {
         &mut self,
         update: SessionUpdate,
     ) -> Result<(), crate::session::storage::AppendUpdateError> {
-        self.drain_pending().await?;
+        // A committed error from an OLDER queued update does not mean this
+        // caller's new durable update was appended. Preserve safe retry semantics.
+        self.drain_pending().await.map_err(|error| {
+            crate::session::storage::AppendUpdateError::NotCommitted(error.into_io_error())
+        })?;
         let result = self
             .storage
             .append_update_durable_commit_aware(&self.info, &update)
@@ -1595,10 +1688,17 @@ impl SessionPersistence {
     /// Flush any pending merged ACP notification to disk and remote sync.
     /// A no-op drain must not clear the disk-full latch.
     async fn flush_pending(&mut self) -> io::Result<()> {
-        let result = self
+        let updates = self
             .drain_pending()
             .await
             .map_err(crate::session::storage::AppendUpdateError::into_io_error);
+        let result = match updates {
+            Err(error) => Err(error),
+            Ok(()) => match self.drain_chat_writes().await {
+                Err(error) => Err(error),
+                Ok(()) => self.drain_plan_modes().await,
+            },
+        };
         if let Err(error) = &result {
             tracing::warn!(%error, "failed to write pending update");
         }
@@ -1676,6 +1776,14 @@ impl SessionPersistence {
                     let result = self.flush_pending().await;
                     let _ = respond_to.send(result);
                 }
+                PersistenceMsg::FlushAndSyncAndAck { respond_to } => {
+                    let result = match self.flush_pending().await {
+                        Ok(()) => self.storage.sync_session_files_checked(&self.info).await,
+                        Err(error) => Err(error),
+                    };
+                    self.observe_io(&result);
+                    let _ = respond_to.send(result);
+                }
                 PersistenceMsg::ProbeWritable { respond_to } => {
                     let result = self.probe_writable().await;
                     self.observe_io(&result);
@@ -1686,24 +1794,20 @@ impl SessionPersistence {
                         SessionUpdate::Acp(notification) => {
                             // ACP notifications use merging to coalesce consecutive text chunks
                             if let Some(to_write) = self.maybe_merge_notification(&notification) {
-                                match self
-                                    .write_update(&SessionUpdate::Acp(Box::new(to_write.clone())))
-                                    .await
-                                {
-                                    Ok(())
-                                    | Err(crate::session::storage::AppendUpdateError::Committed(
-                                        _,
-                                    )) => {
-                                        self.queue_acp_sync(to_write);
-                                    }
-                                    Err(error) => tracing::warn!(%error, "failed to write update"),
+                                self.pending_updates
+                                    .push_back(SessionUpdate::Acp(Box::new(to_write)));
+                                if let Err(error) = self.drain_updates().await {
+                                    tracing::warn!(%error, "retaining uncommitted session updates for retry");
                                 }
                             }
                         }
                         SessionUpdate::EchoAgent(_) => {
-                            // EchoAgent notifications are written directly without merging
-                            if let Err(error) = self.write_update(&update).await {
-                                tracing::warn!(%error, "failed to write update");
+                            // An extension event may not overtake an earlier
+                            // buffered ACP chunk or a previously failed append.
+                            self.queue_pending_notification();
+                            self.pending_updates.push_back(update);
+                            if let Err(error) = self.drain_updates().await {
+                                tracing::warn!(%error, "retaining uncommitted session updates for retry");
                             }
                         }
                     }
@@ -1713,16 +1817,19 @@ impl SessionPersistence {
                     let _ = respond_to.send(result);
                 }
                 PersistenceMsg::Chat(chat_msg) => {
-                    let result = self
-                        .storage
-                        .append_chat_message(&self.info, &chat_msg)
-                        .await;
-                    self.observe_io(&result);
-                    if let Err(e) = result {
-                        tracing::warn!(?e, "failed to write chat message");
+                    self.pending_chat_writes
+                        .push_back(PendingChatWrite::Append(chat_msg));
+                    if let Err(error) = self.drain_chat_writes().await {
+                        tracing::warn!(%error, "retaining failed chat writes for retry");
                     }
                 }
                 PersistenceMsg::AppendCwdSwitchAndAck { item, respond_to } => {
+                    if let Err(error) = self.drain_chat_writes().await {
+                        let _ = respond_to.send(Err(
+                            echo_agent_chat_state::StrictAppendError::NotCommitted(error),
+                        ));
+                        continue;
+                    }
                     let result = self
                         .storage
                         .append_cwd_switch_commit_aware(&self.info, &item)
@@ -1746,19 +1853,20 @@ impl SessionPersistence {
                         num_messages = messages.len(),
                         "Replacing chat history (compaction)"
                     );
-                    let result = self
-                        .storage
-                        .replace_chat_history(&self.info, &messages)
-                        .await;
-                    self.observe_io(&result);
-                    if let Err(e) = result {
-                        tracing::warn!(?e, "failed to replace chat history");
+                    self.pending_chat_writes
+                        .push_back(PendingChatWrite::Replace(messages));
+                    if let Err(error) = self.drain_chat_writes().await {
+                        tracing::warn!(%error, "retaining failed chat replacement for retry");
                     }
                 }
                 PersistenceMsg::ReplaceChatHistoryForStripAndAck {
                     messages,
                     respond_to,
                 } => {
+                    if let Err(error) = self.drain_chat_writes().await {
+                        let _ = respond_to.send(Err(error));
+                        continue;
+                    }
                     // Backup gates the rewrite; see `strip_rewrite_gated`.
                     let result = crate::session::storage::strip_rewrite_gated(
                         self.storage.as_ref(),
@@ -1799,8 +1907,9 @@ impl SessionPersistence {
                     }
                 }
                 PersistenceMsg::PlanModeState(state) => {
-                    if let Err(e) = self.storage.write_plan_mode_state(&self.info, &state).await {
-                        tracing::warn!(?e, "failed to write plan mode state");
+                    self.pending_plan_modes.push_back(state);
+                    if let Err(error) = self.drain_plan_modes().await {
+                        tracing::warn!(%error, "retaining failed plan mode state for retry");
                     }
                 }
                 PersistenceMsg::GoalModeState(state) => {
@@ -2220,6 +2329,9 @@ async fn try_pull_from_remote(info: &Info, client: &crate::remote::BackendClient
 }
 
 pub(crate) fn is_disk_full_io_error(e: &io::Error) -> bool {
+    if let Some(source) = crate::session::storage::committed_barrier_source(e) {
+        return is_disk_full_io_error(source);
+    }
     if e.kind() == io::ErrorKind::StorageFull {
         return true;
     }
@@ -2357,6 +2469,9 @@ pub(crate) async fn new(
             info: info_clone,
             storage: storage.clone(),
             pending_notification: None,
+            pending_updates: VecDeque::new(),
+            pending_chat_writes: VecDeque::new(),
+            pending_plan_modes: VecDeque::new(),
             rx,
             remote_sync: remote_sync.clone(),
             created_fresh: true,
@@ -2425,6 +2540,9 @@ pub(crate) async fn new_with_explicit_dir(
             info: info_clone,
             storage: storage.clone(),
             pending_notification: None,
+            pending_updates: VecDeque::new(),
+            pending_chat_writes: VecDeque::new(),
+            pending_plan_modes: VecDeque::new(),
             rx,
             remote_sync: None,
             created_fresh: false,
@@ -2559,6 +2677,9 @@ pub(crate) async fn load(
             info: loaded_info,
             storage: storage.clone(),
             pending_notification: None,
+            pending_updates: VecDeque::new(),
+            pending_chat_writes: VecDeque::new(),
+            pending_plan_modes: VecDeque::new(),
             rx,
             remote_sync: remote_sync.clone(),
             created_fresh: false,
@@ -2649,6 +2770,9 @@ pub(crate) async fn load_light(
             info: loaded_info,
             storage: storage.clone(),
             pending_notification: None,
+            pending_updates: VecDeque::new(),
+            pending_chat_writes: VecDeque::new(),
+            pending_plan_modes: VecDeque::new(),
             rx,
             remote_sync: remote_sync.clone(),
             created_fresh: false,
@@ -2831,6 +2955,10 @@ fn classify_remote_delete(
 #[cfg(test)]
 #[path = "persistence_tests.rs"]
 mod durable_update_tests;
+
+#[cfg(test)]
+#[path = "persistence_chat_retry_tests.rs"]
+mod chat_retry_tests;
 
 #[cfg(test)]
 #[path = "persistence_delete_session_history_tests.rs"]

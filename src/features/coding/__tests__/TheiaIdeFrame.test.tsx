@@ -124,6 +124,13 @@ describe("Theia IDE bridge", () => {
       expect(screen.getByTitle("Echo Code IDE")).toBe(frame);
       expect(screen.getByRole("alert")).toHaveTextContent("2 个未保存文件");
       await act(async () => { fireEvent.click(screen.getByRole("button", { name: "重新连接" })); });
+      expect(invoke).toHaveBeenCalledTimes(1);
+      expect(screen.getByRole("alertdialog")).toHaveTextContent("重新连接会丢失");
+      fireEvent.click(screen.getByRole("button", { name: "保留编辑内容" }));
+      expect(screen.getByTitle("Echo Code IDE")).toBe(frame);
+      expect(invoke).toHaveBeenCalledTimes(1);
+      fireEvent.click(screen.getByRole("button", { name: "重新连接" }));
+      await act(async () => { fireEvent.click(screen.getByRole("button", { name: "已保留内容，重新连接" })); });
       expect(invoke).toHaveBeenCalledTimes(2);
     } finally {
       vi.useRealTimers();
@@ -141,6 +148,12 @@ describe("Theia IDE bridge", () => {
       expect(invoke).toHaveBeenCalledTimes(1);
       expect(screen.getByTitle("Echo Code IDE")).toBe(frame);
       expect(screen.getByRole("alert")).toHaveTextContent("无法确认是否有未保存文件");
+      fireEvent.click(screen.getByRole("button", { name: "重新连接" }));
+      expect(invoke).toHaveBeenCalledTimes(1);
+      expect(screen.getByRole("alertdialog")).toHaveTextContent("无法确认");
+      fireEvent.keyDown(document, { key: "Escape" });
+      expect(screen.queryByRole("alertdialog")).not.toBeInTheDocument();
+      expect(screen.getByTitle("Echo Code IDE")).toBe(frame);
     } finally {
       vi.useRealTimers();
     }
@@ -163,5 +176,90 @@ describe("Theia IDE bridge", () => {
     await waitFor(() => expect(onBeforeMutation).toHaveBeenCalledWith("write", [String.raw`C:\项目\代码开发\src\main.ts`]));
     sendFrameMessage(frame, { type: "echo/active-file", path: String.raw`c:\项目\代码开发\src\other.ts` });
     expect(onActiveFile).toHaveBeenLastCalledWith(String.raw`c:\项目\代码开发\src\other.ts`);
+  });
+
+  it("guards an error retry after an editor had unsaved content", async () => {
+    render(<TheiaIdeFrame root="/repo" onBeforeMutation={vi.fn()} onAfterMutation={vi.fn()} />);
+    const frame = await screen.findByTitle("Echo Code IDE") as HTMLIFrameElement;
+    sendFrameMessage(frame, { type: "echo/ready" });
+    sendFrameMessage(frame, { type: "echo/dirty-state", count: 0 });
+    invoke.mockRejectedValueOnce(new Error("Owned backend restart failed"));
+    vi.useFakeTimers();
+    try {
+      sendFrameMessage(frame, { type: "echo/backend-connection", online: false });
+      await act(async () => { await vi.advanceTimersByTimeAsync(1_500); });
+      expect(screen.getByText(/自动恢复失败/)).toBeInTheDocument();
+      // A delayed dirty-state message must still protect the retained frame
+      // when the user retries a failed automatic restart.
+      sendFrameMessage(frame, { type: "echo/dirty-state", count: 1 });
+      fireEvent.click(screen.getByRole("button", { name: "重试" }));
+      expect(invoke).toHaveBeenCalledTimes(2);
+      expect(screen.getByRole("alertdialog")).toHaveTextContent("1 个未保存文件");
+      fireEvent.click(screen.getByRole("button", { name: "保留编辑内容" }));
+      expect(screen.getByTitle("Echo Code IDE")).toBe(frame);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("invalidates a pending reconnect confirmation when the original connection recovers", async () => {
+    render(<TheiaIdeFrame root="/repo" onBeforeMutation={vi.fn()} onAfterMutation={vi.fn()} />);
+    const frame = await screen.findByTitle("Echo Code IDE") as HTMLIFrameElement;
+    sendFrameMessage(frame, { type: "echo/ready" });
+    sendFrameMessage(frame, { type: "echo/dirty-state", count: 1 });
+    vi.useFakeTimers();
+    try {
+      sendFrameMessage(frame, { type: "echo/backend-connection", online: false });
+      await act(async () => { await vi.advanceTimersByTimeAsync(1_500); });
+      fireEvent.click(screen.getByRole("button", { name: "重新连接" }));
+      expect(screen.getByRole("alertdialog")).toBeInTheDocument();
+      sendFrameMessage(frame, { type: "echo/backend-connection", online: true });
+      expect(screen.queryByRole("alertdialog")).not.toBeInTheDocument();
+      expect(screen.getByTitle("Echo Code IDE")).toBe(frame);
+      expect(invoke).toHaveBeenCalledTimes(1);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("retains an edit reported while an automatic backend restart is pending", async () => {
+    render(<TheiaIdeFrame root="/repo" onBeforeMutation={vi.fn()} onAfterMutation={vi.fn()} />);
+    const frame = await screen.findByTitle("Echo Code IDE") as HTMLIFrameElement;
+    sendFrameMessage(frame, { type: "echo/ready" });
+    sendFrameMessage(frame, { type: "echo/dirty-state", count: 0 });
+    let finish!: (endpoint: { url: string; embedToken: string }) => void;
+    invoke.mockImplementationOnce(() => new Promise(resolve => { finish = resolve; }));
+    vi.useFakeTimers();
+    try {
+      sendFrameMessage(frame, { type: "echo/backend-connection", online: false });
+      await act(async () => { await vi.advanceTimersByTimeAsync(1_500); });
+      expect(invoke).toHaveBeenCalledTimes(2);
+      sendFrameMessage(frame, { type: "echo/dirty-state", count: 1 });
+      await act(async () => { finish({ url: "http://127.0.0.1:41775/", embedToken: "new-backend" }); });
+      expect(screen.getByTitle("Echo Code IDE")).toBe(frame);
+      expect(screen.getByRole("alert")).toHaveTextContent("1 个未保存文件");
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("keeps a pending disconnect notification when parent callbacks change", async () => {
+    const callbacks = () => ({ onBeforeMutation: vi.fn(), onAfterMutation: vi.fn(), onToast: vi.fn() });
+    const { rerender } = render(<TheiaIdeFrame root="/repo" {...callbacks()} />);
+    const frame = await screen.findByTitle("Echo Code IDE") as HTMLIFrameElement;
+    sendFrameMessage(frame, { type: "echo/ready" });
+    sendFrameMessage(frame, { type: "echo/dirty-state", count: 1 });
+    vi.useFakeTimers();
+    try {
+      sendFrameMessage(frame, { type: "echo/backend-connection", online: false });
+      await act(async () => { await vi.advanceTimersByTimeAsync(500); });
+      rerender(<TheiaIdeFrame root="/repo" {...callbacks()} />);
+      await act(async () => { await vi.advanceTimersByTimeAsync(1_000); });
+      expect(screen.getByRole("alert")).toHaveTextContent("1 个未保存文件");
+      expect(screen.getByTitle("Echo Code IDE")).toBe(frame);
+      expect(invoke).toHaveBeenCalledTimes(1);
+    } finally {
+      vi.useRealTimers();
+    }
   });
 });

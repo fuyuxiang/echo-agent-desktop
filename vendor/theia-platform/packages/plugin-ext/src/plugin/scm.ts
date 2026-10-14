@@ -448,14 +448,14 @@ class ScmResourceGroupImpl implements theia.SourceControlResourceGroup {
         return this.resourceStatesMap.get(handle);
     }
 
-    executeResourceCommand(handle: number): Promise<void> {
+    async executeResourceCommand(handle: number): Promise<void> {
         const command = this.resourceStatesCommandsMap.get(handle);
 
         if (!command) {
-            return Promise.resolve(undefined);
+            return;
         }
 
-        return new Promise(() => this.commands.executeCommand(command.command!, ...(command.arguments || [])));
+        await this.commands.executeCommand(command.command!, ...(command.arguments || []));
     }
 
     takeResourceStateSnapshot(): ScmRawResourceSplice[] {

@@ -14,6 +14,26 @@ __pycache__/
 # Legacy runtime state may still exist during migration; never commit it.
 /.g[r]ok/
 
+# crates.io extraction marker and upstream-only GitHub workflows/templates.
+/vendor/cpal-loopback/.cargo-ok
+/vendor/cpal-loopback/.github/
+/vendor/theia-platform/.github/
+
+# Spare generated icons not used by the current macOS/Windows bundle.icon list.
+# Keep the five configured PNG/ICO/ICNS inputs tracked.
+/src-tauri/icons/64x64.png
+/src-tauri/icons/Square107x107Logo.png
+/src-tauri/icons/Square142x142Logo.png
+/src-tauri/icons/Square150x150Logo.png
+/src-tauri/icons/Square284x284Logo.png
+/src-tauri/icons/Square30x30Logo.png
+/src-tauri/icons/Square310x310Logo.png
+/src-tauri/icons/Square44x44Logo.png
+/src-tauri/icons/Square71x71Logo.png
+/src-tauri/icons/Square89x89Logo.png
+/src-tauri/icons/StoreLogo.png
+/src-tauri/icons/icon.png
+
 # Rust / Tauri 构建产物与自动生成内容
 /src-tauri/target/
 /src-tauri/gen/
@@ -65,8 +85,8 @@ docs/E2E-CHECKLIST.md
 /TODO.md
 /ECHOAGENT_UI_REFERENCE.md
 
-# 内嵌 Python 运行时由 scripts/fetch-python.mjs 构建前拉取, 不入库 (体积大)
+# 历史 Python 运行时归档缓存；当前构建不使用此路径。
 resources/python-standalone-*.tar.gz
 
-# 说话人分离(sherpa-onnx diarization)模型由 scripts/fetch-diarization.mjs 构建前拉取, 不入库 (约 44MB)
+# 历史说话人分离模型缓存；当前构建不使用此路径。
 resources/models/diarization/

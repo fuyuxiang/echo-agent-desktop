@@ -61,7 +61,15 @@ export function unregisterKbProvider(id: string): boolean {
  * 同时把重建结果(条目数 + 时间戳)写入索引状态表,供 getIndexStats 查询。
  */
 export async function rebuildAllKbProviders(): Promise<Array<{ id: string; count: number | undefined }>> {
+  return (await rebuildAllKbProvidersWithDiagnostics()).rebuilt;
+}
+
+export async function rebuildAllKbProvidersWithDiagnostics(): Promise<{
+  rebuilt: Array<{ id: string; count: number | undefined }>;
+  failures: KbSearchFailure[];
+}> {
   const out: Array<{ id: string; count: number | undefined }> = [];
+  const failures: KbSearchFailure[] = [];
   for (const p of registry.providers) {
     if (!p.isEnabled() || !p.rebuild) continue;
     try {
@@ -69,11 +77,11 @@ export async function rebuildAllKbProviders(): Promise<Array<{ id: string; count
       const c = typeof count === "number" ? count : undefined;
       out.push({ id: p.id, count: c });
       recordIndexStats(p.id, c);
-    } catch {
-      /* provider 重建失败不影响其它 */
+    } catch (error) {
+      failures.push({ id: p.id, label: p.label, message: String(error).replace(/^Error:\s*/, "") });
     }
   }
-  return out;
+  return { rebuilt: out, failures };
 }
 
 /** 索引状态:已索引文件数 + 最近重建时间。 */

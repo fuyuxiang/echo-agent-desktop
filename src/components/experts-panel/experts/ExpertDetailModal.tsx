@@ -13,9 +13,11 @@ interface Props {
   onClose: () => void;
   /** Called with (expert, promptOverride?) when user clicks 召唤 or a quickPrompt. */
   onSummon: (expert: ExpertItem, promptOverride?: string) => void;
+  busy?: boolean;
+  error?: string;
 }
 
-export function ExpertDetailModal({ expert, onClose, onSummon }: Props) {
+export function ExpertDetailModal({ expert, onClose, onSummon, busy = false, error }: Props) {
   const dialogRef = useModalFocus<HTMLDivElement>(true, onClose);
 
   const title = expert.title || expert.name;
@@ -79,6 +81,7 @@ export function ExpertDetailModal({ expert, onClose, onSummon }: Props) {
                 <button
                   key={i}
                   className="ec-modal-qp-btn"
+                  disabled={busy}
                   onClick={() => onSummon(expert, qp)}
                 >
                   <span className="ec-modal-qp-text">"{qp}"</span>
@@ -90,13 +93,15 @@ export function ExpertDetailModal({ expert, onClose, onSummon }: Props) {
         )}
 
         </div>
+        {error && <p role="alert" className="ec-error">{error}。请检查专家包后重试。</p>}
         <div className="ec-modal-footer">
         {/* Summon button */}
         <button
           className="ec-modal-summon-btn"
+          disabled={busy}
           onClick={() => onSummon(expert)}
         >
-          召唤 {title}
+          {busy ? "正在准备专家…" : `召唤 ${title}`}
         </button>
         </div>
       </div>

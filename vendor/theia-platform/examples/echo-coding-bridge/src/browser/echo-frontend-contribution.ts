@@ -213,7 +213,16 @@ export class EchoFrontendContribution implements FrontendApplicationContribution
     }
 
     protected dirtyCount(): number {
-        return this.shell?.widgets.filter(widget => Saveable.isDirty(widget)).length ?? 0;
+        // A file and its Diff widget can share the same document. Count each
+        // saveable once while retaining independent unsaved buffers.
+        const dirty = new Set<Saveable>();
+        for (const widget of this.shell?.widgets ?? []) {
+            const saveable = Saveable.getDirty(widget);
+            if (saveable) {
+                dirty.add(saveable);
+            }
+        }
+        return dirty.size;
     }
 
     protected reportDirtyState(): void {

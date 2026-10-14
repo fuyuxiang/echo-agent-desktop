@@ -40,4 +40,28 @@ describe("project session movement", () => {
     await expect(useProjectsStore.getState().moveSessionToProject("p1", session)).rejects.toThrow("disk full");
     expect(useProjectsStore.getState().projects[0].conversations).toEqual([]);
   });
+
+  it("普通独立会话分叉不创建项目或发起无关保存", async () => {
+    await expect(useProjectsStore.getState().associateForkWithSourceProject("s1", { ...session, sessionId: "fork" })).resolves.toBeNull();
+    expect(projectsSave).not.toHaveBeenCalled();
+    expect(useProjectsStore.getState().projects).toEqual([project]);
+  });
+
+  it("仅工作项引用的旧会话分叉建立独立对话和一次项目契约，不复制旧任务", async () => {
+    const owned = { ...project, tasks: [{ id: "t1", title: "原任务", scope: "personal" as const, source: "user", status: "completed" as const, sessionId: "s1" }] };
+    useProjectsStore.setState({ projects: [owned] });
+    await expect(useProjectsStore.getState().associateForkWithSourceProject("s1", { ...session, sessionId: "fork" })).resolves.toBe("p1");
+    expect(useProjectsStore.getState().projects[0].tasks).toEqual(owned.tasks);
+    expect(useProjectsStore.getState().projects[0].conversations).toMatchObject([{ sessionId: "fork", pendingProjectContext: true }]);
+    expect(projectsSave).toHaveBeenCalledWith(useProjectsStore.getState().projects);
+  });
+
+  it("冲突或已有归属不能把分叉关联到错误项目", async () => {
+    const conversation = { sessionId: "s1", title: "原会话", createdAt: project.createdAt };
+    useProjectsStore.setState({ projects: [{ ...project, conversations: [conversation] }, { ...project, id: "p2", conversations: [conversation] }] });
+    await expect(useProjectsStore.getState().associateForkWithSourceProject("s1", { ...session, sessionId: "fork" })).rejects.toThrow("归属冲突");
+    useProjectsStore.setState({ projects: [{ ...project, conversations: [conversation, { ...conversation, sessionId: "fork" }] }] });
+    await expect(useProjectsStore.getState().associateForkWithSourceProject("s1", { ...session, sessionId: "fork" })).rejects.toThrow("已归属项目");
+    expect(projectsSave).not.toHaveBeenCalled();
+  });
 });

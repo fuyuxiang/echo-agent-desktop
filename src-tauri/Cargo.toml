@@ -4,7 +4,7 @@ version = "0.3.11"
 description = "EchoAgent — an open-source desktop agent workspace built on Tauri"
 authors = ["EchoAgent"]
 edition = "2021"
-rust-version = "1.92.0"
+rust-version = "1.96.0"
 
 # The Tauri library expects a lib target (for mobile, and so the binary can
 # stay thin). We follow the standard Tauri 2 layout: `lib.rs` with a `run()`,
@@ -27,7 +27,9 @@ notify-rust = "=4.18.0"
 # Pin the updater minor because `app_updater.rs` injects our private CA through
 # its reqwest 0.12 client hook. Upgrading this plugin must be tested together
 # with the direct reqwest dependency below.
-tauri-plugin-updater = "=2.9.0"
+# Same upstream version, with a host-managed Windows installer handoff so
+# failed installer launches cannot bypass recording/session persistence.
+tauri-plugin-updater = { path = "../vendor/tauri-plugin-updater", version = "=2.9.0" }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 # In-process team MCP server (team_mcp.rs) — streamable-http JSON-RPC.
@@ -124,7 +126,9 @@ tauri-plugin-single-instance = "2"
 [target.'cfg(target_os = "macos")'.dependencies]
 security-framework = "3.7"
 security-framework-sys = "2.17"
+objc2 = { version = "0.6.4", default-features = false, features = ["std"] }
 objc2-foundation = { version = "0.3.2", features = ["std", "NSError", "NSFileManager", "NSString", "NSURL"] }
+objc2-web-kit = { version = "0.3.2", default-features = false, features = ["std", "WKUserContentController", "WKUserScript"] }
 objc2-app-kit = { version = "0.3.2", default-features = false, features = ["std", "libc", "NSRunningApplication", "NSWorkspace"] }
 core-graphics = { version = "0.25", features = ["elcapitan", "highsierra"] }
 
@@ -164,3 +168,7 @@ codegen-units = 16
 # resolve their `.workspace = true` fields against that root.
 [workspace]
 members = ["."]
+
+[patch.crates-io]
+# Same 0.5.0 API/dependencies, fixing Windows argv and macOS plist encoding.
+auto-launch = { path = "../vendor/auto-launch" }

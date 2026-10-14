@@ -10,9 +10,24 @@ export interface DocumentExportReceipt {
   sha256: string;
 }
 
+const OFFICE_CREATE_TOOL = "echoagent-office__office_create";
+
+function recordInput(value: unknown): Record<string, unknown> | null {
+  return value && typeof value === "object" && !Array.isArray(value)
+    ? value as Record<string, unknown> : null;
+}
+
 export function isOfficeCreateTool(toolCall: ToolCallView): boolean {
   return toolCall.officeReceipt != null
+    || recordInput(toolCall.rawInput)?.tool_name === OFFICE_CREATE_TOOL
     || /echoagent-office__office_create/i.test(`${toolCall.kind} ${toolCall.title}`);
+}
+
+/** Runtime discovery wraps an Office call in use_tool; direct MCP calls stay flat. */
+export function officeInputFromToolCall(toolCall: ToolCallView): Record<string, unknown> | null {
+  if (!isOfficeCreateTool(toolCall)) return null;
+  const input = recordInput(toolCall.rawInput);
+  return input?.tool_name === OFFICE_CREATE_TOOL ? recordInput(input.tool_input) : input;
 }
 
 function validReceipt(value: unknown): DocumentExportReceipt | null {

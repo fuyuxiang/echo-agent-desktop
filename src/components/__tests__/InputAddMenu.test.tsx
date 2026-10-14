@@ -14,7 +14,7 @@ import { InputAddMenu } from "../InputAddMenu";
 import { agentsList } from "@/lib/agent-client";
 
 describe("InputAddMenu", () => {
-  it("按录音页面入口可用状态显示录音转写", async () => {
+  it("按历史页面入口可用状态显示会议录音与纪要", async () => {
     const onOpenMeetingMinutes = vi.fn();
     const { rerender } = render(
       <InputAddMenu
@@ -26,7 +26,7 @@ describe("InputAddMenu", () => {
     await act(async () => {
       fireEvent.click(screen.getByRole("button", { name: "添加" }));
     });
-    expect(screen.queryByRole("menuitem", { name: /录音转写/ })).toBeNull();
+    expect(screen.queryByRole("menuitem", { name: /会议录音与纪要/ })).toBeNull();
 
     await act(async () => {
       fireEvent.click(screen.getByRole("button", { name: "添加" }));
@@ -40,7 +40,7 @@ describe("InputAddMenu", () => {
       fireEvent.click(screen.getByRole("button", { name: "添加" }));
     });
     await act(async () => {
-      fireEvent.click(screen.getByRole("menuitem", { name: /录音转写/ }));
+      fireEvent.click(screen.getByRole("menuitem", { name: /会议录音与纪要/ }));
     });
     expect(onOpenMeetingMinutes).toHaveBeenCalledTimes(1);
   });
@@ -123,7 +123,7 @@ describe("InputAddMenu", () => {
     await waitFor(() => expect(onNavigateConnectors).toHaveBeenCalledTimes(1));
   });
 
-  it("显示录音转写时，三个目录子菜单仍跟随各自的实际行位置", async () => {
+  it("显示会议录音与纪要时，三个目录子菜单仍跟随各自的实际行位置", async () => {
     render(
       <InputAddMenu
         onPickFiles={vi.fn()}

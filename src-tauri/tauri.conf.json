@@ -50,6 +50,9 @@
       "../vendor/theia-platform/LICENSE-EPL": "licenses/theia/LICENSE-EPL",
       "../vendor/theia-platform/LICENSE-GPL-2.0-ONLY-CLASSPATH-EXCEPTION": "licenses/theia/LICENSE-GPL-2.0-ONLY-CLASSPATH-EXCEPTION",
       "../vendor/theia-platform/NOTICE.md": "licenses/theia/NOTICE.md",
+      "../vendor/auto-launch/LICENSE": "licenses/auto-launch/LICENSE-MIT",
+      "../vendor/tauri-plugin-updater/LICENSE_MIT": "licenses/tauri-plugin-updater/LICENSE-MIT",
+      "../vendor/tauri-plugin-updater/LICENSE_APACHE-2.0": "licenses/tauri-plugin-updater/LICENSE-APACHE-2.0",
       "resources/theia/browser": "theia/browser",
       "resources/theia/node": "theia/node",
       "resources/office": "office"

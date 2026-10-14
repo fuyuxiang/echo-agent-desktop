@@ -1,7 +1,7 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { fireEvent, render, screen, waitFor, within } from "@testing-library/react";
+import { act, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { CloudStoragePanel } from "../CloudStoragePanel";
-import { getStorageProvider, hydrateStorageProviders, listStorageProviders, saveStorageProviderConfig } from "@/lib/cloud-storage";
+import { getStorageProvider, hydrateStorageProviders, listStorageProviders, removeStorageProviderConfig, saveStorageProviderConfig } from "@/lib/cloud-storage";
 import { open, save } from "@tauri-apps/plugin-dialog";
 
 vi.mock("@tauri-apps/plugin-dialog", () => ({ open: vi.fn(), save: vi.fn() }));
@@ -31,6 +31,13 @@ describe("CloudStoragePanel", () => {
 
   beforeEach(() => {
     vi.clearAllMocks();
+    vi.mocked(hydrateStorageProviders).mockReset().mockResolvedValue([{
+      id: "dav", label: "团队网盘", kind: "webdav", baseUrl: "https://dav.example.com", username: "alice", password: "••••", enabled: true,
+    }]);
+    vi.mocked(listStorageProviders).mockReset().mockReturnValue([{ id: "dav", label: "团队网盘" }]);
+    vi.mocked(saveStorageProviderConfig).mockReset().mockResolvedValue(undefined);
+    provider.list.mockReset().mockResolvedValue([{ path: "/report.pdf", name: "report.pdf", isDir: false, size: 2048 }]);
+    provider.readText.mockReset();
     vi.mocked(getStorageProvider).mockReturnValue(provider as never);
   });
 
@@ -146,5 +153,120 @@ describe("CloudStoragePanel", () => {
     expect(screen.queryByRole("textbox", { name: "编辑 report.pdf" })).toBeNull();
     expect(provider.writeText).toHaveBeenCalledWith("/report.pdf", "原始内容");
     expect(otherProvider.writeText).not.toHaveBeenCalled();
+  });
+
+  it("APP-CLOUD02 已禁用配置仍可选择编辑，保存启用后恢复浏览", async () => {
+    vi.mocked(hydrateStorageProviders).mockResolvedValue([{
+      id: "dav", label: "团队网盘", kind: "webdav", baseUrl: "https://dav.example.com", enabled: false,
+    }]);
+    vi.mocked(listStorageProviders).mockReturnValueOnce([]);
+    const { container } = render(<CloudStoragePanel />);
+    const select = await screen.findByRole("combobox");
+    expect(screen.getByRole("option", { name: /团队网盘.*已禁用/ })).toHaveValue("dav");
+    fireEvent.change(select, { target: { value: "dav" } });
+    expect(container.querySelector(".storage-panel__breadcrumb")).toBeNull();
+    expect(provider.list).not.toHaveBeenCalled();
+    fireEvent.click(screen.getByRole("button", { name: "编辑配置" }));
+    fireEvent.click(screen.getByRole("checkbox", { name: "启用此存储源" }));
+    fireEvent.click(screen.getByRole("button", { name: "保存" }));
+    await screen.findByText("report.pdf");
+    expect(saveStorageProviderConfig).toHaveBeenCalledWith(expect.objectContaining({ id: "dav", enabled: true }));
+    expect(select).toHaveValue("dav");
+    expect(provider.list).toHaveBeenCalledTimes(1);
+  });
+
+  it("APP-CLOUD02 可移除禁用配置而不调用远端文件操作", async () => {
+    vi.mocked(hydrateStorageProviders).mockResolvedValue([{
+      id: "dav", label: "团队网盘", kind: "webdav", baseUrl: "https://dav.example.com", enabled: false,
+    }]);
+    vi.mocked(listStorageProviders).mockReturnValue([]);
+    render(<CloudStoragePanel />);
+    fireEvent.change(await screen.findByRole("combobox"), { target: { value: "dav" } });
+    fireEvent.click(screen.getByRole("button", { name: "移除配置" }));
+    const dialog = await screen.findByRole("alertdialog", { name: "移除存储源“团队网盘”？" });
+    fireEvent.click(within(dialog).getByRole("button", { name: "移除配置" }));
+    await waitFor(() => expect(removeStorageProviderConfig).toHaveBeenCalledWith("dav"));
+    await screen.findByText("未配置存储源");
+    expect(provider.list).not.toHaveBeenCalled();
+    expect(provider.delete).not.toHaveBeenCalled();
+  });
+
+  it("APP-CLOUD02 禁用前取消舍弃确认保留草稿和启用配置", async () => {
+    provider.readText.mockResolvedValueOnce("原始内容");
+    await selectProvider();
+    fireEvent.click(screen.getByRole("button", { name: "读取 report.pdf" }));
+    const editor = await screen.findByRole("textbox", { name: "编辑 report.pdf" });
+    fireEvent.change(editor, { target: { value: "尚未保存" } });
+    fireEvent.click(screen.getByRole("button", { name: "编辑配置" }));
+    fireEvent.click(screen.getByRole("checkbox", { name: "启用此存储源" }));
+    fireEvent.click(within(document.querySelector(".storage-panel__config") as HTMLElement).getByRole("button", { name: "保存" }));
+    const dialog = await screen.findByRole("alertdialog", { name: "舍弃未保存的文件修改？" });
+    fireEvent.click(within(dialog).getByRole("button", { name: "取消" }));
+    expect(saveStorageProviderConfig).not.toHaveBeenCalled();
+    expect(editor).toHaveValue("尚未保存");
+    expect(screen.getByRole("combobox")).toHaveValue("dav");
+    fireEvent.click(within(document.querySelector(".storage-panel__config") as HTMLElement).getByRole("button", { name: "保存" }));
+    const confirmed = await screen.findByRole("alertdialog", { name: "舍弃未保存的文件修改？" });
+    fireEvent.click(within(confirmed).getByRole("button", { name: "舍弃修改并禁用" }));
+    await waitFor(() => expect(saveStorageProviderConfig).toHaveBeenCalledWith(expect.objectContaining({ id: "dav", enabled: false })));
+    expect(screen.queryByRole("region", { name: "文件预览：report.pdf" })).toBeNull();
+  });
+
+  it("APP-CLOUD02 禁用后同id重新启用刷新一次，旧目录响应不能覆盖", async () => {
+    let release!: (entries: Array<{ path: string; name: string; isDir: boolean }>) => void;
+    provider.list.mockImplementationOnce(() => new Promise((resolve) => { release = resolve; }));
+    render(<CloudStoragePanel />);
+    const select = await screen.findByRole("combobox");
+    fireEvent.change(select, { target: { value: "dav" } });
+    await waitFor(() => expect(provider.list).toHaveBeenCalledTimes(1));
+    fireEvent.click(screen.getByRole("button", { name: "编辑配置" }));
+    fireEvent.click(screen.getByRole("checkbox", { name: "启用此存储源" }));
+    vi.mocked(listStorageProviders).mockReturnValue([]);
+    fireEvent.click(screen.getByRole("button", { name: "保存" }));
+    await waitFor(() => expect(screen.queryByText("编辑 WebDAV")).toBeNull());
+    expect(screen.getByRole("combobox")).toHaveValue("dav");
+    fireEvent.click(screen.getByRole("button", { name: "编辑配置" }));
+    fireEvent.click(screen.getByRole("checkbox", { name: "启用此存储源" }));
+    vi.mocked(listStorageProviders).mockReturnValue([{ id: "dav", label: "团队网盘" }]);
+    provider.list.mockResolvedValueOnce([{ path: "/new.txt", name: "new.txt", isDir: false }]);
+    fireEvent.click(screen.getByRole("button", { name: "保存" }));
+    await screen.findByText("new.txt");
+    await act(async () => { release([{ path: "/stale.txt", name: "stale.txt", isDir: false }]); });
+    expect(screen.queryByText("stale.txt")).toBeNull();
+    expect(screen.getByText("new.txt")).toBeInTheDocument();
+    expect(provider.list).toHaveBeenCalledTimes(2);
+  });
+
+  it("APP-CLOUD02 禁用时失效未完成GET，不恢复文件预览", async () => {
+    let release!: (text: string) => void;
+    provider.readText.mockImplementationOnce(() => new Promise((resolve) => { release = resolve; }));
+    await selectProvider();
+    fireEvent.click(screen.getByRole("button", { name: "读取 report.pdf" }));
+    fireEvent.click(screen.getByRole("button", { name: "编辑配置" }));
+    fireEvent.click(screen.getByRole("checkbox", { name: "启用此存储源" }));
+    vi.mocked(listStorageProviders).mockReturnValue([]);
+    fireEvent.click(screen.getByRole("button", { name: "保存" }));
+    await waitFor(() => expect(screen.queryByText("编辑 WebDAV")).toBeNull());
+    await act(async () => { release("旧来源迟到内容"); });
+    expect(screen.queryByRole("region", { name: "文件预览：report.pdf" })).toBeNull();
+  });
+
+  it("APP-CLOUD02 配置保存迟到不刷新已切换的registry-only来源", async () => {
+    vi.mocked(listStorageProviders).mockReturnValue([
+      { id: "dav", label: "团队网盘" }, { id: "other", label: "临时注册源" },
+    ]);
+    const other = { ...provider, list: vi.fn().mockResolvedValue([{ path: "/other.txt", name: "other.txt", isDir: false }]) };
+    vi.mocked(getStorageProvider).mockImplementation((id) => (id === "other" ? other : provider) as never);
+    let release!: () => void;
+    vi.mocked(saveStorageProviderConfig).mockImplementationOnce(() => new Promise<void>((resolve) => { release = resolve; }));
+    await selectProvider();
+    fireEvent.click(screen.getByRole("button", { name: "编辑配置" }));
+    fireEvent.click(screen.getByRole("button", { name: "保存" }));
+    fireEvent.change(screen.getByRole("combobox"), { target: { value: "other" } });
+    await screen.findByText("other.txt");
+    await act(async () => { release(); });
+    expect(screen.getByRole("combobox")).toHaveValue("other");
+    expect(screen.getByText("other.txt")).toBeInTheDocument();
+    expect(provider.list).toHaveBeenCalledTimes(1);
   });
 });

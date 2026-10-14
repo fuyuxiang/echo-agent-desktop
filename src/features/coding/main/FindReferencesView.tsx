@@ -34,6 +34,7 @@ export function FindReferencesView({ root, symbol, onOpenSymbol }: FindReference
   const [hits, setHits] = useState<ReferenceHit[]>([]);
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
+  const [attempt, setAttempt] = useState(0);
 
   useEffect(() => {
     let cancelled = false;
@@ -53,7 +54,7 @@ export function FindReferencesView({ root, symbol, onOpenSymbol }: FindReference
     return () => {
       cancelled = true;
     };
-  }, [root, symbol]);
+  }, [root, symbol, attempt]);
 
   const grouped = useMemo(() => groupByFile(hits), [hits]);
 
@@ -61,7 +62,9 @@ export function FindReferencesView({ root, symbol, onOpenSymbol }: FindReference
     return <div className="coding-views__empty">正在搜索 `{symbol}` 的引用…</div>;
   }
   if (error) {
-    return <div className="coding-views__error">引用搜索失败：{error}</div>;
+    return <div className="coding-views__error" role="alert">引用搜索失败：{error}
+      <button type="button" onClick={() => setAttempt((value) => value + 1)}>重试引用搜索</button>
+    </div>;
   }
   if (hits.length === 0) {
     return <div className="coding-views__empty">未找到 `{symbol}` 的引用</div>;

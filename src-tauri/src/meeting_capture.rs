@@ -13,6 +13,7 @@ pub struct CaptureStatus {
     level: f32,
     recorded_samples: u64,
     error: Option<String>,
+    pending_save: bool,
 }
 
 #[derive(Serialize)]
@@ -132,6 +133,25 @@ pub async fn meeting_capture_stop(
     }
 }
 
+/// Finalize any native recording before a controlled exit or updater restart.
+/// Failed writes retain the capture and its PCM buffer for an explicit retry.
+pub(crate) async fn finish_before_exit() -> Result<(), String> {
+    #[cfg(any(target_os = "macos", target_os = "windows"))]
+    {
+        let Some(capture) = native::status() else {
+            return Ok(());
+        };
+        tokio::task::spawn_blocking(move || native::stop(&capture.meeting_id))
+            .await
+            .map_err(|error| format!("退出前保存录音任务失败：{error}"))?
+            .map(|_| ())
+    }
+    #[cfg(not(any(target_os = "macos", target_os = "windows")))]
+    {
+        Ok(())
+    }
+}
+
 #[cfg(any(target_os = "macos", target_os = "windows"))]
 mod native {
     use super::CaptureStatus;
@@ -226,6 +246,7 @@ mod native {
             level: 0.0,
             recorded_samples: 0,
             error: None,
+            pending_save: false,
         }));
         let accepting = Arc::new(AtomicBool::new(true));
         // Bound the callback queue so a slow disk can never grow audio memory without limit.
@@ -293,25 +314,26 @@ mod native {
     }
 
     pub fn stop(meeting_id: &str) -> Result<MeetingRecord, String> {
-        let handle = {
-            let mut guard = active().lock().map_err(|_| "录音状态不可用".to_string())?;
-            if guard
-                .as_ref()
-                .is_none_or(|capture| capture.meeting_id != meeting_id)
-            {
-                return Err("当前没有对应的系统声音录音".into());
-            }
-            guard.take().expect("checked above")
-        };
+        let mut guard = active().lock().map_err(|_| "录音状态不可用".to_string())?;
+        let handle = guard.as_ref().ok_or("当前没有对应的系统声音录音")?;
+        if handle.meeting_id != meeting_id {
+            return Err("会议录音 ID 不匹配".into());
+        }
         handle.accepting.store(false, Ordering::Release);
         let (reply_tx, reply_rx) = mpsc::sync_channel(1);
-        let sent = handle.sender.send(Message::Stop(reply_tx));
-        let result = if sent.is_ok() {
-            reply_rx.recv().map_err(|_| "录音线程已退出".to_string())?
-        } else {
-            Err("录音线程已退出".into())
-        };
-        let _ = handle.worker.join();
+        let result = handle
+            .sender
+            .send(Message::Stop(reply_tx))
+            .map_err(|_| "录音线程已退出".to_string())
+            .and_then(|()| reply_rx.recv().map_err(|_| "录音线程已退出".to_string()))
+            .and_then(|result| result);
+        // On a write failure the worker retains its pending samples. Keep its
+        // handle so a later Stop retries them and Start cannot replace them.
+        if result.is_ok() || handle.worker.is_finished() {
+            if let Some(handle) = guard.take() {
+                let _ = handle.worker.join();
+            }
+        }
         result
     }
 
@@ -569,6 +591,8 @@ mod native {
             state.active = true;
         }
         let _ = ready.send(Ok(()));
+        let mut system_stream = Some(system_stream);
+        let mut microphone_stream = microphone_stream;
         let mut system = VecDeque::new();
         let mut microphone = VecDeque::new();
         let mut pending = Vec::with_capacity(RATE);
@@ -651,8 +675,8 @@ mod native {
                 }
                 Ok(Message::Stop(reply)) => {
                     accepting.store(false, Ordering::Release);
-                    drop(system_stream);
-                    drop(microphone_stream);
+                    drop(system_stream.take());
+                    drop(microphone_stream.take());
                     let tail = system.len().max(if mode == Mode::Both {
                         microphone.len()
                     } else {
@@ -681,12 +705,21 @@ mod native {
                     let result = result
                         .and_then(|_| flush(&meeting_id, &mut pending, &status))
                         .and_then(|_| meeting_finish_recording(meeting_id.clone()));
+                    let finished = result.is_ok();
                     if let Ok(mut state) = status.lock() {
                         state.active = false;
+                        state.paused = !finished;
+                        state.pending_save = !finished;
+                        state.error = result.as_ref().err().cloned();
                         state.level = 0.0;
                     }
+                    paused = !finished;
+                    system.clear();
+                    microphone.clear();
                     let _ = reply.send(result);
-                    break;
+                    if finished {
+                        break;
+                    }
                 }
                 Err(mpsc::RecvTimeoutError::Disconnected) => break,
                 Err(mpsc::RecvTimeoutError::Timeout) => {}
@@ -698,6 +731,60 @@ mod native {
     mod tests {
         use super::*;
         use cpal::SupportedBufferSize;
+
+        #[test]
+        fn failed_stop_keeps_capture_handle_for_a_save_retry() {
+            let id = uuid::Uuid::now_v7().to_string();
+            let worker_id = id.clone();
+            let state = Arc::new(Mutex::new(CaptureStatus {
+                meeting_id: id.clone(),
+                active: true,
+                paused: false,
+                level: 0.0,
+                recorded_samples: 160,
+                error: None,
+                pending_save: false,
+            }));
+            let worker_state = Arc::clone(&state);
+            let accepting = Arc::new(AtomicBool::new(true));
+            let (sender, receiver) = mpsc::sync_channel(4);
+            // Exercise the native stop/handle lifecycle without requesting a
+            // physical microphone or writing into a real user's meeting home.
+            let worker = thread::spawn(move || {
+                let mut attempts = 0;
+                while let Ok(Message::Stop(reply)) = receiver.recv() {
+                    attempts += 1;
+                    if attempts == 1 {
+                        worker_state.lock().unwrap().pending_save = true;
+                        reply.send(Err("磁盘已满".into())).unwrap();
+                    } else {
+                        let record: MeetingRecord = serde_json::from_value(serde_json::json!({
+                            "id": worker_id, "title": "隔离录音验收", "createdAt": 0, "updatedAt": 0,
+                            "status": "recorded", "modelId": "test", "providerId": "test",
+                            "durationSeconds": 0.01, "recordedSamples": 160, "audioPath": "unused.wav",
+                            "transcript": [], "chunks": []
+                        })).unwrap();
+                        reply.send(Ok(record)).unwrap();
+                        break;
+                    }
+                }
+            });
+            *active().lock().unwrap() = Some(ActiveCapture {
+                meeting_id: id.clone(),
+                sender,
+                accepting,
+                status: state,
+                worker,
+            });
+            assert!(stop(&id).is_err());
+            assert!(status().unwrap().pending_save);
+            assert!(active().lock().unwrap().is_some());
+            tokio::runtime::Runtime::new()
+                .unwrap()
+                .block_on(crate::meeting_capture::finish_before_exit())
+                .unwrap();
+            assert!(status().is_none());
+        }
 
         #[test]
         fn downmixes_stereo_and_resamples_to_transcription_rate() {

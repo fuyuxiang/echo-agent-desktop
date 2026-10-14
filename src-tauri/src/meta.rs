@@ -1072,10 +1072,12 @@ mod tests {
         );
         assert!(validate_state(&state).is_err());
 
-        let mut too_many = EchoAgentState::default();
-        too_many.pinned_sessions = (0..=MAX_SESSION_ENTRIES)
-            .map(|index| format!("session-{index}"))
-            .collect();
+        let too_many = EchoAgentState {
+            pinned_sessions: (0..=MAX_SESSION_ENTRIES)
+                .map(|index| format!("session-{index}"))
+                .collect(),
+            ..EchoAgentState::default()
+        };
         assert!(validate_state(&too_many).is_err());
     }
 }

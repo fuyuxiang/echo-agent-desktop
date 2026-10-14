@@ -1,4 +1,6 @@
-import { describe, it, expect, beforeEach } from "vitest";
+import { describe, it, expect, beforeEach, vi } from "vitest";
+import { invoke } from "@tauri-apps/api/core";
+vi.mock("@tauri-apps/api/core", () => ({ invoke: vi.fn() }));
 import {
   buildPropfindBody,
   parsePropfindResponse,
@@ -9,6 +11,8 @@ import {
   listStorageProviders,
   getStorageProvider,
   resetStorageProviders,
+  hydrateStorageProviders,
+  createTauriWebDavProvider,
   type StorageProvider,
 } from "../cloud-storage";
 
@@ -118,5 +122,18 @@ describe("provider 注册表", () => {
     expect(unregisterStorageProvider("a")).toBe(true);
     expect(listStorageProviders()).toHaveLength(0);
     expect(unregisterStorageProvider("nope")).toBe(false);
+  });
+  it("重新读取配置会撤销已移除的原生存储源，保留其他注册的源", async () => {
+    registerStorageProvider(createTauriWebDavProvider({
+      id: "removed-dav", label: "旧 WebDAV", kind: "webdav", enabled: true,
+      baseUrl: "https://dav.example.com",
+    }));
+    registerStorageProvider(provider("custom-source"));
+    vi.mocked(invoke).mockResolvedValueOnce([]);
+
+    await hydrateStorageProviders();
+
+    expect(getStorageProvider("removed-dav")).toBeNull();
+    expect(listStorageProviders()).toEqual([{ id: "custom-source", label: "custom-source" }]);
   });
 });

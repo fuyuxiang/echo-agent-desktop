@@ -7,24 +7,14 @@ import {
 } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
+import { pinnedTheiaPlugins, validateTheiaPlugin } from "./theia-plugin-validation.mjs";
 
 const root = resolve(import.meta.dirname, "..");
 const sourceRoot = join(root, "vendor/theia-platform");
 const archiveRoot = join(root, "vendor/theia-vsix");
 const manifestPath = join(archiveRoot, "manifest.json");
 const app = JSON.parse(readFileSync(join(sourceRoot, "examples/browser/package.json"), "utf8"));
-const plugins = Object.entries(app.theiaPlugins ?? {}).map(([id, source]) => {
-  const url = new URL(source);
-  const match = url.pathname.match(/^\/api\/([^/]+)\/([^/]+)\/([^/]+)\/file\/([^/]+\.vsix)$/);
-  const version = match?.[3];
-  const filename = match?.[4];
-  if (url.protocol !== "https:" || !version || !filename
-      || `${match[1]}.${match[2]}`.toLowerCase() !== id.toLowerCase()
-      || filename !== `${id}-${version}.vsix`) {
-    throw new Error(`Invalid pinned Theia plugin URL for ${id}: ${source}`);
-  }
-  return { id, source, version, filename };
-});
+const plugins = pinnedTheiaPlugins(app);
 
 // Theia already installs this dependency for its CLI. Reuse the same VSIX
 // extractor after npm ci, without adding a second ZIP implementation.
@@ -40,33 +30,9 @@ function sha256(path) {
   return createHash("sha256").update(readFileSync(path)).digest("hex");
 }
 
-function validateExtracted(dir, { id, version }) {
-  const extensionRoot = join(dir, "extension");
-  let manifest;
-  try {
-    manifest = JSON.parse(readFileSync(join(extensionRoot, "package.json"), "utf8"));
-  } catch {
-    throw new Error(`${id}: VSIX has no extension/package.json`);
-  }
-  if (`${manifest.publisher}.${manifest.name}`.toLowerCase() !== id.toLowerCase()
-      || manifest.version !== version
-      || !manifest.contributes?.languages?.length
-      || !manifest.contributes?.grammars?.length) {
-    throw new Error(`${id}: VSIX identity, version, or language contributions are invalid`);
-  }
-  for (const grammar of manifest.contributes.grammars) {
-    if (!grammar.path || !existsSync(join(extensionRoot, grammar.path))) {
-      throw new Error(`${id}: missing grammar ${grammar.path}`);
-    }
-  }
-  if (!existsSync(join(extensionRoot, "LICENSE-vscode.txt"))) {
-    throw new Error(`${id}: VSIX is missing its license`);
-  }
-}
-
 async function extractAndValidate(decompress, archive, plugin, target) {
   await decompress(archive, target);
-  validateExtracted(target, plugin);
+  validateTheiaPlugin(target, plugin, plugins.map(item => item.id));
 }
 
 async function stage() {

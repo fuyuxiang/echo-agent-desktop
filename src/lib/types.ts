@@ -110,10 +110,14 @@ export interface ToolCallDeltaUpdate {
   update: Record<string, unknown>;
 }
 
-export interface PlanUpdate {
-  type: "plan";
-  plan: Plan;
-}
+/** ACP flattens Plan.entries; retain the older nested-plan transport too. */
+export type PlanUpdate = (
+  | { sessionUpdate: "plan"; type?: "plan" }
+  | { type: "plan"; sessionUpdate?: "plan" }
+) & (
+  | { entries: PlanEntry[]; plan?: Plan | null }
+  | { plan: Plan | null; entries?: PlanEntry[] }
+);
 
 /** A EchoAgent execution plan (ACP `Plan`). Each update replaces the whole plan. */
 export interface Plan {

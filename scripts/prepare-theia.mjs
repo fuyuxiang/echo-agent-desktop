@@ -5,6 +5,8 @@ import { latestTheiaSourceMtime } from "./theia-source-mtime.mjs";
 import { ensureTheiaNodeWritable } from "./ensure-theia-node-writable.mjs";
 import { isNodePtyConsoleHelperHidden, isNodePtyPipeErrorsHandled, isNodePtyConptyReady } from "./patch-theia-node-pty.mjs";
 import { isTheiaWindowlessRuntime } from "./patch-theia-windowless-helpers.mjs";
+import { createHash } from "node:crypto";
+import { pinnedTheiaPlugins, validateTheiaPlugin, theiaPluginTreeFingerprint } from "./theia-plugin-validation.mjs";
 
 const root = resolve(import.meta.dirname, "..");
 const major = Number(process.versions.node.split(".")[0]);
@@ -20,14 +22,15 @@ const runtimeDependencies = [
   "node/LICENSE",
 ];
 const app = JSON.parse(readFileSync(join(root, "vendor/theia-platform/examples/browser/package.json"), "utf8"));
-const languagePluginIds = [...Object.keys(app.theiaPlugins ?? {}), "echoagent.toml-basics"];
-const languagePluginsReady = languagePluginIds.every(id => {
-  try {
-    const manifestPath = id === "echoagent.toml-basics" ? "package.json" : "extension/package.json";
-    const manifest = JSON.parse(readFileSync(join(resources, "browser/plugins", id, manifestPath), "utf8"));
-    return `${manifest.publisher}.${manifest.name}`.toLowerCase() === id.toLowerCase();
-  } catch { return false; }
-});
+const pluginSpecs = [...pinnedTheiaPlugins(app), { id: "echoagent.toml-basics", version: "1.0.0", manifestDir: "" }];
+const pluginIds = pluginSpecs.map(plugin => plugin.id);
+let pluginsReady = false, pluginTreeSha256;
+try {
+  for (const plugin of pluginSpecs) validateTheiaPlugin(join(resources, "browser/plugins", plugin.id), plugin, pluginIds);
+  pluginTreeSha256 = theiaPluginTreeFingerprint(join(resources, "browser/plugins"), pluginIds);
+  pluginsReady = true;
+} catch { /* Missing or damaged plugins require the ordinary prepare chain. */ }
+const pluginManifestSha256 = createHash("sha256").update(readFileSync(join(root, "vendor/theia-vsix/manifest.json"))).digest("hex");
 const node = process.platform === "win32"
   ? join(resources, "node/node.exe")
   : join(resources, "node/bin/node");
@@ -44,7 +47,8 @@ const stagedNodeVersion = existsSync(node)
 if (existsSync(runtime) && existsSync(node)
     && isTheiaWindowlessRuntime(join(resources, "browser"))
     && runtimeDependencies.every(path => existsSync(join(resources, path)))
-    && languagePluginsReady
+    && pluginsReady && platform?.pluginTreeSha256 === pluginTreeSha256
+    && platform?.pluginManifestSha256 === pluginManifestSha256
     && isNodePtyConsoleHelperHidden(join(resources, "browser"))
     && (process.platform !== "win32" || (
       isNodePtyPipeErrorsHandled(join(resources, "browser"))

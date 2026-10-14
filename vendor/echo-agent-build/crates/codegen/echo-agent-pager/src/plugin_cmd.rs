@@ -19,7 +19,7 @@ use echo_agent_core::plugins::install_registry::{InstallKind, InstallRegistry};
 use echo_agent_core::plugins::manifest::{ManifestLoadResult, PluginManifest, load_manifest};
 use echo_agent_plugin_marketplace::SourceKind;
 use echo_agent_plugin_marketplace::git::SourceCacheLease;
-use echo_agent_runtime::plugin::{self, RepoUpdateOutcome, UninstallError};
+use echo_agent_runtime::plugin::{self, MarketplaceAddInput, RepoUpdateOutcome, UninstallError};
 
 // ── JSON output types ───────────────────────────────────────────────
 
@@ -326,11 +326,7 @@ fn installed_plugins(
 }
 
 fn available_plugins(registry: &InstallRegistry) -> Vec<PluginEntry> {
-    let config = echo_agent_runtime::config::load_effective_config()
-        .ok()
-        .unwrap_or(toml::Value::Table(toml::map::Map::new()));
-    let mut sources = echo_agent_plugin_marketplace::load_sources(&config);
-    sources.extend(echo_agent_plugin_marketplace::load_extra_sources_from_settings(&sources));
+    let sources = plugin::load_marketplace_sources();
 
     let mut entries = Vec::new();
     for source in &sources {
@@ -790,11 +786,7 @@ fn cmd_tag(path: &str, push: bool, force: bool, dry_run: bool) -> Result<()> {
 // ── Marketplace subcommands ─────────────────────────────────────────
 
 async fn run_marketplace(cmd: MarketplaceCommand) -> Result<()> {
-    let config = echo_agent_runtime::config::load_effective_config()
-        .ok()
-        .unwrap_or(toml::Value::Table(toml::map::Map::new()));
-    let mut sources = echo_agent_plugin_marketplace::load_sources(&config);
-    sources.extend(echo_agent_plugin_marketplace::load_extra_sources_from_settings(&sources));
+    let sources = plugin::load_marketplace_sources();
 
     match cmd {
         MarketplaceCommand::List { json } => marketplace_list(&sources, json),
@@ -914,38 +906,7 @@ fn marketplace_add(
         MarketplaceAddInput::GitUrl(u) => plugin::name_from_url(u),
         MarketplaceAddInput::LocalPath(p) => plugin::name_from_path(p),
     };
-    let config_path = echo_agent_config::echo_agent_home().join("config.toml");
-
-    let content = std::fs::read_to_string(&config_path).unwrap_or_default();
-    let mut doc: toml_edit::DocumentMut = content
-        .parse()
-        .map_err(|e| anyhow::anyhow!("Failed to parse config.toml: {e}"))?;
-
-    if doc.get("marketplace").is_none() {
-        doc["marketplace"] = toml_edit::Item::Table(toml_edit::Table::new());
-    }
-    if doc["marketplace"].get("sources").is_none() {
-        doc["marketplace"]["sources"] =
-            toml_edit::Item::ArrayOfTables(toml_edit::ArrayOfTables::new());
-    }
-
-    let sources = doc["marketplace"]["sources"]
-        .as_array_of_tables_mut()
-        .ok_or_else(|| anyhow::anyhow!("marketplace.sources is not an array of tables"))?;
-
-    let mut entry = toml_edit::Table::new();
-    entry["name"] = toml_edit::value(&name);
-    match &input {
-        MarketplaceAddInput::GitUrl(git_url) => {
-            entry["git"] = toml_edit::value(git_url);
-        }
-        MarketplaceAddInput::LocalPath(path) => {
-            entry["path"] = toml_edit::value(path.display().to_string());
-        }
-    }
-    sources.push(entry);
-
-    std::fs::write(&config_path, doc.to_string())?;
+    plugin::register_marketplace_source(&name, &input)?;
 
     println!("Added marketplace source: {name} ({identity})");
     Ok(())
@@ -1013,39 +974,16 @@ fn marketplace_remove(
     sources: &[echo_agent_plugin_marketplace::MarketplaceSource],
     name_or_url: &str,
 ) -> Result<()> {
-    let input = name_or_url.trim();
-    if input.is_empty() {
-        bail!("Provide the source name, git URL, or local path to remove.");
-    }
     let cwd = std::env::current_dir().unwrap_or_default();
-    let source = find_removal_source(sources, input, &cwd).map_err(|e| anyhow::anyhow!("{e}"))?;
-
-    let identity = source_identity(source);
-
-    let uninstalled = plugin::uninstall_marketplace_source_plugins(&identity);
-
-    let config_path = echo_agent_config::echo_agent_home().join("config.toml");
-    let mut removed_from_config = false;
-    if let Ok(content) = std::fs::read_to_string(&config_path)
-        && let Some(new) = plugin::remove_toml_marketplace_block(&content, &identity)
-    {
-        if let Err(e) = std::fs::write(&config_path, new) {
-            tracing::warn!("failed to write config.toml: {e}");
-        } else {
-            removed_from_config = true;
-        }
-    }
-
-    // Fallback: settings.json / known_marketplaces.json.
-    if !removed_from_config && !plugin::try_remove_source_from_json_files(&identity) {
-        eprintln!(
-            "Warning: source was found but could not be removed from config files.\n\
-             It may be defined in a managed or read-only settings file."
-        );
-    }
+    let (label, identity, uninstalled) = marketplace_remove_with(
+        sources,
+        name_or_url,
+        &cwd,
+        plugin::remove_marketplace_source,
+    )?;
 
     if uninstalled.is_empty() {
-        println!("Removed marketplace source: {} ({identity})", source.name);
+        println!("Removed marketplace source: {label} ({identity})");
     } else {
         println!(
             "Removed marketplace source and uninstalled {} plugin(s): {}",
@@ -1054,6 +992,53 @@ fn marketplace_remove(
         );
     }
     Ok(())
+}
+
+fn marketplace_remove_with(
+    sources: &[echo_agent_plugin_marketplace::MarketplaceSource],
+    name_or_url: &str,
+    cwd: &Path,
+    remove: impl FnOnce(&str) -> std::io::Result<Vec<String>>,
+) -> Result<(String, String, Vec<String>)> {
+    let input = name_or_url.trim();
+    if input.is_empty() {
+        bail!("Provide the source name, git URL, or local path to remove.");
+    }
+    let (label, identity, missing) = match find_removal_source(sources, input, cwd) {
+        Ok(source) => (source.name.clone(), source_identity(source), None),
+        Err(error) => {
+            // A prior partial removal deliberately hides the source but retains
+            // its canonical identity in the current-profile tombstone. Retry by
+            // explicit URL/path through the same native authorizer; never infer
+            // a missing or ambiguous display name and never reactivate it.
+            if sources.iter().any(|source| source.name == input) {
+                bail!(error);
+            }
+            let identity = match plugin::classify_marketplace_add_input(input, cwd) {
+                MarketplaceAddInput::LocalPath(path) => path.to_string_lossy().into_owned(),
+                MarketplaceAddInput::GitUrl(url)
+                    if input.contains("://")
+                        || input.starts_with("git@")
+                        || input.contains('/') =>
+                {
+                    url
+                }
+                MarketplaceAddInput::GitUrl(_) => bail!(error),
+            };
+            (input.to_string(), identity, Some(error))
+        }
+    };
+
+    // Propagate every parse/write/cleanup error. A compatibility source is
+    // revoked only in the current Echo config; external files stay untouched.
+    let uninstalled = remove(&identity).map_err(|error| {
+        if error.kind() == std::io::ErrorKind::NotFound && missing.is_some() {
+            anyhow::anyhow!(missing.unwrap())
+        } else {
+            anyhow::Error::from(error)
+        }
+    })?;
+    Ok((label, identity, uninstalled))
 }
 
 fn marketplace_update(
@@ -1202,6 +1187,84 @@ mod tests {
             "{err}"
         );
         assert!(err.contains("https://other.example.com/jira.git"), "{err}");
+    }
+
+    #[test]
+    fn scoped_marketplace_remove_retries_revoked_url_through_native_authorizer() {
+        let requested = "https://example.test/review.git/";
+        let expected = "https://example.test/review";
+        let (label, identity, removed) =
+            marketplace_remove_with(&[], requested, Path::new("/"), |identity| {
+                assert_eq!(
+                    echo_agent_core::plugins::marketplace_scope::source_identity(identity),
+                    expected
+                );
+                Ok(vec!["managed-review-repo".to_string()])
+            })
+            .unwrap();
+        assert_eq!(label, requested);
+        assert_eq!(
+            echo_agent_core::plugins::marketplace_scope::source_identity(&identity),
+            expected
+        );
+        assert_eq!(removed, ["managed-review-repo"]);
+    }
+
+    #[test]
+    fn scoped_marketplace_remove_keeps_native_rejection_and_partial_cleanup_failure() {
+        let unknown = marketplace_remove_with(
+            &[],
+            "https://example.test/foreign.git",
+            Path::new("/"),
+            |_| {
+                Err(std::io::Error::new(
+                    std::io::ErrorKind::NotFound,
+                    "not owned",
+                ))
+            },
+        )
+        .unwrap_err();
+        assert!(
+            unknown
+                .to_string()
+                .contains("not found; no sources are configured")
+        );
+        let partial = marketplace_remove_with(
+            &[],
+            "/private/tmp/revoked-review",
+            Path::new("/"),
+            |identity| {
+                assert_eq!(identity, "/private/tmp/revoked-review");
+                Err(std::io::Error::new(
+                    std::io::ErrorKind::PermissionDenied,
+                    "managed cleanup denied",
+                ))
+            },
+        )
+        .unwrap_err();
+        assert_eq!(partial.to_string(), "managed cleanup denied");
+    }
+
+    #[test]
+    fn scoped_marketplace_remove_does_not_guess_missing_or_ambiguous_names() {
+        let missing = marketplace_remove_with(&[], "review", Path::new("/"), |_| {
+            panic!("A missing display name must not invoke cleanup")
+        })
+        .unwrap_err();
+        assert!(missing.to_string().contains("not found"));
+        let mut sources = removal_fixture();
+        sources.push(MarketplaceSource {
+            name: "jira".into(),
+            kind: SourceKind::Git {
+                url: "https://another.example.test/review.git".into(),
+                branch: None,
+            },
+        });
+        let ambiguous = marketplace_remove_with(&sources, "jira", Path::new("/"), |_| {
+            panic!("An ambiguous name must not invoke cleanup")
+        })
+        .unwrap_err();
+        assert!(ambiguous.to_string().contains("Multiple sources are named"));
     }
 
     #[test]

@@ -1547,7 +1547,12 @@ export const useSessionStore = create<SessionState>((set, get) => {
           }
           case "plan": {
             const uu = u as unknown as PlanUpdate;
-            return { ...tr, plan: uu.plan ?? null, planRevisionDirty: false };
+            // ACP serializes Plan directly beside sessionUpdate, without a
+            // nested plan field. Empty entries also replace the old plan.
+            const plan = Array.isArray(uu.entries)
+              ? { entries: uu.entries }
+              : uu.plan && Array.isArray(uu.plan.entries) ? uu.plan : null;
+            return { ...tr, plan, planRevisionDirty: false };
           }
           case "current_mode_update": {
             const raw = u as unknown as Record<string, unknown>;

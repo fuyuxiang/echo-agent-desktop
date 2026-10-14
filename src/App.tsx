@@ -23,6 +23,8 @@ import {
 } from "./lib/model-selection";
 import { useSessionStore } from "./stores/session-store";
 import { useSessionsStore } from "./stores/sessions-store";
+import { reconcileSessionCatalog } from "./lib/session-catalog";
+import { createExitPreparationController, type DesktopExitNotice, type DesktopExitFailure } from "./lib/recording-exit";
 import { usePermissionStore } from "./stores/permission-store";
 import {
   hasPendingQuestionForSession,
@@ -236,6 +238,8 @@ function Shell() {
 
   const [initError, setInitError] = useState<string | null>(null);
   const [initAttempt, setInitAttempt] = useState(0);
+  const [exitPreparing, setExitPreparing] = useState(false);
+  const runtimeRecoveryRequested = useRef(false);
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [settingsSection, setSettingsSection] = useState<SettingsSectionId>("model");
   const [searchOpen, setSearchOpen] = useState(false);
@@ -468,6 +472,7 @@ function Shell() {
   const refreshSessionCatalog = useCallback(async () => {
     const generation = ++sessionCatalogGenerationRef.current;
     const store = sessionsStore.getState();
+    const catalogAtStart = store.independent;
     store.setLoading(true);
     store.setError(null);
     const [sessionResult, workspaceResult] = await Promise.allSettled([
@@ -477,8 +482,9 @@ function Shell() {
     if (sessionCatalogGenerationRef.current !== generation) return;
     const failures: string[] = [];
     if (sessionResult.status === "fulfilled") {
-      sessionsStore.getState().setIndependent(sessionResult.value);
-      useProjectsStore.getState().reconcileSessionArchiveStates(sessionResult.value);
+      const reconciled = reconcileSessionCatalog(sessionResult.value, catalogAtStart, sessionsStore.getState().independent);
+      sessionsStore.getState().setIndependent(reconciled);
+      useProjectsStore.getState().reconcileSessionArchiveStates(reconciled);
     } else {
       failures.push(`会话：${friendlyError(sessionResult.reason)}`);
     }
@@ -605,14 +611,17 @@ function Shell() {
         if (disposed) return;
         setNewSessionTargetCwd(result.cwd);
         sessionsStore.getState().setHomeCwd(result.cwd);
-        setInit(result);
-        authReadyRef.current = result.auth.ready;
+        if (!runtimeRecoveryRequested.current) {
+          setInit(result);
+          authReadyRef.current = result.auth.ready;
+        }
 
         const stopListening = await subscribeAgentEvents({
           onUpdate: (u) => {
             const updateType = (u as { sessionUpdate?: string; type?: string }).sessionUpdate
               ?? (u as { type?: string }).type;
             const updateSessionId = (u as { __sessionId?: string }).__sessionId;
+            if (updateSessionId && sessionsStore.getState().deletedSessionIds.includes(updateSessionId)) return;
             const currentStatus = updateSessionId
               ? findSessionSummary(updateSessionId)?.status
               : undefined;
@@ -660,6 +669,7 @@ function Shell() {
             sessionStore.getState().applyUpdate(u);
           },
           onPermission: (p) => {
+            if (sessionsStore.getState().deletedSessionIds.includes(p.sessionId)) return;
             if (sessionStore.getState().transcripts[p.sessionId]?.control) return;
             const permissionState = permissionStore.getState();
             // A mode switch may close a backend request while its earlier
@@ -706,6 +716,7 @@ function Shell() {
             void refreshSessionCatalog();
           },
           onComplete: (p) => {
+            if (sessionsStore.getState().deletedSessionIds.includes(p.sessionId)) return;
             const requestedAction = sessionStore.getState().transcripts[p.sessionId]?.control?.action;
             const terminalStatus = terminalSessionStatus(p, requestedAction);
             reportEvent(
@@ -830,6 +841,7 @@ function Shell() {
             publishQuotaAlert(next, config, payload.sessionId);
           },
           onSummary: ({ sessionId, title }) => {
+            if (sessionsStore.getState().deletedSessionIds.includes(sessionId)) return;
             // EchoAgent generated (or we renamed) a session title — update the
             // sidebar entry in place. This overrides the "新会话" placeholder
             // set optimistically in handleSendNew. Stamp updatedAt so the
@@ -930,7 +942,9 @@ function Shell() {
             }
           },
           onQuestion: (q) => {
+            if (sessionsStore.getState().deletedSessionIds.includes(q.sessionId)) return;
             if (sessionStore.getState().transcripts[q.sessionId]?.control) return;
+            if (questionStore.getState().closedRequestIds.includes(q.requestId)) return;
             questionStore.getState().request(q);
             sessionsStore.getState().upsert({
               sessionId: q.sessionId,
@@ -954,7 +968,8 @@ function Shell() {
           },
           onAgentDied: ({ reason }) => {
             console.error('[EchoAgent] Agent thread died:', reason);
-            const message = `AI 引擎异常退出：${reason}。请重启应用。`;
+            const message = `AI 引擎异常退出：${reason}。可以重试初始化，已有会话会保留。`;
+            setInitError(message);
             enqueueToast(`⚠️ ${message}`, [], 8000);
             setInit((previous) => previous
               ? {
@@ -1026,6 +1041,27 @@ function Shell() {
         }
         unlisten = stopListening;
 
+        if (runtimeRecoveryRequested.current) {
+          const sessionId = sessionsStore.getState().currentSessionId;
+          const entry = sessionId ? findSessionSummary(sessionId) : undefined;
+          if (entry && !sessionsStore.getState().deletedSessionIds.includes(entry.sessionId)) {
+            sessionStore.getState().setSession(entry.sessionId);
+            let loadedModel: string | null;
+            try {
+              loadedModel = await agentLoadSession(entry.sessionId, entry.cwd);
+            } finally {
+              sessionStore.getState().clearReplaySuppression(entry.sessionId);
+            }
+            if (disposed) return;
+            if (sessionsStore.getState().currentSessionId === entry.sessionId && !sessionsStore.getState().deletedSessionIds.includes(entry.sessionId)) {
+              sessionsStore.getState().upsert({ sessionId: entry.sessionId, currentModelId: loadedModel ?? entry.currentModelId });
+            }
+          }
+          runtimeRecoveryRequested.current = false;
+          setInit(result);
+          authReadyRef.current = result.auth.ready;
+        }
+
         // These catalogs fail independently. Keep the shell usable and expose
         // local retry controls instead of converting a disk/index hiccup into a
         // fatal initialization screen.
@@ -1089,6 +1125,47 @@ function Shell() {
   const showActionToast = useCallback((message: string, actions: ToastAction[], durationMs = 8000) => {
     enqueueToast(message, actions, durationMs);
   }, [enqueueToast]);
+
+  useEffect(() => {
+    let disposed = false;
+    const stops: Array<() => void> = [];
+    const exit = createExitPreparationController({ preparing: setExitPreparing, failed: (message) => showToast(message, 8000) });
+    void Promise.allSettled([
+      listen<DesktopExitNotice>("desktop://prepare-exit", ({ payload }) => exit.prepare(payload)),
+      listen<DesktopExitFailure>("desktop://exit-failed", ({ payload }) => exit.fail(payload)),
+      listen("desktop://runtime-restart-required", () => {
+        if (!disposed) {
+          runtimeRecoveryRequested.current = true;
+          authReadyRef.current = false;
+          sessionStore.getState().failAllStreaming("error", "更新未完成，本地 Agent 正在恢复，请稍候重试。");
+          useMessageQueueStore.getState().retryAllSending();
+          permissionStore.getState().clearAll();
+          questionStore.getState().clearAll();
+          for (const entry of sessionsStore.getState().independent) {
+            if (isAgentOwnedActiveStatus(entry.status)) sessionsStore.getState().upsert({ sessionId: entry.sessionId, status: "failed" });
+          }
+          setInit(null);
+          setInitAttempt((value) => value + 1);
+        }
+      }),
+    ]).then(async (results) => {
+      for (const result of results) if (result.status === "fulfilled") {
+        if (disposed) result.value(); else stops.push(result.value);
+      }
+      if (disposed) return;
+      if (results.some((result) => result.status === "rejected")) {
+        showToast("退出保护监听未能完整建立；录音保存失败时应用会保留，请重新启动后重试。", 8000);
+        return;
+      }
+      try {
+        const pending = await invoke<DesktopExitNotice | null>("desktop_exit_listener_ready");
+        if (!disposed && pending) exit.prepare(pending, true);
+      } catch (error) {
+        if (!disposed) showToast(`退出保护状态确认失败：${friendlyError(error)}`, 8000);
+      }
+    });
+    return () => { disposed = true; exit.dispose(); stops.forEach((stop) => stop()); };
+  }, [showToast]);
 
   useEffect(() => onSessionStatusPersistenceIssue(({ pendingCount }) => {
     showActionToast(
@@ -1154,6 +1231,12 @@ function Shell() {
       // Coding owns its own repository explorer, so recover horizontal space
       // while keeping the global sidebar one click away via the floating rail.
       setSidebarCollapsed(true);
+      return;
+    }
+    // Extension management uses the active Runtime session's trusted workspace
+    // and broadcasts changes from it. Clearing that session on entry made all
+    // install/source/toggle actions unreachable, even after opening a chat.
+    if (["专家·技能·连接器", "技能", "连接器", "插件·市场", "插件市场"].includes(label)) {
       return;
     }
     sessionsStore.getState().setCurrent(null);
@@ -1789,14 +1872,21 @@ function Shell() {
   };
 
   const handleSelectCodingWorkspace = (newCwd: string) => {
+    // The first IDE may use the active/default cwd without having an entry in
+    // recent Coding projects yet. Keep that displayed source when switching
+    // to a new worktree so it remains reachable and survives restart.
+    const previousCwd = codingCwd;
     setCodingWorkspaceCwd(newCwd);
     // Register the cwd in recent Coding projects and activate it.
     if (newCwd) {
-      setCodingWorkspaces((current) =>
-        current.some((w) => w.cwd === newCwd)
-          ? current
-          : [{ cwd: newCwd, sessionCount: 0 }, ...current],
-      );
+      setCodingWorkspaces((current) => {
+        const retained = previousCwd && !current.some((workspace) => workspace.cwd === previousCwd)
+          ? [...current, workspaces.find((workspace) => workspace.cwd === previousCwd) ?? { cwd: previousCwd, sessionCount: 0 }]
+          : current;
+        return retained.some((workspace) => workspace.cwd === newCwd)
+          ? retained
+          : [{ cwd: newCwd, sessionCount: 0 }, ...retained];
+      });
       setActiveCodingWorkspaceCwd(newCwd);
     }
     if (!newCwd) return;
@@ -2247,7 +2337,7 @@ function Shell() {
 
   // Fork copies the session to a new id — jump to it so the user sees the
   // branch they just created (and it appears in the sidebar).
-  const handleForked = (newId: string, sourceSessionId: string, sourceCwd?: string) => {
+  const handleForked = async (newId: string, sourceSessionId: string, sourceCwd?: string) => {
     const source = findSessionSummary(sourceSessionId);
     const cwd = source?.cwd ?? sourceCwd;
     if (!cwd) {
@@ -2256,13 +2346,26 @@ function Shell() {
       return;
     }
     const modelId = resolveSessionModelId(models, source?.currentModelId);
-    sessionsStore.getState().upsert({
+    const fork: SessionSummary = {
       sessionId: newId,
-      title: source?.title ? `${source.title}（分叉）` : "分叉会话",
+      title: source?.title || "分叉会话",
       cwd,
       currentModelId: modelId,
       permissionMode: source?.permissionMode ?? "ask",
-    });
+    };
+    // The Runtime fork already exists. A failed project save must retain it
+    // as a recoverable task rather than report that creating the fork failed.
+    sessionsStore.getState().upsert(fork);
+    try {
+      await useProjectsStore.getState().associateForkWithSourceProject(sourceSessionId, fork);
+    } catch (error) {
+      const linked = useProjectsStore.getState().projects.some((project) =>
+        project.conversations.some((conversation) => conversation.sessionId === newId),
+      );
+      showToast(linked
+        ? `分叉已创建并保留，项目关联尚未确认保存。请在项目页重试保存：${friendlyError(error)}`
+        : `分叉已创建并保留为独立会话，关联项目失败。可在会话菜单“移入项目…”重试：${friendlyError(error)}`, 7000);
+    }
     // A slow fork must not hijack a conversation the user selected meanwhile.
     if (sessionsStore.getState().currentSessionId !== sourceSessionId) return;
     setPlaceholderView(null);
@@ -2646,6 +2749,7 @@ function Shell() {
 
   return (
     <div className={`app${IS_MACOS ? " app--macos" : ""}${codingWorkspaceActive ? " app--coding" : ""}`}>
+      {exitPreparing && <div className="app__exit-overlay" role="status" aria-live="polite">正在保存录音与任务数据并准备退出…</div>}
       {init?.ok && <CodingTaskRuntimeManager roots={[...new Set([
         ...codingWorkspaces.map((workspace) => workspace.cwd),
         codingWorkspaceCwd,

@@ -1,5 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { act, fireEvent, render, screen, waitFor } from "@testing-library/react";
 
 const mocks = vi.hoisted(() => ({
   skillsList: vi.fn(),
@@ -104,6 +104,20 @@ describe("专家技能页的组织 Skill 集成", () => {
 
     await waitFor(() => expect(mocks.orgSetSkillPreference)
       .toHaveBeenCalledWith("skill-weekly", false));
+  });
+
+  it("组织技能变化后的新扫描不会被旧扫描迟到结果覆盖", async () => {
+    let resolveOld!: (skills: ReturnType<typeof organizationSkill>[]) => void;
+    let notify!: () => void;
+    mocks.skillsList.mockReturnValueOnce(new Promise((resolve) => { resolveOld = resolve; })).mockResolvedValueOnce([]);
+    mocks.listenOrgSkillsChanged.mockImplementationOnce(async (handler) => { notify = handler; return vi.fn(); });
+    render(<SkillsTab pills={null} />);
+    await waitFor(() => expect(mocks.listenOrgSkillsChanged).toHaveBeenCalled());
+    await act(async () => notify());
+    await screen.findByText("全局目录中还没有技能");
+    await act(async () => resolveOld([organizationSkill(false)]));
+    expect(screen.queryByText("组织周报")).toBeNull();
+    expect(screen.getByText("全局目录中还没有技能")).toBeInTheDocument();
   });
 
   it("本地 Skill 可直接选择组织范围并打包上传", async () => {

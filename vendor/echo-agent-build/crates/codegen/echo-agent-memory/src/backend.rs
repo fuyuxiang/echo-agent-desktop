@@ -252,6 +252,9 @@ pub struct MemoryBackendImpl {
     /// injection and compaction-recovery backends use their own local counters.
     pub search_counter: std::sync::Arc<std::sync::atomic::AtomicU64>,
     embedding_credentials: EndpointScopedCredentials,
+    /// Personal knowledge owns permission-aware chunk embedding in its
+    /// background indexer; its search must embed only the user query.
+    embed_chunks_on_search: bool,
 }
 
 impl MemoryBackendImpl {
@@ -271,6 +274,7 @@ impl MemoryBackendImpl {
             search_source: MemorySearchSource::Tool,
             observation_sink: noop_memory_observation_sink(),
             embedding_credentials: EndpointScopedCredentials::none(),
+            embed_chunks_on_search: true,
             search_counter: std::sync::Arc::new(std::sync::atomic::AtomicU64::new(0)),
         }
     }
@@ -301,6 +305,13 @@ impl MemoryBackendImpl {
         config: echo_agent_config_types::MemorySearchConfig,
     ) -> Self {
         self.search_config = config;
+        self
+    }
+
+    /// Keep hybrid scoring and query embedding without sending pending indexed
+    /// document text. The caller must supply its own background chunk indexer.
+    pub fn with_query_only_embedding_search(mut self) -> Self {
+        self.embed_chunks_on_search = false;
         self
     }
 
@@ -453,10 +464,10 @@ impl MemoryBackend for MemoryBackendImpl {
         let provider = self.make_embedding_provider().await;
         if let Some(ref provider) = provider {
             match index.ensure_embedding_fingerprint(&provider.fingerprint()) {
-                Ok(true) => {
+                Ok(true) if self.embed_chunks_on_search => {
                     reindex_chunks = index.chunks_without_embeddings().unwrap_or_default();
                 }
-                Ok(false) => {}
+                Ok(_) => {}
                 Err(error) => tracing::warn!(
                     target: crate::MEMORY_LOG_TARGET,
                     %error,
@@ -465,13 +476,14 @@ impl MemoryBackend for MemoryBackendImpl {
             }
             // Desktop edits can reindex files while file watching is disabled.
             // Fill those new chunks on the next semantic search as well.
-            if reindex_chunks.is_empty() {
+            if self.embed_chunks_on_search && reindex_chunks.is_empty() {
                 reindex_chunks = index.chunks_without_embeddings().unwrap_or_default();
             }
         }
         let mut embedded_count: usize = 0;
         let mut embedding_sync_failed = false;
-        if !reindex_chunks.is_empty()
+        if self.embed_chunks_on_search
+            && !reindex_chunks.is_empty()
             && let Some(ref provider) = provider
         {
             let mut upserts: Vec<(String, Vec<f32>)> = Vec::new();
@@ -1485,6 +1497,125 @@ mod tests {
         let results = backend.search("rust programming", 10, 0.0).await.unwrap();
         assert!(!results.is_empty(), "should find indexed content");
         assert!(results[0].snippet.contains("Rust"));
+    }
+
+    #[tokio::test]
+    async fn query_only_search_never_embeds_pending_document_text_but_default_still_does() {
+        use std::io::{Read, Write};
+        use std::sync::atomic::{AtomicBool, Ordering};
+        use std::time::Duration;
+
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let endpoint = format!("http://{}/v1", listener.local_addr().unwrap());
+        listener.set_nonblocking(true).unwrap();
+        let stopped = Arc::new(AtomicBool::new(false));
+        let received = Arc::new(std::sync::Mutex::new(Vec::<Vec<String>>::new()));
+        let server_stopped = stopped.clone();
+        let server_received = received.clone();
+        let server = std::thread::spawn(move || {
+            while !server_stopped.load(Ordering::Acquire) {
+                let Ok((mut stream, _)) = listener.accept() else {
+                    std::thread::sleep(Duration::from_millis(2));
+                    continue;
+                };
+                // Darwin can inherit the listener's O_NONBLOCK on accept.
+                // Header reads must wait for the client to send its request.
+                stream.set_nonblocking(false).unwrap();
+                stream
+                    .set_read_timeout(Some(Duration::from_secs(2)))
+                    .unwrap();
+                let mut bytes = Vec::new();
+                let mut chunk = [0u8; 2048];
+                let (body_start, content_length) = loop {
+                    let count = stream.read(&mut chunk).unwrap();
+                    assert!(count > 0);
+                    bytes.extend_from_slice(&chunk[..count]);
+                    if let Some(position) = bytes.windows(4).position(|value| value == b"\r\n\r\n")
+                    {
+                        let headers = String::from_utf8_lossy(&bytes[..position]);
+                        let length = headers
+                            .lines()
+                            .find_map(|line| {
+                                let (name, value) = line.split_once(':')?;
+                                name.eq_ignore_ascii_case("content-length")
+                                    .then(|| value.trim().parse::<usize>().unwrap())
+                            })
+                            .unwrap();
+                        break (position + 4, length);
+                    }
+                };
+                while bytes.len() < body_start + content_length {
+                    let count = stream.read(&mut chunk).unwrap();
+                    assert!(count > 0);
+                    bytes.extend_from_slice(&chunk[..count]);
+                }
+                let request: serde_json::Value =
+                    serde_json::from_slice(&bytes[body_start..body_start + content_length])
+                        .unwrap();
+                let inputs = request["input"]
+                    .as_array()
+                    .unwrap()
+                    .iter()
+                    .map(|value| value.as_str().unwrap().to_owned())
+                    .collect::<Vec<_>>();
+                let data = inputs
+                    .iter()
+                    .enumerate()
+                    .map(|(index, _)| {
+                        serde_json::json!({
+                            "index": index, "embedding": [1.0, 0.0, 0.0, 0.0]
+                        })
+                    })
+                    .collect::<Vec<_>>();
+                server_received.lock().unwrap().push(inputs);
+                let body = serde_json::json!({ "data": data }).to_string();
+                write!(stream, "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}", body.len(), body).unwrap();
+            }
+        });
+
+        for query_only in [true, false] {
+            received.lock().unwrap().clear();
+            let tmp = TempDir::new().unwrap();
+            let (db_path, storage) = setup_index(&tmp);
+            let backend = MemoryBackendImpl::new(db_path, storage).with_embedding(
+                echo_agent_config_types::MemoryEmbeddingConfig {
+                    model: Some("synthetic-test".into()),
+                    dimensions: 4,
+                    ..Default::default()
+                },
+                endpoint.clone(),
+                Some("synthetic-test-key".into()),
+            );
+            let backend = if query_only {
+                backend.with_query_only_embedding_search()
+            } else {
+                backend
+            };
+            let results =
+                tokio::time::timeout(Duration::from_secs(10), backend.search("rust", 3, 0.0))
+                    .await
+                    .unwrap()
+                    .unwrap();
+            assert!(!results.is_empty());
+            let inputs = received.lock().unwrap().clone();
+            assert!(
+                inputs.iter().any(|batch| batch == &["rust".to_owned()]),
+                "query embedding must remain enabled"
+            );
+            let document_sent = inputs
+                .iter()
+                .flatten()
+                .any(|text| text.contains("Rust programming tutorial"));
+            assert_eq!(
+                document_sent, !query_only,
+                "only opt-in personal search may omit document embedding"
+            );
+            if query_only {
+                assert_eq!(inputs, vec![vec!["rust".to_owned()]]);
+            }
+        }
+        stopped.store(true, Ordering::Release);
+        server.join().unwrap();
     }
 
     #[test]

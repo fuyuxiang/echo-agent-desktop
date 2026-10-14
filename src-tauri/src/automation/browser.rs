@@ -8,11 +8,13 @@ use std::process::Stdio;
 use std::time::Duration;
 use tokio::process::{Child, Command};
 use tokio_tungstenite::tungstenite::Message;
+use tokio_tungstenite::{MaybeTlsStream, WebSocketStream};
 use url::Url;
 
 const START_TIMEOUT: Duration = Duration::from_secs(12);
 const COMMAND_TIMEOUT: Duration = Duration::from_secs(30);
 const MAX_CDP_MESSAGE_BYTES: usize = 16 * 1024 * 1024;
+type CdpConnection = WebSocketStream<MaybeTlsStream<tokio::net::TcpStream>>;
 
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -70,6 +72,9 @@ pub struct BrowserController {
     allow_private_network: bool,
     network_proxy: BrowserNetworkProxy,
     next_cdp_id: u64,
+    // Chromium releases download overrides when their DevTools session ends.
+    // Keep a browser-level connection alive across page commands and tabs.
+    download_session: Option<CdpConnection>,
 }
 
 impl std::fmt::Debug for BrowserController {
@@ -147,6 +152,7 @@ impl BrowserController {
             allow_private_network,
             network_proxy,
             next_cdp_id: 1,
+            download_session: None,
         };
         let target = controller.ensure_page().await?;
         controller.target_id = Some(target.id);
@@ -155,15 +161,42 @@ impl BrowserController {
             .map_err(|error| format!("创建浏览器下载目录失败：{error}"))?;
         crate::paths::harden_private_dir(&download_dir)?;
         let download_path = download_dir.to_string_lossy().into_owned();
-        controller
-            .call_page(
-                "Page.setDownloadBehavior",
+        let configure_downloads = async {
+            let endpoint = format!("http://127.0.0.1:{}/json/version", controller.port);
+            let version: Value = control_client()?
+                .get(endpoint)
+                .send()
+                .await
+                .map_err(|error| format!("读取浏览器下载控制地址失败：{error}"))?
+                .error_for_status()
+                .map_err(|error| format!("读取浏览器下载控制地址失败：{error}"))?
+                .json()
+                .await
+                .map_err(|error| format!("解析浏览器下载控制地址失败：{error}"))?;
+            let address = version
+                .get("webSocketDebuggerUrl")
+                .and_then(Value::as_str)
+                .ok_or_else(|| "浏览器未提供下载控制连接".to_string())?;
+            let (mut connection, _) = tokio_tungstenite::connect_async(address)
+                .await
+                .map_err(|error| format!("连接浏览器下载控制失败：{error}"))?;
+            let id = controller.next_cdp_id;
+            controller.next_cdp_id = controller.next_cdp_id.saturating_add(1);
+            cdp_request(
+                &mut connection,
+                id,
+                "Browser.setDownloadBehavior",
                 json!({
-                    "behavior": "allow",
-                    "downloadPath": download_path,
+                    "behavior": "allow", "downloadPath": download_path, "eventsEnabled": false
                 }),
             )
             .await?;
+            controller.download_session = Some(connection);
+            Ok::<(), String>(())
+        };
+        tokio::time::timeout(COMMAND_TIMEOUT, configure_downloads)
+            .await
+            .map_err(|_| "配置浏览器任务下载目录超时".to_string())??;
         Ok(controller)
     }
 
@@ -271,7 +304,12 @@ impl BrowserController {
             const r = el.getBoundingClientRect();
             const inputType = (el.getAttribute('type') || '').toLowerCase();
             const safeValue = inputType === 'password' ? '' : (el.value || '');
-            const label = (el.getAttribute('aria-label') || el.getAttribute('title') ||
+            const labelledBy = (el.getAttribute('aria-labelledby') || '').split(/\s+/)
+              .filter(Boolean).map(id => document.getElementById(id)?.textContent || '')
+              .filter(text => text.trim()).join(' ').trim();
+            const associatedLabel = Array.from(el.labels || [])
+              .map(label => label.innerText || label.textContent || '').join(' ').trim();
+            const label = (labelledBy || el.getAttribute('aria-label') || associatedLabel || el.getAttribute('title') ||
               el.getAttribute('placeholder') || el.innerText || safeValue).trim().slice(0, 300);
             nodes.push({
               ref: el.dataset.echoRef,
@@ -745,37 +783,23 @@ impl BrowserController {
             let target = self.ensure_page().await?;
             let id = self.next_cdp_id;
             self.next_cdp_id = self.next_cdp_id.saturating_add(1);
-            let request = json!({ "id": id, "method": method, "params": params });
+            // Check the retained session before every page action: if its
+            // override has vanished, fail before another download can escape
+            // to the system directory. A fresh browser reconnect restores it.
+            let download_session = self
+                .download_session
+                .as_mut()
+                .ok_or_else(|| "浏览器下载隔离连接已失效，请重新启动受控浏览器".to_string())?;
+            cdp_request(download_session, id, "Browser.getVersion", json!({}))
+                .await
+                .map_err(|error| {
+                    format!("浏览器下载隔离连接已失效，请重新启动受控浏览器：{error}")
+                })?;
             let (mut websocket, _) =
                 tokio_tungstenite::connect_async(&target.websocket_debugger_url)
                     .await
                     .map_err(|error| format!("连接受控浏览器失败：{error}"))?;
-            websocket
-                .send(Message::Text(request.to_string().into()))
-                .await
-                .map_err(|error| format!("发送浏览器命令失败：{error}"))?;
-            while let Some(message) = websocket.next().await {
-                let message = message.map_err(|error| format!("读取浏览器响应失败：{error}"))?;
-                let Message::Text(text) = message else {
-                    continue;
-                };
-                if text.len() > MAX_CDP_MESSAGE_BYTES {
-                    return Err("浏览器响应超过 16MB 安全上限".to_string());
-                }
-                let value: Value = serde_json::from_str(&text)
-                    .map_err(|error| format!("解析浏览器响应失败：{error}"))?;
-                if value.get("id").and_then(Value::as_u64) != Some(id) {
-                    continue;
-                }
-                if let Some(error) = value.get("error") {
-                    return Err(format!(
-                        "浏览器命令 {method} 失败：{}",
-                        compact_json(error, 2_000)
-                    ));
-                }
-                return Ok(value.get("result").cloned().unwrap_or_else(|| json!({})));
-            }
-            Err("受控浏览器在返回结果前断开连接".to_string())
+            cdp_request(&mut websocket, id, method, params).await
         };
         tokio::time::timeout(COMMAND_TIMEOUT, future)
             .await
@@ -816,6 +840,41 @@ impl BrowserController {
             .await
             .map_err(|error| format!("解析浏览器标签页失败：{error}"))
     }
+}
+
+async fn cdp_request(
+    websocket: &mut CdpConnection,
+    id: u64,
+    method: &str,
+    params: Value,
+) -> Result<Value, String> {
+    let request = json!({ "id": id, "method": method, "params": params });
+    websocket
+        .send(Message::Text(request.to_string().into()))
+        .await
+        .map_err(|error| format!("发送浏览器命令失败：{error}"))?;
+    while let Some(message) = websocket.next().await {
+        let message = message.map_err(|error| format!("读取浏览器响应失败：{error}"))?;
+        let Message::Text(text) = message else {
+            continue;
+        };
+        if text.len() > MAX_CDP_MESSAGE_BYTES {
+            return Err("浏览器响应超过 16MB 安全上限".into());
+        }
+        let value: Value =
+            serde_json::from_str(&text).map_err(|error| format!("解析浏览器响应失败：{error}"))?;
+        if value.get("id").and_then(Value::as_u64) != Some(id) {
+            continue;
+        }
+        if let Some(error) = value.get("error") {
+            return Err(format!(
+                "浏览器命令 {method} 失败：{}",
+                compact_json(error, 2_000)
+            ));
+        }
+        return Ok(value.get("result").cloned().unwrap_or_else(|| json!({})));
+    }
+    Err("受控浏览器在返回结果前断开连接".into())
 }
 
 fn control_client() -> Result<reqwest::Client, String> {
@@ -1107,18 +1166,103 @@ mod tests {
     }
 
     #[tokio::test]
-    #[ignore = "requires an installed Chromium-family browser and desktop session"]
+    #[ignore = "requires isolated ECHO_AGENT_HOME, Chromium and desktop session"]
+    async fn controlled_browser_download_stays_in_task_profile_across_tabs() {
+        assert!(crate::paths::redirected_data_home().is_some());
+        assert!(capability().available);
+        let session_id = format!("browser-download-smoke-{}", uuid::Uuid::now_v7());
+        let mut browser = BrowserController::launch(&session_id, false)
+            .await
+            .expect("launch controlled browser");
+        let expected = "中文任务下载\n仅本次隔离目录\n";
+        let attempt = async {
+            for index in 0..2 {
+                if index == 1 {
+                    browser.new_tab(None).await.expect("second page");
+                }
+                let name = format!("echo-download-{}-{index}.txt", uuid::Uuid::now_v7());
+                let expression = format!(
+                    "(() => {{ const a=document.createElement('a'); a.textContent='下载本次文件'; a.href=URL.createObjectURL(new Blob([{}],{{type:'text/plain;charset=utf-8'}})); a.download={}; document.body.replaceChildren(a); return true; }})()",
+                    serde_json::to_string(expected).unwrap(),
+                    serde_json::to_string(&name).unwrap()
+                );
+                browser
+                    .evaluate(&expression, true)
+                    .await
+                    .expect("own blob page");
+                let snapshot = browser.snapshot().await.expect("snapshot");
+                let reference = snapshot["elements"].as_array().unwrap()[0]["ref"]
+                    .as_str()
+                    .unwrap()
+                    .to_string();
+                browser
+                    .click(Some(&reference), None, None, "left", 1)
+                    .await
+                    .expect("download click");
+                let deadline = tokio::time::Instant::now() + Duration::from_secs(10);
+                let download = loop {
+                    if let Some(download) = browser
+                        .downloads()
+                        .unwrap()
+                        .into_iter()
+                        .find(|download| download.name == name && download.complete)
+                    {
+                        break download;
+                    }
+                    assert!(
+                        tokio::time::Instant::now() < deadline,
+                        "download absent from task profile after real click: {name}"
+                    );
+                    tokio::time::sleep(Duration::from_millis(100)).await;
+                };
+                assert_eq!(
+                    PathBuf::from(&download.path),
+                    browser.download_dir().join(&name)
+                );
+                assert_eq!(std::fs::read(&download.path).unwrap(), expected.as_bytes());
+            }
+        };
+        // A failed assertion still drops/kills the owned browser; this test does
+        // not delete or inspect unrelated files in the user's Downloads folder.
+        attempt.await;
+        browser
+            .download_session
+            .as_mut()
+            .expect("retained download session")
+            .close(None)
+            .await
+            .expect("disconnect owned download session");
+        let error = browser
+            .snapshot()
+            .await
+            .expect_err("lost isolation must block page commands");
+        assert!(error.contains("下载隔离连接已失效"));
+        browser.stop().await.expect("stop browser");
+        remove_profile(&session_id)
+            .await
+            .expect("remove owned profile");
+    }
+
+    #[tokio::test]
+    #[ignore = "requires isolated ECHO_AGENT_HOME, Chromium and desktop session"]
     async fn controlled_browser_smoke_covers_observe_and_interact() {
-        if !capability().available {
-            return;
-        }
+        assert!(
+            crate::paths::redirected_data_home().is_some(),
+            "Set ECHO_AGENT_HOME to an isolated directory before running this smoke test"
+        );
+        let support = capability();
+        assert!(
+            support.available,
+            "Browser smoke requires Chromium: {:?}",
+            support.reason
+        );
         let session_id = format!("browser-smoke-{}", uuid::Uuid::now_v7());
         let mut browser = BrowserController::launch(&session_id, false)
             .await
             .expect("launch controlled browser");
         browser
             .evaluate(
-                r#"document.body.innerHTML='<input aria-label="Name"><input type="password" value="never-leak-password"><button>Run</button><p>Ready</p>'; document.querySelector('button').onclick=()=>document.body.dataset.clicked='yes'; true"#,
+                r#"document.body.innerHTML='<input aria-label="Name"><input type="password" value="never-leak-password"><button>Run</button><p>Ready</p><label for="labelled">本次验收文本</label><input id="labelled"><span id="first-name">审批</span><span id="last-name">目标</span><textarea aria-labelledby="first-name last-name"></textarea>'; document.querySelector('button').onclick=()=>document.body.dataset.clicked='yes'; true"#,
                 true,
             )
             .await
@@ -1126,6 +1270,12 @@ mod tests {
         let snapshot = browser.snapshot().await.expect("snapshot");
         assert!(!snapshot.to_string().contains("never-leak-password"));
         let elements = snapshot["elements"].as_array().expect("elements");
+        assert!(elements
+            .iter()
+            .any(|element| element["name"] == "本次验收文本"));
+        assert!(elements
+            .iter()
+            .any(|element| element["name"] == "审批 目标"));
         let input_ref = elements
             .iter()
             .find(|element| element["name"] == "Name")

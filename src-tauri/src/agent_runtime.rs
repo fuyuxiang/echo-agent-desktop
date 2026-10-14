@@ -19,7 +19,7 @@ use std::fs::OpenOptions;
 use std::io::Read;
 use std::path::{Path, PathBuf};
 use std::rc::Rc;
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 
 use agent_client_protocol as acp;
 use anyhow::{anyhow, Result};
@@ -87,6 +87,11 @@ pub struct AgentHandle {
     /// Becomes true only after live session actors have completed their
     /// graceful shutdown hooks and the ACP gateway has stopped.
     pub shutdown_complete: tokio::sync::watch::Receiver<bool>,
+    /// Most recent final persistence failure while the worker retains its
+    /// LocalSet for retry. The host includes it in a recoverable exit error.
+    pub shutdown_failure: Arc<Mutex<Option<String>>>,
+    /// Reports a failed gateway before its still-live persistence actors finish.
+    pub gateway_failure: tokio::sync::watch::Receiver<Option<String>>,
     /// JoinHandle for the agent OS thread. Used to detect unexpected exits
     /// (panics, crashes) so the frontend can show a "restart agent" prompt.
     pub thread: Option<std::thread::JoinHandle<Result<()>>>,
@@ -257,6 +262,9 @@ pub fn spawn_agent_runtime(_cwd: PathBuf) -> Result<AgentHandle> {
     // 5. Agent thread (!Send → own OS thread + current_thread runtime + LocalSet).
     let cancel_for_thread = cancel.clone();
     let (shutdown_complete_tx, shutdown_complete_rx) = tokio::sync::watch::channel(false);
+    let shutdown_failure = Arc::new(Mutex::new(None));
+    let failure_for_thread = shutdown_failure.clone();
+    let (gateway_failure_tx, gateway_failure_rx) = tokio::sync::watch::channel(None);
     let thread_handle = std::thread::Builder::new()
         .name("echo-agent-runtime".into())
         .spawn(move || -> Result<()> {
@@ -264,7 +272,7 @@ pub fn spawn_agent_runtime(_cwd: PathBuf) -> Result<AgentHandle> {
                 .enable_all()
                 .build()?;
             let local = tokio::task::LocalSet::new();
-            let result = local.block_on(&rt, async move {
+            local.block_on(&rt, async move {
                 let client_tx = acp_agent.tx.clone();
                 // The gateway sender implements `acp::Client` and forwards the
                 // agent's reverse-direction calls onto our mpsc channel.
@@ -297,22 +305,37 @@ pub fn spawn_agent_runtime(_cwd: PathBuf) -> Result<AgentHandle> {
                 // its channel closes, waiting only for the cancellation token
                 // would leave the desktop with a permanently dead sender that
                 // still appears initialized.
-                tokio::select! {
-                    _ = cancel_for_thread.cancelled() => {
-                        shutdown_agent
-                            .flush_all_sessions(std::time::Duration::from_secs(10))
-                            .await;
-                        gateway_task.as_mut().abort();
-                        let _ = gateway_task.await;
-                        Ok(())
-                    }
+                let (outcome, gateway_finished) = tokio::select! {
+                    _ = cancel_for_thread.cancelled() => (Ok(()), false),
                     result = &mut gateway_task => {
-                        Err(anyhow!("ACP gateway exited unexpectedly: {result:?}"))
+                        (Err(anyhow!("ACP gateway exited unexpectedly: {result:?}")), true)
+                    }
+                };
+                if gateway_finished {
+                    let _ = gateway_failure_tx.send(outcome.as_ref().err().map(ToString::to_string));
+                }
+                // A gateway failure also needs a durable session barrier;
+                // its LocalSet can still contain healthy persistence actors.
+                loop {
+                    match shutdown_agent.flush_all_sessions_checked(std::time::Duration::from_secs(10)).await {
+                        Ok(()) => break,
+                        Err(error) => {
+                            tracing::warn!(%error, "retaining Runtime until final session persistence can be retried");
+                            *failure_for_thread.lock().unwrap_or_else(|poisoned| poisoned.into_inner()) = Some(error);
+                            // A cached negative ACK may return immediately.
+                            // Yield so the actor's final-write retry can run.
+                            tokio::time::sleep(std::time::Duration::from_millis(500)).await;
+                        }
                     }
                 }
-            });
-            let _ = shutdown_complete_tx.send(true);
-            result
+                if !gateway_finished {
+                    gateway_task.as_mut().abort();
+                    let _ = gateway_task.await;
+                }
+                *failure_for_thread.lock().unwrap_or_else(|poisoned| poisoned.into_inner()) = None;
+                let _ = shutdown_complete_tx.send(true);
+                outcome
+            })
         })?;
 
     Ok(AgentHandle {
@@ -320,6 +343,8 @@ pub fn spawn_agent_runtime(_cwd: PathBuf) -> Result<AgentHandle> {
         rx: acp_client.rx,
         cancel,
         shutdown_complete: shutdown_complete_rx,
+        shutdown_failure,
+        gateway_failure: gateway_failure_rx,
         thread: Some(thread_handle),
     })
 }
@@ -418,23 +443,48 @@ pub async fn new_session_with_options(
     permission_mode_override: Option<&str>,
 ) -> Result<String> {
     tracing::info!(cwd = %cwd.display(), model_id, "echoagent: new_session send");
+    let permission_mode = permission_mode_override
+        .map(str::to_string)
+        .unwrap_or_else(crate::permission_config::permission_mode_for_session);
+    let req = new_session_request(
+        cwd,
+        model_id,
+        reasoning_effort,
+        &permission_mode,
+        current_desktop_mcp_servers(),
+    );
+    let resp: acp::NewSessionResponse = acp_send(req, tx).await.map_err(|e| {
+        tracing::error!(error = ?e, "echoagent: new_session FAILED");
+        anyhow!("new_session: {e:?}")
+    })?;
+    tracing::info!(session_id = %resp.session_id.0, "echoagent: new_session OK");
+    Ok(resp.session_id.0.to_string())
+}
+
+/// Local service addresses and bearer tokens rotate with this desktop process.
+/// New and restored sessions must receive this same current client-layer seed,
+/// before the Runtime merges the previously persisted TOML registrations.
+fn current_desktop_mcp_servers() -> Vec<acp::McpServer> {
+    desktop_mcp_servers_from_registration([
+        crate::team_mcp::server_url().zip(crate::team_mcp::authorization_header()),
+        crate::automation::server_url().zip(crate::automation::authorization_header()),
+        crate::office_mcp::server_url().zip(crate::office_mcp::authorization_header()),
+        crate::live_info_mcp::server_url().zip(crate::live_info_mcp::authorization_header()),
+    ])
+}
+
+fn desktop_mcp_servers_from_registration(
+    registrations: [Option<(String, String)>; 4],
+) -> Vec<acp::McpServer> {
+    let [team, automation, office, live] = registrations;
     let mut servers = Vec::new();
-    if let (Some(url), Some(authorization)) = (
-        crate::team_mcp::server_url(),
-        crate::team_mcp::authorization_header(),
-    ) {
+    if let Some((url, authorization)) = team {
         servers.push(authenticated_team_mcp_server(url, authorization));
     }
-    if let (Some(url), Some(authorization)) = (
-        crate::automation::server_url(),
-        crate::automation::authorization_header(),
-    ) {
+    if let Some((url, authorization)) = automation {
         servers.push(authenticated_automation_mcp_server(url, authorization));
     }
-    if let (Some(url), Some(authorization)) = (
-        crate::office_mcp::server_url(),
-        crate::office_mcp::authorization_header(),
-    ) {
+    if let Some((url, authorization)) = office {
         servers.push(acp::McpServer::Http(
             acp::McpServerHttp::new(crate::office_mcp::MCP_SERVER_NAME, url).headers(vec![
                 acp::HttpHeader::new("Authorization", authorization),
@@ -442,20 +492,23 @@ pub async fn new_session_with_options(
             ]),
         ));
     }
-    if let (Some(url), Some(authorization)) = (
-        crate::live_info_mcp::server_url(),
-        crate::live_info_mcp::authorization_header(),
-    ) {
+    if let Some((url, authorization)) = live {
         servers.push(acp::McpServer::Http(
             acp::McpServerHttp::new(crate::live_info_mcp::MCP_SERVER_NAME, url)
                 .headers(vec![acp::HttpHeader::new("Authorization", authorization)]),
         ));
     }
-    let mut req = acp::NewSessionRequest::new(cwd.to_path_buf()).mcp_servers(servers);
-    let permission_mode = permission_mode_override
-        .map(str::to_string)
-        .unwrap_or_else(crate::permission_config::permission_mode_for_session);
-    let mut meta = permission_mode_meta(&permission_mode);
+    servers
+}
+
+fn new_session_request(
+    cwd: &Path,
+    model_id: Option<&str>,
+    reasoning_effort: Option<&str>,
+    permission_mode: &str,
+    servers: Vec<acp::McpServer>,
+) -> acp::NewSessionRequest {
+    let mut meta = permission_mode_meta(permission_mode);
     if let Some(mid) = model_id.filter(|s| !s.is_empty()) {
         meta.insert("modelId".into(), serde_json::Value::String(mid.into()));
     }
@@ -465,13 +518,9 @@ pub async fn new_session_with_options(
             serde_json::Value::String(effort.into()),
         );
     }
-    req = req.meta(Some(meta));
-    let resp: acp::NewSessionResponse = acp_send(req, tx).await.map_err(|e| {
-        tracing::error!(error = ?e, "echoagent: new_session FAILED");
-        anyhow!("new_session: {e:?}")
-    })?;
-    tracing::info!(session_id = %resp.session_id.0, "echoagent: new_session OK");
-    Ok(resp.session_id.0.to_string())
+    acp::NewSessionRequest::new(cwd.to_path_buf())
+        .mcp_servers(servers)
+        .meta(Some(meta))
 }
 
 fn authenticated_team_mcp_server(url: String, authorization: String) -> acp::McpServer {
@@ -500,10 +549,28 @@ pub async fn load_session(
     cwd: &Path,
     permission_mode: &str,
 ) -> Result<Option<String>> {
+    load_session_with_servers(
+        tx,
+        session_id,
+        cwd,
+        permission_mode,
+        current_desktop_mcp_servers(),
+    )
+    .await
+}
+
+async fn load_session_with_servers(
+    tx: &AcpAgentTx,
+    session_id: &str,
+    cwd: &Path,
+    permission_mode: &str,
+    servers: Vec<acp::McpServer>,
+) -> Result<Option<String>> {
     let req = acp::LoadSessionRequest::new(
         acp::SessionId::new(session_id.to_string()),
         cwd.to_path_buf(),
     )
+    .mcp_servers(servers)
     .meta(Some(permission_mode_meta(permission_mode)));
     let response: acp::LoadSessionResponse = acp_send(req, tx)
         .await
@@ -958,6 +1025,109 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn restored_session_receives_the_same_fresh_local_mcp_seed_as_new_sessions() {
+        let registrations = std::array::from_fn(|index| {
+            Some((
+                format!("http://127.0.0.1:{}/mcp", 62001 + index),
+                format!("Bearer current-process-{index}"),
+            ))
+        });
+        let servers = desktop_mcp_servers_from_registration(registrations);
+        let new_request = new_session_request(
+            Path::new("/workspace"),
+            Some("model-a"),
+            Some("high"),
+            "auto",
+            servers.clone(),
+        );
+        let (client, mut agent) = echo_agent_acp::acp_channels();
+        let task = tokio::spawn(async move {
+            load_session_with_servers(
+                &client.tx,
+                "restored-session",
+                Path::new("/workspace"),
+                "auto",
+                servers,
+            )
+            .await
+        });
+        let message = agent.rx.recv().await.expect("load request");
+        let echo_agent_acp::AcpAgentMessage::LoadSession(arguments) = message else {
+            panic!("expected LoadSession request")
+        };
+        assert_eq!(arguments.request.session_id.0.as_ref(), "restored-session");
+        assert_eq!(arguments.request.cwd, Path::new("/workspace"));
+        assert_eq!(
+            serde_json::to_value(&arguments.request.mcp_servers).unwrap(),
+            serde_json::to_value(&new_request.mcp_servers).unwrap()
+        );
+        assert_eq!(arguments.request.mcp_servers.len(), 4);
+        let meta = arguments
+            .request
+            .meta
+            .as_ref()
+            .expect("load permission metadata");
+        assert_eq!(meta, &permission_mode_meta("auto"));
+        let new_meta = new_request.meta.as_ref().unwrap();
+        assert_eq!(new_meta["modelId"], "model-a");
+        assert_eq!(new_meta["reasoningEffort"], "high");
+        for (index, server) in arguments.request.mcp_servers.iter().enumerate() {
+            let acp::McpServer::Http(server) = server else {
+                panic!("local server must be HTTP")
+            };
+            assert_eq!(
+                server.url,
+                format!("http://127.0.0.1:{}/mcp", 62001 + index)
+            );
+            assert!(server
+                .headers
+                .iter()
+                .any(|header| header.name == "Authorization"
+                    && header.value == format!("Bearer current-process-{index}")));
+            if server.name == crate::office_mcp::MCP_SERVER_NAME
+                || server.name == crate::automation::MCP_SERVER_NAME
+            {
+                let expected_header = if server.name == crate::office_mcp::MCP_SERVER_NAME {
+                    crate::office_mcp::SESSION_HEADER
+                } else {
+                    crate::automation::SESSION_HEADER
+                };
+                assert!(server.headers.iter().any(
+                    |header| header.name == expected_header && header.value == "${session_id}"
+                ));
+            }
+        }
+        arguments
+            .response_tx
+            .send(Ok(acp::LoadSessionResponse::new()))
+            .expect("load response");
+        assert!(task
+            .await
+            .expect("load task")
+            .expect("load success")
+            .is_none());
+    }
+
+    #[test]
+    fn unregistered_local_mcp_services_are_not_faked_by_the_shared_seed() {
+        assert!(desktop_mcp_servers_from_registration([None, None, None, None]).is_empty());
+        let servers = desktop_mcp_servers_from_registration([
+            None,
+            None,
+            Some((
+                "http://127.0.0.1:63000/mcp".into(),
+                "Bearer office-only".into(),
+            )),
+            None,
+        ]);
+        assert_eq!(servers.len(), 1);
+        let acp::McpServer::Http(server) = &servers[0] else {
+            panic!("expected HTTP")
+        };
+        assert_eq!(server.name, crate::office_mcp::MCP_SERVER_NAME);
+    }
+
+    #[tokio::test]
     async fn set_session_mode_sends_idempotent_standard_acp_request() {
         let (client, mut agent) = echo_agent_acp::acp_channels();
         let task = tokio::spawn(async move { set_session_mode(&client.tx, "s-1", true).await });
@@ -1146,9 +1316,14 @@ mod tests {
     }
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-    #[ignore = "spawns a real agent thread against ~/.echo-agent (~10s)"]
+    #[ignore = "requires an explicit isolated ECHO_AGENT_HOME and local MCP port (~10s)"]
     async fn spawn_smoke_spawn_initialize_new_session() {
-        let cwd = std::env::temp_dir();
+        assert!(
+            crate::paths::redirected_data_home().is_some(),
+            "Set ECHO_AGENT_HOME to an isolated directory before running this smoke test"
+        );
+        let workspace = tempfile::tempdir().expect("isolated smoke workspace");
+        let cwd = workspace.path().to_path_buf();
 
         // 0. 先起 team MCP server —— new_session 会把它注入 EchoAgent（这是去
         //    补丁化后的工具注入路径，替代原 patch 02）。

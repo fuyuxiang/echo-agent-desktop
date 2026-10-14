@@ -518,17 +518,35 @@ pub(crate) fn local_kb_sources_path() -> PathBuf {
     crate::paths::echo_agent_home_dir().join(LOCAL_KB_SOURCES_FILE)
 }
 
-#[tauri::command]
-pub fn org_local_kb_sources_get() -> Result<Value, String> {
-    let path = local_kb_sources_path();
+fn read_local_kb_sources_at(path: &Path, include_storage_state: bool) -> Result<Value, String> {
     if !path.exists() {
-        return Ok(Value::Array(Vec::new()));
+        return Ok(if include_storage_state {
+            json!({ "exists": false, "sources": [] })
+        } else {
+            Value::Array(Vec::new())
+        });
     }
-    let value: Value = read_json(&path)?;
+    let value: Value = read_json(path)?;
     if !value.is_array() {
         return Err("local knowledge sources store must be an array".into());
     }
-    Ok(value)
+    Ok(if include_storage_state {
+        json!({ "exists": true, "sources": value })
+    } else {
+        value
+    })
+}
+
+pub fn read_local_kb_sources() -> Result<Value, String> {
+    read_local_kb_sources_at(&local_kb_sources_path(), false)
+}
+
+#[tauri::command]
+pub fn org_local_kb_sources_get(include_storage_state: Option<bool>) -> Result<Value, String> {
+    read_local_kb_sources_at(
+        &local_kb_sources_path(),
+        include_storage_state.unwrap_or(false),
+    )
 }
 
 #[tauri::command]
@@ -4594,6 +4612,22 @@ fn drain_sse_events(pending: &mut Vec<u8>) -> Result<Vec<(String, Value)>, Strin
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn local_knowledge_snapshot_distinguishes_revoked_sources_from_no_store() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("local-knowledge-sources.json");
+        assert_eq!(
+            read_local_kb_sources_at(&path, true).unwrap(),
+            json!({ "exists": false, "sources": [] })
+        );
+        std::fs::write(&path, "[]").unwrap();
+        assert_eq!(
+            read_local_kb_sources_at(&path, true).unwrap(),
+            json!({ "exists": true, "sources": [] })
+        );
+        assert_eq!(read_local_kb_sources_at(&path, false).unwrap(), json!([]));
+    }
 
     #[test]
     fn server_url_requires_tls_except_loopback() {

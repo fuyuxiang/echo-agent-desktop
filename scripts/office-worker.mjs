@@ -18,30 +18,101 @@ const request = JSON.parse(input);
 const { title, markdown, format } = request;
 if (typeof title !== "string" || typeof markdown !== "string") throw new Error("Invalid document request");
 if (!["docx", "pdf", "xlsx", "pptx"].includes(format)) throw new Error("Unsupported document format");
-const tokens = marked.lexer(markdown, { gfm: true });
+
+// Protect mathematical source before Markdown consumes HTML-looking terms or
+// backslash escapes. These tokens preserve text; Office does not render TeX.
+marked.use({ extensions: [
+  {
+    name: "math_source", level: "block",
+    start(source) { return source.search(/^ {0,3}(?:\${2,}|\\\[)[ \t]*(?:\r?\n|$)/m); },
+    tokenizer(source) {
+      const opening = /^ {0,3}(\${2,}|\\\[)[ \t]*\r?\n/.exec(source);
+      if (!opening) return;
+      const remainder = source.slice(opening[0].length);
+      const delimiter = opening[1] === "\\[" ? "\\]" : opening[1];
+      for (const closing of remainder.matchAll(/^ {0,3}(\${2,}|\\\])[ \t]*(?:\r?\n|$)/gm)) {
+        if (closing[1] !== delimiter) continue;
+        const raw = source.slice(0, opening[0].length + closing.index + closing[0].length);
+        return { type: "math_source", raw, text: raw };
+      }
+    },
+  },
+  {
+    name: "math_source", level: "inline",
+    start(source) {
+      const positions = [source.indexOf("$"), source.search(/\\(?:\(|\[)/)].filter((index) => index >= 0);
+      return positions.length ? Math.min(...positions) : -1;
+    },
+    tokenizer(source) {
+      const bracket = /^\\(?:\(|\[)/.exec(source)?.[0];
+      if (bracket) {
+        const closing = source.indexOf(bracket === "\\(" ? "\\)" : "\\]", bracket.length);
+        if (closing < 0) return;
+        const raw = source.slice(0, closing + 2);
+        return { type: "math_source", raw, text: raw };
+      }
+      const opening = /^\$+/.exec(source)?.[0];
+      if (!opening) return;
+      for (let index = opening.length; index < source.length; index++) {
+        if (source[index] !== "$") continue;
+        const closing = /^\$+/.exec(source.slice(index))[0];
+        let backslashes = 0;
+        for (let previous = index - 1; previous >= 0 && source[previous] === "\\"; previous--) backslashes++;
+        if (closing === opening && backslashes % 2 === 0
+            && source.slice(opening.length, index).trim()) {
+          const raw = source.slice(0, index + closing.length);
+          return { type: "math_source", raw, text: raw };
+        }
+        index += closing.length - 1;
+      }
+    },
+  },
+] });
+const tokens = marked.lexer(markdown, { ...marked.defaults, gfm: true });
 
 function plain(value) {
   if (Array.isArray(value)) return value.map(plain).join("");
   if (!value || typeof value !== "object") return String(value ?? "");
+  if (value.type === "math_source") return value.raw;
   if (value.type === "br") return "\n";
   if (value.type === "image") return value.text || "[图片]";
   if (value.type === "link") return plain(value.tokens ?? value.text);
-  return value.tokens ? plain(value.tokens) : String(value.text ?? "").replace(/<[^>]+>/g, "");
+  // Only HTML tokens contain markup. Comparisons and inline code can contain
+  // angle brackets as ordinary text, and must survive all Office formats.
+  if (value.type === "html") return String(value.text ?? "").replace(/<[^>]+>/g, "");
+  return value.tokens ? plain(value.tokens) : String(value.text ?? "");
 }
 
-function blocks(items = tokens) {
+function blocks(items = tokens, depth = 0) {
   const out = [];
   for (const token of items) {
     if (token.type === "space") continue;
     if (token.type === "heading") out.push({ type: "heading", level: token.depth, text: plain(token.tokens) });
+    else if (token.type === "math_source") out.push({ type: "paragraph", text: plain(token) });
     else if (token.type === "paragraph" || token.type === "text") out.push({ type: "paragraph", text: plain(token.tokens ?? token.text) });
     else if (token.type === "code") out.push({ type: "code", text: token.text });
-    else if (token.type === "blockquote") out.push(...blocks(token.tokens).map((block) => ({ ...block, quote: true })));
+    else if (token.type === "blockquote") out.push(...blocks(token.tokens, depth).map((block) => ({ ...block, quote: true })));
     else if (token.type === "list") {
-      token.items.forEach((item, index) => out.push({
-        type: "list", text: plain(item.tokens ?? item.text),
-        prefix: token.ordered ? `${Number(token.start || 1) + index}.` : "•",
-      }));
+      token.items.forEach((item, index) => {
+        const itemTokens = item.tokens ?? [{ type: "text", text: item.text }];
+        let first = true;
+        // Preserve source order when a nested list sits between paragraphs.
+        // List tokens have no text property and must be traversed recursively.
+        for (const part of itemTokens) {
+          if (part.type === "space") continue;
+          if (part.type === "list") {
+            out.push(...blocks([part], depth + 1));
+          } else if (part.type === "text" || part.type === "paragraph") {
+            out.push({
+              type: "list", text: plain(part.tokens ?? part.text), depth,
+              prefix: first ? (token.ordered ? `${Number(token.start || 1) + index}.` : "•") : "",
+            });
+            first = false;
+          } else {
+            out.push(...blocks([part], depth + 1));
+          }
+        }
+      });
     } else if (token.type === "table") out.push({
       type: "table",
       rows: [token.header, ...token.rows].map((row) => row.map((cell) => plain(cell.tokens ?? cell.text))),
@@ -53,6 +124,12 @@ function blocks(items = tokens) {
 
 const content = blocks();
 
+function docxTextRuns(value, options = {}) {
+  return String(value).split("\n").map((line, index) => new TextRun({
+    ...options, text: line, ...(index > 0 ? { break: 1 } : {}),
+  }));
+}
+
 async function createDocx() {
   const children = [];
   if (!content.some((block) => block.type === "heading" && block.level === 1)) {
@@ -63,9 +140,10 @@ async function createDocx() {
       children.push(new Table({
         width: { size: 100, type: WidthType.PERCENTAGE },
         rows: block.rows.map((row, index) => new TableRow({
+          tableHeader: index === 0,
           children: row.map((cell) => new TableCell({
             children: [new Paragraph({
-              children: [new TextRun({ text: cell, bold: index === 0 })],
+              children: docxTextRuns(cell, { bold: index === 0 }),
               spacing: { before: 80, after: 80 },
             })],
           })),
@@ -78,9 +156,9 @@ async function createDocx() {
       : undefined;
     children.push(new Paragraph({
       heading,
-      children: [new TextRun({ text: `${block.prefix ? `${block.prefix} ` : ""}${block.text}`, italics: Boolean(block.quote) })],
+      children: docxTextRuns(`${block.prefix ? `${block.prefix} ` : ""}${block.text}`, { italics: Boolean(block.quote) }),
       spacing: { after: block.type === "heading" ? 180 : 100, line: 330 },
-      indent: block.type === "list" || block.quote ? { left: 420 } : undefined,
+      indent: block.type === "list" || block.quote ? { left: 420 * ((block.depth ?? 0) + 1) } : undefined,
       alignment: block.type === "code" ? AlignmentType.LEFT : undefined,
     }));
   }
@@ -98,7 +176,10 @@ async function createPdf() {
   document.registerFontkit(fontkit);
   // fontkit's CFF subsetting can produce malformed glyph streams for this
   // OpenType CJK font. Full embedding keeps Chinese text renderable offline.
-  const font = await document.embedFont(await readFile(fontPath));
+  // Full-font ToUnicode maps cover cmap glyphs, not fontkit's localized
+  // alternates. Keep those direct glyphs so copying currency digits and
+  // punctuation yields the original Unicode text as well as readable pixels.
+  const font = await document.embedFont(await readFile(fontPath), { features: { locl: false } });
   document.setTitle(title);
   document.setCreator("EchoAgent");
   const pageWidth = 595.28;
@@ -184,7 +265,7 @@ async function createPdf() {
     } else if (block.type === "heading") {
       y -= block.level === 1 ? 9 : 5;
       draw(block.text, block.level === 1 ? 19 : block.level === 2 ? 14 : 12, 0, ink, 12);
-    } else draw(`${block.prefix ? `${block.prefix} ` : ""}${block.text}`, block.type === "code" ? 9 : 10.5, block.quote || block.type === "list" ? 14 : 0, block.quote ? muted : ink);
+    } else draw(`${block.prefix ? `${block.prefix} ` : ""}${block.text}`, block.type === "code" ? 9 : 10.5, block.quote || block.type === "list" ? 14 * ((block.depth ?? 0) + 1) : 0, block.quote ? muted : ink);
   }
   const pages = document.getPages();
   pages.forEach((item, index) => item.drawText(`${index + 1} / ${pages.length}`, {
@@ -278,7 +359,7 @@ async function createPptx() {
       sectionTitle = block.text;
       continue;
     }
-    const text = block.type === "table" ? block.rows.map((row) => row.join("  |  ")).join("\n") : `${block.prefix ? `${block.prefix} ` : ""}${block.text ?? ""}`;
+    const text = block.type === "table" ? block.rows.map((row) => row.join("  |  ")).join("\n") : `${"  ".repeat(block.depth ?? 0)}${block.prefix ? `${block.prefix} ` : ""}${block.text ?? ""}`;
     for (const line of text.split("\n")) {
       for (const visualLine of visualLines(line)) {
         if (lines.length >= 8) flush();

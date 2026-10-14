@@ -82,8 +82,10 @@ export async function testStorageProviderConfig(id: string): Promise<void> {
 }
 
 /** Construct a real provider backed by Rust reqwest/WebDAV commands. */
+const persistedProviders = new WeakSet<StorageProvider>();
+
 export function createTauriWebDavProvider(config: StorageProviderConfig): StorageProvider {
-  return {
+  const provider: StorageProvider = {
     id: config.id,
     label: config.label,
     isEnabled: () => config.enabled,
@@ -112,10 +114,18 @@ export function createTauriWebDavProvider(config: StorageProviderConfig): Storag
       localPath,
     }),
   };
+  persistedProviders.add(provider);
+  return provider;
 }
 
 export async function hydrateStorageProviders(): Promise<StorageProviderConfig[]> {
   const configs = await loadStorageProviderConfigs();
+  const configuredIds = new Set(configs.map((config) => config.id));
+  for (const provider of [...providers]) {
+    if (persistedProviders.has(provider) && !configuredIds.has(provider.id)) {
+      unregisterStorageProvider(provider.id);
+    }
+  }
   for (const config of configs) registerStorageProvider(createTauriWebDavProvider(config));
   return configs;
 }

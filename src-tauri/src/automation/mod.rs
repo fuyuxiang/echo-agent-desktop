@@ -118,6 +118,16 @@ struct AutomationSession {
 }
 
 impl AutomationSession {
+    fn commit_mode(&self, mode: AutomationMode, activate: bool) {
+        let mut current = self.mode.lock().unwrap();
+        let changed = *current != mode;
+        *current = mode;
+        if activate {
+            *self.paused.lock().unwrap() = false;
+        } else if changed && mode != AutomationMode::Default {
+            *self.paused.lock().unwrap() = true;
+        }
+    }
     fn new(mode: AutomationMode) -> Self {
         // A restored task must never silently regain control after an app
         // restart. A deliberate mode switch starts active; restoring an
@@ -160,6 +170,19 @@ async fn enter_action<'a>(
         return Err("任务模式已变化，本次自动化操作已取消".into());
     }
     Ok(guard)
+}
+
+async fn browser_preflight<T>(
+    session: &AutomationSession,
+    token: &CancellationToken,
+    preparation: impl std::future::Future<Output = Result<T, String>>,
+) -> Result<T, String> {
+    let _guard = enter_action(session, token, AutomationMode::BrowserUse).await?;
+    tokio::select! {
+        biased;
+        _ = token.cancelled() => Err("自动化已暂停，浏览器准备操作已取消".into()),
+        result = preparation => result,
+    }
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -224,12 +247,29 @@ impl AutomationManager {
     }
 
     async fn set_mode(&self, session_id: &str, mode: AutomationMode) -> Result<(), String> {
+        self.apply_mode(session_id, mode, true).await
+    }
+
+    async fn restore_mode(&self, session_id: &str, mode: AutomationMode) -> Result<(), String> {
+        self.apply_mode(session_id, mode, false).await
+    }
+
+    async fn apply_mode(
+        &self,
+        session_id: &str,
+        mode: AutomationMode,
+        activate: bool,
+    ) -> Result<(), String> {
         let session = self.session(session_id).await?;
+        // Loading history is not a user request to resume automation. Keep
+        // both paused sessions and already-running background tasks intact.
+        if !activate && *session.mode.lock().unwrap() == mode {
+            return Ok(());
+        }
         session.cancel_actions();
         self.reject_session_approvals(session_id).await;
         let _exclusive = session.execution_gate.write().await;
-        *session.mode.lock().unwrap() = mode;
-        *session.paused.lock().unwrap() = false;
+        session.commit_mode(mode, activate);
         session.reset_action_token();
         if !mode.allows_browser() {
             if let Some(mut browser) = session.browser.lock().await.take() {
@@ -317,15 +357,19 @@ impl AutomationManager {
 
     async fn stop(&self, session_id: &str) -> Result<(), String> {
         let session = self.session(session_id).await?;
+        self.stop_existing(session_id, &session).await
+    }
+
+    async fn stop_existing(
+        &self,
+        session_id: &str,
+        session: &Arc<AutomationSession>,
+    ) -> Result<(), String> {
         session.cancel_actions();
         *session.paused.lock().unwrap() = true;
         self.reject_session_approvals(session_id).await;
         let _exclusive = session.execution_gate.write().await;
-        let browser_result = if let Some(mut browser) = session.browser.lock().await.take() {
-            browser.stop().await
-        } else {
-            Ok(())
-        };
+        let browser_result = stop_browser(&session.browser).await;
         self.emit_status(session_id).await;
         browser_result
     }
@@ -425,7 +469,7 @@ impl AutomationManager {
         result
     }
 
-    async fn shutdown_all(&self) {
+    async fn shutdown_all(&self) -> Result<(), String> {
         let sessions = self
             .sessions
             .lock()
@@ -433,28 +477,65 @@ impl AutomationManager {
             .values()
             .cloned()
             .collect::<Vec<_>>();
-        for session in sessions {
-            if let Some(mut browser) = session.browser.lock().await.take() {
-                let _ = browser.stop().await;
-            }
+        for session in &sessions {
+            session.cancel_actions();
+            *session.paused.lock().unwrap() = true;
         }
         let pending = std::mem::take(&mut *self.approvals.lock().await);
-        for (_, approval) in pending {
+        for (request_id, approval) in pending {
+            let session_id = approval.request.session_id;
             let _ = approval.response.send(false);
+            let _ = self.app.emit(
+                "automation://approval-closed",
+                json!({ "requestId": request_id, "sessionId": session_id }),
+            );
+        }
+        let mut errors = Vec::new();
+        for session in sessions {
+            let _exclusive = session.execution_gate.write().await;
+            if let Err(error) = stop_browser(&session.browser).await {
+                errors.push(error);
+            }
+        }
+        if errors.is_empty() {
+            Ok(())
+        } else {
+            Err(errors.join("；"))
         }
     }
 
     async fn forget_session(&self, session_id: &str) {
-        if let Some(session) = self.sessions.lock().await.remove(session_id) {
-            if let Some(mut browser) = session.browser.lock().await.take() {
-                let _ = browser.stop().await;
+        // Clone without holding the sessions mutex through process shutdown.
+        let session = self.sessions.lock().await.get(session_id).cloned();
+        if let Some(session) = session {
+            session.cancel_actions();
+            *session.paused.lock().unwrap() = true;
+            self.reject_session_approvals(session_id).await;
+            let _exclusive = session.execution_gate.write().await;
+            if let Err(error) = stop_browser(&session.browser).await {
+                tracing::error!(%error, %session_id, "retaining deleted task browser for a cleanup retry");
+                return;
             }
         }
+        self.sessions.lock().await.remove(session_id);
         self.reject_session_approvals(session_id).await;
         if let Err(error) = browser::remove_profile(session_id).await {
             tracing::warn!(%error, %session_id, "failed to remove deleted task browser profile");
         }
     }
+}
+
+async fn stop_browser(
+    browser: &tokio::sync::Mutex<Option<BrowserController>>,
+) -> Result<(), String> {
+    // Keep ownership until the process is confirmed stopped. Taking it before
+    // the await would lose the retry handle on an error or shutdown timeout.
+    let mut browser = browser.lock().await;
+    if let Some(controller) = browser.as_mut() {
+        controller.stop().await?;
+    }
+    browser.take();
+    Ok(())
 }
 
 fn manager() -> Result<&'static Arc<AutomationManager>, String> {
@@ -586,6 +667,11 @@ pub async fn set_session_mode(session_id: &str, mode: AutomationMode) -> Result<
     manager()?.set_mode(session_id, mode).await
 }
 
+pub async fn restore_session_mode(session_id: &str, mode: AutomationMode) -> Result<(), String> {
+    validate_mode_capability(mode)?;
+    manager()?.restore_mode(session_id, mode).await
+}
+
 pub fn validate_mode_capability(mode: AutomationMode) -> Result<(), String> {
     match mode {
         AutomationMode::Default => Ok(()),
@@ -626,10 +712,27 @@ pub async fn stop_session(session_id: &str) -> Result<(), String> {
     manager()?.stop(session_id).await
 }
 
-pub async fn shutdown_all() {
+pub async fn stop_existing_session(session_id: &str) -> Result<(), String> {
     if let Some(service) = SERVICE.get() {
-        service.manager.shutdown_all().await;
+        let session = service
+            .manager
+            .sessions
+            .lock()
+            .await
+            .get(session_id)
+            .cloned();
+        if let Some(session) = session {
+            service.manager.stop_existing(session_id, &session).await?;
+        }
     }
+    Ok(())
+}
+
+pub async fn shutdown_all() -> Result<(), String> {
+    if let Some(service) = SERVICE.get() {
+        service.manager.shutdown_all().await?;
+    }
+    Ok(())
 }
 
 #[tauri::command]
@@ -984,6 +1087,7 @@ async fn browser_tool(
         manager.emit_status(session_id).await;
         return Ok(tool_json_result(json!({ "stopped": true })));
     }
+    let (approval_plan, upload_paths) = browser_preflight(&session, &action_token, async {
     let launched = {
         let mut guard = session.browser.lock().await;
         let needs_launch = match guard.as_mut() {
@@ -1039,7 +1143,7 @@ async fn browser_tool(
             required_f64(args, "y")?;
         }
         let mut guard = session.browser.lock().await;
-        let browser = guard.as_mut().expect("browser inserted above");
+        let browser = guard.as_mut().ok_or("浏览器已停止，请重新开始操作网页")?;
         let (url, page_title, target) = browser_approval_context(browser, reference).await?;
         let common = json!({
             "url": url,
@@ -1154,6 +1258,8 @@ async fn browser_tool(
     } else {
         None
     };
+    Ok((approval_plan, upload_paths))
+    }).await?;
 
     if let Some(plan) = approval_plan.as_ref() {
         manager
@@ -1171,7 +1277,7 @@ async fn browser_tool(
     let _action_guard = enter_action(&session, &action_token, AutomationMode::BrowserUse).await?;
     let operation = async {
         let mut guard = session.browser.lock().await;
-        let browser = guard.as_mut().expect("browser inserted above");
+        let browser = guard.as_mut().ok_or("浏览器已停止，请重新开始操作网页")?;
         browser.enforce_current_url_policy().await?;
         if let Some(plan) = approval_plan {
             if browser.current_url().await? != plan.expected_url {
@@ -1851,6 +1957,35 @@ mod tests {
     use super::*;
 
     #[test]
+    fn restored_mode_preserves_pause_and_private_network_revocation() {
+        for mode in [AutomationMode::BrowserUse, AutomationMode::ComputerUse] {
+            let session = AutomationSession::new(mode);
+            session.commit_mode(mode, false);
+            assert!(*session.paused.lock().unwrap());
+            assert!(!*session.allow_private_network.lock().unwrap());
+        }
+    }
+
+    #[test]
+    fn restored_mode_does_not_interrupt_active_task_or_activate_changed_mode() {
+        let session = AutomationSession::new(AutomationMode::Default);
+        session.commit_mode(AutomationMode::BrowserUse, true);
+        session.commit_mode(AutomationMode::BrowserUse, false);
+        assert!(!*session.paused.lock().unwrap());
+        session.commit_mode(AutomationMode::ComputerUse, false);
+        assert!(*session.paused.lock().unwrap());
+    }
+
+    #[test]
+    fn explicit_mode_selection_can_activate_after_restored_pause() {
+        let session = AutomationSession::new(AutomationMode::BrowserUse);
+        session.commit_mode(AutomationMode::BrowserUse, false);
+        assert!(*session.paused.lock().unwrap());
+        session.commit_mode(AutomationMode::BrowserUse, true);
+        assert!(!*session.paused.lock().unwrap());
+    }
+
+    #[test]
     fn listener_registration_from_sync_context_uses_tauri_runtime() {
         let listener = bind_loopback().expect("bind loopback listener");
         let (result_tx, result_rx) = std::sync::mpsc::sync_channel(1);
@@ -1904,6 +2039,33 @@ mod tests {
     fn session_ids_reject_control_characters() {
         assert!(validate_session_id("session-1").is_ok());
         assert!(validate_session_id("bad\nvalue").is_err());
+    }
+
+    #[tokio::test]
+    async fn takeover_cancels_browser_preparation_and_releases_execution_gate() {
+        let session = AutomationSession::new(AutomationMode::BrowserUse);
+        *session.paused.lock().unwrap() = false;
+        let token = session.action_token();
+        let preparation = browser_preflight(
+            &session,
+            &token,
+            std::future::pending::<Result<(), String>>(),
+        );
+        let cancel = async {
+            tokio::task::yield_now().await;
+            session.cancel_actions();
+            *session.paused.lock().unwrap() = true;
+            let _exclusive = session.execution_gate.write().await;
+        };
+        let (result, ()) = tokio::time::timeout(Duration::from_secs(1), async {
+            tokio::join!(preparation, cancel)
+        })
+        .await
+        .expect("takeover must not wait for browser startup or a CDP timeout");
+        assert!(result.unwrap_err().contains("准备操作已取消"));
+        assert!(enter_action(&session, &token, AutomationMode::BrowserUse)
+            .await
+            .is_err());
     }
 
     #[test]

@@ -39,9 +39,10 @@ pub struct MarketplaceUpdateResult {
 pub fn install_from_marketplace(
     marketplace_root: &Path,
     plugin_relative_path: &str,
-    provenance: MarketplaceProvenance,
+    mut provenance: MarketplaceProvenance,
     registry: &mut InstallRegistry,
 ) -> Result<MarketplaceInstallResult, InstallError> {
+    capture_source_identity(&mut provenance);
     // Use the resolved plugin directory as the source path.
     // Each plugin gets its own repo key and symlink.
     let plugin_relative_path =
@@ -121,10 +122,11 @@ pub fn install_from_remote_url(
     git_sha: Option<&str>,
     subdir: Option<&str>,
     plugin_name: &str,
-    provenance: MarketplaceProvenance,
+    mut provenance: MarketplaceProvenance,
     registry: &mut InstallRegistry,
     require_sha: bool,
 ) -> Result<MarketplaceInstallResult, InstallError> {
+    capture_source_identity(&mut provenance);
     let subdir = subdir
         .map(|s| {
             MarketplaceRelativePath::parse(s)
@@ -205,6 +207,7 @@ pub fn update_from_marketplace_entry_transactional(
     registry: &mut InstallRegistry,
     require_sha: bool,
 ) -> Result<MarketplaceUpdateResult, InstallError> {
+    capture_source_identity(&mut provenance);
     let plugin_relative_path =
         MarketplaceRelativePath::parse(&entry.relative_path).map_err(|e| {
             InstallError::InstallFailed {
@@ -447,7 +450,15 @@ pub fn find_installed_marketplace_plugin(
 ) -> Option<(String, String)> {
     for (key, repo) in registry.list() {
         if let Some(ref mp) = repo.marketplace
-            && mp.source_url_or_path == source_url_or_path
+            && mp.canonical_source_identity.as_ref().map_or_else(
+                || mp.source_url_or_path == source_url_or_path,
+                |identity| {
+                    echo_agent_core::plugins::marketplace_scope::stored_source_identity(identity)
+                        == echo_agent_core::plugins::marketplace_scope::source_identity(
+                            source_url_or_path,
+                        )
+                },
+            )
             && mp.plugin_subdir == plugin_subdir
         {
             let version = repo
@@ -460,6 +471,16 @@ pub fn find_installed_marketplace_plugin(
         }
     }
     None
+}
+
+fn capture_source_identity(provenance: &mut MarketplaceProvenance) {
+    if provenance.canonical_source_identity.is_none() {
+        provenance.canonical_source_identity = Some(
+            echo_agent_core::plugins::marketplace_scope::source_identity(
+                &provenance.source_url_or_path,
+            ),
+        );
+    }
 }
 
 fn staging_nonce() -> String {
@@ -773,6 +794,7 @@ mod tests {
                 "plugins/demo",
                 MarketplaceProvenance {
                     source_url_or_path: "https://example.com/market.git".into(),
+                    canonical_source_identity: None,
                     source_display_name: "test".into(),
                     plugin_subdir: "plugins/demo".into(),
                 },
@@ -793,6 +815,7 @@ mod tests {
                 "plugins/demo",
                 MarketplaceProvenance {
                     source_url_or_path: "https://example.com/market.git".into(),
+                    canonical_source_identity: None,
                     source_display_name: "test".into(),
                     plugin_subdir: "plugins/demo".into(),
                 },
@@ -863,6 +886,7 @@ mod tests {
             let url = format!("file://{}", repo.path().display());
             let provenance = MarketplaceProvenance {
                 source_url_or_path: "https://example.com/marketplace.git".into(),
+                canonical_source_identity: None,
                 source_display_name: "Test".into(),
                 plugin_subdir: "acme".into(),
             };
@@ -974,6 +998,7 @@ mod tests {
     fn provenance(marketplace: &Path, plugin_subdir: &str) -> MarketplaceProvenance {
         MarketplaceProvenance {
             source_url_or_path: marketplace.display().to_string(),
+            canonical_source_identity: None,
             source_display_name: "Test".into(),
             plugin_subdir: plugin_subdir.into(),
         }
@@ -1004,6 +1029,7 @@ mod tests {
             let marketplace = tempfile::tempdir().unwrap();
             let provenance = MarketplaceProvenance {
                 source_url_or_path: marketplace.path().display().to_string(),
+                canonical_source_identity: None,
                 source_display_name: "Test".into(),
                 plugin_subdir: "../escaped".into(),
             };
@@ -1222,6 +1248,7 @@ mod tests {
         with_test_registry(|registry| {
             let provenance = MarketplaceProvenance {
                 source_url_or_path: "https://example.com/r.git".into(),
+                canonical_source_identity: None,
                 source_display_name: "Test".into(),
                 plugin_subdir: "acme".into(),
             };
@@ -1308,6 +1335,7 @@ mod tests {
             let url = format!("file://{}", repo.path().display());
             let provenance = MarketplaceProvenance {
                 source_url_or_path: "https://example.com/marketplace.git".into(),
+                canonical_source_identity: None,
                 source_display_name: "Test".into(),
                 plugin_subdir: "acme".into(),
             };
@@ -1397,6 +1425,7 @@ mod tests {
         with_test_registry(|registry| {
             let provenance = MarketplaceProvenance {
                 source_url_or_path: "https://example.com/marketplace.git".into(),
+                canonical_source_identity: None,
                 source_display_name: "Test".into(),
                 plugin_subdir: "acme".into(),
             };
@@ -1467,6 +1496,7 @@ mod tests {
             let url = format!("file://{}", repo.path().display());
             let provenance = MarketplaceProvenance {
                 source_url_or_path: "https://example.com/marketplace.git".into(),
+                canonical_source_identity: None,
                 source_display_name: "Test".into(),
                 plugin_subdir: "acme".into(),
             };

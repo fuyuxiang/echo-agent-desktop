@@ -139,6 +139,8 @@ export function ChatView({
   const streamingMessageId = useSessionStore((s) => s.streamingMessageId);
   const error = useSessionStore((s) => s.error);
   const plan = useSessionStore((s) => s.plan);
+  const planRevisionDirty = useSessionStore((s) => s.planRevisionDirty);
+  const hasVisiblePlan = Boolean(plan && (plan.entries.length > 0 || planRevisionDirty));
   const sessionId = useSessionStore((s) => s.sessionId);
   const agentMode = useSessionStore((s) => s.agentMode);
   const control = useSessionStore((s) => s.control);
@@ -688,7 +690,7 @@ export function ChatView({
             )}
           </div>
           <div className="chatview__utility-actions">
-            {plan && plan.entries.length > 0 && (
+            {plan && hasVisiblePlan && (
             <button
               className={`chatview__plan-toggle ${planOpen ? "chatview__plan-toggle--active" : ""}`}
               onClick={() => setPlanOpen((v) => !v)}
@@ -863,7 +865,7 @@ export function ChatView({
           )}
         </div>
 
-        {plan && plan.entries.length > 0 && planOpen && (
+        {plan && hasVisiblePlan && planOpen && (
           <div className="chatview__plan-panel">
             <PlanPanel
               sessionId={sessionId ?? undefined}

@@ -41,6 +41,7 @@ pub(crate) async fn apply(
     let required_agent_type =
         resolve_required_agent_type(Some(model.info().agent_type.as_str()), session_default);
     let previous_model_id = handle.model_id.0.clone();
+    let model_unchanged = previous_model_id == model_id.0;
     let is_family_switch = {
         let models = agent.models_manager.models();
         let old_family = config::find_model_by_id(&models, &previous_model_id)
@@ -64,9 +65,16 @@ pub(crate) async fn apply(
             responds_to: agent_tx,
         });
         let active_agent_type = agent_rx.await.ok().flatten();
-        let is_mismatch = active_agent_type
-            .as_ref()
-            .is_some_and(|active| !harnesses_are_compatible(active, required));
+        let is_mismatch = active_agent_type.as_ref().is_some_and(|active| {
+            // Automation modes install their own profile over the already
+            // selected stock model. Restoring/reapplying that exact model
+            // must keep the profile and its prompt. A different model or a
+            // newly strict harness requirement still uses the normal gate.
+            let automation_reapply = model_unchanged
+                && matches!(active.as_str(), "browser-use" | "computer-use")
+                && !echo_agent_core::config::is_strict_harness_agent_type(required);
+            !automation_reapply && !harnesses_are_compatible(active, required)
+        });
         tracing::info!(
             session_id = %session_id.0,
             model_id = %model_id.0,
@@ -192,7 +200,6 @@ pub(crate) async fn apply(
     } else {
         false
     };
-    let model_unchanged = previous_model_id == model_id.0;
     let new_threshold = {
         let cfg = agent.cfg.borrow();
         let models = agent.models_manager.models();

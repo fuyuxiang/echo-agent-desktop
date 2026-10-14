@@ -14,6 +14,8 @@ import type { AgentEntry, McpServerEntry, SkillInfo } from "@/lib/types";
 interface InputAddMenuProps {
   onPickFiles: () => void;
   disabled?: boolean;
+  /** Chat readiness may block actions while local meeting history remains accessible. */
+  allowMeetingHistoryWhileDisabled?: boolean;
   onSelectExpert?: (agent: AgentEntry) => void;
   onSelectSkill?: (skillName: string) => void;
   onNavigateConnectors?: () => void;
@@ -46,8 +48,8 @@ const FILE_ITEMS: MenuItem[] = [
 
 const MEETING_ITEM: MenuItem = {
   id: "meeting-minutes",
-  label: "录音转写",
-  description: "保存录音、转写并生成会议纪要",
+  label: "会议录音与纪要",
+  description: "查看历史会议，录音、转写并生成纪要",
   icon: <AudioLines size={16} />,
 };
 
@@ -79,6 +81,7 @@ function isCatalogItem(id: MenuItemId): id is CatalogId {
 export function InputAddMenu({
   onPickFiles,
   disabled = false,
+  allowMeetingHistoryWhileDisabled = false,
   onSelectExpert,
   onSelectSkill,
   onNavigateConnectors,
@@ -109,7 +112,10 @@ export function InputAddMenu({
   const [connectors, setConnectors] = useState<McpServerEntry[]>([]);
   const [catalogLoading, setCatalogLoading] = useState(false);
   const [catalogErrors, setCatalogErrors] = useState<Partial<Record<CatalogId, string>>>({});
-  const fileItems = meetingMinutesAvailable && onOpenMeetingMinutes
+  const hasMeetingHistory = Boolean(meetingMinutesAvailable && onOpenMeetingMinutes);
+  const meetingHistoryOnly = disabled && allowMeetingHistoryWhileDisabled && hasMeetingHistory;
+  const triggerDisabled = disabled && !meetingHistoryOnly;
+  const fileItems = hasMeetingHistory
     ? [...FILE_ITEMS, MEETING_ITEM]
     : FILE_ITEMS;
   const menuGroups = onAutomationModeChange
@@ -146,14 +152,22 @@ export function InputAddMenu({
   }, []);
 
   useEffect(() => {
-    if (open) void loadData();
-  }, [open, loadData]);
+    if (open && !meetingHistoryOnly) void loadData();
+    if (meetingHistoryOnly) {
+      loadGenerationRef.current += 1;
+      setCatalogLoading(false);
+      setHoveredItem(null);
+      pendingSubmenuFocusRef.current = false;
+      if (hoverTimerRef.current) clearTimeout(hoverTimerRef.current);
+      if (leaveTimerRef.current) clearTimeout(leaveTimerRef.current);
+    }
+  }, [open, meetingHistoryOnly, loadData]);
 
   useEffect(() => {
     if (!open || !focusFirstItemOnOpenRef.current) return;
-    mainItemRefs.current.get("add-files")?.focus();
+    mainItemRefs.current.get(meetingHistoryOnly ? "meeting-minutes" : "add-files")?.focus();
     focusFirstItemOnOpenRef.current = false;
-  }, [open]);
+  }, [open, meetingHistoryOnly]);
 
   // Close on outside click
   useEffect(() => {
@@ -170,11 +184,11 @@ export function InputAddMenu({
   }, [open]);
 
   useEffect(() => {
-    if (!disabled) return;
+    if (!triggerDisabled) return;
     focusFirstItemOnOpenRef.current = false;
     setOpen(false);
     setHoveredItem(null);
-  }, [disabled]);
+  }, [triggerDisabled]);
 
   // Close on Escape
   useEffect(() => {
@@ -205,7 +219,7 @@ export function InputAddMenu({
     if (leaveTimerRef.current) { clearTimeout(leaveTimerRef.current); leaveTimerRef.current = null; }
     if (hoverTimerRef.current) clearTimeout(hoverTimerRef.current);
     // Direct actions never open the catalog flyout.
-    if (!isCatalogItem(id)) { setHoveredItem(null); return; }
+    if (disabled || !isCatalogItem(id)) { setHoveredItem(null); return; }
     hoverTimerRef.current = setTimeout(() => openSubmenu(id), 150);
   };
 
@@ -254,6 +268,7 @@ export function InputAddMenu({
   }, [catalogErrors, catalogLoading, connectors, experts, hoveredItem, skills]);
 
   const openSubmenu = (id: CatalogId, moveFocus = false) => {
+    if (disabled) return;
     setSubmenuTop(mainItemRefs.current.get(id)?.offsetTop ?? 0);
     setHoveredItem(id);
     if (moveFocus) focusSubmenu();
@@ -308,6 +323,7 @@ export function InputAddMenu({
   }, [catalogErrors, catalogLoading, connectors.length, experts.length, hoveredItem, skills.length, updateSubmenuPosition]);
 
   const handleItemClick = (id: MenuItemId, moveFocusToSubmenu = false) => {
+    if (disabled && (!meetingHistoryOnly || id !== "meeting-minutes")) return;
     if (id === "add-files") {
       close();
       onPickFiles();
@@ -332,6 +348,7 @@ export function InputAddMenu({
   };
 
   const handleTriggerClick = (event: React.MouseEvent<HTMLButtonElement>) => {
+    if (triggerDisabled) return;
     event.stopPropagation();
     const openedFromKeyboard = event.detail === 0;
     setHoveredItem(null);
@@ -348,6 +365,10 @@ export function InputAddMenu({
     index: number,
   ) => {
     const focusAt = (nextIndex: number) => {
+      if (meetingHistoryOnly) {
+        mainItemRefs.current.get("meeting-minutes")?.focus();
+        return;
+      }
       const normalized = (nextIndex + flatItems.length) % flatItems.length;
       mainItemRefs.current.get(flatItems[normalized].id)?.focus();
     };
@@ -402,16 +423,19 @@ export function InputAddMenu({
   };
 
   const handleSelectExpert = (agent: AgentEntry) => {
+    if (disabled) return;
     close();
     onSelectExpert?.(agent);
   };
 
   const handleSelectSkill = (name: string) => {
+    if (disabled) return;
     close();
     onSelectSkill?.(name);
   };
 
   const handleSelectConnector = () => {
+    if (disabled) return;
     close();
     onNavigateConnectors?.();
   };
@@ -436,7 +460,7 @@ export function InputAddMenu({
   };
 
   const renderSubmenu = () => {
-    if (!hoveredItem) return null;
+    if (disabled || !hoveredItem) return null;
 
     let items: React.ReactNode = null;
 
@@ -536,7 +560,7 @@ export function InputAddMenu({
       <button
         className="echo-composer__add"
         onClick={handleTriggerClick}
-        disabled={disabled}
+        disabled={triggerDisabled}
         aria-label="添加"
         aria-haspopup="menu"
         aria-expanded={open}
@@ -547,7 +571,7 @@ export function InputAddMenu({
         <AddIcon size="md" />
       </button>
 
-      {open && !disabled && (
+      {open && !triggerDisabled && (
         <div
           className="iam-popover"
           id="composer-add-menu"
@@ -574,6 +598,7 @@ export function InputAddMenu({
                   const modeUnavailable = Boolean(mode) && (
                     automationModeDisabled || capability?.available === false
                   );
+                  const historyRestricted = meetingHistoryOnly && item.id !== "meeting-minutes";
                   const selected = Boolean(mode) && automationMode === mode;
                   const description = capability?.available === false
                     ? capability.reason || "当前设备不可用"
@@ -586,14 +611,15 @@ export function InputAddMenu({
                       "iam-item"
                       + (hoveredItem === item.id ? " iam-item--active" : "")
                       + (selected ? " iam-item--selected" : "")
-                      + (modeUnavailable ? " iam-item--disabled" : "")
+                      + (modeUnavailable || historyRestricted ? " iam-item--disabled" : "")
                     }
                     onMouseEnter={() => handleItemEnter(item.id)}
                     onMouseLeave={handleItemLeave}
                     onClick={(event) => handleItemClick(item.id, event.detail === 0)}
+                    disabled={historyRestricted}
                     role={mode ? "menuitemradio" : "menuitem"}
                     aria-checked={mode ? selected : undefined}
-                    aria-disabled={modeUnavailable || undefined}
+                    aria-disabled={modeUnavailable || historyRestricted || undefined}
                     aria-haspopup={isCatalogItem(item.id) ? "menu" : undefined}
                     aria-expanded={isCatalogItem(item.id) ? hoveredItem === item.id : undefined}
                     title={modeUnavailable ? description : undefined}

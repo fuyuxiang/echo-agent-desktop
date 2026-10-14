@@ -502,11 +502,13 @@ mod tests {
     }
 
     /// Recording sink that captures every forwarded event for assertions.
+    type SymbolUpdate = (String, String, u32, u32, u32);
+
     #[derive(Default)]
     struct RecordingSink {
         files_updated: Mutex<Vec<(String, String)>>,
         files_removed: Mutex<Vec<(String, String)>>,
-        updated: Mutex<Vec<(String, String, u32, u32, u32)>>,
+        updated: Mutex<Vec<SymbolUpdate>>,
         removed: Mutex<Vec<(String, String)>>,
     }
 

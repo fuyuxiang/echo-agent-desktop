@@ -1,9 +1,9 @@
-import { render, screen } from "@testing-library/react";
+import { act, render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { describe, expect, it, vi } from "vitest";
 
 import { ChangeSetView } from "../explorer/ChangeSetView";
-import type { ChangeSet } from "../lib/types";
+import type { ChangeSet, CommitHunk } from "../lib/types";
 
 const changeSet: ChangeSet = {
   taskId: "task-1",
@@ -38,5 +38,21 @@ describe("ChangeSetView", () => {
     await userEvent.click(screen.getByRole("checkbox", { name: "任务差异块 1" }));
     await userEvent.click(screen.getByRole("button", { name: "提交选中 3 个文件" }));
     expect(onCommit).toHaveBeenCalledWith(["src/task.ts", "src/other.ts"], { "src/user.ts": ["hunk-1"] });
+  });
+
+  it("任务切换后的旧差异块响应不会覆盖新任务可提交差异", async () => {
+    let resolve!: (hunks: CommitHunk[]) => void;
+    const onLoadHunks = vi.fn()
+      .mockReturnValueOnce(new Promise<CommitHunk[]>((accept) => { resolve = accept; }))
+      .mockResolvedValueOnce([{ id: "new-hunk", preview: "new task diff" }]);
+    const props = { hasTask: true, canCommit: true, onCommit: vi.fn(), onLoadHunks, onOpenDiff: vi.fn(), onDiscard: vi.fn(), onRollback: vi.fn() };
+    const view = render(<ChangeSetView {...props} changeSet={changeSet} />);
+    await userEvent.click(screen.getByRole("button", { name: "选择 src/user.ts 的任务差异块" }));
+    view.rerender(<ChangeSetView {...props} changeSet={{ ...changeSet, taskId: "task-2" }} />);
+    await userEvent.click(screen.getByRole("button", { name: "选择 src/user.ts 的任务差异块" }));
+    expect(await screen.findByText("new task diff")).toBeInTheDocument();
+    await act(async () => { resolve([{ id: "old-hunk", preview: "old task diff" }]); });
+    expect(screen.queryByText("old task diff")).not.toBeInTheDocument();
+    expect(screen.getByText("new task diff")).toBeInTheDocument();
   });
 });

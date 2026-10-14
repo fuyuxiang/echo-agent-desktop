@@ -6,7 +6,7 @@
 
 - 开发机器使用 Node.js 22 或 24。`pnpm ide:build` 编译 [`vendor/theia-platform/`](../vendor/theia-platform/)，`pnpm ide:stage` 将 Theia 后端、生产依赖和当前平台的 Node.js 放入 Tauri 资源目录。
 - `pnpm tauri dev` 和 `pnpm tauri build` 的前置钩子会运行 `pnpm ide:prepare`；缺少资源、架构变化或源码更新时重新构建和暂存。安装包中的 IDE 使用随包分发的 Node.js，普通用户不需另装。
-- `pnpm ide:build` 会下载固定版本的基础语言扩展，`pnpm ide:stage` 将它们与仓库内的轻量 TOML 语法扩展一起放入安装包。运行时从本地 `plugins/` 加载，语法高亮不依赖用户联网或手动安装扩展。默认覆盖 JavaScript/JSX、TypeScript/TSX、Rust、Python、Java、JSON、YAML、TOML、HTML、CSS、Markdown 和 Shell Script。TOML 扩展只提供语法功能，避免为基础高亮启动额外语言服务。
+- `pnpm ide:build` 从仓库内经过 SHA-256 核对的 VSIX 解包固定版本基础语言扩展、VS Code Git 与 Git Base；`pnpm ide:stage` 将它们与轻量 TOML 语法扩展一起放入安装包。运行时从本地 `plugins/` 加载，不依赖用户联网或手动安装扩展。基础语法覆盖 JavaScript/JSX、TypeScript/TSX、Rust、Python、Java、JSON、YAML、TOML、HTML、CSS、Markdown 和 Shell Script。TOML 仅提供语法功能。Git/Git Base 固定为 `1.95.3`；Git provider 使用系统 Git、真实 SCM 页面及 Git 命令，Git Base 是其必需依赖。`pnpm ide:plugins:update` 才从固定 OpenVSX URL 更新仓库 VSIX 及摘要；普通准备验证许可证、语言语法/可执行入口、版本、依赖和 Git 命令，缓存复用还核对 staged 插件完整内容摘要。
 - `pnpm ide:build` 和 `pnpm ide:stage` 会给固定版本 `node-pty` 的 Windows ConPTY 清理 helper 加 `windowsHide: true`，保持交互 shell 的上游 ConPTY 创建参数，并处理终端管道在连接前后发生的错误。构建会将旧版加过 `CREATE_NO_WINDOW` 的源码恢复到固定版本的上游参数，再重建原生模块并同步到 `prebuilds/`。暂存缓存和运行时验证会检查源码与二进制；Windows 打包还会实际启动、使用并关闭一个 ConPTY 终端。升级 `node-pty` 时须先复核补丁，构建会在版本或调用点变化时失败。
 - Theia 的 `ipc-bootstrap` 和 `plugin-host` 是后台 IPC worker，Windows 构建让它们保留管道与 IPC、以无控制台模式启动。构建后、暂存后及复用缓存前均检查实际 JavaScript 产物；补丁调用点变化会让构建失败。IDE 的交互终端仍由 ConPTY 创建，不套用这些后台进程标志。
 - 如启动失败，先看应用数据目录中的 `theia.log`。开发者可以用 [`smoke-theia.mjs`](../scripts/smoke-theia.mjs) 检查内嵌页面与桥接。
@@ -22,5 +22,7 @@ Windows 安装包验证会实际启动 Theia、加载一次嵌入式 IDE，并�
 Theia 连接断开时，宿主重新验证本地后端并恢复 IDE。若编辑器有未保存文件，或无法确认保存状态，先保留当前页面供复制内容，等待用户手动重新连接。后端重启会保留现有 `theia.log` 内容；超过 5 MiB 后将旧日志保存在 `theia.previous.log`。
 
 Theia 的文件操作和交互终端以当前系统用户身份运行。授权工作区是工作台范围，不是操作系统沙箱；打开来源未知的项目时仍应检查终端命令与扩展。Windows 启动路径和工作区桥接会处理中文及长路径兼容。
+
+`ECHO_AGENT_HOME` 指向独立于默认 `~/.echo-agent/` 的数据目录时，IDE 配置与日志保存到该目录的 `theia/` 子目录，便于隔离测试与独立数据空间。使用默认数据目录时继续使用 Tauri 应用数据目录中的现有 `theia-config/` 和 `theia.log`，保留既有编辑器设置和布局。
 
 关键实现见 [`theia.rs`](../src-tauri/src/theia.rs)、[`TheiaIdeFrame.tsx`](../src/features/coding/TheiaIdeFrame.tsx) 和 [`prepare-theia.mjs`](../scripts/prepare-theia.mjs)。

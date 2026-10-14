@@ -6,6 +6,7 @@ import { useKnowledgeStore } from "@/stores/knowledge-store";
 
 const STORAGE_KEY = "echoagent.knowledge-sources.v1";
 let hydrationPromise: Promise<KnowledgeSourceDescriptor[]> | null = null;
+let hydratedDescriptors: KnowledgeSourceDescriptor[] | null = null;
 
 export interface KnowledgeSourceDescriptor {
   id: string;
@@ -67,6 +68,7 @@ function parseDescriptors(value: unknown): KnowledgeSourceDescriptor[] {
 }
 
 export function loadKnowledgeSourceDescriptors(): KnowledgeSourceDescriptor[] {
+  if (hydratedDescriptors) return hydratedDescriptors.map((item) => ({ ...item }));
   if (typeof localStorage === "undefined") return [];
   try {
     return parseDescriptors(JSON.parse(localStorage.getItem(STORAGE_KEY) ?? "[]"));
@@ -77,13 +79,20 @@ export function loadKnowledgeSourceDescriptors(): KnowledgeSourceDescriptor[] {
 
 function cacheKnowledgeSourceDescriptors(items: KnowledgeSourceDescriptor[]): void {
   if (typeof localStorage === "undefined") return;
-  localStorage.setItem(STORAGE_KEY, JSON.stringify(items));
+  try {
+    localStorage.setItem(STORAGE_KEY, JSON.stringify(items));
+  } catch (error) {
+    // Native storage is authoritative in the desktop app; a full renderer
+    // cache must not turn an already-persisted update into a failed operation.
+    if (!isTauriAvailable()) throw error;
+  }
 }
 
 async function saveKnowledgeSourceDescriptors(items: KnowledgeSourceDescriptor[]): Promise<void> {
   if (isTauriAvailable()) {
     await invoke<void>("org_local_kb_sources_set", { sources: items });
   }
+  hydratedDescriptors = items.map((item) => ({ ...item }));
   cacheKnowledgeSourceDescriptors(items);
 }
 
@@ -102,8 +111,12 @@ export function hydrateKnowledgeSources(): Promise<KnowledgeSourceDescriptor[]> 
     const cached = loadKnowledgeSourceDescriptors();
     let descriptors = cached;
     if (isTauriAvailable()) {
-      const stored = parseDescriptors(await invoke<unknown>("org_local_kb_sources_get"));
-      if (stored.length > 0 || cached.length === 0) {
+      const raw = await invoke<unknown>("org_local_kb_sources_get", { includeStorageState: true });
+      const snapshot = raw && typeof raw === "object" && !Array.isArray(raw)
+        ? raw as { exists?: unknown; sources?: unknown }
+        : null;
+      const stored = parseDescriptors(snapshot ? snapshot.sources : raw);
+      if (snapshot?.exists === true || stored.length > 0 || cached.length === 0) {
         descriptors = stored;
       } else {
         // One-time migration from releases that used renderer storage only.
@@ -111,6 +124,7 @@ export function hydrateKnowledgeSources(): Promise<KnowledgeSourceDescriptor[]> 
       }
       cacheKnowledgeSourceDescriptors(descriptors);
     }
+    hydratedDescriptors = descriptors.map((item) => ({ ...item }));
     const registered = new Set(listKbProviders().map((source) => source.id));
     for (const descriptor of descriptors) {
       if (!registered.has(descriptor.id)) registerDescriptor(descriptor);
@@ -122,6 +136,12 @@ export function hydrateKnowledgeSources(): Promise<KnowledgeSourceDescriptor[]> 
     throw error;
   });
   return hydrationPromise;
+}
+
+/** Test/support reset; does not alter persisted knowledge sources. */
+export function resetKnowledgeSourceHydration(): void {
+  hydrationPromise = null;
+  hydratedDescriptors = null;
 }
 
 export async function addLocalKnowledgeSource(root: string): Promise<{ descriptor: KnowledgeSourceDescriptor; added: boolean }> {

@@ -7,6 +7,9 @@ use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt, EnvFilte
 const LOG_RETENTION_DAYS: u64 = 14;
 
 pub(crate) fn log_dir() -> PathBuf {
+    if let Some(home) = crate::paths::redirected_data_home() {
+        return home.join("logs");
+    }
     dirs::data_local_dir()
         .unwrap_or_else(crate::paths::echo_agent_home_dir)
         .join("EchoAgent")

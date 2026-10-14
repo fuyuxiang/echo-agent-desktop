@@ -274,13 +274,13 @@ export function Composer({
   knowledgeSessionId?: string;
   /** Opens the personal knowledge management page. */
   onOpenKnowledgeBase?: () => void;
-  /** Opens the durable MiniMax recording/transcription workbench. */
+  /** Opens meeting history and the recording/transcription workbench. */
   onOpenMeetingMinutes?: () => void;
   /** Opens organization login/connection management. */
   onOpenOrganization?: () => void;
 }) {
   const meetingModel = models?.find((model) => model.id === modelId);
-  const meetingCapability = useMeetingTranscriptionCapability(
+  useMeetingTranscriptionCapability(
     onOpenMeetingMinutes ? meetingModel : undefined,
     models,
   );
@@ -1383,6 +1383,7 @@ export function Composer({
         <div className="echo-composer__footer">
           <InputAddMenu
             disabled={!apiReady || awaitingQuestion || disabled}
+            allowMeetingHistoryWhileDisabled={!apiReady && !awaitingQuestion && !disabled}
             onPickFiles={pickFiles}
             onSelectExpert={onSelectExpert}
             onSelectSkill={(name) => {
@@ -1396,7 +1397,7 @@ export function Composer({
               }
             }}
             onNavigateConnectors={onNavigateConnectors}
-            meetingMinutesAvailable={Boolean(onOpenMeetingMinutes && !modelLoading && meetingCapability.available)}
+            meetingMinutesAvailable={Boolean(onOpenMeetingMinutes)}
             onOpenMeetingMinutes={onOpenMeetingMinutes}
             automationMode={automationMode}
             automationCapabilities={automationSupport}

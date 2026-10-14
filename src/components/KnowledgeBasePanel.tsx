@@ -9,7 +9,7 @@ import { FolderOpen, Info, Search } from "lucide-react";
 import {
   searchKbWithDiagnostics,
   listKbProvidersWithStats,
-  rebuildAllKbProviders,
+  rebuildAllKbProvidersWithDiagnostics,
   type KbEntry,
   type KbIndexStats,
 } from "@/lib/knowledge-base";
@@ -46,6 +46,8 @@ export function KnowledgeBasePanel({ onOpen, onToast }: KnowledgeBasePanelProps)
   const [searchNotice, setSearchNotice] = useState<string | null>(null);
   const [semanticStatus, setSemanticStatus] = useState<PersonalKnowledgeIndexStatus | null>(null);
   const [searchRetryKey, setSearchRetryKey] = useState(0);
+  const [sourceChangeKey, setSourceChangeKey] = useState(0);
+  const [rebuildError, setRebuildError] = useState<string | null>(null);
   const q = debouncedQuery.trim();
   useEffect(() => {
     let cancelled = false;
@@ -119,6 +121,7 @@ export function KnowledgeBasePanel({ onOpen, onToast }: KnowledgeBasePanelProps)
       const dir = await filesystemPickDirectory();
       if (!dir) return;
       const { added } = await addLocalKnowledgeSource(dir);
+      setSourceChangeKey((key) => key + 1);
       setRefreshKey((k) => k + 1);
       onToast?.(added ? "已添加本地知识源" : "该知识源已存在");
     } catch (e) {
@@ -132,6 +135,8 @@ export function KnowledgeBasePanel({ onOpen, onToast }: KnowledgeBasePanelProps)
       if (await removeKnowledgeSource(id)) {
         if (sources.length === 1) setQuery("");
         setSources((current) => current.filter((source) => source.id !== id));
+        setResults([]);
+        setSourceChangeKey((key) => key + 1);
         setRefreshKey((k) => k + 1);
         onToast?.("已移除知识源");
       }
@@ -144,17 +149,27 @@ export function KnowledgeBasePanel({ onOpen, onToast }: KnowledgeBasePanelProps)
   const [rebuilding, setRebuilding] = useState(false);
   const rebuildIndex = async () => {
     setRebuilding(true);
+    setRebuildError(null);
     try {
-      const res = await rebuildAllKbProviders();
+      const { rebuilt: res, failures } = await rebuildAllKbProvidersWithDiagnostics();
       const semantic = await rebuildPersonalKnowledgeIndex();
       if (semantic) setSemanticStatus(semantic);
       setRefreshKey((k) => k + 1);
+      setSourceChangeKey((key) => key + 1);
       const total = res.reduce((s, r) => s + (r.count ?? 0), 0);
+      if (failures.length > 0) {
+        const message = `部分知识源索引刷新失败：${failures.map((failure) => `${failure.label}：${failure.message}`).join("；")}。请重试。`;
+        setRebuildError(message);
+        onToast?.(message);
+        return;
+      }
       onToast?.(semantic
         ? `语义索引已更新：${semantic.fileCount} 个文件、${semantic.chunkCount} 个片段`
         : res.length > 0 ? `已重建索引(${total} 项)` : "无可重建的知识源");
     } catch (e) {
-      onToast?.(`重建失败：${String(e).replace(/^Error:\s*/, "")}`);
+      const message = `重建失败：${String(e).replace(/^Error:\s*/, "")}`;
+      setRebuildError(message);
+      onToast?.(message);
     } finally {
       setRebuilding(false);
     }
@@ -229,7 +244,7 @@ export function KnowledgeBasePanel({ onOpen, onToast }: KnowledgeBasePanelProps)
         void cancelPersonalKnowledgeSearch(requestId).catch(() => {});
       }
     };
-  }, [q, searchRetryKey]);
+  }, [q, searchRetryKey, sourceChangeKey]);
 
   const retrySources = () => {
     setSourcesError(null);
@@ -282,6 +297,10 @@ export function KnowledgeBasePanel({ onOpen, onToast }: KnowledgeBasePanelProps)
           </button>
         </div>
       )}
+      {rebuildError && <div className="kb-panel__index-status kb-panel__load-error" role="alert">
+        <span>{rebuildError}</span>
+        <button type="button" className="kb-panel__refresh-btn" onClick={() => void rebuildIndex()} disabled={rebuilding}>重试刷新索引</button>
+      </div>}
       {!sourcesError && sourcesLoading && sources.length === 0 && (
         <div className="kb-panel__loading" role="status">正在读取知识源…</div>
       )}

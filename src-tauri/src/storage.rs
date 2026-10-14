@@ -1213,7 +1213,186 @@ mod tests {
     const CHILD_PATH_ENV: &str = "ECHOAGENT_STORAGE_TRANSACTION_CHILD_PATH";
     const CHILD_ID_ENV: &str = "ECHOAGENT_STORAGE_TRANSACTION_CHILD_ID";
     const CHILD_READY_ENV: &str = "ECHOAGENT_STORAGE_TRANSACTION_CHILD_READY";
-    const CHILD_START_ENV: &str = "ECHOAGENT_STORAGE_TRANSACTION_CHILD_START";
+    const STORAGE_RELEASE_BYTE: u8 = b'S';
+    const STORAGE_CHILD_PHASE_TIMEOUT: Duration = Duration::from_secs(10);
+
+    fn read_storage_release(mut input: impl std::io::Read) -> std::io::Result<()> {
+        let mut release = [0_u8; 1];
+        input.read_exact(&mut release)?;
+        if release[0] != STORAGE_RELEASE_BYTE {
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::InvalidData,
+                "invalid storage writer release byte",
+            ));
+        }
+        Ok(())
+    }
+
+    struct StorageTestWriter {
+        child: std::process::Child,
+        stdout: PathBuf,
+        stderr: PathBuf,
+    }
+
+    #[derive(Default)]
+    struct StorageTestWriters {
+        writers: Vec<StorageTestWriter>,
+    }
+
+    impl Drop for StorageTestWriters {
+        fn drop(&mut self) {
+            // Close every release pipe first, including when startup panics.
+            // A waiting child observes EOF instead of a stale start marker.
+            for writer in &mut self.writers {
+                drop(writer.child.stdin.take());
+            }
+            for writer in &mut self.writers {
+                if !matches!(writer.child.try_wait(), Ok(Some(_))) {
+                    let _ = writer.child.kill();
+                }
+            }
+            // Cleanup must not introduce an unbounded wait after a deadline.
+            let deadline = std::time::Instant::now() + Duration::from_millis(500);
+            loop {
+                let mut all_exited = true;
+                for writer in &mut self.writers {
+                    all_exited &= matches!(writer.child.try_wait(), Ok(Some(_)));
+                }
+                if all_exited || std::time::Instant::now() >= deadline {
+                    break;
+                }
+                std::thread::sleep(Duration::from_millis(10));
+            }
+        }
+    }
+
+    fn storage_child_diagnostics(writer: &StorageTestWriter) -> String {
+        use std::io::Read;
+        let read = |path: &Path| {
+            let mut text = String::new();
+            if let Ok(file) = std::fs::File::open(path) {
+                let _ = file.take(64 * 1024).read_to_string(&mut text);
+            }
+            text
+        };
+        format!(
+            "stdout:\n{}\nstderr:\n{}",
+            read(&writer.stdout),
+            read(&writer.stderr)
+        )
+    }
+
+    fn spawn_storage_test_writer(
+        writers: &mut StorageTestWriters,
+        path: &Path,
+        ready: &Path,
+        id: &str,
+    ) {
+        let spawn_started = std::time::Instant::now();
+        let stdout = ready.with_extension("stdout");
+        let stderr = ready.with_extension("stderr");
+        let child = std::process::Command::new(std::env::current_exe().unwrap())
+            .arg("--exact")
+            .arg("storage::tests::storage_transaction_child_writer")
+            .arg("--nocapture")
+            .env(CHILD_PATH_ENV, path)
+            .env(CHILD_ID_ENV, id)
+            .env(CHILD_READY_ENV, ready)
+            .stdin(std::process::Stdio::piped())
+            // Files avoid output-pipe backpressure and an unbounded
+            // wait_with_output/read_to_end after the child exits.
+            .stdout(std::fs::File::create(&stdout).unwrap())
+            .stderr(std::fs::File::create(&stderr).unwrap())
+            .spawn()
+            .unwrap();
+        // On a failed full-suite run the harness previously discarded all
+        // spawn timings. Preserve actual startup evidence without changing the
+        // ten-second barrier, release protocol or concurrent-write assertions.
+        eprintln!(
+            "storage test child {id}: pid={}, spawn={:?}, ready={}",
+            child.id(),
+            spawn_started.elapsed(),
+            ready.exists()
+        );
+        writers.writers.push(StorageTestWriter {
+            child,
+            stdout,
+            stderr,
+        });
+    }
+
+    fn storage_children_alive(writers: &mut StorageTestWriters) -> Result<(), String> {
+        for writer in &mut writers.writers {
+            if let Some(status) = writer.child.try_wait().map_err(|error| error.to_string())? {
+                return Err(format!(
+                    "storage child exited before release ({status}):\n{}",
+                    storage_child_diagnostics(writer)
+                ));
+            }
+        }
+        Ok(())
+    }
+
+    fn wait_for_storage_children_ready(
+        writers: &mut StorageTestWriters,
+        ready_paths: &[PathBuf],
+        deadline: std::time::Instant,
+    ) -> Result<(), String> {
+        loop {
+            if std::time::Instant::now() >= deadline {
+                return Err("child readiness barrier timed out".into());
+            }
+            storage_children_alive(writers)?;
+            if ready_paths.iter().all(|ready| ready.exists()) {
+                return Ok(());
+            }
+            std::thread::sleep(Duration::from_millis(10));
+        }
+    }
+
+    fn release_storage_children(writers: &mut StorageTestWriters) -> Result<(), String> {
+        use std::io::Write;
+        storage_children_alive(writers)?;
+        // Release all four ready writers before waiting for any transaction.
+        for writer in &mut writers.writers {
+            let mut pipe = writer
+                .child
+                .stdin
+                .take()
+                .ok_or("storage release pipe missing")?;
+            pipe.write_all(&[STORAGE_RELEASE_BYTE])
+                .map_err(|error| error.to_string())?;
+        }
+        Ok(())
+    }
+
+    fn wait_for_storage_children_complete(
+        writers: &mut StorageTestWriters,
+        deadline: std::time::Instant,
+    ) -> Result<(), String> {
+        loop {
+            let mut all_exited = true;
+            for writer in &mut writers.writers {
+                match writer.child.try_wait().map_err(|error| error.to_string())? {
+                    Some(status) if !status.success() => {
+                        return Err(format!(
+                            "storage child failed ({status}):\n{}",
+                            storage_child_diagnostics(writer)
+                        ));
+                    }
+                    Some(_) => {}
+                    None => all_exited = false,
+                }
+            }
+            if all_exited {
+                return Ok(());
+            }
+            if std::time::Instant::now() >= deadline {
+                return Err("storage transaction completion timed out".into());
+            }
+            std::thread::sleep(Duration::from_millis(10));
+        }
+    }
 
     /// Invoked by `storage_transaction_cross_process_upserts_preserve_changes`
     /// through the Rust test harness. A normal test-suite invocation has no
@@ -1225,16 +1404,11 @@ mod tests {
         };
         let id = std::env::var(CHILD_ID_ENV).expect("child id");
         let ready = PathBuf::from(std::env::var_os(CHILD_READY_ENV).expect("ready path"));
-        let start = PathBuf::from(std::env::var_os(CHILD_START_ENV).expect("start path"));
         std::fs::write(&ready, b"ready").unwrap();
-        let deadline = std::time::Instant::now() + Duration::from_secs(10);
-        while !start.exists() {
-            assert!(
-                std::time::Instant::now() < deadline,
-                "start barrier timed out"
-            );
-            std::thread::sleep(Duration::from_millis(10));
-        }
+        // The parent owns both phase deadlines. EOF or a wrong token fails
+        // before any validation or store transaction; no earlier child's
+        // independent countdown can expire while its siblings start up.
+        read_storage_release(std::io::stdin().lock()).expect("storage release pipe failed");
 
         let config = test_provider(&id);
         validate(&config).unwrap();
@@ -1252,7 +1426,6 @@ mod tests {
         const CHILDREN: usize = 4;
         let temp = tempfile::tempdir().unwrap();
         let path = temp.path().join("providers.json");
-        let start = temp.path().join("start");
         write_store_at(
             &path,
             &StorageConfigStore {
@@ -1261,45 +1434,55 @@ mod tests {
         )
         .unwrap();
 
-        let test_binary = std::env::current_exe().unwrap();
-        let mut children = Vec::new();
-        let mut ready_paths = Vec::new();
-        for index in 0..CHILDREN {
-            let ready = temp.path().join(format!("ready-{index}"));
-            let child = std::process::Command::new(&test_binary)
-                .arg("--exact")
-                .arg("storage::tests::storage_transaction_child_writer")
-                .arg("--nocapture")
-                .env(CHILD_PATH_ENV, &path)
-                .env(CHILD_ID_ENV, format!("child-{index}"))
-                .env(CHILD_READY_ENV, &ready)
-                .env(CHILD_START_ENV, &start)
-                .stdout(std::process::Stdio::piped())
-                .stderr(std::process::Stdio::piped())
-                .spawn()
-                .unwrap();
-            children.push(child);
-            ready_paths.push(ready);
-        }
-
-        let deadline = std::time::Instant::now() + Duration::from_secs(10);
-        while !ready_paths.iter().all(|ready| ready.exists()) {
-            assert!(
-                std::time::Instant::now() < deadline,
-                "child readiness barrier timed out"
-            );
-            std::thread::sleep(Duration::from_millis(10));
-        }
-        std::fs::write(&start, b"start").unwrap();
-        for child in children {
-            let output = child.wait_with_output().unwrap();
-            assert!(
-                output.status.success(),
-                "child failed:\nstdout:\n{}\nstderr:\n{}",
-                String::from_utf8_lossy(&output.stdout),
-                String::from_utf8_lossy(&output.stderr)
-            );
-        }
+        let mut children = StorageTestWriters::default();
+        let ready_paths: Vec<_> = (0..CHILDREN)
+            .map(|index| temp.path().join(format!("ready-{index}")))
+            .collect();
+        let ready_deadline = std::time::Instant::now() + STORAGE_CHILD_PHASE_TIMEOUT;
+        // This exercises four concurrent processes, not four sequential OS
+        // launches. A slow spawn must not consume each following writer's
+        // shared startup budget before that writer has even been launched.
+        std::thread::scope(|scope| {
+            let handles: Vec<_> = ready_paths
+                .iter()
+                .enumerate()
+                .map(|(index, ready)| {
+                    let path = &path;
+                    scope.spawn(move || {
+                        let mut group = StorageTestWriters::default();
+                        assert!(
+                            std::time::Instant::now() < ready_deadline,
+                            "child startup timed out"
+                        );
+                        spawn_storage_test_writer(
+                            &mut group,
+                            path,
+                            ready,
+                            &format!("child-{index}"),
+                        );
+                        // The group owns cleanup even if this worker panics.
+                        group
+                    })
+                })
+                .collect();
+            let mut startup_failed = false;
+            for handle in handles {
+                match handle.join() {
+                    Ok(mut group) => children.writers.append(&mut group.writers),
+                    Err(_) => startup_failed = true,
+                }
+            }
+            assert!(!startup_failed, "storage writer startup failed");
+        });
+        assert_eq!(children.writers.len(), CHILDREN);
+        wait_for_storage_children_ready(&mut children, &ready_paths, ready_deadline).unwrap();
+        assert!(std::time::Instant::now() < ready_deadline);
+        release_storage_children(&mut children).unwrap();
+        wait_for_storage_children_complete(
+            &mut children,
+            std::time::Instant::now() + STORAGE_CHILD_PHASE_TIMEOUT,
+        )
+        .unwrap();
 
         let store = read_store_with_lock_at(&path);
         assert_eq!(store.providers.len(), CHILDREN + 1);
@@ -1313,5 +1496,357 @@ mod tests {
                 .iter()
                 .any(|provider| provider.id == format!("child-{index}")));
         }
+    }
+
+    fn assert_storage_release_failure_preserves_store(release: Option<u8>) {
+        use std::io::Write;
+        let temp = tempfile::tempdir().unwrap();
+        let path = temp.path().join("providers.json");
+        let ready = temp.path().join("ready");
+        write_store_at(
+            &path,
+            &StorageConfigStore {
+                providers: vec![test_provider("keeper")],
+            },
+        )
+        .unwrap();
+        let original = std::fs::read(&path).unwrap();
+        let mut children = StorageTestWriters::default();
+        let deadline = std::time::Instant::now() + STORAGE_CHILD_PHASE_TIMEOUT;
+        spawn_storage_test_writer(&mut children, &path, &ready, "must-not-be-written");
+        wait_for_storage_children_ready(&mut children, std::slice::from_ref(&ready), deadline)
+            .unwrap();
+        let mut pipe = children.writers[0].child.stdin.take().unwrap();
+        if let Some(release) = release {
+            pipe.write_all(&[release]).unwrap();
+        }
+        drop(pipe);
+        let failure = wait_for_storage_children_complete(
+            &mut children,
+            std::time::Instant::now() + STORAGE_CHILD_PHASE_TIMEOUT,
+        )
+        .unwrap_err();
+        assert!(failure.contains("storage release pipe failed"));
+        assert_eq!(std::fs::read(&path).unwrap(), original);
+        let store = read_store_with_lock_at(&path);
+        assert_eq!(store.providers.len(), 1);
+        assert_eq!(store.providers[0].id, "keeper");
+        assert!(ready.exists());
+        // A persistent ready marker cannot authorize a dead writer, the exact
+        // stale-marker condition accepted by the old startup barrier.
+        assert!(wait_for_storage_children_ready(
+            &mut children,
+            &[ready],
+            std::time::Instant::now() + STORAGE_CHILD_PHASE_TIMEOUT,
+        )
+        .unwrap_err()
+        .contains("exited before release"));
+    }
+
+    #[test]
+    fn storage_transaction_release_pipe_eof_preserves_store() {
+        assert_storage_release_failure_preserves_store(None);
+    }
+
+    #[test]
+    fn storage_transaction_release_pipe_rejects_invalid_token_without_updates() {
+        assert_storage_release_failure_preserves_store(Some(b'X'));
+    }
+
+    // Included only inside storage::tests. The companion standard server script
+    // creates synthetic credentials and an isolated process-level ECHO_AGENT_HOME.
+    #[tokio::test]
+    #[ignore = "requires the real WsgiDAV/Cheroot resources from scripts/standard-webdav-review.py"]
+    async fn webdav_standard_server_real_commands() {
+        use sha2::{Digest, Sha256};
+        let manifest_path = PathBuf::from(
+            std::env::var_os("ECHO_WEBDAV_REVIEW_MANIFEST")
+                .expect("real WebDAV manifest is required"),
+        );
+        let manifest: serde_json::Value =
+            serde_json::from_slice(&std::fs::read(&manifest_path).unwrap()).unwrap();
+        assert_eq!(manifest["schema"], 1);
+        let text = |key: &str| {
+            manifest[key]
+                .as_str()
+                .expect("manifest string is required")
+                .to_owned()
+        };
+        let home = PathBuf::from(text("home"));
+        let root = PathBuf::from(text("root"));
+        let run = manifest_path.parent().unwrap().canonicalize().unwrap();
+        assert_eq!(run.parent().unwrap(), Path::new("/private/tmp"));
+        assert!(run
+            .file_name()
+            .unwrap()
+            .to_string_lossy()
+            .starts_with("echo-webdav-real-"));
+        assert_eq!(home.canonicalize().unwrap(), run.join("echo-home"));
+        assert_eq!(root.canonicalize().unwrap(), run.join("physical-root"));
+        assert_eq!(
+            crate::paths::echo_agent_home_dir().canonicalize().unwrap(),
+            home
+        );
+        let phase =
+            std::env::var("ECHO_WEBDAV_REVIEW_PHASE").expect("first/restart phase is required");
+        assert!(["first", "restart"].contains(&phase.as_str()));
+        let output = PathBuf::from(
+            std::env::var_os("ECHO_WEBDAV_REVIEW_OUTPUT").expect("output is required"),
+        );
+        let seed_name = text("seedName");
+        assert_eq!(seed_name, "原始 中文.txt");
+        let seed_content = text("seedContent");
+        let marker = "真实 Rust WebDAV 中文验收\n保留空格、表格 | 列一 | 列二 |\n";
+        let directory = "本轮验收 有空格";
+        let filename = "恢复 中文.txt";
+        let remote = format!("/{directory}/{filename}");
+        let physical = root.join("rw").join(directory).join(filename);
+        let mut checks = Vec::<serde_json::Value>::new();
+        let mut record = |id: &str, evidence: serde_json::Value| {
+            checks.push(serde_json::json!({"id":id,"passed":true,"evidence":evidence}));
+        };
+        record(
+            "isolated-real-home-and-physical-root",
+            serde_json::json!({"phase":phase}),
+        );
+        let provider_config = |id: &str, endpoint: &str| {
+            let base_url = text(endpoint);
+            let url = url::Url::parse(&base_url).unwrap();
+            assert_eq!(url.scheme(), "http");
+            assert_eq!(url.host_str(), Some("127.0.0.1"));
+            assert!(url.port().is_some());
+            assert!(
+                url.username().is_empty()
+                    && url.password().is_none()
+                    && url.query().is_none()
+                    && url.fragment().is_none()
+            );
+            StorageProviderConfig {
+                id: id.into(),
+                label: "真实本地 WebDAV 验收".into(),
+                kind: "webdav".into(),
+                base_url,
+                username: Some(text("username")),
+                password: Some(text("password")),
+                enabled: true,
+            }
+        };
+        let mut rw = provider_config("review-rw", "readWriteUrl");
+        let ro = provider_config("review-ro", "readOnlyUrl");
+        if phase == "first" {
+            assert!(storage_providers_list().unwrap().is_empty());
+            storage_provider_upsert(rw.clone()).unwrap();
+            storage_provider_upsert(ro.clone()).unwrap();
+            let mut unauthorized = rw.clone();
+            unauthorized.id = "review-unauthorized".into();
+            unauthorized.password = Some("deliberately-wrong".into());
+            storage_provider_upsert(unauthorized).unwrap();
+            assert_eq!(storage_providers_list().unwrap().len(), 3);
+            assert!(storage_providers_list()
+                .unwrap()
+                .iter()
+                .all(|entry| entry.password.as_deref() == Some("••••")));
+            record(
+                "provider-create-persist-and-mask",
+                serde_json::json!({"providers":3}),
+            );
+            rw.password = Some("••••".into());
+            storage_provider_upsert(rw.clone()).unwrap();
+            storage_provider_test(rw.id.clone()).await.unwrap();
+            storage_provider_test(ro.id.clone()).await.unwrap();
+            record(
+                "real-propfind-connect-and-masked-password-preservation",
+                serde_json::json!({"shares":2}),
+            );
+            let entries = storage_list(rw.id.clone(), "/".into()).await.unwrap();
+            let seed = entries
+                .iter()
+                .find(|entry| entry.name == seed_name)
+                .expect("Chinese spaced seed must be listed");
+            assert_eq!(seed.path, format!("/{seed_name}"));
+            assert!(!seed.is_dir);
+            assert_eq!(seed.size, Some(seed_content.len() as u64));
+            record(
+                "real-propfind-xml-and-chinese-spaced-path",
+                serde_json::json!({"size":seed.size}),
+            );
+            assert_eq!(
+                storage_read_text(rw.id.clone(), format!("/{seed_name}"))
+                    .await
+                    .unwrap(),
+                seed_content
+            );
+            assert_eq!(
+                storage_read_text(ro.id.clone(), format!("/{seed_name}"))
+                    .await
+                    .unwrap(),
+                seed_content
+            );
+            record(
+                "real-get-utf8-from-both-shares",
+                serde_json::json!({"size":seed_content.len()}),
+            );
+            let unauthorized = storage_provider_test("review-unauthorized".into())
+                .await
+                .unwrap_err();
+            assert!(unauthorized.contains("401"));
+            record(
+                "wrong-credential-401-is-error",
+                serde_json::json!({"status":401}),
+            );
+            storage_make_dir(rw.id.clone(), format!("/{directory}"))
+                .await
+                .unwrap();
+            assert!(physical.parent().unwrap().is_dir());
+            record(
+                "real-mkcol-physical-directory",
+                serde_json::json!({"name":directory}),
+            );
+            storage_write_text(rw.id.clone(), remote.clone(), marker.into())
+                .await
+                .unwrap();
+            let bytes = std::fs::read(&physical).unwrap();
+            assert_eq!(bytes, marker.as_bytes());
+            assert_eq!(
+                storage_read_text(rw.id.clone(), remote.clone())
+                    .await
+                    .unwrap(),
+                marker
+            );
+            record(
+                "real-put-physical-bytes-and-get-roundtrip",
+                serde_json::json!({"size":bytes.len(),"sha256":format!("{:x}",Sha256::digest(&bytes))}),
+            );
+            let entries = storage_list(rw.id.clone(), format!("/{directory}"))
+                .await
+                .unwrap();
+            assert!(entries
+                .iter()
+                .any(|entry| entry.path == remote && entry.name == filename));
+            record(
+                "nested-directory-list-keeps-relative-path",
+                serde_json::json!({"path":remote}),
+            );
+            let denied = storage_write_text(
+                ro.id.clone(),
+                format!("/{seed_name}"),
+                "must not be written".into(),
+            )
+            .await
+            .unwrap_err();
+            assert!(denied.contains("403"));
+            assert_eq!(
+                std::fs::read(root.join("ro").join(&seed_name)).unwrap(),
+                seed_content.as_bytes()
+            );
+            record(
+                "read-only-put-403-preserves-file",
+                serde_json::json!({"status":403}),
+            );
+            assert!(storage_delete(rw.id.clone(), "/".into())
+                .await
+                .unwrap_err()
+                .contains("根目录"));
+            assert!(storage_write_text(
+                rw.id.clone(),
+                "/../escape.txt".into(),
+                "must not be written".into()
+            )
+            .await
+            .is_err());
+            assert!(!run.join("escape.txt").exists());
+            record("root-delete-and-traversal-refused", serde_json::json!({}));
+            rw.enabled = false;
+            storage_provider_upsert(rw.clone()).unwrap();
+            assert!(storage_read_text(rw.id.clone(), remote.clone())
+                .await
+                .unwrap_err()
+                .contains("未启用"));
+            assert_eq!(std::fs::read(&physical).unwrap(), marker.as_bytes());
+            record(
+                "disabled-provider-blocks-use-preserves-file",
+                serde_json::json!({}),
+            );
+            rw.enabled = true;
+            storage_provider_upsert(rw.clone()).unwrap();
+            assert_eq!(
+                storage_read_text(rw.id.clone(), remote.clone())
+                    .await
+                    .unwrap(),
+                marker
+            );
+            record(
+                "reenable-recovers-with-preserved-secret",
+                serde_json::json!({}),
+            );
+            assert!(storage_read_text(rw.id.clone(), "/不存在 中文.txt".into())
+                .await
+                .unwrap_err()
+                .contains("404"));
+            record(
+                "missing-file-404-is-error",
+                serde_json::json!({"status":404}),
+            );
+            let scratch = format!("/{directory}/只删本轮文件.txt");
+            storage_write_text(rw.id.clone(), scratch.clone(), "scratch".into())
+                .await
+                .unwrap();
+            storage_delete(rw.id.clone(), scratch).await.unwrap();
+            assert!(!physical.parent().unwrap().join("只删本轮文件.txt").exists());
+            assert_eq!(std::fs::read(&physical).unwrap(), marker.as_bytes());
+            record("real-delete-own-scratch-only", serde_json::json!({}));
+            assert!(config_path().is_file());
+            assert_eq!(read_store().unwrap().providers.len(), 3);
+            record(
+                "provider-config-and-files-left-for-fresh-process",
+                serde_json::json!({"providers":3}),
+            );
+        } else {
+            assert_eq!(storage_providers_list().unwrap().len(), 3);
+            storage_provider_test(rw.id.clone()).await.unwrap();
+            assert_eq!(
+                storage_read_text(rw.id.clone(), remote.clone())
+                    .await
+                    .unwrap(),
+                marker
+            );
+            assert_eq!(std::fs::read(&physical).unwrap(), marker.as_bytes());
+            assert!(storage_list(rw.id.clone(), format!("/{directory}"))
+                .await
+                .unwrap()
+                .iter()
+                .any(|entry| entry.path == remote));
+            record(
+                "fresh-rust-process-reloads-provider-and-chinese-file",
+                serde_json::json!({"path":remote,"size":marker.len()}),
+            );
+            for id in ["review-unauthorized", "review-ro", "review-rw"] {
+                storage_provider_remove(id.into()).unwrap();
+            }
+            assert!(storage_providers_list().unwrap().is_empty());
+            let revoked = storage_read_text(rw.id.clone(), remote.clone())
+                .await
+                .unwrap_err();
+            assert!(revoked.contains("不存在或未启用"));
+            assert_eq!(std::fs::read(&physical).unwrap(), marker.as_bytes());
+            assert!(read_store().unwrap().providers.is_empty());
+            record(
+                "revocation-persists-blocks-read-does-not-delete-remote-file",
+                serde_json::json!({"providers":0}),
+            );
+        }
+        for share in ["rw", "ro"] {
+            assert_eq!(
+                std::fs::read(root.join(share).join(&seed_name)).unwrap(),
+                seed_content.as_bytes()
+            );
+        }
+        record(
+            "original-synthetic-seeds-preserved",
+            serde_json::json!({"shares":2}),
+        );
+        let evidence = serde_json::json!({"passed":true,"phase":phase,"layer":"real-production-rust-storage-commands",
+        "checks":checks,"transferDialogVerified":false,"nativeCloudPanelVerified":false});
+        std::fs::write(output, serde_json::to_vec_pretty(&evidence).unwrap()).unwrap();
     }
 }

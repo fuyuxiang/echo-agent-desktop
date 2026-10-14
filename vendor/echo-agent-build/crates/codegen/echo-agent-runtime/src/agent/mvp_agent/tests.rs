@@ -1631,6 +1631,84 @@ async fn load_effort_precedence_prefers_meta_hint_over_persisted() {
         Some(ReasoningEffort::Low),
     );
 }
+/// Reapplying the current model after loading an automation profile must
+/// preserve that profile, while changing to an incompatible model is gated.
+async fn automation_profile_model_request(active: &'static str, requested: &str, required_agent: &str) -> Result<bool, acp::Error> {
+    use crate::agent::config::{EndpointsConfig, ModelEntry};
+    let agent = build_minimal_agent_for_tests();
+    for id in ["automation-model", "different-model"] {
+        let mut entry = ModelEntry::fallback(id, &EndpointsConfig::default());
+        entry.info.agent_type = required_agent.to_owned();
+        agent.models_manager.insert_test_entry(id, entry);
+    }
+    let sid = acp::SessionId::new("automation-model-restore");
+    let (mut handle, _cmd_tx, mut cmd_rx) = make_live_session_handle(&sid, None);
+    handle.model_id = acp::ModelId::new("automation-model");
+    handle.agent_name = active.to_owned();
+    handle.session_default_agent_profile = Some("echo-agent-build-plan".to_owned());
+    handle.signals_handle.restore_signals(crate::session::signals::SessionSignals {
+        turn_count: 1,
+        ..Default::default()
+    });
+    let (observed_tx, mut observed_rx) = tokio::sync::mpsc::unbounded_channel();
+    let actor = tokio::spawn(async move {
+        while let Some(cmd) = cmd_rx.recv().await {
+            match cmd {
+                TestSessionCommand::GetActiveAgent { responds_to } => {
+                    let _ = responds_to.send(Some(active.to_owned()));
+                }
+                TestSessionCommand::SetSessionModel { sampling_config, skip_prompt_rewrite, responds_to, .. } => {
+                    let _ = observed_tx.send(skip_prompt_rewrite);
+                    let _ = responds_to.send(Ok(acp::ModelId::new(sampling_config.model)));
+                }
+                TestSessionCommand::RebuildAgentForDefinition { .. } => panic!("Must preserve the active automation profile"),
+                _ => {}
+            }
+        }
+    });
+    agent.insert_resident(&sid, handle);
+    let response = crate::agent::handlers::model_switch::apply(
+        &agent, acp::SetSessionModelRequest::new(sid.clone(), acp::ModelId::new(requested)), None,
+    ).await;
+    let result = match response {
+        Ok(_) => {
+            assert_eq!(agent.resident_handle(&sid).unwrap().agent_name, active);
+            assert_eq!(agent.resident_handle(&sid).unwrap().model_id.0.as_ref(), requested);
+            Ok(observed_rx.try_recv().expect("The model update must reach the actor"))
+        }
+        Err(error) => {
+            assert_eq!(agent.resident_handle(&sid).unwrap().model_id.0.as_ref(), "automation-model");
+            assert!(observed_rx.try_recv().is_err(), "Rejected model must not reach the actor");
+            Err(error)
+        }
+    };
+    actor.abort();
+    result
+}
+
+#[tokio::test]
+async fn automation_profile_model_restore_preserves_same_model_and_prompt() {
+    for profile in ["browser-use", "computer-use"] {
+        assert!(automation_profile_model_request(profile, "automation-model", "echo-agent-build-plan").await
+            .expect("Reapplying the current model must not reject the automation profile"));
+    }
+}
+
+#[tokio::test]
+async fn automation_profile_model_change_still_rejects_incompatible_harness() {
+    for profile in ["browser-use", "computer-use"] {
+        let error = automation_profile_model_request(profile, "different-model", "echo-agent-build-plan").await.unwrap_err();
+        assert!(error.message.contains("requires agent"));
+    }
+}
+
+#[tokio::test]
+async fn automation_profile_model_restore_still_rejects_new_strict_harness_requirement() {
+    for profile in ["browser-use", "computer-use"] {
+        let error = automation_profile_model_request(profile, "automation-model", "codex").await.unwrap_err();
+        assert!(error.message.contains("requires agent"));
+    }
+}
 /// A session persisted under a routing *slug* (not the catalog map key) must
 /// still get reasoning modes and a selected model from
 /// `session_config_options` — the id is resolved to the catalog key before

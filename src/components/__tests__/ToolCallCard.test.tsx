@@ -19,6 +19,33 @@ const base: ToolCallView = {
 };
 
 describe("ToolCallCard", () => {
+  it.each(["use_tool", "echoagent-office__office_create"])("间接 Office 调用 %s 展示实际文档标题", (title) => {
+    render(<ToolCallCard tc={{
+      ...base,
+      title,
+      kind: "use_tool",
+      status: "in_progress",
+      rawInput: {
+        variant: "UseTool",
+        tool_name: "echoagent-office__office_create",
+        tool_input: { title: "原生Agent办公验收", format: "docx", markdown: "中文正文" },
+      },
+    }} />);
+    expect(screen.getByText("文档")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "办公文档 生成 原生Agent办公验收 运行中" })).toBeInTheDocument();
+  });
+
+  it("间接非 Office 工具不因嵌套标题而显示文档", () => {
+    render(<ToolCallCard tc={{
+      ...base,
+      title: "use_tool",
+      kind: "use_tool",
+      rawInput: { tool_name: "other__create", tool_input: { title: "季度报告", format: "docx" } },
+    }} />);
+    expect(screen.queryByText("文档")).not.toBeInTheDocument();
+    expect(screen.queryByText("生成 季度报告")).not.toBeInTheDocument();
+  });
+
   it("以文档成果展示内置 Office 调用", () => {
     const onOpenPath = vi.fn();
     const officeCall: ToolCallView = {

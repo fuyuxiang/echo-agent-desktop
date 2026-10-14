@@ -313,7 +313,7 @@ fn candidate_connector_roots() -> Vec<PathBuf> {
     }
     crate::paths::push_unique_path(&mut out, crate::paths::connectors_marketplace_dir());
 
-    if let Some(h) = dirs::home_dir() {
+    if let Some(h) = crate::paths::legacy_catalog_user_home() {
         crate::paths::push_unique_path(
             &mut out,
             h.join(".echo-agent").join("connectors-marketplace"),
@@ -338,7 +338,7 @@ fn candidate_builtin_roots() -> Vec<PathBuf> {
     }
     crate::paths::push_unique_path(&mut out, crate::paths::builtin_skills_dir());
 
-    if let Some(h) = dirs::home_dir() {
+    if let Some(h) = crate::paths::legacy_catalog_user_home() {
         crate::paths::push_unique_path(
             &mut out,
             h.join(".echo-agent")

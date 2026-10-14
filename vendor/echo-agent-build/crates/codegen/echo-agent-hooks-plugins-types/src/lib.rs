@@ -608,12 +608,14 @@ pub enum PluginsAction {
         source: String,
     },
     Uninstall {
+        #[serde(alias = "pluginId")]
         plugin_id: String,
         /// If true, skip multi-plugin repo confirmation.
         #[serde(default)]
         confirmed: bool,
     },
     Update {
+        #[serde(alias = "pluginId")]
         plugin_id: Option<String>,
     },
     Add {
@@ -624,10 +626,12 @@ pub enum PluginsAction {
     },
     /// Enable a disabled plugin by ID.
     Enable {
+        #[serde(alias = "pluginId")]
         plugin_id: String,
     },
     /// Disable a plugin by ID (adds to disabled list in config).
     Disable {
+        #[serde(alias = "pluginId")]
         plugin_id: String,
     },
 }
@@ -1238,24 +1242,31 @@ pub enum MarketplaceAction {
     Refresh {
         /// If set, only refresh this source (by canonical URL/path).
         #[serde(default)]
+        #[serde(alias = "sourceUrlOrPath")]
         source_url_or_path: Option<String>,
     },
     /// Install a plugin from a marketplace source.
     Install {
         /// Canonical source identity (git URL or local path).
+        #[serde(alias = "sourceUrlOrPath")]
         source_url_or_path: String,
+        #[serde(alias = "pluginRelativePath")]
         plugin_relative_path: String,
     },
     /// Update an installed marketplace plugin to the latest version.
     Update {
         /// Canonical source identity (git URL or local path).
+        #[serde(alias = "sourceUrlOrPath")]
         source_url_or_path: String,
+        #[serde(alias = "pluginRelativePath")]
         plugin_relative_path: String,
     },
     /// Uninstall a marketplace-installed plugin.
     Uninstall {
         /// Canonical source identity.
+        #[serde(alias = "sourceUrlOrPath")]
         source_url_or_path: String,
+        #[serde(alias = "pluginRelativePath")]
         plugin_relative_path: String,
     },
     /// Add a new marketplace source (git URL).
@@ -1266,6 +1277,60 @@ pub enum MarketplaceAction {
     /// Remove a marketplace source.
     RemoveSource {
         /// Canonical source identity (git URL or local path).
+        #[serde(alias = "sourceUrlOrPath")]
         source_url_or_path: String,
     },
+}
+
+#[cfg(test)]
+mod marketplace_desktop_contract_tests {
+    use super::*;
+
+    #[test]
+    fn marketplace_desktop_camel_case_actions_keep_legacy_wire_compatibility() {
+        let source = "https://127.0.0.1:4443/review-market.git";
+        for kind in ["install", "update", "uninstall", "remove_source", "refresh"] {
+            let mut desktop = serde_json::json!({"type":kind,"sourceUrlOrPath":source});
+            let mut legacy = serde_json::json!({"type":kind,"source_url_or_path":source});
+            if matches!(kind, "install" | "update" | "uninstall") {
+                desktop["pluginRelativePath"] = "plugins/review-plugin".into();
+                legacy["plugin_relative_path"] = "plugins/review-plugin".into();
+            }
+            let actual: MarketplaceAction = serde_json::from_value(desktop)
+                .unwrap_or_else(|error| panic!("Actual desktop {kind} action rejected: {error}"));
+            let previous: MarketplaceAction = serde_json::from_value(legacy).unwrap();
+            assert_eq!(
+                actual, previous,
+                "Desktop source selection changed for {kind}"
+            );
+            let serialized = serde_json::to_value(actual).unwrap();
+            assert_eq!(serialized["source_url_or_path"], source);
+            assert!(
+                serialized.get("sourceUrlOrPath").is_none(),
+                "Legacy Runtime wire changed"
+            );
+        }
+    }
+
+    #[test]
+    fn plugins_desktop_camel_case_actions_keep_legacy_wire_compatibility() {
+        for kind in ["enable", "disable", "update", "uninstall"] {
+            let desktop = serde_json::json!({"type":kind,"pluginId":"user/01234567/review-plugin"});
+            let legacy = serde_json::json!({"type":kind,"plugin_id":"user/01234567/review-plugin"});
+            let actual: PluginsAction = serde_json::from_value(desktop).unwrap();
+            let previous: PluginsAction = serde_json::from_value(legacy).unwrap();
+            assert_eq!(actual, previous);
+            let value = serde_json::to_value(actual).unwrap();
+            assert_eq!(value["plugin_id"], "user/01234567/review-plugin");
+            assert!(value.get("pluginId").is_none());
+        }
+        assert!(
+            serde_json::from_value::<PluginsAction>(
+                serde_json::json!({"type":"enable","pluginId":"a","plugin_id":"b"})
+            )
+            .is_err(),
+            "Conflicting desktop/legacy IDs must not select an arbitrary target"
+        );
+        assert!(serde_json::from_value::<MarketplaceAction>(serde_json::json!({"type":"remove_source","sourceUrlOrPath":"a","source_url_or_path":"b"})).is_err());
+    }
 }

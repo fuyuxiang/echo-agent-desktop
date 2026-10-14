@@ -358,10 +358,7 @@ pub async fn save_attachment_blob(
     mime: String,
     suggested_name: Option<String>,
 ) -> Result<String, String> {
-    use tauri::Manager;
-    let dir = app
-        .path()
-        .app_data_dir()
+    let dir = crate::paths::desktop_data_dir(&app)
         .map_err(|error| format!("解析应用数据目录失败：{error}"))?
         .join("clipboard-images");
     let path = save_blob(&dir, &bytes, &mime, suggested_name.as_deref())?;
@@ -384,11 +381,7 @@ pub async fn discard_attachment_blob(
     access: tauri::State<'_, crate::shell_fs::FilesystemAccess>,
     path: String,
 ) -> Result<(), String> {
-    use tauri::Manager;
-
-    let dir = app
-        .path()
-        .app_data_dir()
+    let dir = crate::paths::desktop_data_dir(&app)
         .map_err(|error| format!("解析应用数据目录失败：{error}"))?
         .join("clipboard-images");
     let raw = PathBuf::from(path);

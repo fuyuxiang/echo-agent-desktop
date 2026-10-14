@@ -35,6 +35,7 @@ interface AutomationSessionState {
   status: AutomationStatus | null;
   approvals: AutomationApproval[];
   error: string | null;
+  isActive: () => boolean;
   refresh: () => Promise<void>;
   setStatus: (status: AutomationStatus) => void;
   removeApproval: (requestId: string) => void;
@@ -48,6 +49,28 @@ function useAutomationSession(sessionId: string | null): AutomationSessionState 
   const [status, setStatus] = useState<AutomationStatus | null>(null);
   const [approvals, setApprovals] = useState<AutomationApproval[]>([]);
   const [error, setError] = useState<string | null>(null);
+  const active = useRef(false);
+  const statusRevision = useRef(0);
+  const approvalRevision = useRef(0);
+  const refreshRevision = useRef(0);
+  const closedRequests = useRef(new Set<string>());
+  const isActive = useCallback(() => active.current, []);
+
+  const applyStatus = useCallback((next: AutomationStatus) => {
+    if (!active.current || next.sessionId !== sessionId) return;
+    statusRevision.current += 1;
+    setStatus(next);
+  }, [sessionId]);
+
+  const removeApproval = useCallback((requestId: string) => {
+    approvalRevision.current += 1;
+    closedRequests.current.add(requestId);
+    // Retain a bounded tombstone set for reordered native events.
+    if (closedRequests.current.size > 256) {
+      closedRequests.current.delete(closedRequests.current.values().next().value!);
+    }
+    setApprovals((current) => current.filter((item) => item.requestId !== requestId));
+  }, []);
 
   const refresh = useCallback(async () => {
     if (!sessionId) {
@@ -56,45 +79,59 @@ function useAutomationSession(sessionId: string | null): AutomationSessionState 
       setError(null);
       return;
     }
+    const revision = ++refreshRevision.current;
+    const statusAtStart = statusRevision.current;
+    const approvalsAtStart = approvalRevision.current;
     const [nextStatus, nextApprovals] = await Promise.all([
       automationStatus(sessionId),
       automationPendingApprovals(sessionId),
     ]);
-    setStatus(nextStatus);
-    setApprovals(nextApprovals);
+    if (!active.current || revision !== refreshRevision.current) return;
+    if (statusRevision.current === statusAtStart && nextStatus.sessionId === sessionId) setStatus(nextStatus);
+    const pending = nextApprovals.filter((item) => item.sessionId === sessionId && !closedRequests.current.has(item.requestId));
+    setApprovals((current) => approvalRevision.current === approvalsAtStart ? pending : [
+      ...pending,
+      ...current.filter((item) => !pending.some((entry) => entry.requestId === item.requestId) && !closedRequests.current.has(item.requestId)),
+    ]);
     setError(null);
   }, [sessionId]);
 
   useEffect(() => {
     let disposed = false;
     const unlisteners: UnlistenFn[] = [];
+    active.current = true;
     setStatus(null);
     setApprovals([]);
-    if (!hasTauriRuntime()) return;
+    if (!hasTauriRuntime()) return () => { active.current = false; };
 
     const setup = async () => {
       try {
-        const registered = await Promise.all([
+        const registered = await Promise.allSettled([
           onAutomationStatus((next) => {
-            if (!disposed && next.sessionId === sessionId) setStatus(next);
+            if (!disposed) applyStatus(next);
           }),
           onAutomationApproval((request) => {
             if (disposed || request.sessionId !== sessionId) return;
+            if (closedRequests.current.has(request.requestId)) return;
+            approvalRevision.current += 1;
             setApprovals((current) => current.some((item) => item.requestId === request.requestId)
               ? current
               : [...current, request]);
           }),
           onAutomationApprovalClosed((event) => {
             if (!disposed && event.sessionId === sessionId) {
-              setApprovals((current) => current.filter((item) => item.requestId !== event.requestId));
+              removeApproval(event.requestId);
             }
           }),
         ]);
-        if (disposed) {
-          registered.forEach((unlisten) => unlisten());
+        const listeners = registered.flatMap((result) => result.status === "fulfilled" ? [result.value] : []);
+        const failed = registered.find((result) => result.status === "rejected");
+        if (disposed || failed) {
+          listeners.forEach((unlisten) => unlisten());
+          if (failed?.status === "rejected") throw failed.reason;
           return;
         }
-        unlisteners.push(...registered);
+        unlisteners.push(...listeners);
         await refresh();
       } catch (setupError) {
         // Browser preview and tests do not expose Tauri IPC. The controls stay
@@ -105,30 +142,29 @@ function useAutomationSession(sessionId: string | null): AutomationSessionState 
     void setup();
     return () => {
       disposed = true;
+      active.current = false;
       unlisteners.forEach((unlisten) => unlisten());
     };
-  }, [refresh, sessionId]);
+  }, [applyStatus, refresh, removeApproval, sessionId]);
 
   useEffect(() => {
     if (!sessionId || !hasTauriRuntime()) return;
+    let disposed = false;
     const refreshIfVisible = () => {
       if (document.visibilityState === "visible") {
-        void refresh().catch((refreshError) => setError(friendlyError(refreshError)));
+        void refresh().catch((refreshError) => { if (!disposed) setError(friendlyError(refreshError)); });
       }
     };
     window.addEventListener("focus", refreshIfVisible);
     document.addEventListener("visibilitychange", refreshIfVisible);
     return () => {
+      disposed = true;
       window.removeEventListener("focus", refreshIfVisible);
       document.removeEventListener("visibilitychange", refreshIfVisible);
     };
   }, [refresh, sessionId]);
 
-  const removeApproval = useCallback((requestId: string) => {
-    setApprovals((current) => current.filter((item) => item.requestId !== requestId));
-  }, []);
-
-  return { status, approvals, error, refresh, setStatus, removeApproval };
+  return { status, approvals, error, isActive, refresh, setStatus: applyStatus, removeApproval };
 }
 
 function selectedAutomationMode(mode: AgentMode): AutomationMode {
@@ -171,12 +207,13 @@ function AutomationToolbar({
     setBusy(true);
     try {
       const next = await operation();
+      if (!automation.isActive()) return;
       if (next) automation.setStatus(next);
       if (success) onToast?.(success);
     } catch (error) {
-      onToast?.(friendlyError(error));
+      if (automation.isActive()) onToast?.(friendlyError(error));
     } finally {
-      setBusy(false);
+      if (automation.isActive()) setBusy(false);
     }
   }, [automation, onToast]);
 
@@ -328,12 +365,13 @@ function AutomationApprovalCard({
     setResolving(true);
     try {
       const found = await automationResolveApproval(request.requestId, approved);
+      if (!automation.isActive()) return;
       automation.removeApproval(request.requestId);
       if (!found) onToast?.("该确认已超时或被处理");
     } catch (error) {
-      onToast?.(`无法回复安全确认：${friendlyError(error)}`);
+      if (automation.isActive()) onToast?.(`无法回复安全确认：${friendlyError(error)}`);
     } finally {
-      setResolving(false);
+      if (automation.isActive()) setResolving(false);
     }
   };
 
@@ -362,9 +400,15 @@ function AutomationApprovalCard({
   );
 }
 
-export function AutomationControls(props: AutomationControlsProps) {
+function SessionAutomationControls(props: AutomationControlsProps) {
   const automation = useAutomationSession(props.sessionId);
   return props.placement === "toolbar"
     ? <AutomationToolbar {...props} automation={automation} />
     : <AutomationApprovalCard automation={automation} onToast={props.onToast} />;
+}
+
+export function AutomationControls(props: AutomationControlsProps) {
+  // A toolbar operation or IPC query belongs to the session that started it.
+  // Remounting also prevents its busy/approval state leaking into another task.
+  return <SessionAutomationControls key={props.sessionId ?? "none"} {...props} />;
 }

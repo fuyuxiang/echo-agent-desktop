@@ -4,6 +4,7 @@
 //! created before the namespace migration, then configures the embedded
 //! runtime to use the EchoAgent directory exclusively.
 
+use std::ffi::OsString;
 use std::fs;
 use std::io::{self, Write};
 use std::path::{Path, PathBuf};
@@ -24,6 +25,45 @@ const MIGRATION_MARKER: &str = ".legacy-data-migrated";
 const LEGACY_AUTH_FILE: &str = "auth.json";
 const EXPERTS_MARKETPLACE_DIR_NAME: &str = "experts-marketplace";
 const CONNECTORS_MARKETPLACE_DIR_NAME: &str = "connectors-marketplace";
+
+/// Parse startup options without converting filesystem arguments to UTF-8.
+/// Other desktop/platform arguments are left for their existing handlers.
+pub(crate) fn parse_data_home_args(
+    args: impl IntoIterator<Item = OsString>,
+) -> Result<Option<PathBuf>, String> {
+    let mut args = args.into_iter();
+    let mut home = None;
+    while let Some(arg) = args.next() {
+        if arg.as_encoded_bytes().starts_with(b"--data-home=") {
+            return Err("请使用 --data-home <绝对路径> 指定数据目录".into());
+        }
+        if arg != "--data-home" {
+            continue;
+        }
+        if home.is_some() {
+            return Err("--data-home 不能重复指定".into());
+        }
+        let value = args.next().ok_or("--data-home 缺少数据目录")?;
+        if value.as_encoded_bytes().contains(&0) {
+            return Err("数据目录不能包含空字符".into());
+        }
+        let path = PathBuf::from(value);
+        if !path.is_absolute() {
+            return Err("--data-home 必须使用非空的绝对路径".into());
+        }
+        reject_legacy_workbuddy_path(&path)?;
+        home = Some(path);
+    }
+    Ok(home)
+}
+
+pub(crate) fn apply_startup_data_home() -> Result<(), String> {
+    if let Some(home) = parse_data_home_args(std::env::args_os().skip(1))? {
+        // Called before logging, Runtime initialization or background threads.
+        std::env::set_var(HOME_ENV, home);
+    }
+    Ok(())
+}
 
 /// Reject data roots owned by the retired WorkBuddy integration.
 ///
@@ -58,10 +98,58 @@ pub fn echo_agent_home_dir() -> PathBuf {
         })
 }
 
+pub(crate) fn redirected_data_home() -> Option<PathBuf> {
+    let root = echo_agent_home_dir();
+    let default = dirs::home_dir().map(|home| home.join(HOME_DIR_NAME));
+    is_redirected_data_home(&root, default.as_deref()).then_some(root)
+}
+
+pub(crate) fn is_redirected_data_home(root: &Path, default: Option<&Path>) -> bool {
+    let identity = path_identity(root);
+    let default = default.map(path_identity);
+    default.as_deref() != Some(identity.as_path())
+}
+
+/// Automatic discovery of retired catalogs belongs to the default profile.
+/// A redirected profile may still select a source explicitly via the catalog
+/// settings/environment, but must not silently import another profile's data.
+pub(crate) fn legacy_catalog_user_home() -> Option<PathBuf> {
+    legacy_catalog_home_for(&echo_agent_home_dir(), dirs::home_dir().as_deref())
+}
+
+fn legacy_catalog_home_for(data_home: &Path, user_home: Option<&Path>) -> Option<PathBuf> {
+    user_home
+        .filter(|home| path_identity(data_home) == path_identity(&home.join(HOME_DIR_NAME)))
+        .map(Path::to_path_buf)
+}
+
+fn path_identity(path: &Path) -> PathBuf {
+    path.canonicalize().unwrap_or_else(|_| path.to_path_buf())
+}
+
+/// Desktop sidecars follow an explicitly redirected profile while existing
+/// ordinary installations retain their platform application-data paths.
+pub(crate) fn desktop_data_dir(app: &tauri::AppHandle) -> Result<PathBuf, String> {
+    use tauri::Manager;
+    if let Some(home) = redirected_data_home() {
+        return Ok(home.join("desktop"));
+    }
+    app.path().app_data_dir().map_err(|error| error.to_string())
+}
+
 /// Default user-visible workspace for sessions created without an explicit
 /// folder selection. Keeping this in one dedicated directory avoids treating
 /// the user's entire home directory as an implicit filesystem capability.
 pub(crate) fn default_workspace_dir() -> Result<PathBuf, String> {
+    if let Some(workspace) =
+        redirected_default_workspace(&echo_agent_home_dir(), dirs::home_dir().as_deref())
+    {
+        fs::create_dir_all(&workspace)
+            .map_err(|error| format!("创建隔离工作区 {} 失败：{error}", workspace.display()))?;
+        return workspace
+            .canonicalize()
+            .map_err(|error| format!("无法解析隔离工作区 {}：{error}", workspace.display()));
+    }
     let mut bases = Vec::new();
     if let Some(documents) = dirs::document_dir() {
         push_unique_path(&mut bases, documents);
@@ -94,6 +182,15 @@ pub(crate) fn default_workspace_dir() -> Result<PathBuf, String> {
         }
     }
     Err(last_error.unwrap_or_else(|| "无法创建默认工作区".into()))
+}
+
+fn redirected_default_workspace(data_home: &Path, user_home: Option<&Path>) -> Option<PathBuf> {
+    // initialize_runtime_home also sets ECHO_AGENT_HOME for ordinary launches.
+    // Compare the resolved root rather than treating mere env presence as an
+    // override. Redirected launches must not create a real Documents workspace.
+    let default_home = user_home.map(|home| path_identity(&home.join(HOME_DIR_NAME)));
+    (default_home.as_deref() != Some(path_identity(data_home).as_path()))
+        .then(|| data_home.join("workspaces").join("default"))
 }
 
 fn default_workspace_path(base: &Path) -> PathBuf {
@@ -148,15 +245,11 @@ pub(crate) fn push_unique_path(paths: &mut Vec<PathBuf>, path: PathBuf) {
     }
 }
 
-fn legacy_home_dir() -> PathBuf {
-    std::env::var_os(LEGACY_HOME_ENV)
+fn legacy_home_dir() -> Option<PathBuf> {
+    let explicit = std::env::var_os(LEGACY_HOME_ENV)
         .filter(|value| !value.is_empty())
-        .map(PathBuf::from)
-        .unwrap_or_else(|| {
-            dirs::home_dir()
-                .unwrap_or_else(|| PathBuf::from("."))
-                .join(LEGACY_HOME_DIR_NAME)
-        })
+        .map(PathBuf::from);
+    explicit.or_else(|| legacy_catalog_user_home().map(|home| home.join(LEGACY_HOME_DIR_NAME)))
 }
 
 /// Configure the embedded engine to use EchoAgent's home and import legacy
@@ -185,7 +278,9 @@ pub fn initialize_runtime_home() -> Result<PathBuf, String> {
     harden_private_dir(&target)?;
 
     let marker = target.join(MIGRATION_MARKER);
-    if legacy != target && legacy.is_dir() && !marker.exists() {
+    if let Some(legacy) =
+        legacy.filter(|legacy| legacy != &target && legacy.is_dir() && !marker.exists())
+    {
         merge_missing(&legacy, &target).map_err(|e| format!("migrate legacy agent data: {e}"))?;
         fs::write(
             &marker,
@@ -213,7 +308,7 @@ pub fn initialize_runtime_home() -> Result<PathBuf, String> {
 }
 
 fn migrate_legacy_catalog_roots(data_home: &Path) {
-    let Some(user_home) = dirs::home_dir() else {
+    let Some(user_home) = legacy_catalog_user_home() else {
         return;
     };
     let roots = catalog_roots(data_home);
@@ -443,11 +538,60 @@ fn copy_file_if_missing(source: &Path, destination: &Path) -> io::Result<()> {
 #[cfg(test)]
 mod tests {
     use super::{
-        catalog_roots, default_workspace_path, merge_missing, migrate_catalog_dir,
+        catalog_roots, default_workspace_path, legacy_catalog_home_for, merge_missing,
+        migrate_catalog_dir, parse_data_home_args, redirected_default_workspace,
         reject_legacy_workbuddy_path, write_private_file,
     };
     use std::fs;
     use std::path::Path;
+
+    #[test]
+    fn data_home_cli_preserves_chinese_and_spaces_as_one_argument() {
+        let directory = tempfile::tempdir().unwrap();
+        let home = directory.path().join("中文 数据目录");
+        assert_eq!(
+            parse_data_home_args([
+                "--background".into(),
+                "--data-home".into(),
+                home.clone().into_os_string(),
+            ])
+            .unwrap(),
+            Some(home)
+        );
+        assert_eq!(parse_data_home_args(["--background".into()]).unwrap(), None);
+    }
+
+    #[test]
+    fn data_home_cli_rejects_missing_relative_duplicate_or_malformed_paths() {
+        let directory = tempfile::tempdir().unwrap();
+        let absolute = directory.path().as_os_str().to_os_string();
+        for args in [
+            vec!["--data-home".into()],
+            vec!["--data-home".into(), "relative/path".into()],
+            vec!["--data-home".into(), "".into()],
+            vec![
+                "--data-home".into(),
+                absolute.clone(),
+                "--data-home".into(),
+                absolute.clone(),
+            ],
+            vec!["--data-home=".into()],
+            vec!["--data-home".into(), "\0".into()],
+        ] {
+            assert!(parse_data_home_args(args).is_err());
+        }
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn data_home_cli_does_not_panic_on_non_utf8_filesystem_arguments() {
+        use std::os::unix::ffi::OsStringExt;
+        let value = std::ffi::OsString::from_vec(b"/tmp/echo-\xff".to_vec());
+        assert_eq!(
+            parse_data_home_args(["--data-home".into(), value.clone()]).unwrap(),
+            Some(value.into())
+        );
+    }
 
     #[test]
     fn rejects_legacy_workbuddy_paths_on_both_platforms() {
@@ -497,6 +641,61 @@ mod tests {
         let workspace = default_workspace_path(user_documents);
         assert_eq!(workspace, user_documents.join("EchoAgent"));
         assert_ne!(workspace, user_documents);
+    }
+
+    #[test]
+    fn redirected_home_keeps_default_workspace_inside_the_data_root() {
+        let home = std::path::Path::new("/users/reviewer");
+        let isolated = std::path::Path::new("/tmp/echo-review");
+        assert_eq!(
+            redirected_default_workspace(isolated, Some(home)),
+            Some(isolated.join("workspaces/default"))
+        );
+        assert_eq!(
+            redirected_default_workspace(&home.join(".echo-agent"), Some(home)),
+            None
+        );
+    }
+
+    #[test]
+    fn redirected_profile_does_not_discover_default_profile_legacy_catalogs() {
+        let home = Path::new("/users/reviewer");
+        assert_eq!(
+            legacy_catalog_home_for(Path::new("/tmp/echo-review"), Some(home)),
+            None
+        );
+        assert_eq!(
+            legacy_catalog_home_for(&home.join(".echo-agent"), Some(home)),
+            Some(home.to_path_buf())
+        );
+        assert_eq!(
+            legacy_catalog_home_for(Path::new("/tmp/echo-review"), None),
+            None
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn canonical_default_profile_keeps_legacy_migration_and_workspace_compatibility() {
+        let temp = tempfile::tempdir().unwrap();
+        let user_home = temp.path().join("user");
+        let actual_data = temp.path().join("data");
+        fs::create_dir_all(&user_home).unwrap();
+        fs::create_dir_all(&actual_data).unwrap();
+        std::os::unix::fs::symlink(&actual_data, user_home.join(".echo-agent")).unwrap();
+        let canonical = actual_data.canonicalize().unwrap();
+        assert_eq!(
+            legacy_catalog_home_for(&canonical, Some(&user_home)),
+            Some(user_home.clone())
+        );
+        assert_eq!(
+            redirected_default_workspace(&canonical, Some(&user_home)),
+            None
+        );
+        assert_eq!(
+            legacy_catalog_home_for(&temp.path().join("review"), Some(&user_home)),
+            None
+        );
     }
 
     #[test]

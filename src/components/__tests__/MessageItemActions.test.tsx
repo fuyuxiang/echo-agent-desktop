@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { act, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { MessageItem } from "../MessageItem";
 import { ThemeProvider } from "../ThemeProvider";
 import type { ChatMessage } from "@/stores/session-store";
@@ -136,6 +136,49 @@ describe("assistant message actions", () => {
     fireEvent.keyDown(document, { key: "Escape" });
     expect(screen.queryByRole("menu", { name: "选择导出格式" })).toBeNull();
     expect(trigger).toHaveFocus();
+  });
+
+  it("选择办公格式前说明公式、图表及 Excel 的导出范围，且保留四个可用入口", () => {
+    renderMessage();
+    fireEvent.click(screen.getByRole("button", { name: "导出回复为办公文件" }));
+
+    const commonNote = screen.getByText("公式和 Mermaid 图表以原始文本保留。图表可从图表菜单下载 SVG。");
+    const spreadsheetNote = screen.getByText("Excel：回复含表格时，仅导出表格。");
+    expect(commonNote).toBeVisible();
+    expect(spreadsheetNote).toBeVisible();
+    const items = screen.getAllByRole("menuitem");
+    expect(items.map((item) => item.textContent)).toEqual(["Word", "PDF", "Excel", "PPT"]);
+    for (const item of items) {
+      expect(item).toBeEnabled();
+      expect(item).toHaveAccessibleDescription(expect.stringContaining(commonNote.textContent!));
+      expect(commonNote.compareDocumentPosition(item) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    }
+    expect(screen.getByRole("menuitem", { name: "Excel" })).toHaveAccessibleDescription(
+      `${commonNote.textContent} ${spreadsheetNote.textContent}`,
+    );
+    expect(commonNote).not.toHaveAttribute("tabindex");
+    expect(spreadsheetNote).not.toHaveAttribute("tabindex");
+    expect(items[0]).toHaveFocus();
+  });
+
+  it("导出说明不改变菜单首尾导航及离开菜单的焦点行为", () => {
+    renderMessage();
+    fireEvent.click(screen.getByRole("button", { name: "导出回复为办公文件" }));
+    const word = screen.getByRole("menuitem", { name: "Word" });
+    const ppt = screen.getByRole("menuitem", { name: "PPT" });
+    fireEvent.keyDown(word, { key: "End" });
+    expect(ppt).toHaveFocus();
+    fireEvent.keyDown(ppt, { key: "ArrowDown" });
+    expect(word).toHaveFocus();
+    fireEvent.keyDown(word, { key: "ArrowUp" });
+    expect(ppt).toHaveFocus();
+    fireEvent.keyDown(ppt, { key: "Home" });
+    expect(word).toHaveFocus();
+
+    const nextAction = screen.getByRole("button", { name: "朗读回复" });
+    act(() => nextAction.focus());
+    expect(screen.queryByRole("menu", { name: "选择导出格式" })).toBeNull();
+    expect(nextAction).toHaveFocus();
   });
 
   it("根据终态区分重新生成和重新执行", () => {

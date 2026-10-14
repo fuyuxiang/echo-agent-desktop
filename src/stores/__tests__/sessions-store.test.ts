@@ -19,11 +19,24 @@ import { persistSessionStatus } from "@/lib/session-status-persistence";
  *  - sentinel keys behave like ordinary keys.
  */
 describe("sessions-store drafts", () => {
+  it("删除后忽略迟到事件及目录快照，不复活会话或状态持久化", () => {
+    const row = { sessionId: "late-deleted", cwd: "/workspace", title: "测试任务" };
+    const store = useSessionsStore.getState();
+    store.upsert(row);
+    store.remove(row.sessionId);
+    vi.mocked(persistSessionStatus).mockClear();
+    store.upsert({ ...row, status: "working" });
+    store.mergeSessions([row]);
+    store.setIndependent([row]);
+    expect(useSessionsStore.getState().independent).toEqual([]);
+    expect(useSessionsStore.getState().pendingSessionPatches[row.sessionId]).toBeUndefined();
+    expect(persistSessionStatus).not.toHaveBeenCalled();
+  });
   beforeEach(() => {
     vi.clearAllMocks();
     localStorage.removeItem("echoagent.session-controls.v1");
     // Reset the whole store between tests so drafts don't bleed across cases.
-    useSessionsStore.setState({
+    useSessionsStore.setState({ deletedSessionIds: [],
       independent: [],
       workspaces: [],
       tasksOpen: true,
@@ -184,7 +197,7 @@ describe("sessions-store drafts", () => {
   });
 
   it("删除会话同步修正工作目录计数", () => {
-    useSessionsStore.setState({
+    useSessionsStore.setState({ deletedSessionIds: [],
       workspaces: [{ cwd: "/workspace", sessionCount: 2 }],
       independent: [{ sessionId: "s1", title: "one", cwd: "/workspace" }],
     });

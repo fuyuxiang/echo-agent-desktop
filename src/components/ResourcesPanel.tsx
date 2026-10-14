@@ -31,6 +31,9 @@ interface ResourcesPanelProps {
 }
 
 interface EditorState {
+  /** The workspace/session where this draft was opened; switches never retarget it. */
+  cwd?: string;
+  sessionId?: string;
   scope: MemoryEntry["scope"];
   path: string;
   content: string;
@@ -68,6 +71,7 @@ type MemoryTab = "longTerm" | "summaries";
 
 export function ResourcesPanel({ cwd, sessionId, onToast }: ResourcesPanelProps) {
   const [entries, setEntries] = useState<MemoryEntry[]>([]);
+  const [entriesCwd, setEntriesCwd] = useState(cwd);
   const [loading, setLoading] = useState(false);
   const [loadError, setLoadError] = useState<string | null>(null);
   const [query, setQuery] = useState("");
@@ -76,15 +80,21 @@ export function ResourcesPanel({ cwd, sessionId, onToast }: ResourcesPanelProps)
   const [busy, setBusy] = useState(false);
   const { requestConfirmation, dialog } = useAppDialog(JSON.stringify([cwd ?? null, sessionId ?? null]));
   const reloadGeneration = useRef(0);
+  const currentCwd = useRef(cwd);
+  currentCwd.current = cwd;
   const searchInputRef = useRef<HTMLInputElement>(null);
 
   const reload = useCallback(async () => {
+    if (currentCwd.current !== cwd) return;
     const generation = ++reloadGeneration.current;
     setLoading(true);
     setLoadError(null);
     try {
       const next = await memoryList(cwd);
-      if (reloadGeneration.current === generation) setEntries(next);
+      if (reloadGeneration.current === generation && currentCwd.current === cwd) {
+        setEntries(next);
+        setEntriesCwd(cwd);
+      }
     } catch (error) {
       if (reloadGeneration.current !== generation) return;
       const message = errorText(error);
@@ -94,6 +104,8 @@ export function ResourcesPanel({ cwd, sessionId, onToast }: ResourcesPanelProps)
       if (reloadGeneration.current === generation) setLoading(false);
     }
   }, [cwd, onToast]);
+  const latestReload = useRef(reload);
+  latestReload.current = reload;
 
   useEffect(() => {
     void reload();
@@ -118,25 +130,25 @@ export function ResourcesPanel({ cwd, sessionId, onToast }: ResourcesPanelProps)
     setBusy(true);
     try {
       if (draft.isNew) {
-        await memoryAppend(draft.scope, draft.content, cwd);
+        await memoryAppend(draft.scope, draft.content, draft.cwd);
         onToast?.("已追加记忆");
       } else {
         await memorySave(
           draft.scope,
           draft.path,
           draft.content,
-          cwd,
+          draft.cwd,
           draft.revision,
         );
         onToast?.("已保存记忆");
       }
       setEditing(null);
-      await reload();
+      await latestReload.current();
     } catch (error) {
       const message = errorText(error);
       if (message.startsWith("记忆文件已保存，但检索索引更新失败")) {
         setEditing(null);
-        await reload();
+        await latestReload.current();
         onToast?.(message);
       } else {
         onToast?.(`保存失败：${message}`);
@@ -159,11 +171,13 @@ export function ResourcesPanel({ cwd, sessionId, onToast }: ResourcesPanelProps)
         setBusy(true);
         try {
           await memoryDelete(entry.scope, entry.path, cwd, entry.revision);
-          setEntries((current) => current.filter((candidate) => !(
-            candidate.scope === entry.scope && candidate.path === entry.path
-          )));
+          if (currentCwd.current === cwd) {
+            setEntries((current) => current.filter((candidate) => !(
+              candidate.scope === entry.scope && candidate.path === entry.path
+            )));
+          }
           onToast?.(isSummary ? "已删除会话摘要及检索索引" : "已删除记忆文件");
-          await reload();
+          await latestReload.current();
         } finally {
           setBusy(false);
         }
@@ -186,9 +200,9 @@ export function ResourcesPanel({ cwd, sessionId, onToast }: ResourcesPanelProps)
         setBusy(true);
         try {
           const removed = await memoryClearSessionSummaries(cwd);
-          setEntries((current) => current.filter((entry) => entry.scope !== "session"));
+          if (currentCwd.current === cwd) setEntries((current) => current.filter((entry) => entry.scope !== "session"));
           onToast?.(removed > 0 ? `已清除 ${removed} 个会话摘要文件` : "没有需要清除的会话摘要");
-          await reload();
+          await latestReload.current();
         } finally {
           setBusy(false);
         }
@@ -206,7 +220,7 @@ export function ResourcesPanel({ cwd, sessionId, onToast }: ResourcesPanelProps)
     try {
       const completed = await memoryFlush(sessionId);
       onToast?.(completed ? "提取已执行；若有可复用内容，可在会话摘要中查看" : "本次提取未完成，请稍后重试");
-      await reload();
+      await latestReload.current();
     } catch (error) {
       onToast?.(`落盘失败：${errorText(error)}`);
     } finally {
@@ -229,7 +243,7 @@ export function ResourcesPanel({ cwd, sessionId, onToast }: ResourcesPanelProps)
           const changed = await memoryDream(sessionId);
           onToast?.(changed ? "长期记忆已更新" : "本次没有更新长期记忆；可能没有待整理的摘要");
         } finally {
-          await reload();
+          await latestReload.current();
           setBusy(false);
         }
       },
@@ -238,7 +252,7 @@ export function ResourcesPanel({ cwd, sessionId, onToast }: ResourcesPanelProps)
   }, [onToast, reload, requestConfirmation, sessionId]);
 
   const handleRewriteDraft = useCallback(async (draft: EditorState) => {
-    if (!sessionId) {
+    if (!sessionId || sessionId !== draft.sessionId || cwd !== draft.cwd) {
       onToast?.("AI 整理需要一个已打开的会话");
       return;
     }
@@ -256,10 +270,11 @@ export function ResourcesPanel({ cwd, sessionId, onToast }: ResourcesPanelProps)
     } finally {
       setBusy(false);
     }
-  }, [onToast, sessionId]);
+  }, [cwd, onToast, sessionId]);
 
   const normalizedQuery = query.trim().toLowerCase();
-  const visibleEntries = entries.filter((entry) => activeTab === "summaries"
+  const currentEntries = entriesCwd === cwd ? entries : [];
+  const visibleEntries = currentEntries.filter((entry) => activeTab === "summaries"
     ? entry.scope === "session"
     : entry.scope !== "session");
   const filtered = visibleEntries.filter((entry) => (
@@ -267,9 +282,9 @@ export function ResourcesPanel({ cwd, sessionId, onToast }: ResourcesPanelProps)
     || entry.path.toLowerCase().includes(normalizedQuery)
     || visibleMemoryContent(entry).toLowerCase().includes(normalizedQuery)
   ));
-  const globalCount = entries.filter((entry) => entry.scope === "global").length;
-  const workspaceCount = entries.filter((entry) => entry.scope === "workspace").length;
-  const sessionCount = entries.filter((entry) => entry.scope === "session").length;
+  const globalCount = currentEntries.filter((entry) => entry.scope === "global").length;
+  const workspaceCount = currentEntries.filter((entry) => entry.scope === "workspace").length;
+  const sessionCount = currentEntries.filter((entry) => entry.scope === "session").length;
   const clearSearch = () => {
     setQuery("");
     searchInputRef.current?.focus();
@@ -386,6 +401,8 @@ export function ResourcesPanel({ cwd, sessionId, onToast }: ResourcesPanelProps)
         <button
           className="resources-panel__create-btn"
           onClick={() => setEditing({
+            cwd,
+            sessionId,
             scope: cwd ? "workspace" : "global",
             path: "MEMORY.md",
             content: "",
@@ -434,7 +451,7 @@ export function ResourcesPanel({ cwd, sessionId, onToast }: ResourcesPanelProps)
             <div className="resources-panel__item-actions">
               <button
                 className="resources-panel__icon-btn"
-                onClick={() => setEditing({ ...entry, content: visibleContent || "旧版摘要没有可展示的内容。", isNew: false })}
+                onClick={() => setEditing({ ...entry, cwd, sessionId, content: visibleContent || "旧版摘要没有可展示的内容。", isNew: false })}
                 title={entry.readOnly ? "查看" : "编辑"}
               >
                 <EditToolIcon size="sm" />
@@ -451,8 +468,8 @@ export function ResourcesPanel({ cwd, sessionId, onToast }: ResourcesPanelProps)
       {editing && (
         <MemoryEditor
           draft={editing}
-          cwd={cwd}
-          canRewrite={Boolean(sessionId) && !editing.readOnly}
+          cwd={editing.cwd}
+          canRewrite={Boolean(sessionId) && sessionId === editing.sessionId && cwd === editing.cwd && !editing.readOnly}
           busy={busy}
           onChange={setEditing}
           onCancel={() => setEditing(null)}
@@ -518,6 +535,7 @@ function MemoryEditor({
             <input type="text" value={draft.path} disabled />
           </label>
         </div>
+        {draft.scope !== "global" && draft.cwd && <p className="resources-panel__notice" role="note">此草稿保存到工作区：{draft.cwd}</p>}
         <textarea
           className="memory-editor__content"
           aria-label={draft.isNew ? "记忆内容" : `记忆内容 ${draft.path}`}

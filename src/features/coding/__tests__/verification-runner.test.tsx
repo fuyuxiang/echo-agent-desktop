@@ -1,0 +1,82 @@
+import { act, renderHook, waitFor } from "@testing-library/react";
+import { beforeEach, describe, expect, it, vi } from "vitest";
+import type { CodingTask, DetectedCommand } from "../lib/types";
+
+const api = vi.hoisted(() => ({
+  beginVerification: vi.fn(), runVerification: vi.fn(), reportVerification: vi.fn(),
+  reportStartFailed: vi.fn(), approvePlanCommand: vi.fn(),
+}));
+vi.mock("../lib/tauri-api", () => ({ codingApi: api }));
+
+import { useVerificationRunner } from "../lib/use-verification-runner";
+import { codingRuntimeKey, useCodingRuntimeStore } from "../lib/coding-task-runtime";
+import { useTaskStore } from "../store/task-store";
+
+function task(id: string): CodingTask {
+  return {
+    schemaVersion: 2, id, name: id, requirement: "验证", phase: "stopped",
+    acceptanceCriteria: [], taskNodes: [], planIssues: [], globalConstraints: [], createdAt: "", updatedAt: "1",
+  };
+}
+const commands: DetectedCommand[] = [{ kind: "test", command: "pnpm test", label: "测试" }];
+
+describe("verification runner task scope", () => {
+  beforeEach(() => {
+    Object.values(api).forEach((mock) => mock.mockReset());
+    api.beginVerification.mockImplementation(async (_root: string, id: string) => task(id));
+    api.reportVerification.mockResolvedValue(undefined);
+    api.reportStartFailed.mockResolvedValue(undefined);
+    useCodingRuntimeStore.setState({ tasks: {}, settling: {}, activeRunIds: {}, verificationBatches: {} });
+    useTaskStore.setState({ root: "", task: null });
+  });
+
+  it("立即重复点击仍只启动一个验证批次", async () => {
+    let resolve!: (value: { status: string }) => void;
+    api.runVerification.mockReturnValue(new Promise((accept) => { resolve = accept; }));
+    const { result } = renderHook(() => useVerificationRunner({
+      cwd: "/a", task: task("t1"), commands, detectedReady: true,
+      setCommandOutput: vi.fn(), requestConfirmation: vi.fn(),
+    }));
+    act(() => {
+      result.current.runVerifications(commands);
+      result.current.runVerifications(commands);
+    });
+    await waitFor(() => expect(api.runVerification).toHaveBeenCalledTimes(1));
+    expect(api.beginVerification).toHaveBeenCalledTimes(1);
+    await act(async () => { resolve({ status: "passed" }); });
+    await waitFor(() => expect(result.current.runningVerification).toBe(false));
+  });
+
+  it("切项目后原批次保持可取消且旧失败不会清掉新批次状态", async () => {
+    let failOld!: (reason: Error) => void;
+    let finishNew!: (value: { status: string }) => void;
+    api.runVerification.mockImplementation((root: string) => root === "/a"
+      ? new Promise((_accept, reject) => { failOld = reject; })
+      : new Promise((accept) => { finishNew = accept; }));
+    const onToast = vi.fn();
+    const setCommandOutput = vi.fn();
+    const { result, rerender } = renderHook(({ root, id }) => useVerificationRunner({
+      cwd: root, task: task(id), commands, detectedReady: true,
+      setCommandOutput, requestConfirmation: vi.fn(), onToast,
+    }), { initialProps: { root: "/a", id: "t1" } });
+    act(() => { result.current.runVerifications(commands); });
+    await waitFor(() => expect(api.runVerification).toHaveBeenCalledTimes(1));
+    const oldRun = useCodingRuntimeStore.getState().activeRunIds[codingRuntimeKey("/a", "t1")];
+    expect(oldRun).toBeTruthy();
+    rerender({ root: "/b", id: "t2" });
+    expect(result.current.runningVerification).toBe(false);
+    expect(result.current.activeRunId).toBeNull();
+    expect(useCodingRuntimeStore.getState().activeRunIds[codingRuntimeKey("/a", "t1")]).toBe(oldRun);
+    act(() => { result.current.runVerifications(commands); });
+    await waitFor(() => expect(api.runVerification).toHaveBeenCalledTimes(2));
+    const newRun = result.current.activeRunId;
+    expect(newRun).toBeTruthy();
+    await act(async () => { failOld(new Error("旧项目验证失败")); });
+    expect(result.current.runningVerification).toBe(true);
+    expect(result.current.activeRunId).toBe(newRun);
+    expect(onToast).not.toHaveBeenCalled();
+    expect(api.reportStartFailed).toHaveBeenCalledWith("/a", "t1", expect.stringContaining("旧项目验证失败"));
+    await act(async () => { finishNew({ status: "passed" }); });
+    await waitFor(() => expect(result.current.runningVerification).toBe(false));
+  });
+});

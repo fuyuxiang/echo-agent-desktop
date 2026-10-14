@@ -33,7 +33,7 @@ EchoAgent 将会话绑定到实际工作目录。你可以选择模型和权限�
 
 ### 从源码运行
 
-构建需要 Node.js **22 或 24**、pnpm **10**、Rust **1.92.0+**（stable）、Protocol Buffers 编译器 `protoc`，以及对应平台的原生工具链。macOS 需要 Xcode Command Line Tools；Windows 需要 Visual Studio 2022 C++ 构建工具和 Windows SDK。完整的内嵌 Agent Runtime 源码已经随仓库提交，无需初始化 submodule。
+构建需要 Node.js **22 或 24**、pnpm **10**、Rust **1.96.0+**（stable）、Protocol Buffers 编译器 `protoc`，以及对应平台的原生工具链。macOS 需要 Xcode Command Line Tools；Windows 需要 Visual Studio 2022 C++ 构建工具和 Windows SDK。完整的内嵌 Agent Runtime 源码已经随仓库提交，无需初始化 submodule。
 
 **macOS**
 
@@ -98,15 +98,22 @@ EchoAgent 使用 React 18 构建界面，Tauri 2 与 Rust 负责桌面能力、�
 | --- | --- |
 | `pnpm tauri dev` | 启动完整桌面应用，并自动准备 Theia 与 Office Worker。 |
 | `pnpm test` | 运行前端 Vitest 测试。 |
+| `pnpm test:scripts` | 验证浏览器快照标签、macOS 测试签名范围和 IDE 脏文档计数；CI 自动运行。 |
+| `pnpm test:ide` | 构建 Theia 后验证固定 VSIX 完整性和 SCM 命令完成、失败传播。 |
+| `pnpm test:native-guards` | 在 macOS 运行原生验收工具的合成报告、隔离和续跑条件回归；不启动桌面应用，也不代表真实界面验收。 |
 | `pnpm test:mermaid` | 验证真实图表渲染、换行、预览、复制、下载及失败恢复；macOS 同时检查原生 WKWebView。 |
 | `pnpm build` | TypeScript 类型检查与前端生产构建。 |
 | `pnpm office:test` | 验证内置文档生成器。 |
-| `cargo test --locked --manifest-path src-tauri/Cargo.toml --lib --tests -j 2` | 运行 Rust 单元与集成测试。 |
+| `pnpm test:rust` | 在新临时数据目录运行全部 Rust 单元与集成测试；macOS 先对本仓库的测试程序作本地 ad hoc 签名，避免大型未签名测试程序的子进程启动延迟。 |
 | `cargo fmt --manifest-path src-tauri/Cargo.toml --check` | 检查 Rust 格式。 |
 | `cargo clippy --locked --manifest-path src-tauri/Cargo.toml --lib -- -D warnings` | 运行 Rust 静态检查。 |
 | `pnpm dist:mac` / `pnpm dist:win` | 在对应平台构建发行安装包；正式发行需平台签名。 |
 
 发行步骤见 [桌面发行说明](docs/desktop-release.md)。
+
+原生验收入口为 `scripts/validate-native-review.mjs`，以及 `validate-native-browser-review.mjs`、`validate-native-capabilities-review.mjs`、`validate-native-core-review.mjs`、`validate-native-ide-git-review.mjs`、`validate-native-local-review.mjs`、`validate-native-webdav-review.mjs` 和 `validate-native-exit-recovery-review.mjs`。这些工具需要已构建的桌面可执行文件，使用独立临时数据目录；主验收流程包含首次启动和重启检查。涉及模型的流程需要可用的项目内置模型服务，定时任务验收会等待真实到点。它们不会由普通单元测试自动启动。
+
+新增原生验收工具默认将报告写入系统临时目录；可通过各入口的 `NATIVE_*_REVIEW_OUTPUT` 环境变量指定保留位置，通用桌面和会议界面验收使用 `UI_REVIEW_OUTPUT`。Code 验收中的续跑选项必须显式指定原输出目录，保留原始报告与独立临时数据目录。WebDAV 验收需在独立 Python 环境安装 `WsgiDAV` 和 `cheroot`，再用 `WEBDAV_REVIEW_PYTHON` 指定该环境的 Python；可选 `WEBDAV_REVIEW_PYTHONPATH` 用于显式依赖目录。Office 内容独立核验脚本 `validate-native-office-content.py` 另需 `python-docx`、`openpyxl`、`python-pptx` 和 `pypdf`。报告、截图、安装包和用户运行数据不属于项目源码。
 
 图表验收复用 Theia 的可选 Playwright 安装，也可通过 `PLAYWRIGHT_MODULE` 指向独立安装的 Playwright `index.mjs`。浏览器工具仅用于开发验证。验收使用随机本地端口和实际生产 SVG 图片，检查文字与节点边界、长圆形标签、显式换行、Markdown 多行、树连接、图表类型切换后的配置隔离，以及预览、源码、复制、下载和失败恢复。可用 `CHROME_BIN` 指定 Chromium 可执行文件、`UI_REVIEW_OUTPUT` 指定截图与几何数据目录；macOS 需要 Xcode Command Line Tools，原生 WKWebView 也会检查这些标签边界及配置隔离。CI 在 Windows、macOS 和 Linux 上运行该检查。
 

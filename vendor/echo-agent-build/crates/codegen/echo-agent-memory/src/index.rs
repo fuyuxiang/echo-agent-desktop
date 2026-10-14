@@ -698,10 +698,19 @@ impl MemoryIndex {
             )));
         }
         let embedding_bytes: Vec<u8> = embedding.iter().flat_map(|f| f.to_le_bytes()).collect();
-        self.db.execute(
-            "INSERT OR REPLACE INTO chunks_vec(chunk_id, embedding) VALUES (?1, ?2)",
+        // vec0 does not implement SQLite's OR REPLACE conflict behavior.
+        // Replace within one transaction so a repeated indexing pass updates
+        // the vector, and an insert failure cannot remove the old embedding.
+        let tx = self.db.unchecked_transaction()?;
+        tx.execute(
+            "DELETE FROM chunks_vec WHERE chunk_id = ?1",
+            params![chunk_id],
+        )?;
+        tx.execute(
+            "INSERT INTO chunks_vec(chunk_id, embedding) VALUES (?1, ?2)",
             params![chunk_id, embedding_bytes],
         )?;
+        tx.commit()?;
         Ok(())
     }
 
@@ -1073,13 +1082,12 @@ mod tests {
 
         let matches = idx.search_fts("简洁说明", 10).unwrap();
         assert_eq!(matches.len(), 2);
-        assert!(
-            idx.get_chunk(&matches[0].chunk_id)
-                .unwrap()
-                .unwrap()
-                .text
-                .contains("简洁说明")
-        );
+        assert!(idx
+            .get_chunk(&matches[0].chunk_id)
+            .unwrap()
+            .unwrap()
+            .text
+            .contains("简洁说明"));
         assert_eq!(
             idx.search_fts("简洁说明", 1).unwrap()[0].chunk_id,
             matches[0].chunk_id
@@ -1088,11 +1096,10 @@ mod tests {
             .search_fts_by_sources("简洁说明", 10, &["workspace"])
             .unwrap();
         assert_eq!(scoped.len(), 2);
-        assert!(
-            idx.search_fts_by_sources("简洁说明", 10, &["global"])
-                .unwrap()
-                .is_empty()
-        );
+        assert!(idx
+            .search_fts_by_sources("简洁说明", 10, &["global"])
+            .unwrap()
+            .is_empty());
     }
 
     #[test]

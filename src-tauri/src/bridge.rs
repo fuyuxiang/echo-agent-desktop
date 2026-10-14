@@ -15,7 +15,7 @@ use std::sync::Arc;
 use agent_client_protocol as acp;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
-use tauri::{AppHandle, Emitter};
+use tauri::{AppHandle, Emitter, Manager};
 use tokio::sync::{oneshot, Mutex};
 use uuid::Uuid;
 
@@ -894,19 +894,44 @@ pub async fn pending_interactions(
 /// plus the session id it belongs to (so the frontend can route updates for
 /// side-channel sessions like inspiration generation away from the main
 /// transcript store).
-#[derive(Clone, Debug, Serialize)]
-#[serde(rename_all = "camelCase")]
+#[derive(Clone, Debug)]
 pub struct UpdateEvent {
     /// Session id this update belongs to. `None` only if EchoAgent omitted it
     /// (shouldn't happen for SessionNotification). When present, the frontend
     /// checks it against the current session before applying.
-    #[serde(skip_serializing_if = "Option::is_none")]
     pub session_id: Option<String>,
     /// Preserve ACP metadata needed for replay-aware timing and terminal copy.
-    #[serde(skip_serializing_if = "Option::is_none", rename = "_meta")]
     pub meta: Option<Value>,
-    #[serde(flatten)]
     pub update: Value,
+}
+
+impl Serialize for UpdateEvent {
+    fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        let mut payload = self
+            .update
+            .as_object()
+            .cloned()
+            .ok_or_else(|| serde::ser::Error::custom("Session update must be a JSON object"))?;
+        let nested_meta = payload.remove("_meta");
+        let meta = match (&self.meta, nested_meta) {
+            (Some(Value::Object(outer)), Some(Value::Object(mut inner))) => {
+                // Notification metadata owns replay/timing identity. The update
+                // also carries prompt/model metadata; emit one combined key so
+                // JSON consumers cannot silently discard either envelope.
+                inner.extend(outer.clone());
+                Some(Value::Object(inner))
+            }
+            (Some(outer), _) => Some(outer.clone()),
+            (None, inner) => inner,
+        };
+        if let Some(meta) = meta {
+            payload.insert("_meta".into(), meta);
+        }
+        if let Some(session_id) = &self.session_id {
+            payload.insert("sessionId".into(), Value::String(session_id.clone()));
+        }
+        payload.serialize(serializer)
+    }
 }
 
 /// Payload emitted on `agent://complete`.
@@ -1103,6 +1128,40 @@ async fn handle_client_message(
         AcpClientMessage::SessionNotification(b) => {
             let update = serialize_session_update(&b.request.update);
             let sid = b.request.session_id.0.as_ref().to_string();
+            // RED evidence comes from the native Runtime channel, not rendered
+            // tool-card text or a client-supplied exit code. Resolve the session
+            // through its native workspace capability before touching task data.
+            if matches!(
+                update.get("sessionUpdate").and_then(Value::as_str),
+                Some("tool_call" | "tool_call_update")
+            ) {
+                let root = app
+                    .try_state::<crate::commands::AppState>()
+                    .and_then(|state| state.session_workspace(&sid).ok())
+                    .and_then(|root| {
+                        app.try_state::<crate::shell_fs::FilesystemAccess>()
+                            .and_then(|access| {
+                                access.require_workspace(&root.to_string_lossy()).ok()
+                            })
+                    });
+                if let Some(root) = root {
+                    let meta = b
+                        .request
+                        .meta
+                        .as_ref()
+                        .and_then(|meta| serde_json::to_value(meta).ok());
+                    if let Err(error) = crate::coding::tdd::observe_runtime_update(
+                        &root,
+                        &sid,
+                        &update,
+                        meta.as_ref(),
+                    )
+                    .await
+                    {
+                        tracing::warn!(%error, session_id = %sid, "native Runtime RED capture rejected");
+                    }
+                }
+            }
             tracing::debug!(session_id = %sid, update = %update, "agent://update");
             let _ = app.emit(
                 "agent://update",
@@ -2784,6 +2843,52 @@ mod tests {
         assert_eq!(value["sessionId"], "s-1");
         assert_eq!(value["_meta"]["agentTimestampMs"], 123);
         assert_eq!(value["sessionUpdate"], "turn_completed");
+    }
+
+    #[test]
+    fn replay_update_merges_inner_prompt_metadata_without_duplicate_keys() {
+        for kind in [
+            "user_message_chunk",
+            "agent_message_chunk",
+            "tool_call_update",
+        ] {
+            let event = UpdateEvent {
+                session_id: Some("s-1".into()),
+                meta: Some(serde_json::json!({
+                    "isReplay": true, "eventId": "durable-1", "agentTimestampMs": 123
+                })),
+                update: serde_json::json!({
+                    "sessionUpdate": kind,
+                    "_meta": { "modelId": "chat-qwen", "promptIndex": 0, "isReplay": false }
+                }),
+            };
+            let encoded = serde_json::to_string(&event).expect("serialize replay update");
+            assert_eq!(encoded.matches("\"_meta\"").count(), 1);
+            let value: Value = serde_json::from_str(&encoded).expect("parse emitted update");
+            assert_eq!(value["sessionId"], "s-1");
+            assert_eq!(value["_meta"]["isReplay"], true);
+            assert_eq!(value["_meta"]["eventId"], "durable-1");
+            assert_eq!(value["_meta"]["agentTimestampMs"], 123);
+            assert_eq!(value["_meta"]["modelId"], "chat-qwen");
+            assert_eq!(value["_meta"]["promptIndex"], 0);
+        }
+    }
+
+    #[test]
+    fn live_update_keeps_inner_metadata_and_authoritative_session_identity() {
+        let event = UpdateEvent {
+            session_id: Some("s-1".into()),
+            meta: None,
+            update: serde_json::json!({
+                "sessionUpdate": "user_message_chunk", "sessionId": "unrelated",
+                "_meta": { "modelId": "chat-glm", "promptIndex": 2 }
+            }),
+        };
+        let value = serde_json::to_value(event).expect("serialize live update");
+        assert_eq!(value["sessionId"], "s-1");
+        assert_eq!(value["_meta"]["modelId"], "chat-glm");
+        assert_eq!(value["_meta"]["promptIndex"], 2);
+        assert!(value["_meta"].get("isReplay").is_none());
     }
 
     #[test]

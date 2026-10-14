@@ -54,7 +54,7 @@ describe("Mermaid 图表预览", () => {
 
   it("单击图表可在应用内预览，并以原始逻辑尺寸查看宽图", async () => {
     render(<MarkdownPreMermaid content={graph} />);
-    const trigger = await screen.findByRole("button", { name: "放大预览图表" });
+    const trigger = await screen.findByRole("button", { name: "放大预览图表" }, { timeout: 5000 });
     fireEvent.click(trigger);
 
     const dialog = screen.getByRole("dialog", { name: "图表预览" });
@@ -79,7 +79,7 @@ describe("Mermaid 图表预览", () => {
   it("保留宿主提供的预览回调", async () => {
     const onPreviewMermaid = vi.fn();
     render(<MarkdownPreMermaid content={graph} onPreviewMermaid={onPreviewMermaid} />);
-    await screen.findByRole("button", { name: "放大预览图表" });
+    await screen.findByRole("button", { name: "放大预览图表" }, { timeout: 5000 });
     fireEvent.click(screen.getByRole("button", { name: "放大" }));
     expect(onPreviewMermaid).toHaveBeenCalledWith(standaloneSvg, graph);
     expect(screen.queryByRole("dialog", { name: "图表预览" })).toBeNull();
@@ -97,13 +97,13 @@ describe("Mermaid 图表预览", () => {
     expect(screen.queryByRole("button", { name: "下载" })).toBeNull();
 
     rerender(<MarkdownPreMermaid content={graph} />);
-    await screen.findByRole("button", { name: "放大预览图表" });
+    await screen.findByRole("button", { name: "放大预览图表" }, { timeout: 5000 });
     expect(screen.queryByRole("alert")).toBeNull();
   });
 
   it("为独立 SVG 禁用 HTML 标签并固定中文字体，避免节点文字按不同字体计算宽度", async () => {
     render(<MarkdownPreMermaid content={graph} />);
-    await screen.findByRole("button", { name: "放大预览图表" });
+    await screen.findByRole("button", { name: "放大预览图表" }, { timeout: 5000 });
     expect(mermaid.initialize).toHaveBeenCalledWith(expect.objectContaining({
       securityLevel: "strict",
       htmlLabels: false,

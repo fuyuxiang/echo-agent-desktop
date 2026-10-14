@@ -83,9 +83,18 @@ struct ActivityInner {
     /// Self-expiring: entries are dead once the actor drops its receiver
     /// (see module docs), and are purged whenever the list is locked.
     sessions: Mutex<Vec<SessionActivityEntry>>,
+    /// Kept across a host grace timeout and actor exit: channel closure alone
+    /// is never a successful persistence acknowledgement.
+    checked_shutdowns: Mutex<Vec<CheckedSessionShutdown>>,
     /// Subagents currently initializing or running; kept in sync by
     /// the shared coordinator's `running_count_changed` callback.
     subagents: Arc<AtomicUsize>,
+}
+
+struct CheckedSessionShutdown {
+    id: String,
+    cmd_tx: tokio::sync::mpsc::UnboundedSender<SessionCommand>,
+    completion: tokio::sync::watch::Receiver<Option<Result<(), String>>>,
 }
 
 /// Cheap-to-clone, `Send + Sync` handle. See module docs.
@@ -182,6 +191,74 @@ impl AgentActivity {
                     }
                 }
                 return;
+            }
+            tokio::time::sleep(FLUSH_POLL).await;
+        }
+    }
+
+    /// Checked host shutdown. Unlike the CLI's bounded best-effort flush,
+    /// success requires every actor's post-SessionEnd persistence ACK.
+    /// Timeout/write failures retain the same ACK receivers for a later retry.
+    pub async fn flush_all_sessions_checked(&self, grace: Duration) -> Result<(), String> {
+        let deadline = tokio::time::Instant::now() + grace;
+        loop {
+            let snapshot: Vec<_> = self
+                .lock_live_sessions()
+                .iter()
+                .map(|entry| (entry.id.clone(), entry.cmd_tx.clone()))
+                .collect();
+            {
+                let mut checked = self
+                    .inner
+                    .checked_shutdowns
+                    .lock()
+                    .unwrap_or_else(|poison| poison.into_inner());
+                for (id, cmd_tx) in snapshot {
+                    if checked
+                        .iter()
+                        .any(|entry| entry.cmd_tx.same_channel(&cmd_tx))
+                    {
+                        continue;
+                    }
+                    let (completion, receiver) = tokio::sync::watch::channel(None);
+                    let _ = cmd_tx.send(SessionCommand::ShutdownChecked { completion });
+                    checked.push(CheckedSessionShutdown {
+                        id,
+                        cmd_tx,
+                        completion: receiver,
+                    });
+                }
+                let mut pending = Vec::new();
+                let mut errors = Vec::new();
+                for entry in checked.iter() {
+                    match entry.completion.borrow().as_ref() {
+                        Some(Ok(())) if entry.cmd_tx.is_closed() => {}
+                        Some(Ok(())) => pending.push(entry.id.clone()),
+                        Some(Err(error)) => errors.push(format!("{}: {error}", entry.id)),
+                        None if entry.completion.has_changed().is_err()
+                            || entry.cmd_tx.is_closed() =>
+                        {
+                            errors.push(format!(
+                                "{}: session exited without a final persistence acknowledgement",
+                                entry.id
+                            ));
+                        }
+                        None => pending.push(entry.id.clone()),
+                    }
+                }
+                if !errors.is_empty() {
+                    return Err(errors.join("; "));
+                }
+                if pending.is_empty() {
+                    checked.clear();
+                    return Ok(());
+                }
+                if tokio::time::Instant::now() >= deadline {
+                    return Err(format!(
+                        "session persistence is still pending: {}",
+                        pending.join(", ")
+                    ));
+                }
             }
             tokio::time::sleep(FLUSH_POLL).await;
         }
@@ -422,5 +499,107 @@ mod tests {
     async fn flush_with_no_sessions_is_noop() {
         let activity = AgentActivity::default();
         activity.flush_all_sessions(Duration::from_secs(1)).await;
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn checked_flush_requires_a_save_ack_not_only_actor_exit() {
+        let activity = AgentActivity::default();
+        let (mut rx, _, _) = register_raw(&activity, "unacknowledged");
+        let actor = tokio::spawn(async move {
+            let Some(SessionCommand::ShutdownChecked { completion }) = rx.recv().await else {
+                panic!("checked shutdown command expected");
+            };
+            drop(completion);
+        });
+        let error = activity
+            .flush_all_sessions_checked(Duration::from_secs(1))
+            .await
+            .unwrap_err();
+        assert!(error.contains("without a final persistence acknowledgement"));
+        actor.await.unwrap();
+        assert_eq!(activity.session_count(), 0);
+        assert!(
+            activity
+                .flush_all_sessions_checked(Duration::from_secs(1))
+                .await
+                .is_err(),
+            "re-polling an empty live registry must not erase a failed save"
+        );
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn checked_flush_timeout_retains_the_ack_for_the_next_retry() {
+        let activity = AgentActivity::default();
+        let (mut rx, _, _) = register_raw(&activity, "slow-save");
+        let actor = tokio::spawn(async move {
+            let Some(SessionCommand::ShutdownChecked { completion }) = rx.recv().await else {
+                panic!("checked shutdown command expected");
+            };
+            tokio::time::sleep(Duration::from_secs(2)).await;
+            completion.send_replace(Some(Ok(())));
+        });
+        assert!(
+            activity
+                .flush_all_sessions_checked(Duration::from_millis(100))
+                .await
+                .is_err()
+        );
+        actor.await.unwrap();
+        assert_eq!(activity.session_count(), 0);
+        activity
+            .flush_all_sessions_checked(Duration::from_secs(1))
+            .await
+            .unwrap();
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn checked_flush_propagates_write_failure_and_can_observe_a_save_retry() {
+        let activity = AgentActivity::default();
+        let (mut rx, _, _) = register_raw(&activity, "disk-full");
+        let (retry, retried) = tokio::sync::oneshot::channel();
+        let actor = tokio::spawn(async move {
+            let Some(SessionCommand::ShutdownChecked { completion }) = rx.recv().await else {
+                panic!("checked shutdown command expected");
+            };
+            completion.send_replace(Some(Err("No space left on device".to_string())));
+            retried.await.unwrap();
+            completion.send_replace(Some(Ok(())));
+        });
+        let error = activity
+            .flush_all_sessions_checked(Duration::from_secs(1))
+            .await
+            .unwrap_err();
+        assert!(error.contains("disk-full: No space left on device"));
+        assert_eq!(
+            activity.session_count(),
+            1,
+            "failed final save retains its actor"
+        );
+        retry.send(()).unwrap();
+        actor.await.unwrap();
+        activity
+            .flush_all_sessions_checked(Duration::from_secs(1))
+            .await
+            .unwrap();
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn checked_flush_waits_for_actor_exit_even_after_a_successful_save_ack() {
+        let activity = AgentActivity::default();
+        let (mut rx, _, _) = register_raw(&activity, "finishing");
+        let actor = tokio::spawn(async move {
+            let Some(SessionCommand::ShutdownChecked { completion }) = rx.recv().await else {
+                panic!("checked shutdown command expected");
+            };
+            completion.send_replace(Some(Ok(())));
+            tokio::time::sleep(Duration::from_secs(1)).await;
+        });
+        let started = tokio::time::Instant::now();
+        activity
+            .flush_all_sessions_checked(Duration::from_secs(2))
+            .await
+            .unwrap();
+        assert!(started.elapsed() >= Duration::from_secs(1));
+        actor.await.unwrap();
     }
 }

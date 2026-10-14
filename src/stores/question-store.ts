@@ -28,6 +28,8 @@ export interface QuestionRequest {
 interface QuestionState {
   /** sessionId → ordered queue of pending question requests. */
   queues: Record<string, QuestionRequest[]>;
+  /** Closed reverse requests may arrive again in a delayed event or snapshot. */
+  closedRequestIds: string[];
   /** Push a new question request from the backend. */
   request: (q: QuestionRequest) => void;
   /** Remove a question from its session's queue. */
@@ -40,8 +42,10 @@ interface QuestionState {
 
 export const useQuestionStore = create<QuestionState>((set) => ({
   queues: {},
+  closedRequestIds: [],
   request: (q) =>
     set((s) => {
+      if (s.closedRequestIds.includes(q.requestId)) return s;
       const sid = q.sessionId || "__global";
       const prev = s.queues[sid] ?? [];
       if (prev.some((pending) => pending.requestId === q.requestId)) return s;
@@ -49,10 +53,12 @@ export const useQuestionStore = create<QuestionState>((set) => ({
     }),
   dismiss: (requestId, sessionId) =>
     set((s) => {
+      const closedRequestIds = [...s.closedRequestIds.filter((id) => id !== requestId), requestId].slice(-256);
       if (sessionId) {
         const prev = s.queues[sessionId];
-        if (!prev) return s;
+        if (!prev) return { closedRequestIds };
         return {
+          closedRequestIds,
           queues: {
             ...s.queues,
             [sessionId]: prev.filter((q) => q.requestId !== requestId),
@@ -63,9 +69,9 @@ export const useQuestionStore = create<QuestionState>((set) => ({
       for (const sid of Object.keys(queues)) {
         queues[sid] = queues[sid].filter((q) => q.requestId !== requestId);
       }
-      return { queues };
+      return { queues, closedRequestIds };
     }),
-  clearAll: () => set({ queues: {} }),
+  clearAll: () => set({ queues: {}, closedRequestIds: [] }),
   clearSession: (sessionId) =>
     set((state) => {
       if (!state.queues[sessionId]) return state;

@@ -628,6 +628,23 @@ fn emit_output(
     );
 }
 
+trait VerificationEvents: Send + Sync {
+    fn output(&self, root: &Path, task_id: &str, run_id: &str, stream: &'static str, line: &str);
+    fn updated(&self, record: &VerificationRecord);
+}
+
+struct AppVerificationEvents(AppHandle);
+
+impl VerificationEvents for AppVerificationEvents {
+    fn output(&self, root: &Path, task_id: &str, run_id: &str, stream: &'static str, line: &str) {
+        emit_output(&self.0, root, task_id, run_id, stream, line);
+    }
+
+    fn updated(&self, record: &VerificationRecord) {
+        let _ = self.0.emit("coding://verification-updated", record);
+    }
+}
+
 /// Run one verification command inside the workspace. Streams output to the UI
 /// and honours the same native high-risk command policy as the rest of the app.
 ///
@@ -637,6 +654,34 @@ fn emit_output(
 #[allow(clippy::too_many_arguments)]
 pub async fn run(
     app: AppHandle,
+    processes: &CodingProcesses,
+    root: PathBuf,
+    task_id: String,
+    kind: VerificationKind,
+    command: String,
+    timeout_secs: Option<u64>,
+    requested_run_id: Option<String>,
+    approval_token: Option<String>,
+) -> Result<VerificationRecord, String> {
+    run_with_events(
+        Arc::new(AppVerificationEvents(app)),
+        processes,
+        root,
+        task_id,
+        kind,
+        command,
+        timeout_secs,
+        requested_run_id,
+        approval_token,
+    )
+    .await
+}
+
+// Keep process execution, consent, persistence and cleanup in one path. The
+// event destination is the only seam used by subprocess tests without a GUI.
+#[allow(clippy::too_many_arguments)]
+async fn run_with_events(
+    events: Arc<dyn VerificationEvents>,
     processes: &CodingProcesses,
     root: PathBuf,
     task_id: String,
@@ -710,14 +755,14 @@ pub async fn run(
     let spawn_reader = |stream: Box<dyn AsyncRead + Unpin + Send>,
                         channel: &'static str,
                         buffer: Arc<Mutex<(String, bool)>>| {
-        let app = app.clone();
+        let events = events.clone();
         let root = root.clone();
         let task_id = task_id.clone();
         let run_id = run_id.clone();
         tokio::spawn(async move {
             read_output(stream, |raw| {
                 let line = strip_ansi(raw);
-                emit_output(&app, &root, &task_id, &run_id, channel, &line);
+                events.output(&root, &task_id, &run_id, channel, &line);
                 let mut guard = buffer.lock().unwrap_or_else(|e| e.into_inner());
                 let (text, dropped) = &mut *guard;
                 push_bounded(text, &line, dropped);
@@ -785,7 +830,7 @@ pub async fn run(
     tokio::task::spawn_blocking(move || append_record(&write_root, &write_record))
         .await
         .map_err(|error| format!("写入验证记录失败：{error}"))??;
-    let _ = app.emit("coding://verification-updated", &record);
+    events.updated(&record);
     Ok(record)
 }
 
@@ -878,6 +923,349 @@ pub async fn coding_verification_cancel(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[cfg(unix)]
+    #[derive(Default)]
+    struct CapturedEvents {
+        chunks: Mutex<Vec<(String, String)>>,
+        updates: Mutex<Vec<VerificationRecord>>,
+    }
+
+    #[cfg(unix)]
+    impl VerificationEvents for CapturedEvents {
+        fn output(
+            &self,
+            _root: &Path,
+            _task_id: &str,
+            run_id: &str,
+            _stream: &'static str,
+            line: &str,
+        ) {
+            self.chunks
+                .lock()
+                .unwrap()
+                .push((run_id.to_string(), line.to_string()));
+        }
+
+        fn updated(&self, record: &VerificationRecord) {
+            self.updates.lock().unwrap().push(record.clone());
+        }
+    }
+
+    // Re-execute only this test in a child with its own data profile and store.
+    // No process-global environment mutation can race the rest of the suite.
+    #[cfg(unix)]
+    fn isolated_runner_case(kind: &str, test_name: &str) {
+        if std::env::var("ECHO_VERIFICATION_FIXTURE_KIND").as_deref() == Ok(kind) {
+            let scope = PathBuf::from(std::env::var_os("ECHO_VERIFICATION_FIXTURE_ROOT").unwrap());
+            let nonce = std::env::var("ECHO_VERIFICATION_FIXTURE_NONCE").unwrap();
+            assert!(scope.starts_with(std::env::temp_dir().canonicalize().unwrap()));
+            assert_eq!(std::fs::read_to_string(scope.join("nonce")).unwrap(), nonce);
+            assert_eq!(crate::paths::echo_agent_home_dir(), scope.join("home"));
+            assert_eq!(
+                crate::paths::echo_agent_home_dir().canonicalize().unwrap(),
+                scope.join("home")
+            );
+            tokio::runtime::Builder::new_multi_thread()
+                .worker_threads(2)
+                .enable_all()
+                .build()
+                .unwrap()
+                .block_on(async {
+                    tokio::time::timeout(
+                        std::time::Duration::from_secs(20),
+                        exercise_native_runner(scope.join("workspace 中文"), kind),
+                    )
+                    .await
+                })
+                .unwrap();
+            std::fs::write(scope.join("proof-complete"), format!("{kind}:{nonce}")).unwrap();
+            return;
+        }
+
+        let directory = tempfile::tempdir().unwrap();
+        let scope = directory.path().canonicalize().unwrap();
+        let home = scope.join("home");
+        std::fs::create_dir(&home).unwrap();
+        let nonce = uuid::Uuid::now_v7().to_string();
+        std::fs::write(scope.join("nonce"), &nonce).unwrap();
+        let stdout_path = scope.join("stdout");
+        let stderr_path = scope.join("stderr");
+        let mut command = std::process::Command::new(std::env::current_exe().unwrap());
+        command
+            .args(["--exact", test_name, "--nocapture", "--test-threads=1"])
+            .current_dir(&scope)
+            .env("ECHO_VERIFICATION_FIXTURE_KIND", kind)
+            .env("ECHO_VERIFICATION_FIXTURE_ROOT", &scope)
+            .env("ECHO_VERIFICATION_FIXTURE_NONCE", &nonce)
+            .env("ECHO_AGENT_HOME", &home)
+            .env("GROK_HOME", home.join("grok"))
+            .stdin(Stdio::null())
+            .stdout(std::fs::File::create(&stdout_path).unwrap())
+            .stderr(std::fs::File::create(&stderr_path).unwrap());
+        let mut child = crate::process_supervisor::spawn_sync(command).unwrap();
+        let deadline = Instant::now() + std::time::Duration::from_secs(30);
+        let status = loop {
+            if let Some(status) = child.try_wait().unwrap() {
+                break status;
+            }
+            if Instant::now() >= deadline {
+                crate::process_supervisor::stop_sync(&mut child);
+                panic!("isolated verification subprocess exceeded its deadline");
+            }
+            std::thread::sleep(std::time::Duration::from_millis(10));
+        };
+        assert!(
+            status.success(),
+            "isolated verification failed:\n{}\n{}",
+            std::fs::read_to_string(stdout_path).unwrap(),
+            std::fs::read_to_string(stderr_path).unwrap()
+        );
+        // A misspelled exact filter would otherwise exit successfully with zero tests.
+        assert_eq!(
+            std::fs::read_to_string(scope.join("proof-complete")).unwrap(),
+            format!("{kind}:{nonce}")
+        );
+    }
+
+    #[cfg(unix)]
+    async fn exercise_native_runner(root: PathBuf, kind: &str) {
+        std::fs::create_dir(&root).unwrap();
+        std::fs::write(
+            root.join("verification-fixture.sh"),
+            r#"child=''
+trap 'kill "$child" 2>/dev/null; wait "$child"; exit 0' TERM
+sleep 30 &
+child=$!
+printf '%s\n' "$child" > descendant.pid
+printf '%s\n' "$$" > shell.pid
+printf 'READY STDOUT\n'
+printf 'READY STDERR\n' >&2
+wait "$child"
+printf 'LATE STDOUT\n'
+printf 'LATE STDERR\n' >&2
+printf late > late-write
+"#,
+        )
+        .unwrap();
+        let coding_task =
+            task::create_task(&root, "subprocess", "synthetic local verification").unwrap();
+        crate::coding::changeset::capture_filesystem_baseline(&root, &coding_task.id).unwrap();
+        assert!(store::workspace_dir(&root).starts_with(crate::paths::echo_agent_home_dir()));
+        let processes = Arc::new(CodingProcesses::new());
+        let events = Arc::new(CapturedEvents::default());
+        let command = "exec /bin/sh ./verification-fixture.sh".to_string();
+        let run_id = format!("actual-{kind}");
+        assert!(high_risk_command_reason(&command, &root).is_none());
+        assert!(run_with_events(
+            events.clone(),
+            &processes,
+            root.clone(),
+            coding_task.id.clone(),
+            VerificationKind::Custom,
+            command.clone(),
+            Some(1),
+            Some(run_id.clone()),
+            None,
+        )
+        .await
+        .unwrap_err()
+        .contains("需要用户确认"));
+        assert!(!root.join("shell.pid").exists());
+        assert!(list_records(&root, &coding_task.id).is_empty());
+
+        let approval = processes
+            .approve_verification(&root, &coding_task.id, &command)
+            .unwrap();
+        let execution = {
+            let (events, processes, root, task_id, command, run_id, approval) = (
+                events.clone(),
+                processes.clone(),
+                root.clone(),
+                coding_task.id.clone(),
+                command.clone(),
+                run_id.clone(),
+                approval.clone(),
+            );
+            tokio::spawn(async move {
+                run_with_events(
+                    events,
+                    &processes,
+                    root,
+                    task_id,
+                    VerificationKind::Custom,
+                    command,
+                    Some(1), // The real runner clamps a requested one second to five.
+                    Some(run_id),
+                    Some(approval),
+                )
+                .await
+            })
+        };
+        let pid_files = ["shell.pid", "descendant.pid"];
+        tokio::time::timeout(std::time::Duration::from_secs(5), async {
+            loop {
+                let chunks = events.chunks.lock().unwrap().clone();
+                let ready = ["READY STDOUT", "READY STDERR"]
+                    .iter()
+                    .all(|expected| chunks.iter().any(|(_, line)| line.as_str() == *expected));
+                if ready
+                    && pid_files.iter().all(|file| {
+                        std::fs::read_to_string(root.join(file))
+                            .ok()
+                            .is_some_and(|text| text.trim().parse::<i32>().is_ok())
+                    })
+                {
+                    break;
+                }
+                tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+            }
+        })
+        .await
+        .unwrap();
+        let pids: Vec<i32> = pid_files
+            .iter()
+            .map(|file| {
+                std::fs::read_to_string(root.join(file))
+                    .unwrap()
+                    .trim()
+                    .parse()
+                    .unwrap()
+            })
+            .collect();
+        assert_ne!(pids[0], pids[1]);
+        for pid in &pids {
+            assert!(*pid > 1 && *pid != std::process::id() as i32);
+            assert_eq!(
+                unsafe { libc::kill(*pid, 0) },
+                0,
+                "fixture process must really be running"
+            );
+        }
+        assert!(processes
+            .register(&run_id, CancellationToken::new())
+            .is_err());
+        if kind == "cancel" {
+            processes.cancel(&run_id).unwrap();
+        }
+        let record = execution.await.unwrap().unwrap();
+        assert_eq!(
+            record.status,
+            if kind == "cancel" {
+                VerificationStatus::Cancelled
+            } else {
+                VerificationStatus::TimedOut
+            }
+        );
+        // The graceful fixture exits zero: cancellation/timeout still cannot become Passed.
+        assert_eq!(record.exit_code, Some(0));
+        if kind == "timeout" {
+            assert!(record.duration_ms >= 5_000);
+        }
+        assert!(record.stdout.contains("READY STDOUT"));
+        assert!(record.stderr.contains("READY STDERR"));
+        assert!(!record.stdout.contains("LATE"));
+        assert!(!record.stderr.contains("LATE"));
+        assert!(
+            processes.cancel(&run_id).is_err(),
+            "completed run must leave the registry"
+        );
+        tokio::time::timeout(std::time::Duration::from_secs(2), async {
+            while pids.iter().any(|pid| unsafe { libc::kill(*pid, 0) } == 0) {
+                tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+            }
+        })
+        .await
+        .unwrap();
+        for pid in &pids {
+            assert_eq!(unsafe { libc::kill(*pid, 0) }, -1);
+            assert_eq!(
+                std::io::Error::last_os_error().raw_os_error(),
+                Some(libc::ESRCH)
+            );
+        }
+        assert!(!root.join("late-write").exists());
+        let records = list_records(&root, &coding_task.id);
+        assert_eq!(records.len(), 1);
+        assert_eq!(records[0].id, record.id);
+        assert_eq!(records[0].status, record.status);
+        assert!(record.content_revision.is_some());
+
+        if kind == "cancel" {
+            assert!(run_with_events(
+                events.clone(),
+                &processes,
+                root.clone(),
+                coding_task.id.clone(),
+                VerificationKind::Custom,
+                command,
+                Some(5),
+                Some(run_id.clone()),
+                Some(approval),
+            )
+            .await
+            .unwrap_err()
+            .contains("尚未确认或授权已过期"));
+            let retry_command =
+                "printf 'RETRY STDOUT\\n'; printf 'RETRY STDERR\\n' >&2".to_string();
+            let retry_approval = processes
+                .approve_verification(&root, &coding_task.id, &retry_command)
+                .unwrap();
+            let retry = run_with_events(
+                events.clone(),
+                &processes,
+                root.clone(),
+                coding_task.id.clone(),
+                VerificationKind::Custom,
+                retry_command,
+                Some(5),
+                Some(run_id.clone()),
+                Some(retry_approval),
+            )
+            .await
+            .unwrap();
+            assert_eq!(retry.status, VerificationStatus::Passed);
+            assert_eq!(retry.exit_code, Some(0));
+            assert_ne!(retry.id, record.id);
+            assert!(retry.stdout.contains("RETRY STDOUT"));
+            assert!(retry.stderr.contains("RETRY STDERR"));
+            assert!(processes.cancel(&run_id).is_err());
+            let records = list_records(&root, &coding_task.id);
+            assert_eq!(records.len(), 2);
+            assert_eq!(records[0].id, record.id);
+            assert_eq!(records[0].status, VerificationStatus::Cancelled);
+            assert_eq!(records[1].id, retry.id);
+            assert_eq!(records[1].status, VerificationStatus::Passed);
+            assert_eq!(events.updates.lock().unwrap().len(), 2);
+        } else {
+            assert_eq!(events.updates.lock().unwrap().len(), 1);
+        }
+        assert!(!events
+            .chunks
+            .lock()
+            .unwrap()
+            .iter()
+            .any(|(_, line)| line.contains("LATE")));
+        assert!(!root.join("late-write").exists());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn native_subprocess_cancel_reaps_tree_and_same_id_retry_requires_new_approval() {
+        isolated_runner_case(
+            "cancel",
+            "coding::verification::tests::native_subprocess_cancel_reaps_tree_and_same_id_retry_requires_new_approval",
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn native_subprocess_timeout_is_not_zero_exit_success_and_reaps_tree() {
+        isolated_runner_case(
+            "timeout",
+            "coding::verification::tests::native_subprocess_timeout_is_not_zero_exit_success_and_reaps_tree",
+        );
+    }
 
     fn temp_root() -> std::path::PathBuf {
         let dir = std::env::temp_dir().join(format!("coding-verify-{}", uuid::Uuid::now_v7()));

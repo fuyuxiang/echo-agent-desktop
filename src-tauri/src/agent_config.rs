@@ -334,91 +334,6 @@ fn apply_memory_patch(
     Ok(resolved_memory_config(config))
 }
 
-#[cfg(test)]
-mod memory_tests {
-    use super::*;
-    #[test]
-    fn patch_preserves_other_fields_and_rejects_stale_revision() {
-        let mut config: Value = toml::from_str("[memory]\nenabled=false\n[memory.embedding]\nprovider='api'\nendpoint='https://custom.example'\napi_key='keep'\n").unwrap();
-        let revision = memory_revision(&config);
-        let patch: MemoryConfigPatch =
-            serde_json::from_value(serde_json::json!({"dreamEnabled": false})).unwrap();
-        let saved = apply_memory_patch(&mut config, patch, Some(revision.clone())).unwrap();
-        assert!(!saved.enabled);
-        assert!(!saved.dream_enabled);
-        assert_eq!(
-            config["memory"]["embedding"]["api_key"].as_str(),
-            Some("keep")
-        );
-        let before = config.clone();
-        assert!(apply_memory_patch(
-            &mut config,
-            MemoryConfigPatch {
-                enabled: Some(true),
-                ..Default::default()
-            },
-            Some(revision)
-        )
-        .is_err());
-        assert_eq!(config, before);
-        let wire = serde_json::to_value(saved).unwrap();
-        assert!(wire["revision"].is_string());
-    }
-
-    #[test]
-    fn memory_defaults_are_enabled_for_echoagent() {
-        let config = Value::Table(Default::default());
-        let mut expected = MemoryConfig::default();
-        expected.revision = memory_revision(&config);
-        assert_eq!(resolved_memory_config(&config), expected);
-    }
-
-    #[test]
-    fn memory_config_resolves_each_nested_setting() {
-        let config: Value = toml::from_str(
-            r#"
-                [memory]
-                enabled = false
-                [memory.initial_injection]
-                enabled = false
-                [memory.session]
-                save_on_end = false
-                [memory.watcher]
-                enabled = false
-                [memory.dream]
-                enabled = false
-                [compaction.memory_flush]
-                enabled = false
-            "#,
-        )
-        .unwrap();
-        assert_eq!(
-            resolved_memory_config(&config),
-            MemoryConfig {
-                enabled: false,
-                initial_injection_enabled: false,
-                save_on_end: false,
-                watcher_enabled: false,
-                auto_flush_enabled: false,
-                dream_enabled: false,
-                revision: memory_revision(&config),
-                ..MemoryConfig::default()
-            }
-        );
-    }
-
-    #[test]
-    fn set_nested_bool_preserves_unrelated_config() {
-        let mut config: Value = toml::from_str("[models]\ndefault = 'demo'\n").unwrap();
-        set_nested_bool(&mut config, "memory", Some("session"), "save_on_end", true).unwrap();
-        assert_eq!(config["models"]["default"].as_str(), Some("demo"));
-        assert_eq!(
-            config["memory"]["session"]["save_on_end"].as_bool(),
-            Some(true)
-        );
-    }
-}
-
 // ---------------------------------------------------------------------------
 // Remote catalog fetch
 // ---------------------------------------------------------------------------
@@ -457,4 +372,90 @@ pub(crate) fn ensure_remote_fetch_disabled() -> Result<bool, String> {
         set_nested_bool(config, "features", None, "remote_fetch", false)?;
         Ok(true)
     })
+}
+
+#[cfg(test)]
+mod memory_tests {
+    use super::*;
+    #[test]
+    fn patch_preserves_other_fields_and_rejects_stale_revision() {
+        let mut config: Value = toml::from_str("[memory]\nenabled=false\n[memory.embedding]\nprovider='api'\nendpoint='https://custom.example'\napi_key='keep'\n").unwrap();
+        let revision = memory_revision(&config);
+        let patch: MemoryConfigPatch =
+            serde_json::from_value(serde_json::json!({"dreamEnabled": false})).unwrap();
+        let saved = apply_memory_patch(&mut config, patch, Some(revision.clone())).unwrap();
+        assert!(!saved.enabled);
+        assert!(!saved.dream_enabled);
+        assert_eq!(
+            config["memory"]["embedding"]["api_key"].as_str(),
+            Some("keep")
+        );
+        let before = config.clone();
+        assert!(apply_memory_patch(
+            &mut config,
+            MemoryConfigPatch {
+                enabled: Some(true),
+                ..Default::default()
+            },
+            Some(revision)
+        )
+        .is_err());
+        assert_eq!(config, before);
+        let wire = serde_json::to_value(saved).unwrap();
+        assert!(wire["revision"].is_string());
+    }
+
+    #[test]
+    fn memory_defaults_are_enabled_for_echoagent() {
+        let config = Value::Table(Default::default());
+        let expected = MemoryConfig {
+            revision: memory_revision(&config),
+            ..MemoryConfig::default()
+        };
+        assert_eq!(resolved_memory_config(&config), expected);
+    }
+
+    #[test]
+    fn memory_config_resolves_each_nested_setting() {
+        let config: Value = toml::from_str(
+            r#"
+                [memory]
+                enabled = false
+                [memory.initial_injection]
+                enabled = false
+                [memory.session]
+                save_on_end = false
+                [memory.watcher]
+                enabled = false
+                [memory.dream]
+                enabled = false
+                [compaction.memory_flush]
+                enabled = false
+            "#,
+        )
+        .unwrap();
+        assert_eq!(
+            resolved_memory_config(&config),
+            MemoryConfig {
+                enabled: false,
+                initial_injection_enabled: false,
+                save_on_end: false,
+                watcher_enabled: false,
+                auto_flush_enabled: false,
+                dream_enabled: false,
+                revision: memory_revision(&config),
+            }
+        );
+    }
+
+    #[test]
+    fn set_nested_bool_preserves_unrelated_config() {
+        let mut config: Value = toml::from_str("[models]\ndefault = 'demo'\n").unwrap();
+        set_nested_bool(&mut config, "memory", Some("session"), "save_on_end", true).unwrap();
+        assert_eq!(config["models"]["default"].as_str(), Some("demo"));
+        assert_eq!(
+            config["memory"]["session"]["save_on_end"].as_bool(),
+            Some(true)
+        );
+    }
 }

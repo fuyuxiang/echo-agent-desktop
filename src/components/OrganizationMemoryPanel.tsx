@@ -198,7 +198,7 @@ export function OrganizationMemoryPanel({
   const [previewLoading, setPreviewLoading] = useState(false);
   const [removeTarget, setRemoveTarget] = useState<{ id: string; name: string; submission: boolean } | null>(null);
   const [publishDocumentTarget, setPublishDocumentTarget] = useState<OrgDocument | null>(null);
-  const previewDialogRef = useModalFocus<HTMLDivElement>(Boolean(preview), () => setPreview(null));
+  const previewDialogRef = useModalFocus<HTMLDivElement>(Boolean(preview), () => closePreview());
   const closePublishDialog = () => { if (!busy) setPublishDocumentTarget(null); };
   const closeRemoveDialog = () => { if (!busy) setRemoveTarget(null); };
   const publishDialogRef = useModalFocus<HTMLDivElement>(Boolean(publishDocumentTarget), closePublishDialog);
@@ -212,13 +212,60 @@ export function OrganizationMemoryPanel({
   const [memoryOutcome, setMemoryOutcome] = useState("");
   const [memoryWorkspace, setMemoryWorkspace] = useState("");
   const [memoryValidUntil, setMemoryValidUntil] = useState("");
+  const workspaceGeneration = useRef(0);
+  const previewGeneration = useRef(0);
+  const currentBoundary = () => useOrgSessionStore.getState().boundaryRevision;
+  const isCurrentBoundary = (revision: number) => currentBoundary() === revision;
+  const closePreview = () => {
+    previewGeneration.current += 1;
+    setPreview(null);
+    setPreviewLoading(false);
+  };
+
+  const clearWorkspace = useCallback(() => {
+    workspaceGeneration.current += 1;
+    previewGeneration.current += 1;
+    setScopes([]);
+    setSelectedScope("");
+    selectedScopeRef.current = "";
+    setWriteScope("");
+    setPublishScope("");
+    setDocuments([]);
+    setDocumentTotal(0);
+    setDocumentPage(1);
+    setMemories([]);
+    setMemoryPromotions([]);
+    setDocumentSubmissions([]);
+    setSubmissionTotal(0);
+    setSubmissionPage(1);
+    setFolderBatch(null);
+    setUploadIntent(null);
+    setPreview(null);
+    setPreviewLoading(false);
+    setRemoveTarget(null);
+    setPublishDocumentTarget(null);
+    setSkills([]);
+    setSkillSubmissions([]);
+    setShowMemoryForm(false);
+    setMemoryContent("");
+    setMemoryRationale("");
+    setMemoryOutcome("");
+    setMemoryWorkspace("");
+    setMemoryValidUntil("");
+    setTab("overview");
+  }, []);
 
   useEffect(() => {
     if (mirroredSession) setSession(mirroredSession);
   }, [mirroredSession]);
 
   const loadWorkspace = useCallback(async () => {
+    const boundary = useOrgSessionStore.getState().boundaryRevision;
+    const generation = ++workspaceGeneration.current;
+    const isCurrent = () => useOrgSessionStore.getState().boundaryRevision === boundary
+      && workspaceGeneration.current === generation;
     const nextScopes = await orgListScopes();
+    if (!isCurrent()) return;
     const activeScope = nextScopes.some((scope) => scope.id === selectedScopeRef.current)
       ? selectedScopeRef.current : "";
     selectedScopeRef.current = activeScope;
@@ -230,6 +277,7 @@ export function OrganizationMemoryPanel({
       orgListMemories(),
       orgMemoryPromotionsMine(),
     ]);
+    if (!isCurrent()) return;
     setScopes(nextScopes);
     if (selectedScopeRef.current === activeScope) {
       setDocuments(docs.items);
@@ -252,11 +300,32 @@ export function OrganizationMemoryPanel({
       : nextScopes.find((scope) => scope.kind === "team")?.id || nextScopes.find((scope) => scope.kind === "org")?.id || "");
   }, []);
 
+  useEffect(() => useOrgSessionStore.subscribe((next, previous) => {
+    if (next.boundaryRevision === previous.boundaryRevision) return;
+    clearWorkspace();
+    if (!next.session?.loggedIn) setLoading(false);
+    // A native permission/account event can arrive while this page is open.
+    // Initial hydration and explicit login already load their own workspace.
+    if (next.session?.loggedIn && previous.session?.loggedIn) {
+      void loadWorkspace().catch((reason) => {
+        if (useOrgSessionStore.getState().boundaryRevision === next.boundaryRevision) {
+          setError(String(reason));
+        }
+      });
+    }
+  }), [clearWorkspace, loadWorkspace]);
+
+  useEffect(() => () => {
+    workspaceGeneration.current += 1;
+    previewGeneration.current += 1;
+  }, []);
+
   useEffect(() => {
     let alive = true;
+    const boundary = currentBoundary();
     orgSession()
       .then(async (nextSession) => {
-        if (!alive) return;
+        if (!alive || !isCurrentBoundary(boundary)) return;
         setSession(nextSession);
         mirrorOrgSession(nextSession);
         if (nextSession.serverUrl) setServerUrl(nextSession.serverUrl);
@@ -265,7 +334,7 @@ export function OrganizationMemoryPanel({
         }
         if (nextSession.loggedIn) await loadWorkspace();
       })
-      .catch((reason) => alive && setError(String(reason)))
+      .catch((reason) => alive && isCurrentBoundary(boundary) && setError(String(reason)))
       .finally(() => alive && setLoading(false));
     return () => { alive = false; };
   }, [loadWorkspace, mirrorOrgSession]);
@@ -326,10 +395,12 @@ export function OrganizationMemoryPanel({
 
   const handleLogin = async (event: React.FormEvent) => {
     event.preventDefault();
+    const boundary = currentBoundary();
     setBusy(true);
     setError(null);
     try {
       const next = await orgLogin(serverUrl, username, password);
+      if (!isCurrentBoundary(boundary)) return;
       setSession(next);
       mirrorOrgSession(next);
       setPassword("");
@@ -343,10 +414,12 @@ export function OrganizationMemoryPanel({
   };
 
   const refreshWorkspace = async () => {
+    const boundary = currentBoundary();
     setBusy(true);
     setError(null);
     try {
       const nextSession = await orgSession();
+      if (!isCurrentBoundary(boundary)) return;
       setSession(nextSession);
       mirrorOrgSession(nextSession);
       if (nextSession.serverUrl) setServerUrl(nextSession.serverUrl);
@@ -368,25 +441,7 @@ export function OrganizationMemoryPanel({
   const resetWorkspace = (signedOutSession: OrgSession = { loggedIn: false }) => {
     setSession(signedOutSession);
     mirrorOrgSession(signedOutSession);
-    setScopes([]);
-    setSelectedScope("");
-    selectedScopeRef.current = "";
-    setWriteScope("");
-    setPublishScope("");
-    setDocuments([]);
-    setDocumentTotal(0);
-    setDocumentPage(1);
-    setMemories([]);
-    setMemoryPromotions([]);
-    setDocumentSubmissions([]);
-    setSubmissionTotal(0);
-    setSubmissionPage(1);
-    setFolderBatch(null);
-    setUploadIntent(null);
-    setPreview(null);
-    setSkills([]);
-    setSkillSubmissions([]);
-    setTab("overview");
+    clearWorkspace();
   };
 
   const handleLogout = async () => {
@@ -411,6 +466,7 @@ export function OrganizationMemoryPanel({
 
   const pickAndUploadDocument = async () => {
     if (!uploadScope) return;
+    const boundary = currentBoundary();
     setError(null);
     try {
       const paths = await filesystemPickFiles({
@@ -419,7 +475,7 @@ export function OrganizationMemoryPanel({
         title: "选择要提交的可检索文档（可多选）",
         extensions: ["md", "txt", "pdf", "docx", "xlsx", "pptx", "png", "jpg", "jpeg"],
       });
-      if (!paths || paths.length === 0) return;
+      if (!isCurrentBoundary(boundary) || !paths || paths.length === 0) return;
       await uploadDocumentsInBatch(paths.map((path) => ({ path })), uploadScope.id);
     } catch (reason) {
       setError(`选择文档失败：${String(reason).replace(/^Error:\s*/, "")}`);
@@ -428,11 +484,13 @@ export function OrganizationMemoryPanel({
 
   const pickDocumentFolder = async () => {
     if (!uploadScope) return;
+    const boundary = currentBoundary();
     setError(null);
     try {
       const folder = await filesystemPickDirectory();
-      if (!folder) return;
+      if (!isCurrentBoundary(boundary) || !folder) return;
       const result = await orgScanDocumentFolder(folder);
+      if (!isCurrentBoundary(boundary)) return;
       if (result.items.length === 0) {
         setError("文件夹中没有可上传的文档（支持 MD、TXT、PDF、Office 文档和图片）");
         return;
@@ -457,6 +515,7 @@ export function OrganizationMemoryPanel({
   };
 
   const uploadDocumentsInBatch = async (files: Array<{ path: string; title?: string }>, scopeId: string) => {
+    const boundary = currentBoundary();
     setBusy(true);
     setError(null);
     setUploadProgress({ label: "正在上传文档", completed: 0, total: files.length });
@@ -465,13 +524,17 @@ export function OrganizationMemoryPanel({
       const settled = await settleWithConcurrency(
         files,
         3,
-        (file) => orgSubmitDocument(file.path, scopeId, file.title),
-        (completed) => setUploadProgress({
+        (file) => {
+          if (!isCurrentBoundary(boundary)) throw new Error("组织账号或权限已改变，已停止后续上传");
+          return orgSubmitDocument(file.path, scopeId, file.title);
+        },
+        (completed) => isCurrentBoundary(boundary) && setUploadProgress({
           label: "正在上传文档",
           completed,
           total: files.length,
         }),
       );
+      if (!isCurrentBoundary(boundary)) return;
       const failures: string[] = [];
       let done = 0;
       let skipped = 0;
@@ -502,23 +565,32 @@ export function OrganizationMemoryPanel({
   };
 
   const changeDocumentScope = async (scopeId: string) => {
+    const boundary = currentBoundary();
     selectedScopeRef.current = scopeId;
     setSelectedScope(scopeId);
+    setDocuments([]);
+    setDocumentTotal(0);
+    setDocumentPage(1);
     setError(null);
     try {
       const page = await orgListDocuments(scopeId || undefined);
-      if (selectedScopeRef.current !== scopeId) return;
+      if (!isCurrentBoundary(boundary) || selectedScopeRef.current !== scopeId) return;
       setDocuments(page.items);
       setDocumentTotal(page.total);
       setDocumentPage(1);
-    } catch (reason) { setError(String(reason)); }
+    } catch (reason) {
+      if (isCurrentBoundary(boundary) && selectedScopeRef.current === scopeId) setError(String(reason));
+    }
   };
 
   const loadMoreDocuments = async () => {
+    const boundary = currentBoundary();
+    const scope = selectedScopeRef.current;
     const next = documentPage + 1;
     setBusy(true);
     try {
-      const page = await orgListDocuments(selectedScopeRef.current || undefined, undefined, next);
+      const page = await orgListDocuments(scope || undefined, undefined, next);
+      if (!isCurrentBoundary(boundary) || selectedScopeRef.current !== scope) return;
       setDocuments((current) => [...current, ...page.items.filter((item) => !current.some((old) => old.id === item.id))]);
       setDocumentTotal(page.total);
       setDocumentPage(next);
@@ -526,10 +598,12 @@ export function OrganizationMemoryPanel({
   };
 
   const loadMoreSubmissions = async () => {
+    const boundary = currentBoundary();
     const next = submissionPage + 1;
     setBusy(true);
     try {
       const page = await orgDocumentSubmissionsMinePage(next);
+      if (!isCurrentBoundary(boundary)) return;
       setDocumentSubmissions((current) => [...current, ...page.items.filter((item) => !current.some((old) => old.id === item.id))]);
       setSubmissionTotal(page.total);
       setSubmissionPage(next);
@@ -537,6 +611,9 @@ export function OrganizationMemoryPanel({
   };
 
   const showDocumentPreview = async (id: string, name: string, sourceType: string, submission: boolean, publishedDocId?: string | null) => {
+    const boundary = currentBoundary();
+    const generation = ++previewGeneration.current;
+    const isCurrent = () => isCurrentBoundary(boundary) && previewGeneration.current === generation;
     setPreviewLoading(true);
     setPreview(null);
     setError(null);
@@ -545,6 +622,7 @@ export function OrganizationMemoryPanel({
     try {
       if (officeDocument && parsedDocId) {
         const parsed = await orgFetchDocument(parsedDocId, null, "0:199");
+        if (!isCurrent()) return;
         if (parsed.chunks.length > 0) {
           setPreview({ name, content: parsed.text, parsed: true, docId: parsedDocId, nextChunk: (parsed.nextSeq ?? 199) + 1, more: parsed.hasMore ?? parsed.chunks.length === 200, resourceId: id, submission, sourceType });
           return;
@@ -555,8 +633,10 @@ export function OrganizationMemoryPanel({
         return;
       }
       const result = await orgPreviewDocument(id, submission, sourceType, name);
+      if (!isCurrent()) return;
       setPreview({ name, content: result.content, parsed: false, resourceId: id, submission, sourceType });
     } catch (reason) {
+      if (!isCurrent()) return;
       if (officeDocument) {
         setPreview({ name, content: "", parsed: false, resourceId: id, submission, sourceType, unavailableReason: "暂时无法读取文档内容。可下载原件在本地查看，稍后重试在线预览。" });
         return;
@@ -564,28 +644,37 @@ export function OrganizationMemoryPanel({
       if (parsedDocId && !officeDocument) {
         try {
           const parsed = await orgFetchDocument(parsedDocId, null, "0:199");
+          if (!isCurrent()) return;
           if (parsed.chunks.length === 0) throw new Error("尚无解析内容");
           setPreview({ name, content: parsed.text, parsed: true, docId: parsedDocId, nextChunk: (parsed.nextSeq ?? 199) + 1, more: parsed.hasMore ?? parsed.chunks.length === 200, resourceId: id, submission, sourceType });
           return;
         } catch { /* Show the original preview error. */ }
       }
-      setError(`无法在线预览文档：${String(reason).replace(/^Error:\s*/, "")}。可下载原件在本地查看。`);
-    } finally { setPreviewLoading(false); }
+      if (isCurrent()) setError(`无法在线预览文档：${String(reason).replace(/^Error:\s*/, "")}。可下载原件在本地查看。`);
+    } finally { if (isCurrent()) setPreviewLoading(false); }
   };
 
   const loadMorePreview = async () => {
     if (!preview?.docId || preview.nextChunk === undefined) return;
+    const boundary = currentBoundary();
+    const generation = previewGeneration.current;
+    const docId = preview.docId;
     setPreviewLoading(true);
     try {
       const start = preview.nextChunk;
       const parsed = await orgFetchDocument(preview.docId, null, `${start}:${start + 199}`);
-      setPreview((current) => current ? {
+      if (!isCurrentBoundary(boundary) || previewGeneration.current !== generation) return;
+      setPreview((current) => current?.docId === docId ? {
         ...current,
         content: `${current.content}\n\n${parsed.text}`,
         nextChunk: (parsed.nextSeq ?? start + 199) + 1,
         more: parsed.hasMore ?? parsed.chunks.length === 200,
       } : current);
-    } catch (reason) { setError(String(reason)); } finally { setPreviewLoading(false); }
+    } catch (reason) {
+      if (isCurrentBoundary(boundary) && previewGeneration.current === generation) setError(String(reason));
+    } finally {
+      if (isCurrentBoundary(boundary) && previewGeneration.current === generation) setPreviewLoading(false);
+    }
   };
 
   const downloadDocument = async (id: string, name: string, submission: boolean) => {
@@ -644,6 +733,7 @@ export function OrganizationMemoryPanel({
 
   const pickAndUploadSkill = async () => {
     if (!uploadScope) return;
+    const boundary = currentBoundary();
     setError(null);
     let paths: string[];
     try {
@@ -657,7 +747,7 @@ export function OrganizationMemoryPanel({
       setError(`选择 Skill ZIP 失败：${String(reason).replace(/^Error:\s*/, "")}`);
       return;
     }
-    if (!paths || paths.length === 0) return;
+    if (!isCurrentBoundary(boundary) || !paths || paths.length === 0) return;
     setBusy(true);
     setUploadProgress({ label: "正在上传 Skill", completed: 0, total: paths.length });
     let batchError: string | null = null;
@@ -665,13 +755,17 @@ export function OrganizationMemoryPanel({
       const settled = await settleWithConcurrency(
         paths,
         3,
-        (path) => orgSubmitSkill(path, uploadScope.id),
-        (completed) => setUploadProgress({
+        (path) => {
+          if (!isCurrentBoundary(boundary)) throw new Error("组织账号或权限已改变，已停止后续上传");
+          return orgSubmitSkill(path, uploadScope.id);
+        },
+        (completed) => isCurrentBoundary(boundary) && setUploadProgress({
           label: "正在上传 Skill",
           completed,
           total: paths.length,
         }),
       );
+      if (!isCurrentBoundary(boundary)) return;
       const failures: string[] = [];
       let done = 0;
       settled.forEach((result, index) => {
@@ -701,13 +795,20 @@ export function OrganizationMemoryPanel({
   };
 
   const uploadNewVersion = async (document: OrgDocument) => {
+    const boundary = currentBoundary();
     const extensions = document.sourceType === "image" ? ["png", "jpg", "jpeg"] : [document.sourceType];
-    const [path] = await filesystemPickFiles({
-      multiple: false,
-      title: "选择同类型新版本",
-      extensions,
-    });
-    if (!path) return;
+    let path: string | undefined;
+    try {
+      [path] = await filesystemPickFiles({
+        multiple: false,
+        title: "选择同类型新版本",
+        extensions,
+      });
+    } catch (reason) {
+      if (isCurrentBoundary(boundary)) setError(`选择新版本失败：${String(reason).replace(/^Error:\s*/, "")}`);
+      return;
+    }
+    if (!isCurrentBoundary(boundary) || !path) return;
     setBusy(true);
     try {
       await orgNewDocumentVersion(document.id, path);
@@ -969,9 +1070,9 @@ export function OrganizationMemoryPanel({
           <SubmissionList title="我的 Skill 提交" submissions={visibleSkillSubmissions} />
         </section>
       )}
-          {preview && <div ref={previewDialogRef} tabIndex={-1} onClick={(event) => { if (event.target === event.currentTarget) setPreview(null); }} className="org-document-modal" role="dialog" aria-modal="true" aria-label={`查看文档 ${preview.name}`}>
+          {preview && <div ref={previewDialogRef} tabIndex={-1} onClick={(event) => { if (event.target === event.currentTarget) closePreview(); }} className="org-document-modal" role="dialog" aria-modal="true" aria-label={`查看文档 ${preview.name}`}>
             <div className="org-document-modal__panel">
-              <header><div><strong>{preview.name}</strong>{preview.parsed && <small>内容来自知识索引，原件排版请下载查看</small>}</div><div className="org-document-modal__header-actions">{!preview.unavailableReason && <button onClick={() => void downloadDocument(preview.resourceId, preview.name, preview.submission)}><Download size={14} />下载原件</button>}<button data-modal-initial-focus aria-label="关闭预览" onClick={() => setPreview(null)}><X size={18} /></button></div></header>
+              <header><div><strong>{preview.name}</strong>{preview.parsed && <small>内容来自知识索引，原件排版请下载查看</small>}</div><div className="org-document-modal__header-actions">{!preview.unavailableReason && <button onClick={() => void downloadDocument(preview.resourceId, preview.name, preview.submission)}><Download size={14} />下载原件</button>}<button data-modal-initial-focus aria-label="关闭预览" onClick={closePreview}><X size={18} /></button></div></header>
               <div className="org-document-modal__body">{preview.unavailableReason
                 ? <div className="org-parsed-preview__unavailable"><FileText size={28} /><strong>暂时无法在线预览</strong><p>{preview.unavailableReason}</p><button className="org-memory__primary" onClick={() => void downloadDocument(preview.resourceId, preview.name, preview.submission)}><Download size={15} />下载原件</button></div>
                 : preview.parsed

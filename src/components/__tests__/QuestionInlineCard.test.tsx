@@ -56,13 +56,17 @@ describe("QuestionInlineCard", () => {
       return vi.fn();
     });
     clientMocks.closed = undefined;
-    useQuestionStore.setState({ queues: {} });
+    useQuestionStore.getState().clearAll();
     useQuestionStore.getState().request(request);
   });
 
   it("keeps a multi-select request retryable until the backend ACK is true", async () => {
     const consoleError = vi.spyOn(console, "error").mockImplementation(() => undefined);
     try {
+      // This case tests failed ACK and retry, while the separate fake-timer
+      // case tests the two-second expiry. Keep CI load out of its premise.
+      useQuestionStore.getState().clearAll();
+      useQuestionStore.getState().request({ ...request, timeout: 30 });
       clientMocks.resolve.mockResolvedValueOnce(false).mockResolvedValueOnce(true);
       render(<QuestionInlineCard sessionId="session-1" />);
 
@@ -111,7 +115,7 @@ describe("QuestionInlineCard", () => {
   });
 
   it("keeps every item in a multi-question request reachable from a keyboard-scrollable region", () => {
-    useQuestionStore.setState({ queues: {} });
+    useQuestionStore.getState().clearAll();
     useQuestionStore.getState().request({
       ...request,
       questions: [

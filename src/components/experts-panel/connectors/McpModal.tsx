@@ -3,7 +3,7 @@ import {
   XCloseIcon, SearchIcon, ConfigureIcon, McpIcon, DeleteIcon, RefreshCwIcon,
 } from "@/foundation/components/Icon/icons";
 import {
-  mcpDelete, mcpList, mcpSetup, mcpToggle, mcpToggleTool, onMcpStatusEvent,
+  mcpAuthTrigger, mcpDelete, mcpList, mcpSetup, mcpToggle, mcpToggleTool, onMcpStatusEvent,
 } from "@/lib/agent-client";
 import { ensureSession } from "@/lib/ensure-session";
 import { useSessionStore } from "@/stores/session-store";
@@ -32,6 +32,9 @@ export function McpModal({
   const [mutating, setMutating] = useState<string | null>(null);
   const [setupDrafts, setSetupDrafts] = useState<Record<string, Record<string, string>>>({});
   const [diagnostics, setDiagnostics] = useState<Record<string, { status?: string; reason?: string; detail?: string }>>({});
+  const [authError, setAuthError] = useState<{ name: string; message: string } | null>(null);
+  const authInFlight = useRef(false);
+  const mounted = useRef(true);
   const dialogRef = useModalFocus<HTMLDivElement>(!embedded, onClose);
   const activeSessionId = useSessionStore((state) => state.sessionId);
   const { requestConfirmation, dialog } = useAppDialog(activeSessionId);
@@ -66,19 +69,76 @@ export function McpModal({
   useEffect(() => {
     let unlisten: (() => void) | undefined;
     let timer: ReturnType<typeof setTimeout> | undefined;
+    let disposed = false;
     onMcpStatusEvent((payload) => {
+      if (disposed || payload.sessionId !== activeSessionId) return;
       const status = payload as { name?: string; status?: string; reason?: string; detail?: string };
       if (status.name) {
         setDiagnostics((current) => ({ ...current, [status.name!]: status }));
       }
       if (timer) clearTimeout(timer);
       timer = setTimeout(() => { void reload(); }, 250);
-    }).then((fn) => { unlisten = fn; });
+    }).then((fn) => { if (disposed) fn(); else unlisten = fn; }).catch(() => {});
     return () => {
+      disposed = true;
       if (timer) clearTimeout(timer);
       unlisten?.();
     };
-  }, [reload]);
+  }, [reload, activeSessionId]);
+
+  useEffect(() => {
+    setDiagnostics({});
+    setAuthError(null);
+  }, [activeSessionId]);
+  useEffect(() => {
+    mounted.current = true;
+    return () => { mounted.current = false; };
+  }, []);
+
+  const handleAuthorize = async (server: McpServerEntry) => {
+    if (authInFlight.current) return;
+    authInFlight.current = true;
+    setAuthError(null);
+    setMutating(`auth:${server.name}`);
+    let targetSession = activeSessionId;
+    try {
+      const sessionId = activeSessionId ?? await ensureSession();
+      targetSession = sessionId;
+      if (!mounted.current) return;
+      if (useSessionStore.getState().sessionId !== sessionId) throw new Error("活动会话已改变，请在当前会话重试授权");
+      const result = await mcpAuthTrigger(sessionId, server.name);
+      if (!mounted.current || useSessionStore.getState().sessionId !== sessionId) return;
+      if (result.status !== "authenticated") {
+        throw new Error(result.error || (result.status === "setup_required"
+          ? "请先完成此服务的配置，再重新授权"
+          : "授权未完成或已取消，请重试"));
+      }
+      onToast?.(`已授权「${server.displayName || server.name}」`);
+      // Read the current store session, including one lazily created above.
+      const generation = ++reloadGeneration.current;
+      try {
+        const next = await mcpList(sessionId, true);
+        if (mounted.current && reloadGeneration.current === generation && useSessionStore.getState().sessionId === sessionId) setServers(next);
+      } catch (reason) {
+        if (mounted.current && reloadGeneration.current === generation && useSessionStore.getState().sessionId === sessionId) {
+          setError(`授权已完成，但连接状态刷新失败：${String(reason).replace(/^Error:\s*/, "")}。请点击「刷新诊断」。`);
+        }
+      } finally {
+        if (mounted.current && reloadGeneration.current === generation) {
+          setLoading(false);
+          setRefreshing(false);
+        }
+      }
+    } catch (reason) {
+      if (!mounted.current || useSessionStore.getState().sessionId !== targetSession) return;
+      const message = String(reason).replace(/^Error:\s*/, "");
+      setAuthError({ name: server.name, message });
+      onToast?.(`授权失败：${message}`);
+    } finally {
+      authInFlight.current = false;
+      if (mounted.current) setMutating(null);
+    }
+  };
 
   const filtered = servers.filter((server) => {
     const query = search.trim().toLowerCase();
@@ -277,20 +337,29 @@ export function McpModal({
                               {server.target && <div className="mcp-item-target" title={server.target}>{server.target}</div>}
                             </div>
                           </button>
+                          {server.authRequired && (
+                            <button type="button" className="um-btn um-btn--primary"
+                              aria-label={`授权 MCP 服务 ${server.displayName || server.name}`}
+                              disabled={mutating !== null || !server.enabled || server.setupRequired}
+                              onClick={() => void handleAuthorize(server)}>
+                              {mutating === `auth:${server.name}` ? "等待浏览器授权…" : "授权连接"}
+                            </button>
+                          )}
                           <label className="sk-toggle" title={server.enabled ? "已启用" : "已停用"}>
                             <input type="checkbox" checked={server.enabled}
                               aria-label={`${server.enabled ? "停用" : "启用"} MCP 服务 ${server.displayName || server.name}`}
-                              disabled={mutating === server.name || server.setupRequired}
+                              disabled={mutating !== null || server.setupRequired}
                               onChange={() => void handleToggle(server, !server.enabled)} />
                             <span className="sk-toggle-track"><span className="sk-toggle-thumb" /></span>
                           </label>
                           {server.editable && (
                             <button type="button" className="sk-inst-del" title="删除用户配置"
                               aria-label={`删除 MCP 服务 ${server.displayName || server.name}`}
-                              disabled={mutating === server.name}
+                              disabled={mutating !== null}
                               onClick={() => void handleDelete(server)}><DeleteIcon size="sm" /></button>
                           )}
                         </div>
+                        {authError?.name === server.name && <div className="ec-error" role="alert">授权失败：{authError.message}。可点击「授权连接」重试。</div>}
                         {isExpanded && (
                           <div className="mcp-item-details">
                             <div className="mcp-detail-grid">
@@ -330,7 +399,7 @@ export function McpModal({
                                   </label>
                                 ))}
                                 <button type="button" className="um-btn um-btn--primary"
-                                  disabled={mutating === `setup:${server.name}`}
+                                  disabled={mutating !== null}
                                   onClick={() => void handleSetup(server)}>
                                   {mutating === `setup:${server.name}` ? "应用中…" : server.setupRequired ? "应用并启动" : "更新配置"}
                                 </button>
@@ -347,7 +416,7 @@ export function McpModal({
                                     <label className="sk-toggle mcp-tool-toggle" title="仅影响当前会话">
                                       <input type="checkbox" checked={tool.enabled}
                                         aria-label={`${tool.enabled ? "停用" : "启用"}工具 ${tool.displayName || tool.name}`}
-                                        disabled={mutating === `tool:${server.name}:${tool.name}`}
+                                        disabled={mutating !== null}
                                         onChange={() => void handleToolToggle(server, tool.name, !tool.enabled)} />
                                       <span className="sk-toggle-track"><span className="sk-toggle-thumb" /></span>
                                     </label>

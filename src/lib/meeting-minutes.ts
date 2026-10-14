@@ -26,6 +26,7 @@ export interface CaptureStatus {
   level: number;
   recordedSamples: number;
   error?: string;
+  pendingSave?: boolean;
 }
 
 export interface TranscriptSegment {
@@ -122,22 +123,36 @@ export function meetingImportAudio(
   return invoke("meeting_import_audio", { sourcePath, title, modelId, providerId });
 }
 
-export function meetingProcess(meetingId: string): Promise<MeetingRecord> {
-  return invoke("meeting_process", { meetingId });
+export interface MeetingModelBinding {
+  modelId: string;
+  providerId: string;
 }
 
-export function meetingRegenerateMinutes(meetingId: string): Promise<MeetingRecord> {
-  return invoke("meeting_regenerate_minutes", { meetingId });
+export function meetingProcess(meetingId: string, binding?: MeetingModelBinding): Promise<MeetingRecord> {
+  return invoke("meeting_process", {
+    meetingId,
+    modelId: binding?.modelId ?? null,
+    providerId: binding?.providerId ?? null,
+  });
+}
+
+export function meetingRegenerateMinutes(meetingId: string, binding?: MeetingModelBinding): Promise<MeetingRecord> {
+  return invoke("meeting_regenerate_minutes", {
+    meetingId,
+    modelId: binding?.modelId ?? null,
+    providerId: binding?.providerId ?? null,
+  });
 }
 
 export function meetingUpdate(
   meetingId: string,
-  update: { title?: string; transcript?: TranscriptSegment[] },
+  update: { title?: string; transcript?: TranscriptSegment[]; minutes?: string },
 ): Promise<MeetingRecord> {
   return invoke("meeting_update", {
     meetingId,
     title: update.title ?? null,
     transcript: update.transcript ?? null,
+    minutes: update.minutes ?? null,
   });
 }
 
@@ -179,6 +194,7 @@ interface RecorderSnapshot {
   level: number;
   error: string | null;
   source: RecordingSource | null;
+  pendingSave: boolean;
 }
 
 type RecorderListener = (snapshot: RecorderSnapshot) => void;
@@ -203,6 +219,8 @@ class MeetingRecorder {
   private nativePoll: number | null = null;
   private nativePollBusy = false;
   private starting = false;
+  private stopOperation: Promise<MeetingRecord> | null = null;
+  private pauseOperation: Promise<void> | null = null;
   private snapshot: RecorderSnapshot = {
     meeting: null,
     active: false,
@@ -210,6 +228,7 @@ class MeetingRecorder {
     level: 0,
     error: null,
     source: null,
+    pendingSave: false,
   };
 
   subscribe(listener: RecorderListener): () => void {
@@ -239,7 +258,7 @@ class MeetingRecorder {
         try {
           meeting = await meetingCreate(title, modelId, providerId, source);
           const status = await meetingCaptureStart(meeting.id, source);
-          this.publish({ meeting, active: true, paused: status.paused, level: status.level, error: status.error ?? null, source });
+          this.publish({ meeting, active: true, paused: status.paused, level: status.level, error: status.error ?? null, source, pendingSave: status.pendingSave ?? false });
           this.startNativePolling();
           return meeting;
         } catch (error) {
@@ -302,7 +321,7 @@ class MeetingRecorder {
     if (!status) return;
     const meeting = await meetingGet(status.meetingId);
     const source = meeting.captureSource === "both" ? "both" : "system";
-    this.publish({ meeting, active: true, paused: status.paused, level: status.level, error: status.error ?? null, source });
+    this.publish({ meeting, active: true, paused: status.paused, level: status.level, error: status.error ?? null, source, pendingSave: status.pendingSave ?? false });
     this.startNativePolling();
   }
 
@@ -317,7 +336,7 @@ class MeetingRecorder {
     try {
       const status = await meetingCaptureStatus();
       if (!status || status.meetingId !== this.snapshot.meeting?.id) return;
-      this.publish({ paused: status.paused, level: status.level, error: status.error ?? null });
+      this.publish({ paused: status.paused, level: status.level, error: status.error ?? null, pendingSave: status.pendingSave ?? false });
       if (status.recordedSamples !== this.snapshot.meeting.recordedSamples) {
         const meeting = await meetingGet(status.meetingId);
         if (this.snapshot.active && this.snapshot.meeting?.id === status.meetingId) this.publish({ meeting });
@@ -364,6 +383,9 @@ class MeetingRecorder {
     if (!meetingId) return;
     if (this.pending.length > 0) this.writeQueue.push(this.pending.splice(0, this.pending.length));
     if (this.writeQueue.length === 0) return;
+    if (this.writeQueue.length >= 3) {
+      this.publish({ paused: true, level: 0, error: "录音写入较慢，已暂停；请等待写入完成后继续" });
+    }
     this.uploadChain = this.uploadChain
       .then(async () => {
         while (this.writeQueue.length > 0) {
@@ -374,7 +396,7 @@ class MeetingRecorder {
             this.publish({ meeting, error: null });
           } catch (error) {
             this.lastWriteError = error instanceof Error ? error : new Error(String(error));
-            this.publish({ error: String(error).replace(/^Error:\s*/, "") });
+            this.publish({ paused: true, level: 0, error: String(error).replace(/^Error:\s*/, "") });
             return;
           }
         }
@@ -391,31 +413,61 @@ class MeetingRecorder {
     throw this.lastWriteError ?? new Error("录音写入失败，请检查磁盘空间后重试");
   }
 
-  async setPaused(paused: boolean): Promise<void> {
-    const meeting = this.snapshot.meeting;
-    if (!meeting || !this.snapshot.active) return;
-    if (this.snapshot.source !== "microphone") {
-      const updated = await meetingCapturePause(meeting.id, paused);
-      this.publish({ meeting: updated, paused, level: 0 });
-      return;
-    }
-    if (paused) await this.ensureFlushed();
-    const updated = await meetingSetPaused(meeting.id, paused);
-    this.publish({ meeting: updated, paused, level: 0 });
+  setPaused(paused: boolean): Promise<void> {
+    if (this.stopOperation) return Promise.reject(new Error("正在结束录音，请稍后重试"));
+    if (this.pauseOperation) return Promise.reject(new Error("正在切换录音状态，请稍后重试"));
+    this.pauseOperation = this.applyPaused(paused).finally(() => { this.pauseOperation = null; });
+    return this.pauseOperation;
   }
 
-  async stop(): Promise<MeetingRecord> {
+  private async applyPaused(paused: boolean): Promise<void> {
+    const meeting = this.snapshot.meeting;
+    if (!meeting || !this.snapshot.active) return;
+    if (this.snapshot.pendingSave) throw new Error("录音已停止，请先重试保存");
+    if (this.snapshot.source !== "microphone") {
+      const updated = await meetingCapturePause(meeting.id, paused);
+      this.publish({ meeting: updated, paused, level: 0, error: null });
+      return;
+    }
+    const previousPaused = this.snapshot.paused;
+    if (paused) this.publish({ paused: true, level: 0 });
+    try {
+      if (paused || this.writeQueue.length > 0 || this.pending.length > 0) await this.ensureFlushed();
+      const updated = await meetingSetPaused(meeting.id, paused);
+      this.publish({ meeting: updated, paused, level: 0, error: null });
+    } catch (error) {
+      this.publish({ paused: previousPaused || this.writeQueue.length > 0 || this.lastWriteError !== null, error: String(error).replace(/^Error:\s*/, "") });
+      throw error;
+    }
+  }
+
+  stop(): Promise<MeetingRecord> {
+    // A toolbar action and a controlled exit may stop the same recording.
+    // Share one native finalization so the second caller cannot see a removed
+    // capture or race a pending disk write.
+    this.stopOperation ??= Promise.resolve()
+      .then(async () => {
+        if (this.pauseOperation) await this.pauseOperation.catch(() => undefined);
+        return this.finishRecording();
+      })
+      .finally(() => { this.stopOperation = null; });
+    return this.stopOperation;
+  }
+
+  private async finishRecording(): Promise<MeetingRecord> {
     const meeting = this.snapshot.meeting;
     if (!meeting || !this.snapshot.active) throw new Error("当前没有正在进行的录音");
     if (this.snapshot.source !== "microphone") {
       try {
         const completed = await meetingCaptureStop(meeting.id);
         this.stopNativePolling();
-        this.publish({ meeting: completed, active: false, paused: false, level: 0, error: null, source: null });
+        this.publish({ meeting: completed, active: false, paused: false, level: 0, error: null, source: null, pendingSave: false });
         return completed;
       } catch (error) {
         const status = await meetingCaptureStatus().catch(() => null);
-        if (!status) {
+        if (status) {
+          this.publish({ paused: status.paused, pendingSave: status.pendingSave ?? false, level: 0, error: String(error).replace(/^Error:\s*/, "") });
+        } else {
           this.stopNativePolling();
           const latest = await meetingGet(meeting.id).catch(() => meeting);
           this.publish({ meeting: latest, active: false, paused: false, level: 0, error: String(error), source: null });
@@ -423,6 +475,9 @@ class MeetingRecorder {
         throw error;
       }
     }
+    // Stop accepting PCM before releasing the microphone. Keep the buffered
+    // audio and its recovery entry until every native write has succeeded.
+    this.publish({ paused: true, pendingSave: true, level: 0 });
     this.processor?.disconnect();
     this.source?.disconnect();
     this.processor = null;
@@ -433,11 +488,16 @@ class MeetingRecorder {
     this.context = null;
     try {
       await this.ensureFlushed();
+      if (!this.snapshot.meeting?.recordedSamples) {
+        await meetingDelete(meeting.id);
+        this.publish({ meeting: null, active: false, paused: false, level: 0, source: null, pendingSave: false });
+        throw new Error("未录到音频，空记录已移除，请重新开始录音");
+      }
       const completed = await meetingFinishRecording(meeting.id);
-      this.publish({ meeting: completed, active: false, paused: false, level: 0, source: null });
+      this.publish({ meeting: completed, active: false, paused: false, level: 0, source: null, pendingSave: false, error: null });
       return completed;
     } catch (error) {
-      this.publish({ active: false, paused: false, level: 0, error: String(error), source: null });
+      this.publish({ level: 0, error: String(error).replace(/^Error:\s*/, "") });
       throw error;
     }
   }

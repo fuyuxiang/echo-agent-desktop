@@ -178,6 +178,11 @@ pub struct DiscoveryConfig {
     pub disabled: Vec<String>,
     /// `[plugins].enabled` plugin IDs or names (overrides default-disabled for project plugins).
     pub enabled: Vec<String>,
+    /// Source identities revoked in the current Echo scope. Compatibility
+    /// settings/installs stay read-only, but their components cannot load.
+    pub disabled_marketplace_sources: Vec<String>,
+    /// Logical local aliases captured when their canonical source was revoked.
+    pub disabled_marketplace_source_aliases: std::collections::BTreeMap<String, String>,
 }
 
 impl DiscoveryConfig {
@@ -277,9 +282,33 @@ pub fn discover_plugins(
     trust_store: &TrustStore,
     project_trusted: bool,
 ) -> Vec<DiscoveredPlugin> {
+    discover_plugins_with_user_home(
+        cwd,
+        config,
+        trust_store,
+        project_trusted,
+        dirs::home_dir().as_deref(),
+    )
+}
+
+fn discover_plugins_with_user_home(
+    cwd: Option<&Path>,
+    config: &DiscoveryConfig,
+    trust_store: &TrustStore,
+    project_trusted: bool,
+    user_home: Option<&Path>,
+) -> Vec<DiscoveredPlugin> {
     let _plugin_discovery_timer = crate::timing::timer("plugin_discovery");
     let mut seen_paths: HashSet<PathBuf> = HashSet::new();
     let mut candidates: Vec<DiscoveredPlugin> = Vec::new();
+    let user_revocations = user_home.map(|home| {
+        super::marketplace_scope::RevokedCompatSources::read_user_with_aliases_in(
+            &home.join(".claude"),
+            &config.disabled_marketplace_sources,
+            &config.disabled_marketplace_source_aliases,
+        )
+    });
+    let mut project_revocations = None;
 
     // 1. CLI --plugin-dir paths
     for dir in &config.cli_plugin_dirs {
@@ -303,6 +332,15 @@ pub fn discover_plugins(
     // walk (cwd→git root), so discovery and gating can never drift.
     if let Some(cwd) = cwd {
         let (project_dirs, git_root) = project_plugin_dirs(Some(cwd));
+        if let Some(root) = git_root.as_ref() {
+            project_revocations = Some(
+                super::marketplace_scope::RevokedCompatSources::read_with_aliases_in(
+                    &root.join(".claude"),
+                    &config.disabled_marketplace_sources,
+                    &config.disabled_marketplace_source_aliases,
+                ),
+            );
+        }
         for plugins_dir in project_dirs {
             let origin = project_plugins_dir_origin(&plugins_dir);
             scan_plugin_dir(
@@ -341,7 +379,7 @@ pub fn discover_plugins(
     // Gate the echoagent plugins dir on user_echo_agent_home() so a project's .echo-agent/plugins
     // is never scanned as user-global when no home resolves.
     let echoagent = echo_agent_config::user_echo_agent_home();
-    let plugin_dirs = user_plugin_dirs(dirs::home_dir().as_deref(), echoagent.as_deref());
+    let plugin_dirs = user_plugin_dirs(user_home, echoagent.as_deref());
     for (plugins_dir, origin) in plugin_dirs {
         if plugins_dir.is_dir() {
             scan_plugin_dir(
@@ -360,7 +398,10 @@ pub fn discover_plugins(
     // Marketplace repos are cloned locally and registered here.
     // Tracks marketplace installs in installed_plugins.json with explicit
     // Each marketplace has a plugins/ (and optionally external_plugins/) subdirectory.
-    for marketplace in &super::marketplace::resolve_known_marketplaces() {
+    let marketplaces = user_home
+        .map(|home| super::marketplace::resolve_known_marketplaces_in(&home.join(".claude")))
+        .unwrap_or_default();
+    for marketplace in &marketplaces {
         for dir in &marketplace.plugin_dirs {
             collect_plugin(
                 dir,
@@ -381,7 +422,12 @@ pub fn discover_plugins(
         // Installed plugins are always User scope (auto-trusted).
         // The user explicitly installed them via marketplace or CLI,
         // so they should be trusted regardless of install_dir location.
-        let registry = super::install_registry::InstallRegistry::load();
+        let mut registry = super::install_registry::InstallRegistry::load();
+        super::marketplace_scope::filter_installed(
+            &mut registry,
+            &config.disabled_marketplace_sources,
+            &config.disabled_marketplace_source_aliases,
+        );
         collect_installed_plugins(
             &registry,
             PluginScope::User,
@@ -397,7 +443,7 @@ pub fn discover_plugins(
     // scope wins. Within same scope, first-found (alphabetical by canonical
     // with explicit installPath entries (nested under cache/<marketplace>/<plugin>/<version>/).
     // The plugin name is extracted from the JSON key ("name@marketplace").
-    if let Some(home) = dirs::home_dir() {
+    if let Some(home) = user_home {
         let installed_json = home
             .join(".claude")
             .join("plugins")
@@ -425,6 +471,23 @@ pub fn discover_plugins(
             }
         }
     }
+
+    // Revoke before conflict resolution and before lower-priority explicit
+    // config paths are considered. Release canonical-path dedup entries too:
+    // an explicit ConfigPath/CLI choice must remain usable even when a compat
+    // scan of the same directory was revoked by its marketplace identity.
+    candidates.retain(|plugin| {
+        let revocations = if plugin.scope == PluginScope::Project {
+            project_revocations.as_ref()
+        } else {
+            user_revocations.as_ref()
+        };
+        !revocations.is_some_and(|sources| sources.blocks(&plugin.origin, &plugin.canonical_root))
+    });
+    seen_paths = candidates
+        .iter()
+        .map(|plugin| plugin.canonical_root.clone())
+        .collect();
 
     // 6. Config-path plugins
     for dir in &config.config_paths {
@@ -891,6 +954,86 @@ fn read_claude_installed_plugins(
 mod tests {
     use super::*;
 
+    #[test]
+    fn disabled_marketplace_scope_removes_real_discovery_components_but_keeps_explicit_path() {
+        let tmp = tempfile::tempdir().unwrap();
+        let fake_home = tmp.path().join("external-user");
+        let claude = fake_home.join(".claude");
+        let install = tmp.path().join("external-marketplace");
+        let name = "scoped-marketplace-component-regression";
+        let url = "https://127.0.0.1:4443/component-regression.git";
+        let plugin = install.join("plugins").join(name);
+        std::fs::create_dir_all(plugin.join("skills/notes")).unwrap();
+        std::fs::write(
+            plugin.join("plugin.json"),
+            serde_json::json!({"name":name,"skills":"skills","version":"1.0.0"}).to_string(),
+        )
+        .unwrap();
+        std::fs::write(
+            plugin.join("skills/notes/SKILL.md"),
+            "# Scoped static notes\n",
+        )
+        .unwrap();
+        std::fs::create_dir_all(claude.join("plugins")).unwrap();
+        let settings = claude.join("settings.json");
+        let registry = claude.join("plugins/known_marketplaces.json");
+        std::fs::write(
+            &settings,
+            serde_json::json!({"enabledPlugins":{format!("{name}@review-market"):true}})
+                .to_string(),
+        )
+        .unwrap();
+        std::fs::write(&registry, serde_json::json!({"review-market":{"source":{"source":"git","url":url},"installLocation":install}}).to_string()).unwrap();
+        let before = [
+            std::fs::read(&settings).unwrap(),
+            std::fs::read(&registry).unwrap(),
+        ];
+        let trust = TrustStore::load_from(tmp.path().join("owned-trust"));
+        let mut config = DiscoveryConfig {
+            enabled: vec![name.into()],
+            ..Default::default()
+        };
+        let discovered =
+            discover_plugins_with_user_home(None, &config, &trust, true, Some(&fake_home));
+        let active = super::super::registry::PluginRegistry::from_discovered(
+            discovered,
+            &config.disabled,
+            &config.enabled,
+        );
+        assert_eq!(
+            active.get(name).unwrap().skill_count,
+            1,
+            "Fixture must reach the real executable-component registry before removal"
+        );
+        config.disabled_marketplace_sources = vec![url.into()];
+        let discovered =
+            discover_plugins_with_user_home(None, &config, &trust, true, Some(&fake_home));
+        let revoked = super::super::registry::PluginRegistry::from_discovered(
+            discovered,
+            &config.disabled,
+            &config.enabled,
+        );
+        assert!(
+            revoked.get(name).is_none(),
+            "Removed source still registered its skill namespace"
+        );
+        config.config_paths = vec![plugin.clone()];
+        let discovered =
+            discover_plugins_with_user_home(None, &config, &trust, true, Some(&fake_home));
+        let explicit = discovered
+            .iter()
+            .find(|candidate| candidate.manifest.name == name)
+            .unwrap();
+        assert_eq!(
+            explicit.origin,
+            PluginOrigin::ConfigPath,
+            "Revoked compat scan incorrectly consumed the explicit canonical path"
+        );
+        assert_eq!(std::fs::read(&settings).unwrap(), before[0]);
+        assert_eq!(std::fs::read(&registry).unwrap(), before[1]);
+        assert!(plugin.join("skills/notes/SKILL.md").is_file());
+    }
+
     fn make_manifest_plugin(tmp: &Path, name: &str) -> PathBuf {
         let plugin_dir = tmp.join(name);
         std::fs::create_dir_all(&plugin_dir).unwrap();
@@ -1160,6 +1303,7 @@ mod tests {
                 )]),
                 marketplace: Some(MarketplaceProvenance {
                     source_url_or_path: "https://example.com/mp.git".to_string(),
+                    canonical_source_identity: None,
                     source_display_name: "Demo Marketplace".to_string(),
                     plugin_subdir: "plugins/mp-plugin".to_string(),
                 }),

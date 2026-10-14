@@ -30,6 +30,8 @@
   },
   "theiaPluginsDir": "../../plugins",
   "theiaPlugins": {
+    "vscode.git-base": "https://open-vsx.org/api/vscode/git-base/1.95.3/file/vscode.git-base-1.95.3.vsix",
+    "vscode.git": "https://open-vsx.org/api/vscode/git/1.95.3/file/vscode.git-1.95.3.vsix",
     "vscode.javascript": "https://open-vsx.org/api/vscode/javascript/1.95.3/file/vscode.javascript-1.95.3.vsix",
     "vscode.typescript": "https://open-vsx.org/api/vscode/typescript/1.95.3/file/vscode.typescript-1.95.3.vsix",
     "vscode.rust": "https://open-vsx.org/api/vscode/rust/1.95.3/file/vscode.rust-1.95.3.vsix",

@@ -9,6 +9,7 @@ const mocks = vi.hoisted(() => ({
   mcpList: vi.fn(),
   mcpSetup: vi.fn(),
   mcpToggleTool: vi.fn(),
+  mcpAuthTrigger: vi.fn(),
   pickFiles: vi.fn(),
   pickDirectory: vi.fn(),
   connectorConfig: vi.fn(),
@@ -34,6 +35,7 @@ vi.mock("@/lib/agent-client", () => ({
   mcpList: mocks.mcpList,
   mcpSetup: mocks.mcpSetup,
   mcpToggleTool: mocks.mcpToggleTool,
+  mcpAuthTrigger: mocks.mcpAuthTrigger,
   mcpDelete: vi.fn(),
   mcpToggle: vi.fn(),
   onMcpStatusEvent: vi.fn(async () => () => {}),
@@ -420,6 +422,27 @@ describe("本地 Skills / MCP 完整流程", () => {
     fireEvent.click(screen.getByRole("button", { name: "查看帮助" }));
     await waitFor(() => expect(mocks.openUrl).toHaveBeenCalledWith("javascript:alert(1)"));
     expect(await screen.findByRole("alert")).toHaveTextContent("无法打开帮助链接：不允许的 URL scheme");
+  });
+
+  it("待授权服务有实际授权入口，拒绝后可重试并刷新真实状态", async () => {
+    const server = {
+      name: "oauth-demo", displayName: "OAuth Demo", transport: "http", target: "https://mcp.example.com",
+      enabled: true, source: "user", status: "needsauth", live: true, authRequired: true,
+      setupRequired: false, setupValues: {}, tools: [], args: [], env: {}, editable: true,
+    };
+    mocks.mcpList.mockResolvedValue([server]);
+    mocks.mcpAuthTrigger.mockResolvedValueOnce({ status: "failed", error: "用户拒绝授权" })
+      .mockResolvedValueOnce({ status: "authenticated" });
+    render(<McpModal onClose={vi.fn()} />);
+    fireEvent.click(await screen.findByRole("button", { name: "授权 MCP 服务 OAuth Demo" }));
+    expect(await screen.findByRole("alert")).toHaveTextContent("用户拒绝授权");
+    expect(mocks.mcpAuthTrigger).toHaveBeenCalledWith("session-1", "oauth-demo");
+
+    mocks.mcpList.mockResolvedValue([{ ...server, authRequired: false, status: "ready", tools: [{ name: "query", enabled: true }] }]);
+    fireEvent.click(screen.getByRole("button", { name: "授权 MCP 服务 OAuth Demo" }));
+    await waitFor(() => expect(screen.queryByRole("button", { name: "授权 MCP 服务 OAuth Demo" })).toBeNull());
+    expect(screen.getByText("1 个工具")).toBeInTheDocument();
+    expect(mocks.mcpList).toHaveBeenLastCalledWith("session-1", true);
   });
 
   it("MCP Setup 与逐工具开关走活动会话", async () => {

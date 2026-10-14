@@ -956,6 +956,38 @@ pub enum AppendUpdateError {
     Committed(io::Error),
 }
 
+/// The replay line landed, but its durable file/directory barrier did not.
+/// Keep this distinct from a derived-summary failure for durable callers.
+#[derive(Debug)]
+struct CommittedBarrierError(io::Error);
+
+impl std::fmt::Display for CommittedBarrierError {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        self.0.fmt(formatter)
+    }
+}
+
+impl std::error::Error for CommittedBarrierError {
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        Some(&self.0)
+    }
+}
+
+pub(crate) fn committed_barrier_error(error: io::Error) -> io::Error {
+    io::Error::new(error.kind(), CommittedBarrierError(error))
+}
+
+pub(crate) fn is_committed_barrier_error(error: &io::Error) -> bool {
+    committed_barrier_source(error).is_some()
+}
+
+pub(crate) fn committed_barrier_source(error: &io::Error) -> Option<&io::Error> {
+    error
+        .get_ref()?
+        .downcast_ref::<CommittedBarrierError>()
+        .map(|source| &source.0)
+}
+
 #[derive(Debug)]
 pub enum AppendCwdSwitchError {
     NotCommitted(io::Error),
@@ -968,7 +1000,20 @@ pub enum AppendCwdSwitchError {
 impl AppendUpdateError {
     pub fn into_io_error(self) -> io::Error {
         match self {
-            Self::NotCommitted(error) | Self::Committed(error) => error,
+            Self::NotCommitted(error) | Self::Committed(error) => {
+                if is_committed_barrier_error(&error) {
+                    // Preserve errno for legacy IO callers; the marker is only
+                    // meaningful to commit-aware/durable append callers.
+                    error
+                        .into_inner()
+                        .unwrap()
+                        .downcast::<CommittedBarrierError>()
+                        .unwrap()
+                        .0
+                } else {
+                    error
+                }
+            }
         }
     }
 }
@@ -1064,6 +1109,18 @@ pub trait StorageAdapter: Send + Sync {
 
     /// Append a chat message and increment counter.
     async fn append_chat_message(&self, info: &Info, message: &ConversationItem) -> io::Result<()>;
+
+    /// Retrying a cache append must distinguish a missing line from failed
+    /// bookkeeping after the line landed. Legacy adapters retain their API.
+    async fn append_chat_message_commit_aware(
+        &self,
+        info: &Info,
+        message: &ConversationItem,
+    ) -> Result<(), AppendUpdateError> {
+        self.append_chat_message(info, message)
+            .await
+            .map_err(AppendUpdateError::NotCommitted)
+    }
 
     /// Append one working-directory switch generation exactly once.
     async fn append_cwd_switch_commit_aware(
@@ -1182,6 +1239,12 @@ pub trait StorageAdapter: Send + Sync {
 
     /// Sync all session files to disk. Called before CopyFile to ensure all writes are persisted.
     async fn sync_session_files(&self, info: &Info) -> io::Result<()>;
+
+    /// Checked host persistence barrier. Adapters with a best-effort legacy
+    /// sync override this to propagate actual file-sync failures.
+    async fn sync_session_files_checked(&self, info: &Info) -> io::Result<()> {
+        self.sync_session_files(info).await
+    }
 
     /// Truncate rewind points from a specific prompt index (inclusive)
     /// Used when rewinding to remove future history

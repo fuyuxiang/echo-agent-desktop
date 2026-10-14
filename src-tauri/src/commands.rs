@@ -314,7 +314,9 @@ impl AppState {
             return false;
         }
         current_tx.take();
-        drop(current_tx);
+        // Keep the sender guard through the synchronous state changes so an
+        // initialization cannot publish a replacement between identity check
+        // and teardown of its handle/readiness.
         if let Some(handle) = self.handle.lock().unwrap().take() {
             handle.cancel.cancel();
         }
@@ -325,6 +327,35 @@ impl AppState {
         self.clear_orphaned_sessions();
         self.clear_session_workspaces();
         crate::agent_admin::clear_runtime_capabilities();
+        self.init_outcome.lock().unwrap().take();
+        self.mark_runtime_models_failed(error);
+        crate::permission_config::mark_runtime_permission_mode_offline(None);
+        true
+    }
+
+    /// Remove a dead gateway from readiness immediately, while keeping its
+    /// worker handle and LocalSet available for final persistence/retry.
+    fn quarantine_gateway_if_current(
+        &self,
+        tx: &echo_agent_acp::AcpAgentTx,
+        error: String,
+    ) -> bool {
+        let mut current_tx = self.tx.lock().unwrap();
+        if !current_tx
+            .as_ref()
+            .is_some_and(|current| current.same_channel(tx))
+        {
+            return false;
+        }
+        current_tx.take();
+        // Match the same sender throughout quarantine, including its handle
+        // and readiness. Publishing another sender must wait for this guard.
+        if let Some(handle) = self.handle.lock().unwrap().as_ref() {
+            handle.cancel.cancel();
+        }
+        if let Some(scheduler) = self.automation_scheduler.lock().unwrap().take() {
+            scheduler.abort();
+        }
         self.init_outcome.lock().unwrap().take();
         self.mark_runtime_models_failed(error);
         crate::permission_config::mark_runtime_permission_mode_offline(None);
@@ -941,7 +972,7 @@ pub async fn agent_init(
     if let Some(scheduler) = state.automation_scheduler.lock().unwrap().take() {
         scheduler.abort();
     }
-    stop_agent_runtime(&state).await;
+    stop_agent_runtime_wait(&state, std::time::Duration::from_secs(12)).await?;
     crate::automations::clear_runtime_sessions();
     state.clear_orphaned_sessions();
     state.clear_session_workspaces();
@@ -972,6 +1003,8 @@ pub async fn agent_init(
         rx,
         cancel,
         shutdown_complete,
+        shutdown_failure,
+        mut gateway_failure,
         thread,
     } = tokio::task::spawn_blocking(move || agent_runtime::spawn_agent_runtime(spawn_cwd))
         .await
@@ -1005,7 +1038,35 @@ pub async fn agent_init(
         rx: placeholder_rx,
         cancel: cancel.clone(),
         shutdown_complete,
+        shutdown_failure,
+        gateway_failure: gateway_failure.clone(),
         thread: None,
+    });
+
+    // Joining the Runtime can legitimately wait for a failed disk write to be
+    // repaired. Its gateway is already unusable during that wait and must not
+    // remain eligible for init reuse or receive another user prompt.
+    let gateway_app = app.clone();
+    let gateway_tx = tx.clone();
+    tauri::async_runtime::spawn(async move {
+        loop {
+            let failure = gateway_failure.borrow_and_update().clone();
+            if let Some(reason) = failure {
+                if gateway_app
+                    .state::<AppState>()
+                    .quarantine_gateway_if_current(&gateway_tx, reason.clone())
+                {
+                    let _ = gateway_app.emit(
+                        "agent://agent-died",
+                        serde_json::json!({ "reason": reason, "generation": generation }),
+                    );
+                }
+                break;
+            }
+            if gateway_failure.changed().await.is_err() {
+                break;
+            }
+        }
     });
 
     // Monitor the agent thread: if it exits unexpectedly (panic/crash), notify
@@ -1377,7 +1438,8 @@ pub async fn agent_load_session(
     }
     let automation_mode = crate::automation::AutomationMode::parse(&agent_mode)
         .unwrap_or(crate::automation::AutomationMode::Default);
-    if let Err(error) = crate::automation::set_session_mode(&session_id, automation_mode).await {
+    if let Err(error) = crate::automation::restore_session_mode(&session_id, automation_mode).await
+    {
         tracing::warn!(%error, %session_id, %agent_mode, "failed to restore automation mode");
     }
     Ok(current_model_id)
@@ -1565,8 +1627,9 @@ pub async fn agent_shutdown(
     folder_trusts: State<'_, FolderTrusts>,
 ) -> Result<(), String> {
     // Trigger the cancel token so the agent thread's `cancelled().await` resolves.
-    crate::automation::shutdown_all().await;
-    stop_agent_runtime(&state).await;
+    let _init_guard = state.init_lock.lock().await;
+    crate::automation::shutdown_all().await?;
+    stop_agent_runtime_wait(&state, std::time::Duration::from_secs(12)).await?;
     if let Some(scheduler) = state.automation_scheduler.lock().unwrap().take() {
         scheduler.abort();
     }
@@ -1592,24 +1655,76 @@ pub async fn agent_shutdown(
 
 /// Stop the embedded Runtime without dropping session-end persistence hooks.
 /// Shared by the frontend restart command and the native tray Quit action.
-pub(crate) async fn stop_agent_runtime(state: &AppState) {
+pub(crate) async fn stop_agent_runtime(state: &AppState) -> Result<(), String> {
+    stop_agent_runtime_with_grace(state, std::time::Duration::from_secs(12)).await
+}
+
+async fn stop_agent_runtime_with_grace(
+    state: &AppState,
+    grace: std::time::Duration,
+) -> Result<(), String> {
+    let _init_guard = tokio::time::timeout(grace, state.init_lock.lock())
+        .await
+        .map_err(|_| "AI 引擎仍在初始化，应用已保留，请稍后重试退出".to_string())?;
+    stop_agent_runtime_wait(state, grace).await
+}
+
+async fn stop_agent_runtime_wait(
+    state: &AppState,
+    grace: std::time::Duration,
+) -> Result<(), String> {
+    // The scheduler owns a sender independently of state.tx. Quiesce it
+    // before flushing, otherwise a due task can create another session while
+    // the old Runtime is being saved for exit/restart.
+    if let Some(scheduler) = state.automation_scheduler.lock().unwrap().take() {
+        scheduler.abort();
+    }
     let handle = state.handle.lock().unwrap().take();
     state.tx.lock().unwrap().take();
     if let Some(mut handle) = handle {
         handle.cancel.cancel();
-        let wait = async {
-            if !*handle.shutdown_complete.borrow() {
-                let _ = handle.shutdown_complete.wait_for(|done| *done).await;
+        let result = tokio::time::timeout(grace, async {
+            if *handle.shutdown_complete.borrow() {
+                return Ok(());
             }
-        };
-        if tokio::time::timeout(std::time::Duration::from_secs(12), wait)
-            .await
-            .is_err()
-        {
-            tracing::warn!("agent graceful shutdown timed out after 12 seconds");
+            handle
+                .shutdown_complete
+                .wait_for(|done| *done)
+                .await
+                .map(|_| ())
+                .map_err(|_| {
+                    "AI 引擎已退出，但未能确认任务数据保存完成，请检查会话后重试".to_string()
+                })
+        })
+        .await;
+        match result {
+            Ok(Ok(())) => {}
+            Ok(Err(error)) => {
+                state.mark_runtime_models_failed(error.clone());
+                crate::permission_config::mark_runtime_permission_mode_offline(None);
+                return Err(error);
+            }
+            Err(_) => {
+                // Cancellation stops new work but must not drop a LocalSet
+                // whose session-end persistence hooks are still flushing.
+                let failure = handle
+                    .shutdown_failure
+                    .lock()
+                    .unwrap_or_else(|poisoned| poisoned.into_inner())
+                    .clone();
+                *state.handle.lock().unwrap() = Some(handle);
+                let error = match failure {
+                    Some(reason) => format!("任务数据保存尚未完成：{reason}。已保留应用与后台保存任务，请修复后重试退出或初始化"),
+                    None => "任务数据仍在保存，已保留应用与后台保存任务，请稍后重试退出或初始化".to_string(),
+                };
+                state.mark_runtime_models_failed(error.clone());
+                crate::permission_config::mark_runtime_permission_mode_offline(None);
+                return Err(error);
+            }
         }
     }
     crate::permission_config::mark_runtime_permission_mode_offline(None);
+    Ok(())
 }
 
 /// Resolve a pending permission request from the frontend.
@@ -1959,6 +2074,9 @@ pub async fn agent_delete_session(
         .clone()
         .ok_or("agent not initialized")?;
     let workspace_arg = workspace.to_string_lossy().into_owned();
+    // Stop side effects before history deletion. A failed stop remains
+    // retryable and must not leave an active browser belonging to a removed task.
+    crate::automation::stop_existing_session(&session_id).await?;
     agent_runtime::delete_session(&tx, &session_id, Some(&workspace_arg))
         .await
         .map_err(|e| e.to_string())?;
@@ -2140,6 +2258,192 @@ pub fn agent_clear_session_expert(session_id: String) -> Result<bool, String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn shutdown_fixture(state: &AppState) -> tokio::sync::watch::Sender<bool> {
+        let (client, _agent) = echo_agent_acp::acp_channels();
+        let (finished, shutdown_complete) = tokio::sync::watch::channel(false);
+        *state.tx.lock().unwrap() = Some(client.tx.clone());
+        *state.handle.lock().unwrap() = Some(AgentHandle {
+            tx: client.tx,
+            rx: client.rx,
+            cancel: tokio_util::sync::CancellationToken::new(),
+            shutdown_complete,
+            shutdown_failure: std::sync::Arc::new(Mutex::new(None)),
+            gateway_failure: tokio::sync::watch::channel(None).1,
+            thread: None,
+        });
+        finished
+    }
+
+    #[tokio::test]
+    async fn shutdown_timeout_retains_the_runtime_until_a_save_retry_completes() {
+        let state = AppState::default();
+        *state.automation_scheduler.lock().unwrap() =
+            Some(tauri::async_runtime::spawn(std::future::pending()));
+        let finished = shutdown_fixture(&state);
+        let error = stop_agent_runtime_wait(&state, std::time::Duration::from_millis(5))
+            .await
+            .unwrap_err();
+        assert!(error.contains("仍在保存"));
+        assert!(
+            state.automation_scheduler.lock().unwrap().is_none(),
+            "scheduler must stop before persistence, including a retryable timeout"
+        );
+        assert!(
+            state.tx.lock().unwrap().is_none(),
+            "cancelled runtime must not accept new prompts"
+        );
+        assert!(state
+            .handle
+            .lock()
+            .unwrap()
+            .as_ref()
+            .unwrap()
+            .cancel
+            .is_cancelled());
+        finished.send(true).unwrap();
+        stop_agent_runtime_wait(&state, std::time::Duration::from_millis(5))
+            .await
+            .unwrap();
+        assert!(state.handle.lock().unwrap().is_none());
+    }
+
+    #[tokio::test]
+    async fn closed_shutdown_channel_is_not_a_successful_save_ack() {
+        let state = AppState::default();
+        drop(shutdown_fixture(&state));
+        let error = stop_agent_runtime_wait(&state, std::time::Duration::from_millis(5))
+            .await
+            .unwrap_err();
+        assert!(error.contains("未能确认任务数据保存完成"));
+        assert!(
+            state.handle.lock().unwrap().is_none(),
+            "an exited thread cannot be retried as a live worker"
+        );
+    }
+
+    #[tokio::test]
+    async fn shutdown_timeout_surfaces_the_actual_persistence_failure() {
+        let state = AppState::default();
+        let _finished = shutdown_fixture(&state);
+        *state
+            .handle
+            .lock()
+            .unwrap()
+            .as_ref()
+            .unwrap()
+            .shutdown_failure
+            .lock()
+            .unwrap() = Some("磁盘写入失败：permission denied".into());
+        let error = stop_agent_runtime_wait(&state, std::time::Duration::from_millis(5))
+            .await
+            .unwrap_err();
+        assert!(error.contains("permission denied"));
+        assert!(state.handle.lock().unwrap().is_some());
+    }
+
+    #[test]
+    fn failed_gateway_is_not_reused_while_its_worker_is_still_saving() {
+        let state = AppState::default();
+        let _finished = shutdown_fixture(&state);
+        let old_tx = state.tx.lock().unwrap().clone().unwrap();
+        assert!(state.quarantine_gateway_if_current(
+            &old_tx,
+            "gateway closed while disk save is pending".into()
+        ));
+        assert!(state.tx.lock().unwrap().is_none());
+        assert!(
+            state.handle.lock().unwrap().is_some(),
+            "the saving worker must remain retryable"
+        );
+        let (replacement, _agent) = echo_agent_acp::acp_channels();
+        *state.tx.lock().unwrap() = Some(replacement.tx.clone());
+        assert!(!state.quarantine_gateway_if_current(&old_tx, "late old failure".into()));
+        assert!(state
+            .tx
+            .lock()
+            .unwrap()
+            .as_ref()
+            .unwrap()
+            .same_channel(&replacement.tx));
+    }
+
+    #[test]
+    fn gateway_quarantine_keeps_sender_identity_until_readiness_is_invalidated() {
+        let state = std::sync::Arc::new(AppState::default());
+        let _finished = shutdown_fixture(&state);
+        let old_tx = state.tx.lock().unwrap().clone().unwrap();
+        let cancel = state
+            .handle
+            .lock()
+            .unwrap()
+            .as_ref()
+            .unwrap()
+            .cancel
+            .clone();
+        let readiness_guard = state.runtime_models.lock().unwrap();
+        let worker_state = state.clone();
+        let worker = std::thread::spawn(move || {
+            worker_state.quarantine_gateway_if_current(&old_tx, "gateway failed".into())
+        });
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(2);
+        while !cancel.is_cancelled() && std::time::Instant::now() < deadline {
+            std::thread::sleep(std::time::Duration::from_millis(1));
+        }
+        let reached_readiness = cancel.is_cancelled();
+        let replacement_blocked = matches!(
+            state.tx.try_lock(),
+            Err(std::sync::TryLockError::WouldBlock)
+        );
+        drop(readiness_guard);
+        assert!(worker.join().unwrap());
+        assert!(
+            reached_readiness,
+            "quarantine must reach the blocked readiness transition"
+        );
+        assert!(
+            replacement_blocked,
+            "replacement cannot publish its sender in the middle of old-runtime quarantine"
+        );
+    }
+
+    #[tokio::test]
+    async fn shutdown_waits_for_an_in_progress_initialization() {
+        let state = AppState::default();
+        let init_guard = state.init_lock.lock().await;
+        let mut stop = Box::pin(stop_agent_runtime(&state));
+        assert!(
+            tokio::time::timeout(std::time::Duration::from_millis(5), &mut stop)
+                .await
+                .is_err()
+        );
+        let finished = shutdown_fixture(&state);
+        finished.send(true).unwrap();
+        drop(init_guard);
+        stop.await.unwrap();
+        assert!(state.handle.lock().unwrap().is_none());
+    }
+
+    #[tokio::test]
+    async fn shutdown_initialization_wait_is_bounded_without_discarding_the_runtime() {
+        let state = AppState::default();
+        let _init_guard = state.init_lock.lock().await;
+        let _finished = shutdown_fixture(&state);
+        let error = stop_agent_runtime_with_grace(&state, std::time::Duration::from_millis(5))
+            .await
+            .unwrap_err();
+        assert!(error.contains("仍在初始化"));
+        assert!(state.handle.lock().unwrap().is_some());
+        assert!(state.tx.lock().unwrap().is_some());
+        assert!(!state
+            .handle
+            .lock()
+            .unwrap()
+            .as_ref()
+            .unwrap()
+            .cancel
+            .is_cancelled());
+    }
 
     #[test]
     fn renderer_message_and_question_payloads_are_bounded() {

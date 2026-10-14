@@ -31,6 +31,12 @@ mod mcp;
 mod meeting_capture;
 mod meeting_minutes;
 mod meta;
+mod native_browser_validation;
+mod native_capabilities_validation;
+mod native_coding_validation;
+mod native_core_validation;
+mod native_exit_validation;
+mod native_ide_validation;
 mod notifications;
 mod office_mcp;
 mod org;
@@ -58,9 +64,32 @@ use bridge::{FolderTrusts, Permissions, PlanApprovals, Questions};
 use commands::AppState;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Duration;
+use tauri::Emitter;
 use tauri::Manager;
 
 static EXIT_IN_PROGRESS: AtomicBool = AtomicBool::new(false);
+static EXIT_READY: AtomicBool = AtomicBool::new(false);
+static EXIT_LISTENER_READY: AtomicBool = AtomicBool::new(false);
+
+pub(crate) fn exit_review_lifecycle_snapshot() -> serde_json::Value {
+    serde_json::json!({
+        "listenerReady": EXIT_LISTENER_READY.load(Ordering::Acquire),
+        "exitInProgress": EXIT_IN_PROGRESS.load(Ordering::Acquire),
+        "exitReady": EXIT_READY.load(Ordering::Acquire),
+    })
+}
+#[derive(Clone, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+struct ExitPreparationNotice {
+    request_id: String,
+    recording_saved: bool,
+}
+static ACTIVE_EXIT_REQUEST: std::sync::Mutex<Option<ExitPreparationNotice>> =
+    std::sync::Mutex::new(None);
+type ExitPreparationResult = Result<(), String>;
+static EXIT_PREPARATION: std::sync::Mutex<
+    Option<(String, tokio::sync::oneshot::Sender<ExitPreparationResult>)>,
+> = std::sync::Mutex::new(None);
 const SHUTDOWN_STEP_TIMEOUT: Duration = Duration::from_secs(2);
 #[cfg(windows)]
 const THEIA_SHUTDOWN_TIMEOUT: Duration = Duration::from_secs(7);
@@ -74,7 +103,7 @@ async fn bounded_shutdown<F: std::future::Future<Output = ()>>(step: F, name: &'
     }
 }
 
-async fn stop_theia_for_exit(app: &tauri::AppHandle) {
+async fn stop_theia_for_exit(app: &tauri::AppHandle) -> Result<(), String> {
     app.state::<theia::TheiaServer>().begin_shutdown();
     let handle = app.clone();
     let stop = tauri::async_runtime::spawn_blocking(move || {
@@ -82,30 +111,44 @@ async fn stop_theia_for_exit(app: &tauri::AppHandle) {
     });
     #[cfg(windows)]
     match tokio::time::timeout(THEIA_SHUTDOWN_TIMEOUT, stop).await {
-        Ok(Ok(())) => {}
-        Ok(Err(error)) => tracing::warn!(%error, "Theia shutdown task failed"),
-        Err(_) => {
-            // A concurrent IDE start can hold TheiaServer's lock. The
-            // kill-on-close Job still reaps its Node tree when the app exits.
-            tracing::warn!("Theia shutdown timed out; Windows Job will close on exit");
-        }
+        Ok(Ok(())) => Ok(()),
+        Ok(Err(error)) => Err(format!("IDE 关闭任务失败：{error}")),
+        Err(_) => Err("IDE 进程清理超时，应用已保留，请稍候重试".into()),
     }
     #[cfg(not(windows))]
-    if let Err(error) = stop.await {
-        tracing::warn!(%error, "Theia shutdown task failed");
-    }
+    stop.await
+        .map_err(|error| format!("IDE 关闭任务失败：{error}"))
 }
 
-async fn shutdown_before_exit(app: &tauri::AppHandle) {
+async fn required_shutdown<F: std::future::Future<Output = Result<(), String>>>(
+    step: F,
+    name: &'static str,
+) -> Result<(), String> {
+    tokio::time::timeout(SHUTDOWN_STEP_TIMEOUT, step)
+        .await
+        .map_err(|_| format!("{name} 本地进程清理超时，应用已保留，请稍候重试"))?
+        .map_err(|error| format!("{name} 本地进程清理失败，应用已保留：{error}"))
+}
+
+async fn shutdown_before_exit(app: &tauri::AppHandle) -> Result<(), String> {
     let state = app.state::<AppState>();
     // Start the runtime's session flush immediately. It has its own 12-second
     // bound; a second two-second timeout would cancel it before persistence.
-    tokio::join!(
+    let (theia, automation, _, runtime) = tokio::join!(
         stop_theia_for_exit(app),
-        bounded_shutdown(automation::shutdown_all(), "automation"),
+        required_shutdown(automation::shutdown_all(), "Browser/Computer Use"),
         bounded_shutdown(weixin::shutdown(app), "weixin"),
         commands::stop_agent_runtime(&state),
     );
+    let errors = [theia.err(), automation.err(), runtime.err()]
+        .into_iter()
+        .flatten()
+        .collect::<Vec<_>>();
+    if errors.is_empty() {
+        Ok(())
+    } else {
+        Err(errors.join("；"))
+    }
 }
 
 fn try_begin_exit(flag: &AtomicBool) -> bool {
@@ -113,27 +156,189 @@ fn try_begin_exit(flag: &AtomicBool) -> bool {
         .is_ok()
 }
 
-fn request_graceful_exit(app: tauri::AppHandle) {
-    if !try_begin_exit(&EXIT_IN_PROGRESS) {
-        return;
+fn renderer_save_confirmation_required(
+    has_window: bool,
+    listener_ready: bool,
+    has_recording: bool,
+) -> bool {
+    has_window && (listener_ready || has_recording)
+}
+
+async fn prepare_recording_for_exit(app: &tauri::AppHandle) -> Result<(), String> {
+    let listener_ready = EXIT_LISTENER_READY.load(Ordering::Acquire);
+    // Before the renderer has ever installed its recording guard, a failed or
+    // still-loading startup with no recording must remain able to quit.
+    let has_recording = if listener_ready {
+        false
+    } else {
+        meeting_minutes::meeting_list()?
+            .iter()
+            .any(|record| matches!(record.status.as_str(), "recording" | "paused"))
+    };
+    if renderer_save_confirmation_required(
+        app.get_webview_window("main").is_some(),
+        listener_ready,
+        has_recording,
+    ) {
+        let request_id = uuid::Uuid::now_v7().to_string();
+        let notice = ExitPreparationNotice {
+            request_id: request_id.clone(),
+            recording_saved: false,
+        };
+        let (sender, response) = tokio::sync::oneshot::channel();
+        {
+            let mut pending = EXIT_PREPARATION.lock().map_err(|_| "退出准备状态不可用")?;
+            if pending.is_some() {
+                return Err("正在准备退出，请稍候".into());
+            }
+            *pending = Some((request_id.clone(), sender));
+        }
+        *ACTIVE_EXIT_REQUEST
+            .lock()
+            .map_err(|_| "退出准备状态不可用")? = Some(notice.clone());
+        let result = if let Err(error) = app.emit("desktop://prepare-exit", &notice) {
+            Err(format!("无法通知录音保存：{error}"))
+        } else {
+            match tokio::time::timeout(Duration::from_secs(30), response).await {
+                Ok(Ok(result)) => result,
+                Ok(Err(_)) => Err("录音保存确认已中断，请重试退出".into()),
+                Err(_) => Err("录音保存确认超时，应用已保留，请检查录音并重试退出".into()),
+            }
+        };
+        {
+            let mut pending = EXIT_PREPARATION.lock().map_err(|_| "退出准备状态不可用")?;
+            if pending.as_ref().is_some_and(|(id, _)| id == &request_id) {
+                pending.take();
+            }
+        }
+        result?;
+        if let Some(notice) = ACTIVE_EXIT_REQUEST
+            .lock()
+            .map_err(|_| "退出准备状态不可用")?
+            .as_mut()
+        {
+            if notice.request_id == request_id {
+                notice.recording_saved = true;
+            }
+        }
     }
-    tauri::async_runtime::spawn(async move {
-        shutdown_before_exit(&app).await;
+    meeting_capture::finish_before_exit().await
+}
+
+fn resolve_exit_preparation(
+    pending: &mut Option<(String, tokio::sync::oneshot::Sender<ExitPreparationResult>)>,
+    request_id: &str,
+    error: Option<String>,
+) -> bool {
+    if !pending.as_ref().is_some_and(|(id, _)| id == request_id) {
+        return false;
+    }
+    let Some((_, sender)) = pending.take() else {
+        return false;
+    };
+    sender.send(error.map_or(Ok(()), Err)).is_ok()
+}
+
+#[tauri::command]
+fn desktop_exit_prepared(
+    window: tauri::WebviewWindow,
+    request_id: String,
+    error: Option<String>,
+) -> Result<bool, String> {
+    if window.label() != "main" {
+        return Err("只能由主窗口确认录音保存".into());
+    }
+    if request_id.len() > 128 || error.as_ref().is_some_and(|error| error.len() > 4096) {
+        return Err("退出准备响应无效或过长".into());
+    }
+    let mut pending = EXIT_PREPARATION.lock().map_err(|_| "退出准备状态不可用")?;
+    Ok(resolve_exit_preparation(&mut pending, &request_id, error))
+}
+
+#[tauri::command]
+fn desktop_exit_listener_ready(
+    window: tauri::WebviewWindow,
+) -> Result<Option<ExitPreparationNotice>, String> {
+    if window.label() != "main" {
+        return Err("只能由主窗口注册录音保存监听".into());
+    }
+    EXIT_LISTENER_READY.store(true, Ordering::Release);
+    ACTIVE_EXIT_REQUEST
+        .lock()
+        .map_err(|_| "退出准备状态不可用".to_string())
+        .map(|notice| notice.clone())
+}
+
+pub(crate) fn abort_prepared_exit(app: &tauri::AppHandle, error: String, runtime_stopped: bool) {
+    let request_id = ACTIVE_EXIT_REQUEST
+        .lock()
+        .ok()
+        .and_then(|mut active| active.take())
+        .map(|notice| notice.request_id);
+    EXIT_READY.store(false, Ordering::Release);
+    if runtime_stopped {
+        app.state::<theia::TheiaServer>().cancel_shutdown();
+        let _ = app.emit("desktop://runtime-restart-required", ());
+    }
+    EXIT_IN_PROGRESS.store(false, Ordering::Release);
+    show_main_window(app);
+    let message = format!("未退出，应用已保留：{error}");
+    tracing::error!(%message, "exit preparation failed");
+    let _ = app.emit(
+        "desktop://exit-failed",
+        serde_json::json!({ "requestId": request_id, "message": message }),
+    );
+}
+
+pub(crate) async fn prepare_application_exit(app: &tauri::AppHandle) -> Result<(), String> {
+    if !try_begin_exit(&EXIT_IN_PROGRESS) {
+        return Err("应用正在退出、恢复或更新，请稍候".into());
+    }
+    if let Err(error) = prepare_recording_for_exit(app).await {
+        abort_prepared_exit(app, error.clone(), false);
+        return Err(error);
+    }
+    Ok(())
+}
+
+pub(crate) async fn shutdown_application_for_exit(app: &tauri::AppHandle) -> Result<(), String> {
+    shutdown_before_exit(app).await
+}
+
+pub(crate) fn complete_prepared_exit(app: tauri::AppHandle, restart: bool) {
+    EXIT_READY.store(true, Ordering::Release);
+    if restart {
+        app.restart();
+    } else {
         app.exit(0);
+    }
+}
+
+fn request_graceful_exit(app: tauri::AppHandle) {
+    tauri::async_runtime::spawn(async move {
+        if prepare_application_exit(&app).await.is_err() {
+            return;
+        }
+        if let Err(error) = shutdown_before_exit(&app).await {
+            abort_prepared_exit(&app, error, true);
+            return;
+        }
+        complete_prepared_exit(app, false);
     });
 }
 
-fn request_graceful_restart(app: tauri::AppHandle) -> Result<(), String> {
-    if !try_begin_exit(&EXIT_IN_PROGRESS) {
-        return Ok(());
-    }
+async fn restart_prepared_application(app: tauri::AppHandle) -> Result<(), String> {
     if let Err(error) = process_supervisor::permit_application_relaunch() {
-        EXIT_IN_PROGRESS.store(false, Ordering::Release);
-        return Err(format!("无法重启应用：{error}"));
+        let message = format!("无法重启应用：{error}");
+        abort_prepared_exit(&app, message.clone(), false);
+        return Err(message);
+    }
+    if let Err(error) = shutdown_before_exit(&app).await {
+        abort_prepared_exit(&app, error.clone(), true);
+        return Err(error);
     }
     tauri::async_runtime::spawn(async move {
-        shutdown_before_exit(&app).await;
-        app.restart();
+        complete_prepared_exit(app, true);
     });
     Ok(())
 }
@@ -154,6 +359,95 @@ fn show_main_window(app: &tauri::AppHandle) {
     }
 }
 
+#[derive(Debug, PartialEq)]
+struct AutostartLaunchSpec {
+    name: String,
+    args: Vec<String>,
+}
+
+fn profile_hash(home: &std::path::Path) -> String {
+    use sha2::{Digest, Sha256};
+    hex::encode(&Sha256::digest(home.as_os_str().as_encoded_bytes())[..8])
+}
+
+fn autostart_launch_spec(
+    package_name: &str,
+    custom_home: Option<&std::path::Path>,
+) -> Result<AutostartLaunchSpec, String> {
+    let mut spec = AutostartLaunchSpec {
+        name: package_name.into(),
+        args: vec!["--background".into()],
+    };
+    if let Some(home) = custom_home {
+        if !home.is_absolute() {
+            return Err("登录启动数据目录必须是绝对路径".into());
+        }
+        let home_arg = home.to_str().ok_or("数据目录无法转换为系统登录启动参数")?;
+        spec.name = format!("{package_name}-profile-{}", profile_hash(home));
+        spec.args.extend(["--data-home".into(), home_arg.into()]);
+    }
+    Ok(spec)
+}
+
+fn custom_profile_identifier(base: &str, home: &std::path::Path, validation: bool) -> String {
+    format!(
+        "{base}.{}-{}",
+        if validation { "review" } else { "profile" },
+        profile_hash(home)
+    )
+}
+
+fn validate_validation_profile_launch(validation: bool, redirected: bool) -> Result<(), String> {
+    if validation && !redirected {
+        Err("验收模式必须指定独立的数据目录；不能使用默认数据目录或指向它的符号链接。请通过 --data-home <临时绝对路径> 重新启动。".into())
+    } else {
+        Ok(())
+    }
+}
+
+#[cfg(any(target_os = "macos", test))]
+fn validate_custom_profile_macos_version(
+    custom_profile: bool,
+    reported_version: Option<&str>,
+) -> Result<(), String> {
+    if !custom_profile {
+        return Ok(());
+    }
+    let unknown = "无法识别 macOS 版本，已阻止自定义数据目录启动以保护现有资料；请确认系统版本，或使用默认数据目录。";
+    let version = reported_version.ok_or(unknown)?.trim();
+    if version.is_empty() || version.len() > 64 {
+        return Err(unknown.into());
+    }
+    let mut components = version.split('.');
+    let major = components
+        .next()
+        .filter(|value| !value.is_empty() && value.bytes().all(|byte| byte.is_ascii_digit()))
+        .and_then(|value| value.parse::<u64>().ok())
+        .ok_or(unknown)?;
+    if components.any(|value| value.is_empty() || !value.bytes().all(|byte| byte.is_ascii_digit()))
+    {
+        return Err(unknown.into());
+    }
+    if major < 14 {
+        return Err(format!("自定义数据目录的独立 WebView 存储需要 macOS 14 或更新版本，当前为 {version}；已阻止启动以保护现有资料。请升级系统，或使用默认数据目录。"));
+    }
+    Ok(())
+}
+
+#[cfg(target_os = "macos")]
+fn ensure_custom_profile_macos_support() -> Result<(), String> {
+    if paths::redirected_data_home().is_none() {
+        return Ok(());
+    }
+    let version = std::process::Command::new("/usr/bin/sw_vers")
+        .arg("-productVersion")
+        .output()
+        .ok()
+        .filter(|output| output.status.success())
+        .and_then(|output| String::from_utf8(output.stdout).ok());
+    validate_custom_profile_macos_version(true, version.as_deref())
+}
+
 #[cfg(any(target_os = "macos", target_os = "windows", target_os = "linux"))]
 #[derive(Debug, serde::Deserialize, serde::Serialize)]
 struct DesktopWindowState {
@@ -164,9 +458,7 @@ struct DesktopWindowState {
 
 #[cfg(any(target_os = "macos", target_os = "windows", target_os = "linux"))]
 fn desktop_window_state_path(app: &tauri::AppHandle) -> Option<std::path::PathBuf> {
-    use tauri::Manager;
-    app.path()
-        .app_data_dir()
+    paths::desktop_data_dir(app)
         .ok()
         .map(|dir| dir.join("window-state.json"))
 }
@@ -242,13 +534,18 @@ fn setup_desktop_lifecycle(app: &mut tauri::App) -> Result<(), Box<dyn std::erro
         tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent},
         DragDropEvent, Manager, WindowEvent,
     };
+    #[cfg(target_os = "macos")]
     use tauri_plugin_autostart::MacosLauncher;
     use tauri_plugin_notification::NotificationExt;
 
-    app.handle().plugin(tauri_plugin_autostart::init(
-        MacosLauncher::LaunchAgent,
-        Some(vec!["--background"]),
-    ))?;
+    let custom_home = paths::redirected_data_home();
+    let launch = autostart_launch_spec(&app.package_info().name, custom_home.as_deref())?;
+    let autostart = tauri_plugin_autostart::Builder::new()
+        .app_name(launch.name)
+        .args(launch.args);
+    #[cfg(target_os = "macos")]
+    let autostart = autostart.macos_launcher(MacosLauncher::LaunchAgent);
+    app.handle().plugin(autostart.build())?;
     automations::sync_autostart_state(app.handle());
 
     let show = MenuItem::with_id(app, "show", "打开 EchoAgent", true, None::<&str>)?;
@@ -354,7 +651,7 @@ fn setup_desktop_lifecycle(app: &mut tauri::App) -> Result<(), Box<dyn std::erro
             }
             _ => {}
         });
-        if std::env::args().any(|arg| arg == "--background") {
+        if std::env::args_os().any(|arg| arg == "--background") {
             let _ = window.hide();
         }
     }
@@ -363,6 +660,23 @@ fn setup_desktop_lifecycle(app: &mut tauri::App) -> Result<(), Box<dyn std::erro
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
+    if let Err(error) = paths::apply_startup_data_home() {
+        eprintln!("EchoAgent 启动参数无效：{error}");
+        std::process::exit(2);
+    }
+    let validation = std::env::var("ECHO_DESKTOP_REVIEW").as_deref() == Ok("1")
+        || std::env::var("ECHO_DESKTOP_VALIDATION").as_deref() == Ok("1");
+    if let Err(error) =
+        validate_validation_profile_launch(validation, paths::redirected_data_home().is_some())
+    {
+        eprintln!("EchoAgent 无法启动：{error}");
+        std::process::exit(2);
+    }
+    #[cfg(target_os = "macos")]
+    if let Err(error) = ensure_custom_profile_macos_support() {
+        eprintln!("EchoAgent 无法启动：{error}");
+        std::process::exit(2);
+    }
     // Keep the non-blocking file writer alive through the whole Tauri event
     // loop. Release builds on Windows have no console, so this is the primary
     // post-mortem record for startup, model reload and session admission.
@@ -379,6 +693,35 @@ pub fn run() {
         tracing::error!(%error, "failed to initialize EchoAgent runtime home");
     }
     process_supervisor::install_host_job();
+    let mut context = tauri::generate_context!();
+    let mut profile_windows = Vec::new();
+    if let Some(home) = paths::redirected_data_home() {
+        // Initialization created this root. Resolve aliases and relative env
+        // paths once so OS login and manual launches share the same profile.
+        let home = home.canonicalize().unwrap_or(home);
+        std::env::set_var("ECHO_AGENT_HOME", &home);
+        use sha2::{Digest, Sha256};
+        let digest = Sha256::digest(home.as_os_str().as_encoded_bytes());
+        let mut store_id = [0_u8; 16];
+        store_id.copy_from_slice(&digest[..16]);
+        // Keep WebView drafts, queues and other localStorage away from the
+        // ordinary profile. macOS 14+ uses a dedicated WKWebsiteDataStore.
+        for window in &mut context.config_mut().app.windows {
+            window.data_directory = Some(home.join("webview"));
+            window.data_store_identifier = Some(store_id);
+            if window.create {
+                profile_windows.push((window.clone(), home.join("webview"), store_id));
+                // This Tauri release's WindowConfig conversion does not copy
+                // the data-directory/store fields. Build redirected windows
+                // explicitly so these options reach the actual WebView.
+                window.create = false;
+            }
+        }
+        // Default, custom and explicit acceptance profiles cannot focus each
+        // other's resident process; restarting the same profile still reuses it.
+        let identifier = custom_profile_identifier(&context.config().identifier, &home, validation);
+        context.config_mut().identifier = identifier;
+    }
     let builder = tauri::Builder::default();
     // Tauri requires single-instance to be the first registered plugin. A
     // second launch focuses the resident window (which may be tray-hidden)
@@ -391,7 +734,15 @@ pub fn run() {
     }));
 
     let app = builder
-        .setup(|app| {
+        .setup(move |app| {
+            // Match the ordinary auto-created window order, including focus
+            // requests received while a large pending backup is being restored.
+            for (config, directory, store_id) in profile_windows {
+                tauri::WebviewWindowBuilder::from_config(&*app, &config)?
+                    .data_directory(directory)
+                    .data_store_identifier(store_id)
+                    .build()?;
+            }
             backup::apply_pending(app.handle()).map_err(std::io::Error::other)?;
             // 离线租约过期时在 Agent Runtime 启动前移除受管 Skill 注入，
             // 避免已撤权的长期离线客户继续加载企业能力。
@@ -410,7 +761,7 @@ pub fn run() {
             // Done here (not in `FilesystemAccess::new`) because the allow-list
             // is registered before setup runs and needs `app_data_dir` from the
             // Tauri handle.
-            if let Ok(clipboard_dir) = app.path().app_data_dir() {
+            if let Ok(clipboard_dir) = paths::desktop_data_dir(app.handle()) {
                 let access = app.state::<shell_fs::FilesystemAccess>();
                 access.register_attachment_store(&clipboard_dir.join("clipboard-images"));
             }
@@ -437,6 +788,11 @@ pub fn run() {
             setup_desktop_lifecycle(app)?;
             Ok(())
         })
+        .on_page_load(|webview, payload| {
+            if let Err(error) = native_exit_validation::on_page_load(webview, payload) {
+                tracing::error!(%error, "isolated native exit review could not start");
+            }
+        })
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_notification::init())
         .plugin(tauri_plugin_updater::Builder::new().build())
@@ -461,6 +817,15 @@ pub fn run() {
             weixin::weixin_handoff,
             weixin::weixin_disconnect,
             desktop_validation::desktop_validation_ready,
+            desktop_validation::desktop_review_complete,
+            desktop_validation::desktop_review_context,
+            native_browser_validation::desktop_review_browser_manifest,
+            native_capabilities_validation::desktop_review_capabilities_manifest,
+            native_core_validation::desktop_review_core_manifest,
+            native_exit_validation::native_exit_review_context,
+            native_ide_validation::desktop_review_ide_manifest,
+            desktop_exit_prepared,
+            desktop_exit_listener_ready,
             desktop_preferences::desktop_notification_preview_save,
             notifications::notification_take_pending_opens,
             notifications::notification_set_visible_session,
@@ -829,12 +1194,12 @@ pub fn run() {
             storage::storage_delete,
             storage::storage_make_dir,
         ])
-        .build(tauri::generate_context!())
+        .build(context)
         .expect("error while building EchoAgent");
 
     app.run(|app_handle, event| {
         if let tauri::RunEvent::ExitRequested { api, .. } = &event {
-            if !EXIT_IN_PROGRESS.load(Ordering::Acquire) {
+            if !EXIT_READY.load(Ordering::Acquire) {
                 api.prevent_exit();
                 request_graceful_exit(app_handle.clone());
             }
@@ -855,13 +1220,164 @@ pub fn run() {
 
 #[cfg(test)]
 mod exit_tests {
-    use super::try_begin_exit;
+    use super::{renderer_save_confirmation_required, resolve_exit_preparation, try_begin_exit};
     use std::sync::atomic::AtomicBool;
+
+    #[test]
+    fn validation_profiles_reject_default_home_before_any_startup_write() {
+        assert!(super::validate_validation_profile_launch(true, false).is_err());
+        assert!(super::validate_validation_profile_launch(true, true).is_ok());
+        assert!(super::validate_validation_profile_launch(false, false).is_ok());
+        assert!(super::validate_validation_profile_launch(false, true).is_ok());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn validation_profiles_reject_a_symlink_to_the_default_home() {
+        let directory = tempfile::tempdir().unwrap();
+        let default = directory.path().join("默认 数据");
+        std::fs::create_dir(&default).unwrap();
+        let alias = directory.path().join("验收别名");
+        std::os::unix::fs::symlink(&default, &alias).unwrap();
+        let redirected = crate::paths::is_redirected_data_home(&alias, Some(&default));
+        assert!(!redirected);
+        assert!(super::validate_validation_profile_launch(true, redirected).is_err());
+        let custom = directory.path().join("独立目录");
+        assert!(super::validate_validation_profile_launch(
+            true,
+            crate::paths::is_redirected_data_home(&custom, Some(&default))
+        )
+        .is_ok());
+    }
+
+    #[test]
+    fn macos_profile_guard_allows_supported_versions_and_leaves_default_unchanged() {
+        for version in ["14", "14.0", "15.8.1\n", "26.0"] {
+            assert!(super::validate_custom_profile_macos_version(true, Some(version)).is_ok());
+        }
+        assert!(super::validate_custom_profile_macos_version(false, None).is_ok());
+        assert!(super::validate_custom_profile_macos_version(false, Some("13.6.9")).is_ok());
+    }
+
+    #[test]
+    fn macos_profile_guard_never_silently_uses_the_default_store() {
+        let unsupported =
+            super::validate_custom_profile_macos_version(true, Some("13.6.9")).unwrap_err();
+        assert!(unsupported.contains("需要 macOS 14"));
+        for version in [
+            None,
+            Some(""),
+            Some("Darwin 23"),
+            Some("14..0"),
+            Some("14.0\n13.0"),
+        ] {
+            let error = super::validate_custom_profile_macos_version(true, version).unwrap_err();
+            assert!(error.contains("无法识别 macOS 版本"));
+        }
+    }
+
+    #[test]
+    fn default_autostart_arguments_and_name_remain_compatible() {
+        let spec = super::autostart_launch_spec("echoagent", None).unwrap();
+        assert_eq!(spec.name, "echoagent");
+        assert_eq!(spec.args, ["--background"]);
+    }
+
+    #[test]
+    fn custom_autostart_reopens_the_exact_home_without_touching_default_item() {
+        let directory = tempfile::tempdir().unwrap();
+        let home = directory.path().canonicalize().unwrap().join("中文 空格");
+        let spec = super::autostart_launch_spec("echoagent", Some(&home)).unwrap();
+        assert!(spec.name.starts_with("echoagent-profile-"));
+        assert_ne!(spec.name, "echoagent");
+        assert_eq!(
+            crate::paths::parse_data_home_args(spec.args.iter().map(std::ffi::OsString::from))
+                .unwrap(),
+            Some(home.clone())
+        );
+        let other = super::autostart_launch_spec("echoagent", Some(&home.join("other"))).unwrap();
+        assert_ne!(spec.name, other.name);
+    }
+
+    #[test]
+    fn custom_and_review_instances_have_stable_separate_identifiers() {
+        let directory = tempfile::tempdir().unwrap();
+        let home = directory.path().canonicalize().unwrap();
+        let ordinary = super::custom_profile_identifier("com.echoagent.desktop", &home, false);
+        let review = super::custom_profile_identifier("com.echoagent.desktop", &home, true);
+        assert_ne!(ordinary, "com.echoagent.desktop");
+        assert_ne!(ordinary, review);
+        assert_eq!(
+            ordinary,
+            super::custom_profile_identifier("com.echoagent.desktop", &home, false)
+        );
+        assert_ne!(
+            ordinary,
+            super::custom_profile_identifier("com.echoagent.desktop", &home.join("other"), false)
+        );
+    }
 
     #[test]
     fn graceful_exit_can_only_start_once() {
         let flag = AtomicBool::new(false);
         assert!(try_begin_exit(&flag));
         assert!(!try_begin_exit(&flag));
+    }
+
+    #[tokio::test]
+    async fn stale_recording_reply_does_not_consume_the_retry_request() {
+        let (sender, receiver) = tokio::sync::oneshot::channel();
+        let mut pending = Some(("retry-request".to_string(), sender));
+        assert!(!resolve_exit_preparation(
+            &mut pending,
+            "timed-out-request",
+            None
+        ));
+        assert!(pending.is_some());
+        assert!(resolve_exit_preparation(
+            &mut pending,
+            "retry-request",
+            None
+        ));
+        assert!(pending.is_none());
+        assert_eq!(receiver.await.unwrap(), Ok(()));
+    }
+
+    #[tokio::test]
+    async fn recording_save_failure_is_returned_and_can_be_retried() {
+        let (sender, receiver) = tokio::sync::oneshot::channel();
+        let mut pending = Some(("first".to_string(), sender));
+        assert!(resolve_exit_preparation(
+            &mut pending,
+            "first",
+            Some("磁盘已满".into())
+        ));
+        assert_eq!(receiver.await.unwrap(), Err("磁盘已满".into()));
+        assert!(pending.is_none());
+    }
+
+    #[test]
+    fn uninitialized_empty_renderer_does_not_prevent_exit() {
+        assert!(!renderer_save_confirmation_required(true, false, false));
+        assert!(renderer_save_confirmation_required(true, false, true));
+        assert!(renderer_save_confirmation_required(true, true, false));
+        assert!(!renderer_save_confirmation_required(false, true, true));
+    }
+
+    #[tokio::test]
+    async fn local_process_shutdown_timeout_is_a_retryable_failure() {
+        assert!(super::required_shutdown(std::future::pending(), "fixture")
+            .await
+            .is_err());
+        assert!(super::required_shutdown(async { Ok(()) }, "fixture")
+            .await
+            .is_ok());
+    }
+
+    #[tokio::test]
+    async fn local_process_shutdown_error_cannot_become_a_successful_exit() {
+        let result =
+            super::required_shutdown(async { Err("拒绝停止浏览器".into()) }, "fixture").await;
+        assert!(result.unwrap_err().contains("拒绝停止浏览器"));
     }
 }

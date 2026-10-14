@@ -6,7 +6,7 @@ import {
   type QuestionRequest,
 } from "../question-store";
 
-const resetStore = () => useQuestionStore.setState({ queues: {} });
+const resetStore = () => useQuestionStore.getState().clearAll();
 
 function makeQuestion(requestId: string, sessionId: string): QuestionRequest {
   return {
@@ -47,6 +47,15 @@ describe("question-store", () => {
     useQuestionStore.getState().request(request);
     useQuestionStore.getState().request(request);
     expect(useQuestionStore.getState().queues.s1).toHaveLength(1);
+  });
+
+  it("关闭通知先于请求或快照到达时不恢复已关闭提问", () => {
+    const store = useQuestionStore.getState();
+    store.dismiss("closed", "s1");
+    store.request(makeQuestion("closed", "s1"));
+    expect(hasPendingQuestionForSession("s1")).toBe(false);
+    store.request(makeQuestion("new", "s1"));
+    expect(useQuestionStore.getState().queues.s1.map((q) => q.requestId)).toEqual(["new"]);
   });
 
   it("不同会话隔离", () => {

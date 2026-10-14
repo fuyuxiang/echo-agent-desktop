@@ -1,7 +1,19 @@
-import { useEffect, useState } from "react";
+import { Component, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { DiffEditor } from "@monaco-editor/react";
 import { Check, ExternalLink, LoaderCircle, X } from "lucide-react";
 import { codingApi } from "./lib/tauri-api";
+import { useCodingActionScope } from "./hooks/useCodingActionScope";
+import { prepareLocalMonaco } from "./lib/local-monaco";
+
+class DiffEditorBoundary extends Component<{ children: ReactNode; onError: (error: Error) => void }, { failed: boolean }> {
+  state = { failed: false };
+
+  static getDerivedStateFromError() { return { failed: true }; }
+
+  componentDidCatch(error: Error) { this.props.onError(error); }
+
+  render() { return this.state.failed ? null : this.props.children; }
+}
 
 interface Props {
   root: string;
@@ -30,12 +42,28 @@ export function reviewLanguage(path: string): string {
 }
 
 export function TheiaTaskReview({ root, taskId, path, onClose, onOpenFile, onReviewed, onToast }: Props) {
-  const [diff, setDiff] = useState<{ original: string; modified: string; binary: boolean; modifiedHash: string } | null>(null);
+  type ReviewDiff = { original: string; modified: string; binary: boolean; modifiedHash: string };
+  const viewSequence = useRef(0);
+  const diffSequence = useRef(0);
+  const [storedDiff, setStoredDiff] = useState<{ view: number; instance: number; value: ReviewDiff } | null>(null);
   const [error, setError] = useState("");
   const [reviewing, setReviewing] = useState(false);
   const [binaryAcknowledged, setBinaryAcknowledged] = useState(false);
   const [reloadVersion, setReloadVersion] = useState(0);
+  const [editorReadyScope, setEditorReadyScope] = useState("");
+  const [editorMountedScope, setEditorMountedScope] = useState("");
+  const [editorFailure, setEditorFailure] = useState<{ scope: string; message: string } | null>(null);
+  // A → B → A is a fresh view, even when its paths and reload counter match.
+  // Hide a previous view's payload synchronously, before any effect or paint.
+  const view = useMemo(() => ++viewSequence.current, [root, taskId, path, reloadVersion]);
+  const activeDiff = storedDiff?.view === view ? storedDiff : null;
+  const diff = activeDiff?.value ?? null;
+  const editorScope = `${view}:${activeDiff?.instance ?? "pending"}`;
+  const editorReady = editorReadyScope === editorScope;
+  const editorMounted = editorMountedScope === editorScope;
+  const editorError = editorFailure?.scope === editorScope ? editorFailure.message : "";
   const [theme, setTheme] = useState(() => document.documentElement.getAttribute("data-theme") === "dark" ? "vs-dark" : "vs");
+  const isCurrent = useCodingActionScope(root, taskId, path);
 
   useEffect(() => {
     const observer = new MutationObserver(() => {
@@ -47,34 +75,52 @@ export function TheiaTaskReview({ root, taskId, path, onClose, onOpenFile, onRev
 
   useEffect(() => {
     let cancelled = false;
-    setDiff(null);
+    setStoredDiff(null);
     setError("");
     setBinaryAcknowledged(false);
+    setReviewing(false);
     codingApi.changeDiff(root, taskId, path).then((result) => {
-      if (!cancelled) setDiff(result);
+      if (!cancelled) setStoredDiff({ view, instance: ++diffSequence.current, value: result });
     }).catch((reason) => {
       if (!cancelled) setError(String(reason));
     });
     return () => { cancelled = true; };
-  }, [root, taskId, path, reloadVersion]);
+  }, [root, taskId, path, reloadVersion, view]);
+
+  useEffect(() => {
+    if (!diff || diff.binary) return;
+    let cancelled = false;
+    setEditorFailure(null);
+    void prepareLocalMonaco().then(() => {
+      if (!cancelled) setEditorReadyScope(editorScope);
+    }).catch((reason: unknown) => {
+      if (!cancelled) {
+        setEditorFailure({ scope: editorScope, message: String(reason).replace(/^Error:\s*/, "") });
+      }
+    });
+    return () => { cancelled = true; };
+  }, [diff, editorScope]);
 
   const markReviewed = async () => {
-    if (!diff?.modifiedHash) {
+    if (!diff?.modifiedHash || (!diff.binary && (!editorMounted || !!editorError))) {
       onToast?.("无法确认当前差异版本，请重新打开差异后再审阅");
       return;
     }
     setReviewing(true);
     try {
       await codingApi.markReviewed(root, taskId, path, diff.modifiedHash);
+      if (!isCurrent()) return;
       await onReviewed();
+      if (!isCurrent()) return;
       onToast?.(`已审阅 ${path}`);
     } catch (reason) {
+      if (!isCurrent()) return;
       const message = String(reason).replace(/^Error:\s*/, "");
       setError(`审阅失败：${message}`);
-      setDiff(null);
+      setStoredDiff(null);
       onToast?.(`审阅失败：${message}`);
     } finally {
-      setReviewing(false);
+      if (isCurrent()) setReviewing(false);
     }
   };
 
@@ -84,7 +130,7 @@ export function TheiaTaskReview({ root, taskId, path, onClose, onOpenFile, onRev
         <div><strong>任务差异</strong><span>{path}</span></div>
         <div>
           <button type="button" onClick={onOpenFile}><ExternalLink size={14} />打开文件</button>
-          <button type="button" disabled={!diff?.modifiedHash || reviewing || (diff.binary && !binaryAcknowledged)} onClick={() => void markReviewed()}>
+          <button type="button" disabled={!diff?.modifiedHash || reviewing || (diff.binary ? !binaryAcknowledged : !editorMounted || !!editorError)} onClick={() => void markReviewed()}>
             {reviewing ? <LoaderCircle size={14} className="is-spinning" /> : <Check size={14} />}
             标记已审阅
           </button>
@@ -103,15 +149,26 @@ export function TheiaTaskReview({ root, taskId, path, onClose, onOpenFile, onRev
           </label>
         </div>
       )}
-      {diff && !diff.binary && (
+      {diff && !diff.binary && editorError && <div className="echo-theia-review__state" role="alert">
+        差异编辑器加载失败：{editorError}
+        <button type="button" onClick={() => setReloadVersion((value) => value + 1)}>重试加载差异</button>
+      </div>}
+      {diff && !diff.binary && !editorError && !editorReady && <div className="echo-theia-review__state">
+        <LoaderCircle size={17} className="is-spinning" />正在加载本地差异编辑器…
+      </div>}
+      {diff && !diff.binary && !editorError && editorReady && <DiffEditorBoundary key={editorScope} onError={(reason) => {
+        if (isCurrent()) setEditorFailure({ scope: editorScope, message: reason.message });
+      }}>
         <DiffEditor
           original={diff.original}
           modified={diff.modified}
           language={reviewLanguage(path)}
           theme={theme}
+          loading="正在显示文本差异…"
+          onMount={() => setEditorMountedScope(editorScope)}
           options={{ readOnly: true, renderSideBySide: true, minimap: { enabled: false }, automaticLayout: true }}
         />
-      )}
+      </DiffEditorBoundary>}
     </section>
   );
 }

@@ -21,7 +21,7 @@ function deferredSend() {
 
 beforeEach(() => {
   localStorage.clear();
-  useSessionsStore.setState({ independent: [], drafts: {}, currentSessionId: null, pendingSessionPatches: {} });
+  useSessionsStore.setState({ deletedSessionIds: [], independent: [], drafts: {}, currentSessionId: null, pendingSessionPatches: {} });
   usePendingExpertStore.setState({ expert: null });
 });
 afterEach(() => { cleanup(); resetVoiceRegistry(); });

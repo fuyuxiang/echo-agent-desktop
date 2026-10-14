@@ -773,6 +773,12 @@ pub enum SessionCommand {
     },
     Cancel(CancelOptions),
     Shutdown(ShutdownKind),
+    /// Graceful shutdown whose final persistence barrier is acknowledged after
+    /// SessionEnd. The actor stays alive on a write failure so the host can
+    /// retain its Runtime and retry without rerunning teardown hooks.
+    ShutdownChecked {
+        completion: tokio::sync::watch::Sender<Option<Result<(), String>>>,
+    },
     /// Force-trigger a feedback request notification for local client testing.
     /// Bypasses all heuristics, sampling, and cooldown checks.
     TriggerTestFeedback {

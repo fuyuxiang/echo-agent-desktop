@@ -20,6 +20,7 @@ use std::io::Read;
 use std::path::{Path, PathBuf};
 use std::sync::{Mutex, OnceLock};
 
+use echo_agent_runtime::session::fork::{ForkSessionRequest, ForkSessionResponse};
 use echo_agent_runtime::session::memory::{
     init_sqlite_vec, storage::normalize_memory_content, MemoryIndex, MemoryScope, MemoryStorage,
 };
@@ -1324,6 +1325,65 @@ pub async fn rewind_execute(
 // Session fork / info
 // ========================================================================
 
+fn session_fork_request(session_id: &str, workspace: &Path) -> ForkSessionRequest {
+    let cwd = workspace.to_string_lossy().into_owned();
+    ForkSessionRequest {
+        source_session_id: session_id.to_owned(),
+        source_cwd: cwd.clone(),
+        new_cwd: cwd,
+        ..Default::default()
+    }
+}
+
+fn parse_session_fork_response(
+    value: serde_json::Value,
+    source_session_id: &str,
+    workspace: &Path,
+) -> Result<String, String> {
+    let cwd = workspace.to_string_lossy();
+    let forked_id = if value.get("newSessionId").is_some() {
+        // The current Runtime serializes this exact DTO. A malformed current
+        // response must not fall through to a permissive legacy shape.
+        let response: ForkSessionResponse =
+            serde_json::from_value(value).map_err(|error| format!("分叉响应格式无效：{error}"))?;
+        if response.parent_session_id != source_session_id || response.new_cwd != cwd {
+            return Err("分叉响应的源会话或工作区与后端绑定不一致".into());
+        }
+        response.new_session_id
+    } else {
+        // Retain the earlier public response shapes. If an older object
+        // includes provenance, validate it rather than discarding it.
+        if let Some(parent) = value.get("parentSessionId") {
+            if parent.as_str() != Some(source_session_id) {
+                return Err("分叉响应的源会话与后端绑定不一致".into());
+            }
+        }
+        if let Some(target) = value.get("newCwd") {
+            if target.as_str() != Some(cwd.as_ref()) {
+                return Err("分叉响应的工作区与后端绑定不一致".into());
+            }
+        }
+        if value.get("error").is_some() {
+            return Err("分叉响应报告失败".into());
+        }
+        value
+            .get("sessionId")
+            .and_then(serde_json::Value::as_str)
+            .or_else(|| value.as_str())
+            .ok_or("分叉响应缺少新会话 ID")?
+            .to_owned()
+    };
+    if !valid_admin_id(&forked_id)
+        || !forked_id
+            .bytes()
+            .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'_'))
+        || forked_id == source_session_id
+    {
+        return Err("Agent Runtime 返回的分叉会话 ID 无效或与源会话相同".into());
+    }
+    Ok(forked_id)
+}
+
 /// Fork a session: copy its history to a new session id so the user can
 /// explore a different direction. Returns the new session id.
 #[tauri::command]
@@ -1353,23 +1413,11 @@ pub async fn session_fork(
         .unwrap()
         .clone()
         .ok_or("agent not initialized")?;
-    let params = raw_params(&serde_json::json!({
-        "sessionId": session_id,
-        "cwd": trusted_cwd.to_string_lossy(),
-    }));
+    let params = raw_params(&session_fork_request(&session_id, &trusted_cwd));
     let v: serde_json::Value = call_ext(&tx, "echo.agent/session/fork", params)
         .await
         .map_err(|e| e.to_string())?;
-    // Response: { sessionId: "..." } or bare string.
-    let forked_id = v
-        .get("sessionId")
-        .and_then(|s| s.as_str())
-        .or_else(|| v.as_str())
-        .ok_or("fork response missing sessionId")?
-        .to_string();
-    if !valid_admin_id(&forked_id) {
-        return Err("Agent Runtime 返回的分叉会话 ID 无效".into());
-    }
+    let forked_id = parse_session_fork_response(v, &session_id, &trusted_cwd)?;
     // A fork is a continuation of the same task context, so it inherits the
     // source task's permission mode without affecting either task afterwards.
     if crate::policy::locked_permission_mode().is_none() {
@@ -2484,6 +2532,128 @@ mod tests {
         secure_remote_source, validate_admin_action, MemoryEntryScope, MemoryIndex, MemoryStorage,
         ModelReloadAck, RawSearchHit, RunningTaskSource, MAX_ADMIN_ACTION_STRING_BYTES,
     };
+
+    fn canonical_fork_response() -> serde_json::Value {
+        serde_json::json!({
+            "newSessionId": "fork-session", "chatMessagesCopied": 3,
+            "updatesCopied": 5, "planStateCopied": false,
+            "newCwd": "/private/tmp/owned-workspace", "parentSessionId": "source-session"
+        })
+    }
+
+    #[test]
+    fn session_fork_request_matches_real_runtime_dto_and_old_wire_does_not() {
+        use echo_agent_runtime::session::fork::ForkSessionRequest;
+        let old = serde_json::json!({ "sessionId": "source-session", "cwd": "/private/tmp/owned-workspace" });
+        assert!(serde_json::from_value::<ForkSessionRequest>(old).is_err());
+        let request = super::session_fork_request(
+            "source-session",
+            std::path::Path::new("/private/tmp/owned-workspace"),
+        );
+        let wire = serde_json::to_value(&request).expect("serialize actual Runtime request");
+        assert_eq!(wire["sourceSessionId"], "source-session");
+        assert_eq!(wire["sourceCwd"], "/private/tmp/owned-workspace");
+        assert_eq!(wire["newCwd"], "/private/tmp/owned-workspace");
+        assert!(wire.get("sessionId").is_none());
+        assert!(wire.get("cwd").is_none());
+        let decoded: ForkSessionRequest =
+            serde_json::from_value(wire).expect("real Runtime decode");
+        assert_eq!(decoded.source_session_id, "source-session");
+        assert_eq!(decoded.source_cwd, decoded.new_cwd);
+        assert!(decoded.new_session_id.is_none());
+        assert!(decoded.new_model_id.is_none());
+        assert!(decoded.target_prompt_index.is_none());
+    }
+
+    #[test]
+    fn session_fork_response_accepts_actual_runtime_new_session_id() {
+        use echo_agent_runtime::session::fork::ForkSessionResponse;
+        let typed: ForkSessionResponse =
+            serde_json::from_value(canonical_fork_response()).expect("Runtime DTO");
+        let wire = serde_json::to_value(typed).expect("Runtime serialization");
+        // The previous host's only object key was absent in this actual wire.
+        assert!(wire.get("sessionId").is_none());
+        assert_eq!(
+            super::parse_session_fork_response(
+                wire,
+                "source-session",
+                std::path::Path::new("/private/tmp/owned-workspace")
+            ),
+            Ok("fork-session".into())
+        );
+    }
+
+    #[test]
+    fn session_fork_response_rejects_wrong_parent_workspace_and_identity() {
+        for (field, value) in [
+            ("parentSessionId", serde_json::json!("foreign-parent")),
+            (
+                "newCwd",
+                serde_json::json!("/private/tmp/foreign-workspace"),
+            ),
+            ("newSessionId", serde_json::json!("source-session")),
+            ("newSessionId", serde_json::json!("../escaped")),
+            ("newSessionId", serde_json::json!("")),
+        ] {
+            let mut wire = canonical_fork_response();
+            wire[field] = value;
+            assert!(
+                super::parse_session_fork_response(
+                    wire,
+                    "source-session",
+                    std::path::Path::new("/private/tmp/owned-workspace")
+                )
+                .is_err(),
+                "field {field}"
+            );
+        }
+    }
+
+    #[test]
+    fn session_fork_response_rejects_malformed_current_shape_without_legacy_fallback() {
+        for wire in [
+            serde_json::json!({ "newSessionId": null, "sessionId": "legacy-fork" }),
+            serde_json::json!({ "newSessionId": "fork-session", "sessionId": "legacy-fork" }),
+            serde_json::json!({ "sessionId": "legacy-fork", "error": "failed" }),
+            serde_json::json!({ "sessionId": "legacy-fork", "parentSessionId": "foreign-parent" }),
+            serde_json::json!({ "sessionId": "legacy-fork", "newCwd": "/private/tmp/foreign-workspace" }),
+        ] {
+            assert!(super::parse_session_fork_response(
+                wire,
+                "source-session",
+                std::path::Path::new("/private/tmp/owned-workspace")
+            )
+            .is_err());
+        }
+    }
+
+    #[test]
+    fn session_fork_response_keeps_explicit_legacy_shapes_with_identity_checks() {
+        for wire in [
+            serde_json::json!("legacy-fork"),
+            serde_json::json!({ "sessionId": "legacy-fork" }),
+        ] {
+            assert_eq!(
+                super::parse_session_fork_response(
+                    wire,
+                    "source-session",
+                    std::path::Path::new("/private/tmp/owned-workspace")
+                ),
+                Ok("legacy-fork".into())
+            );
+        }
+        for wire in [
+            serde_json::json!("source-session"),
+            serde_json::json!({ "sessionId": "../escaped" }),
+        ] {
+            assert!(super::parse_session_fork_response(
+                wire,
+                "source-session",
+                std::path::Path::new("/private/tmp/owned-workspace")
+            )
+            .is_err());
+        }
+    }
 
     #[test]
     fn rewind_points_accept_runtime_snake_case_envelope() {

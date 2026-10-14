@@ -288,6 +288,7 @@ pub fn meeting_create(
 
 #[tauri::command]
 pub fn meeting_append_pcm(meeting_id: String, samples: Vec<i16>) -> Result<MeetingRecord, String> {
+    let _job = MeetingJobGuard::acquire(&meeting_id)?;
     if samples.is_empty() {
         return read_meeting(&meeting_id);
     }
@@ -301,17 +302,49 @@ pub fn meeting_append_pcm(meeting_id: String, samples: Vec<i16>) -> Result<Meeti
     if record.recorded_samples.saturating_add(samples.len() as u64) > MAX_RECORDING_SAMPLES {
         return Err("单场会议录音不能超过 24 小时".into());
     }
-    append_samples(Path::new(&record.audio_path), &samples)?;
-    record.recorded_samples = record.recorded_samples.saturating_add(samples.len() as u64);
-    record.duration_seconds = record.recorded_samples as f64 / SAMPLE_RATE as f64;
-    record.updated_at = now_millis();
-    patch_wav_header(Path::new(&record.audio_path), record.recorded_samples)?;
-    save_meeting(&record)?;
+    append_recording_samples(&mut record, &samples, save_meeting)?;
     Ok(record)
+}
+
+fn append_recording_samples(
+    record: &mut MeetingRecord,
+    samples: &[i16],
+    persist: impl FnOnce(&MeetingRecord) -> Result<(), String>,
+) -> Result<(), String> {
+    let owned_audio_path = PathBuf::from(&record.audio_path);
+    let audio_path = owned_audio_path.as_path();
+    let previous_samples = record.recorded_samples;
+    let previous_length = fs::metadata(audio_path)
+        .map_err(|error| format!("读取录音文件失败：{error}"))?
+        .len();
+    let write_result = (|| {
+        append_samples(audio_path, samples)?;
+        record.recorded_samples = record.recorded_samples.saturating_add(samples.len() as u64);
+        record.duration_seconds = record.recorded_samples as f64 / SAMPLE_RATE as f64;
+        record.updated_at = now_millis();
+        patch_wav_header(audio_path, record.recorded_samples)?;
+        persist(record)
+    })();
+    if let Err(error) = write_result {
+        // A retry must not duplicate PCM that was appended before the manifest
+        // or WAV header failed to save. Restore both to the previous boundary.
+        let rollback = OpenOptions::new()
+            .write(true)
+            .open(audio_path)
+            .and_then(|file| file.set_len(previous_length))
+            .map_err(|rollback_error| rollback_error.to_string())
+            .and_then(|()| patch_wav_header(audio_path, previous_samples));
+        if let Err(rollback_error) = rollback {
+            return Err(format!("{error}；录音分片回滚失败：{rollback_error}"));
+        }
+        return Err(error);
+    }
+    Ok(())
 }
 
 #[tauri::command]
 pub fn meeting_set_paused(meeting_id: String, paused: bool) -> Result<MeetingRecord, String> {
+    let _job = MeetingJobGuard::acquire(&meeting_id)?;
     let mut record = read_meeting(&meeting_id)?;
     if !matches!(record.status.as_str(), "recording" | "paused") {
         return Err("当前会议不在录音状态".into());
@@ -324,6 +357,7 @@ pub fn meeting_set_paused(meeting_id: String, paused: bool) -> Result<MeetingRec
 
 #[tauri::command]
 pub fn meeting_finish_recording(meeting_id: String) -> Result<MeetingRecord, String> {
+    let _job = MeetingJobGuard::acquire(&meeting_id)?;
     let mut record = read_meeting(&meeting_id)?;
     if record.recorded_samples == 0 {
         return Err("还没有录到可保存的音频".into());
@@ -888,15 +922,40 @@ fn api_client() -> Result<reqwest::Client, String> {
         .map_err(|error| format!("创建会议服务客户端失败：{error}"))
 }
 
+fn processing_provider(
+    record: &mut MeetingRecord,
+    model_id: Option<String>,
+    provider_id: Option<String>,
+) -> Result<crate::providers::MeetingProviderAccess, String> {
+    let (model_id, provider_id) = match (model_id, provider_id) {
+        (None, None) => (record.model_id.clone(), record.provider_id.clone()),
+        (Some(model), Some(provider))
+            if !model.trim().is_empty() && !provider.trim().is_empty() =>
+        {
+            (model.trim().to_string(), provider.trim().to_string())
+        }
+        _ => return Err("请完整选择会议模型及连接".into()),
+    };
+    // Validate first: a deleted/expired connection must not erase corrections
+    // or replace the saved binding. Both processing commands hold the job guard.
+    let access = crate::providers::meeting_provider_access(&model_id, &provider_id)?;
+    record.model_id = model_id;
+    record.provider_id = provider_id;
+    Ok(access)
+}
+
 #[tauri::command]
-pub async fn meeting_process(meeting_id: String) -> Result<MeetingRecord, String> {
+pub async fn meeting_process(
+    meeting_id: String,
+    model_id: Option<String>,
+    provider_id: Option<String>,
+) -> Result<MeetingRecord, String> {
     let _job = MeetingJobGuard::acquire(&meeting_id)?;
     let mut record = read_meeting(&meeting_id)?;
     if record.recorded_samples == 0 {
         return Err("会议没有可转写的录音".into());
     }
-    let provider =
-        crate::providers::meeting_provider_access(&record.model_id, &record.provider_id)?;
+    let provider = processing_provider(&mut record, model_id, provider_id)?;
     record.status = "transcribing".into();
     record.error = None;
     record.transcript.clear();
@@ -963,6 +1022,10 @@ pub async fn meeting_process(meeting_id: String) -> Result<MeetingRecord, String
             }
         }
     }
+    completed.sort_by_key(|(chunk, _)| chunk.index);
+    record.transcript = normalize_transcript(&completed);
+    let transcript = transcript_as_text(&record.transcript);
+    record.transcript_text = Some(transcript.clone());
     if let Some(error) = first_error {
         record.status = "partial".into();
         record.error = Some(error.clone());
@@ -970,10 +1033,6 @@ pub async fn meeting_process(meeting_id: String) -> Result<MeetingRecord, String
         save_meeting(&record)?;
         return Err(error);
     }
-    completed.sort_by_key(|(chunk, _)| chunk.index);
-    record.transcript = normalize_transcript(&completed);
-    let transcript = transcript_as_text(&record.transcript);
-    record.transcript_text = Some(transcript.clone());
     if transcript.trim().is_empty() {
         let error = "录音中未识别到可用语音，请检查录音内容或麦克风".to_string();
         record.status = "failed".into();
@@ -1005,7 +1064,11 @@ pub async fn meeting_process(meeting_id: String) -> Result<MeetingRecord, String
 }
 
 #[tauri::command]
-pub async fn meeting_regenerate_minutes(meeting_id: String) -> Result<MeetingRecord, String> {
+pub async fn meeting_regenerate_minutes(
+    meeting_id: String,
+    model_id: Option<String>,
+    provider_id: Option<String>,
+) -> Result<MeetingRecord, String> {
     let _job = MeetingJobGuard::acquire(&meeting_id)?;
     let mut record = read_meeting(&meeting_id)?;
     let transcript = record
@@ -1013,8 +1076,7 @@ pub async fn meeting_regenerate_minutes(meeting_id: String) -> Result<MeetingRec
         .clone()
         .filter(|value| !value.trim().is_empty())
         .ok_or("当前会议还没有可用的转写文本")?;
-    let provider =
-        crate::providers::meeting_provider_access(&record.model_id, &record.provider_id)?;
+    let provider = processing_provider(&mut record, model_id, provider_id)?;
     record.status = "summarizing".into();
     record.error = None;
     save_meeting(&record)?;
@@ -1042,10 +1104,9 @@ pub fn meeting_update(
     meeting_id: String,
     title: Option<String>,
     transcript: Option<Vec<TranscriptSegment>>,
+    minutes: Option<String>,
 ) -> Result<MeetingRecord, String> {
-    if is_job_active(&meeting_id)? {
-        return Err("会议正在处理中，完成后再编辑".into());
-    }
+    let _job = MeetingJobGuard::acquire(&meeting_id)?;
     let mut record = read_meeting(&meeting_id)?;
     if let Some(title) = title {
         record.title = safe_title(&title);
@@ -1063,6 +1124,14 @@ pub fn meeting_update(
         record.transcript_text = Some(transcript_as_text(&record.transcript));
         record.minutes = None;
         record.status = "transcribed".into();
+    }
+    if let Some(minutes) = minutes {
+        if minutes.trim().is_empty() || minutes.len() > 2 * 1024 * 1024 {
+            return Err("会议纪要为空或超过 2 MiB 上限".into());
+        }
+        record.minutes = Some(minutes);
+        record.status = "completed".into();
+        record.error = None;
     }
     record.updated_at = now_millis();
     save_meeting(&record)?;
@@ -1243,6 +1312,250 @@ pub fn meeting_open_audio(meeting_id: String) -> Result<(), String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn test_record(audio_path: PathBuf) -> MeetingRecord {
+        MeetingRecord {
+            id: uuid::Uuid::now_v7().to_string(),
+            title: "会议持久化验收".into(),
+            created_at: 0,
+            updated_at: 0,
+            status: "recording".into(),
+            model_id: "test/MiniMax".into(),
+            provider_id: "test".into(),
+            duration_seconds: 0.0,
+            recorded_samples: 0,
+            audio_path: audio_path.to_string_lossy().into_owned(),
+            capture_source: Some("microphone".into()),
+            original_file_name: None,
+            transcript: vec![],
+            transcript_text: None,
+            minutes: None,
+            chunks: vec![],
+            error: None,
+        }
+    }
+
+    #[test]
+    fn failed_manifest_save_rolls_back_audio_before_retry() {
+        let directory = tempfile::tempdir().unwrap();
+        let audio_path = directory.path().join("中文 录音.wav");
+        write_wav_header(&mut File::create(&audio_path).unwrap(), 0).unwrap();
+        let mut record = test_record(audio_path.clone());
+        let failed =
+            append_recording_samples(&mut record, &[1, 2, 3], |_| Err("保存会议记录失败".into()));
+        assert!(failed.is_err());
+        let bytes = fs::read(&audio_path).unwrap();
+        assert_eq!(bytes.len(), WAV_HEADER_BYTES as usize);
+        assert_eq!(&bytes[40..44], &0u32.to_le_bytes());
+        // Reloading the unchanged manifest provides the original counters.
+        record.recorded_samples = 0;
+        append_recording_samples(&mut record, &[1, 2, 3], |_| Ok(())).unwrap();
+        let bytes = fs::read(audio_path).unwrap();
+        assert_eq!(&bytes[44..], &[1, 0, 2, 0, 3, 0]);
+        assert_eq!(record.recorded_samples, 3);
+    }
+
+    #[test]
+    fn edited_minutes_survive_a_native_record_reload() {
+        let directory = tempfile::tempdir().unwrap();
+        let output = std::process::Command::new(std::env::current_exe().unwrap())
+            .args([
+                "--exact",
+                "meeting_minutes::tests::minutes_persistence_child",
+                "--nocapture",
+            ])
+            .env("ECHO_AGENT_HOME", directory.path())
+            .env("ECHO_MEETING_REVIEW_CHILD", "1")
+            .output()
+            .unwrap();
+        assert!(
+            output.status.success(),
+            "{}",
+            String::from_utf8_lossy(&output.stdout)
+        );
+        assert!(String::from_utf8_lossy(&output.stdout).contains("running 1 test"));
+    }
+
+    #[test]
+    fn minutes_persistence_child() {
+        if std::env::var("ECHO_MEETING_REVIEW_CHILD").as_deref() != Ok("1") {
+            return;
+        }
+        let record = test_record(meetings_root().join("录音.wav"));
+        save_meeting(&record).unwrap();
+        let markdown = "# 校对纪要\n\n| 事项 | 负责人 |\n| --- | --- |\n| 验收 | 张三 |";
+        let updated = meeting_update(record.id.clone(), None, None, Some(markdown.into())).unwrap();
+        assert_eq!(updated.status, "completed");
+        let reloaded = read_meeting(&record.id).unwrap();
+        assert_eq!(reloaded.minutes.as_deref(), Some(markdown));
+        assert_eq!(export_text(&reloaded, "minutes").unwrap().2, markdown);
+        assert!(meeting_update(record.id.clone(), None, None, Some(" ".into())).is_err());
+        assert_eq!(
+            read_meeting(&record.id).unwrap().minutes.as_deref(),
+            Some(markdown)
+        );
+    }
+
+    #[test]
+    fn invalid_processing_model_keeps_saved_minutes_and_binding() {
+        let directory = tempfile::tempdir().unwrap();
+        let output = std::process::Command::new(std::env::current_exe().unwrap())
+            .args([
+                "--exact",
+                "meeting_minutes::tests::processing_model_selection_child",
+                "--nocapture",
+            ])
+            .env("ECHO_AGENT_HOME", directory.path())
+            .env("ECHO_MEETING_MODEL_CHILD", "1")
+            .output()
+            .unwrap();
+        assert!(
+            output.status.success(),
+            "{}",
+            String::from_utf8_lossy(&output.stdout)
+        );
+        assert!(String::from_utf8_lossy(&output.stdout).contains("running 1 test"));
+    }
+
+    #[tokio::test]
+    async fn processing_model_selection_child() {
+        if std::env::var("ECHO_MEETING_MODEL_CHILD").as_deref() != Ok("1") {
+            return;
+        }
+        let mut record = test_record(meetings_root().join("录音.wav"));
+        record.recorded_samples = SAMPLE_RATE as u64;
+        record.status = "completed".into();
+        record.transcript_text = Some("已校对的转写".into());
+        record.minutes = Some("# 已校对的纪要".into());
+        save_meeting(&record).unwrap();
+        let original = serde_json::to_string(&read_meeting(&record.id).unwrap()).unwrap();
+        assert!(meeting_process(
+            record.id.clone(),
+            Some("missing/MiniMax".into()),
+            Some("missing".into())
+        )
+        .await
+        .is_err());
+        assert!(meeting_regenerate_minutes(
+            record.id.clone(),
+            Some("missing/MiniMax".into()),
+            Some("missing".into())
+        )
+        .await
+        .is_err());
+        assert!(
+            meeting_process(record.id.clone(), Some("test/MiniMax".into()), None)
+                .await
+                .unwrap_err()
+                .contains("完整选择")
+        );
+        assert_eq!(
+            serde_json::to_string(&read_meeting(&record.id).unwrap()).unwrap(),
+            original
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn partial_transcript_is_saved_even_when_a_remaining_chunk_fails() {
+        let directory = tempfile::tempdir().unwrap();
+        let output = std::process::Command::new(std::env::current_exe().unwrap())
+            .args([
+                "--exact",
+                "meeting_minutes::tests::partial_transcript_persistence_child",
+                "--nocapture",
+            ])
+            .env("ECHO_AGENT_HOME", directory.path())
+            .env("ECHO_MEETING_PARTIAL_CHILD", "1")
+            .output()
+            .unwrap();
+        assert!(
+            output.status.success(),
+            "{}",
+            String::from_utf8_lossy(&output.stdout)
+        );
+        assert!(String::from_utf8_lossy(&output.stdout).contains("running 1 test"));
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn partial_transcript_persistence_child() {
+        use std::os::unix::fs::PermissionsExt;
+        if std::env::var("ECHO_MEETING_PARTIAL_CHILD").as_deref() != Ok("1") {
+            return;
+        }
+        // Exercise production processing with a real cached first response and
+        // an unreadable second chunk. No model or ASR network request is made.
+        let home = crate::paths::echo_agent_home_dir();
+        crate::paths::write_private_file(
+            &home.join("config.toml"),
+            br#"
+            [model_providers.test]
+            base_url = "http://127.0.0.1:9/v1"
+            api_backend = "chat_completions"
+            auth_scheme = "bearer"
+            api_key = "isolated-test-key"
+            echoagent_allow_insecure_http = true
+            [model."test/MiniMax"]
+            model_provider = "test"
+            model = "MiniMax"
+        "#,
+        )
+        .unwrap();
+        let mut record = test_record(home.join("audio.wav"));
+        // The original connection was deleted. Explicitly reselecting a valid
+        // connection must recover this existing recording, not require import.
+        record.model_id = "deleted/MiniMax".into();
+        record.provider_id = "deleted".into();
+        record.recorded_samples = SAMPLE_RATE as u64 * 421;
+        record.duration_seconds = 421.0;
+        record.status = "recorded".into();
+        let mut wav = File::create(&record.audio_path).unwrap();
+        write_wav_header(&mut wav, (record.recorded_samples * 2) as u32).unwrap();
+        wav.set_len(WAV_HEADER_BYTES + record.recorded_samples * 2)
+            .unwrap();
+        drop(wav);
+        save_meeting(&record).unwrap();
+        let chunks = meeting_dir(&record.id).unwrap().join("chunks");
+        fs::create_dir_all(&chunks).unwrap();
+        crate::paths::write_private_file(
+            &chunks.join("chunk-0000.json"),
+            br#"{"text":"completed chunk text","segments":[],"trace_id":null}"#,
+        )
+        .unwrap();
+        let failing_chunk = chunks.join("chunk-0001.wav");
+        fs::write(&failing_chunk, b"unreadable chunk").unwrap();
+        fs::set_permissions(&failing_chunk, fs::Permissions::from_mode(0o000)).unwrap();
+        assert!(fs::read(&failing_chunk).is_err());
+        assert!(meeting_process(record.id.clone(), None, None)
+            .await
+            .unwrap_err()
+            .contains("不存在"));
+        let result = meeting_process(
+            record.id.clone(),
+            Some("test/MiniMax".into()),
+            Some("test".into()),
+        )
+        .await;
+        fs::set_permissions(&failing_chunk, fs::Permissions::from_mode(0o600)).unwrap();
+        assert!(result.unwrap_err().contains("第 2 段"));
+        let saved = read_meeting(&record.id).unwrap();
+        assert_eq!(saved.status, "partial");
+        assert_eq!(saved.model_id, "test/MiniMax");
+        assert_eq!(saved.provider_id, "test");
+        assert_eq!(saved.transcript.len(), 1);
+        assert!(saved
+            .transcript_text
+            .as_deref()
+            .unwrap()
+            .contains("completed chunk text"));
+        assert!(export_text(&saved, "transcript")
+            .unwrap()
+            .2
+            .contains("completed chunk text"));
+        assert!(chunks.join("chunk-0000.json").is_file());
+        assert_eq!(saved.chunks[1].status, "failed");
+    }
 
     #[test]
     fn meeting_minutes_hide_leading_model_reasoning() {

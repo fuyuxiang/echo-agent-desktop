@@ -1,6 +1,7 @@
 import { forwardRef, useCallback, useEffect, useImperativeHandle, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { Code2, LoaderCircle, RotateCw } from "lucide-react";
+import { useAppDialog } from "@/components/AppDialog";
 import { idePath, relativeToWorkspace } from "./lib/windows-path";
 
 export interface TheiaMutationTicket {
@@ -66,7 +67,33 @@ export const TheiaIdeFrame = forwardRef<TheiaIdeFrameHandle, TheiaIdeFrameProps>
   const [attempt, setAttempt] = useState(0);
   const [reloadKey, setReloadKey] = useState(0);
   const [connectionWarning, setConnectionWarning] = useState("");
+  const { requestConfirmation, dialog } = useAppDialog(`${root}:${connectionWarning}`);
   const [theme, setTheme] = useState(() => document.documentElement.getAttribute("data-theme") === "dark" ? "dark" : "light");
+  const bridgeCallbacks = useRef({ onActiveFile, onActiveSymbol, onPreviewUrl, onAfterMutation,
+    onBeforeMutation, onDirtyChange, onToast });
+  useLayoutEffect(() => {
+    bridgeCallbacks.current = { onActiveFile, onActiveSymbol, onPreviewUrl, onAfterMutation,
+      onBeforeMutation, onDirtyChange, onToast };
+  }, [onActiveFile, onActiveSymbol, onPreviewUrl, onAfterMutation, onBeforeMutation, onDirtyChange, onToast]);
+
+  const reconnect = () => {
+    const restart = () => setAttempt((value) => value + 1);
+    if (!hasBeenReady.current || lastKnownDirtyCount.current === 0) {
+      restart();
+      return;
+    }
+    const detail = lastKnownDirtyCount.current === null
+      ? "无法确认是否有未保存文件"
+      : `当前有 ${lastKnownDirtyCount.current} 个未保存文件`;
+    requestConfirmation({
+      title: "保留编辑内容后重新连接？",
+      description: `${detail}。重新连接会丢失当前编辑器中未保存的内容。请取消并复制需要保留的内容；确认已保留后再继续。`,
+      cancelLabel: "保留编辑内容",
+      confirmLabel: "已保留内容，重新连接",
+      danger: true,
+      action: restart,
+    });
+  };
 
   const requestCount = useCallback((type: "echo/save-all" | "echo/get-dirty") => {
     if (type === "echo/get-dirty" && status !== "ready") {
@@ -204,7 +231,7 @@ export const TheiaIdeFrame = forwardRef<TheiaIdeFrameHandle, TheiaIdeFrameProps>
         setConnectionWarning(`IDE 连接已断开，${detail}。请先复制需要保留的内容，再重新连接。`);
         return;
       }
-      onDirtyChange?.(null);
+      bridgeCallbacks.current.onDirtyChange?.(null);
       setStatus("loading");
       setReloadKey((value) => value + 1);
     };
@@ -213,6 +240,8 @@ export const TheiaIdeFrame = forwardRef<TheiaIdeFrameHandle, TheiaIdeFrameProps>
           || typeof event.data !== "object" || !event.data) return;
       const message = event.data as Record<string, unknown>;
       if (message.token !== token || typeof message.type !== "string") return;
+      const { onActiveFile, onActiveSymbol, onPreviewUrl, onAfterMutation,
+        onBeforeMutation, onDirtyChange, onToast } = bridgeCallbacks.current;
       if (message.type === "echo/ready") {
         offline = false;
         clearRecovery();
@@ -242,6 +271,12 @@ export const TheiaIdeFrame = forwardRef<TheiaIdeFrameHandle, TheiaIdeFrameProps>
             }
             void invoke<TheiaEndpoint>("coding_theia_start", { root }).then((next) => {
               if (disposed || !offline) return;
+              // The editor may have become dirty while the native restart
+              // was pending. Recheck before changing the iframe URL/token.
+              if (lastKnownDirtyCount.current !== 0) {
+                reloadFrame();
+                return;
+              }
               if (next.url !== activeEndpoint?.url || next.embedToken !== activeEndpoint?.embedToken) {
                 setEndpoint({ ...next, root });
                 reloadFrame();
@@ -363,7 +398,7 @@ export const TheiaIdeFrame = forwardRef<TheiaIdeFrameHandle, TheiaIdeFrameProps>
       clearRecovery();
       window.removeEventListener("message", onMessage);
     };
-  }, [activeEndpoint, baseUrl, onActiveFile, onActiveSymbol, onPreviewUrl, onAfterMutation, onBeforeMutation, onDirtyChange, onToast, root, token]);
+  }, [activeEndpoint, baseUrl, root, token]);
 
   return (
     <div className="echo-theia" aria-label="Theia 代码工作台">
@@ -397,7 +432,7 @@ export const TheiaIdeFrame = forwardRef<TheiaIdeFrameHandle, TheiaIdeFrameProps>
                   <pre>{error}</pre>
                 </details>
               )}
-              <button type="button" onClick={() => setAttempt((value) => value + 1)}>
+              <button type="button" onClick={reconnect}>
                 <RotateCw size={14} /> 重试
               </button>
             </>
@@ -413,9 +448,10 @@ export const TheiaIdeFrame = forwardRef<TheiaIdeFrameHandle, TheiaIdeFrameProps>
       {status === "ready" && connectionWarning && (
         <div className="echo-theia__connection-warning" role="alert">
           <span>{connectionWarning}</span>
-          <button type="button" onClick={() => setAttempt((value) => value + 1)}>重新连接</button>
+          <button type="button" onClick={reconnect}>重新连接</button>
         </div>
       )}
+      {dialog}
     </div>
   );
 });

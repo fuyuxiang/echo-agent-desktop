@@ -145,6 +145,8 @@ fn trusted_local_refresh_surfaces_new_agent_via_discovery() {
         config_paths: Vec::new(),
         disabled: Vec::new(),
         enabled: vec!["demo-plugin".to_string()],
+        disabled_marketplace_sources: Vec::new(),
+        disabled_marketplace_source_aliases: Default::default(),
     };
     let plugin_registry = handle
         .refresh_and_build_for_cwd(&cwd, &config, &[], true)
@@ -180,6 +182,8 @@ fn trusted_local_refresh_surfaces_new_agent_via_discovery() {
         config_paths: Vec::new(),
         disabled: Vec::new(),
         enabled: Vec::new(),
+        disabled_marketplace_sources: Vec::new(),
+        disabled_marketplace_source_aliases: Default::default(),
     };
     let session_dirs = vec![plugin_dir.clone()];
     let registry = session_handle
@@ -281,6 +285,8 @@ async fn headless_session_refreshes_trusted_local_plugin_and_writes_session_json
         config_paths: Vec::new(),
         disabled: Vec::new(),
         enabled: vec!["demo-plugin".to_string()],
+        disabled_marketplace_sources: Vec::new(),
+        disabled_marketplace_source_aliases: Default::default(),
     };
     let plugin_registry = SharedPluginRegistryHandle::new(None, Vec::new())
         .build_for_cwd(workdir.workspace(), &config, &[], true)

@@ -14,7 +14,7 @@ describe("SearchOverlay", () => {
   beforeEach(() => {
     vi.mocked(sessionSearch).mockReset().mockResolvedValue([]);
     vi.mocked(agentListSessions).mockReset().mockResolvedValue([]);
-    useSessionsStore.setState({
+    useSessionsStore.setState({ deletedSessionIds: [],
       independent: [],
       workspaces: [],
       homeCwd: "/home",

@@ -32,7 +32,7 @@ describe("Sidebar", () => {
 
   beforeEach(() => {
     resetOrgSessionMirror();
-    useSessionsStore.setState({
+    useSessionsStore.setState({ deletedSessionIds: [],
       independent: [],
       workspaces: [],
       tasksOpen: true,
@@ -212,7 +212,7 @@ describe("Sidebar", () => {
   });
 
   it("升级后旧默认目录会话仍显示为任务且不生成用户名空间", () => {
-    useSessionsStore.setState({
+    useSessionsStore.setState({ deletedSessionIds: [],
       independent: [{ sessionId: "legacy", title: "升级前任务", cwd: "/Users/demo" }],
       workspaces: [{ cwd: "/Users/demo", sessionCount: 1 }],
       homeCwd: "/Users/demo/Documents/EchoAgent",
@@ -226,7 +226,7 @@ describe("Sidebar", () => {
   });
 
   it("项目会话只在其真实项目下展示", () => {
-    useSessionsStore.setState({
+    useSessionsStore.setState({ deletedSessionIds: [],
       independent: [{ sessionId: "project-session", title: "项目对话", cwd: "/workspace" }],
     });
     useProjectsStore.setState({
@@ -293,7 +293,7 @@ describe("Sidebar", () => {
   });
 
   it("侧栏项目对话提供移出、归档和经确认的永久删除", async () => {
-    useSessionsStore.setState({
+    useSessionsStore.setState({ deletedSessionIds: [],
       independent: [{ sessionId: "project-session", title: "过期对话", cwd: "/workspace" }],
     });
     useProjectsStore.setState({

@@ -27,6 +27,168 @@ mod yolo_toggle_report_tests {
         assert_eq!(yolo_toggle_report(true, true), None);
     }
 }
+#[cfg(test)]
+mod task_list_actor_tests {
+    use super::*;
+    use echo_agent_tools::computer::types::{
+        BackgroundHandle, ComputerError, KillOutcome, TaskSnapshot, TerminalBackend,
+        TerminalRunRequest, TerminalRunResult,
+    };
+
+    struct ColdTerminal {
+        entered: Arc<tokio::sync::Notify>,
+        warmed: Arc<tokio::sync::Notify>,
+    }
+
+    #[async_trait::async_trait]
+    impl TerminalBackend for ColdTerminal {
+        async fn run(&self, _: TerminalRunRequest) -> Result<TerminalRunResult, ComputerError> {
+            panic!("a task list must not execute a command")
+        }
+        async fn run_background(
+            &self,
+            _: TerminalRunRequest,
+        ) -> Result<BackgroundHandle, ComputerError> {
+            panic!("a task list must not start a process")
+        }
+        async fn get_task(&self, _: &str) -> Option<TaskSnapshot> {
+            None
+        }
+        async fn kill_task(&self, _: &str) -> KillOutcome {
+            KillOutcome::NotFound
+        }
+        async fn wait_for_completion(
+            &self,
+            _: &str,
+            _: Option<std::time::Duration>,
+        ) -> Option<TaskSnapshot> {
+            None
+        }
+        async fn list_tasks(&self) -> Vec<TaskSnapshot> {
+            // LocalTerminalBackend queues this read behind WarmShell. Keep
+            // that read pending deterministically without running an OS shell.
+            self.entered.notify_one();
+            self.warmed.notified().await;
+            Vec::new()
+        }
+    }
+
+    #[tokio::test]
+    async fn cold_terminal_task_poll_does_not_block_knowledge_detach_in_the_real_actor_loop() {
+        tokio::task::LocalSet::new()
+            .run_until(async {
+                let workspace = tempfile::tempdir().unwrap();
+                let entered = Arc::new(tokio::sync::Notify::new());
+                let warmed = Arc::new(tokio::sync::Notify::new());
+                let (gateway_tx, _gateway_rx) = tokio::sync::mpsc::unbounded_channel();
+                let (persistence_tx, _persistence_rx) = tokio::sync::mpsc::unbounded_channel();
+                let (mut actor, events) = super::super::support::create_test_actor_ex(
+                    0,
+                    256_000,
+                    85,
+                    gateway_tx,
+                    persistence_tx,
+                )
+                .await;
+                actor.session_info.cwd = workspace.path().to_string_lossy().into_owned();
+                let bridge = echo_agent_tools::bridge::ToolBridge::finalize_builder(
+                    echo_agent_tools::bridge::ToolBridge::get_builder(),
+                    echo_agent_tools::registry::types::ToolServerConfig {
+                        tools: vec![],
+                        behavior_preset: None,
+                    },
+                    echo_agent_tools::registry::types::SessionContext {
+                        backend: Arc::new(ColdTerminal {
+                            entered: entered.clone(),
+                            warmed: warmed.clone(),
+                        }),
+                        fs: Arc::new(echo_agent_tools::computer::local::LocalFs),
+                        cwd: workspace.path().into(),
+                        session_folder: workspace.path().into(),
+                        session_env: Arc::new(std::collections::HashMap::new()),
+                        notification_handle:
+                            echo_agent_tools::notification::ToolNotificationHandle::noop(),
+                        owner_session_id: None,
+                        subagent: None,
+                        parent_scheduler_handle: None,
+                        skills: vec![],
+                        state_path: std::path::PathBuf::new(),
+                        memory_backend: None,
+                        web_search_config: Default::default(),
+                        web_fetch_config: Default::default(),
+                        lsp: None,
+                        image_gen_config: Default::default(),
+                        video_gen_config: Default::default(),
+                        app_builder_deployer_config: Default::default(),
+                        api_key_provider: None,
+                        auth_provider: None,
+                        attribution_callback: None,
+                        system_reminder_tag: echo_agent_tools::reminders::DEFAULT_REMINDER_TAG,
+                    },
+                )
+                .await
+                .unwrap();
+                *actor.agent.borrow_mut() = echo_agent_core::Agent::new(
+                    echo_agent_core::AgentDefinition::default_echo_agent_build(),
+                    echo_agent_core::PromptContext::default(),
+                    String::new(),
+                    Arc::new(bridge),
+                    echo_agent_core::ReminderPolicy::default(),
+                    echo_agent_core::CompactionPolicy::default(),
+                    vec![],
+                    false,
+                );
+                let (commands, receiver) = tokio::sync::mpsc::unbounded_channel();
+                let (_chat_tx, chat_rx) = tokio::sync::mpsc::unbounded_channel();
+                let actor_loop = tokio::task::spawn_local(super::run_session(
+                    Arc::new(actor),
+                    receiver,
+                    chat_rx,
+                    events,
+                    None,
+                    Arc::new(parking_lot::Mutex::new(
+                        echo_agent_workspace::file_system::CodebaseIndexManager::new(),
+                    )),
+                    workspace.path().into(),
+                    crate::session::fs_watch::FsWatchCapabilities::none(),
+                ));
+
+                let (list_reply, mut pending_list) = tokio::sync::oneshot::channel();
+                commands
+                    .send(SessionCommand::ListTasks {
+                        respond_to: list_reply,
+                    })
+                    .unwrap();
+                tokio::time::timeout(std::time::Duration::from_secs(1), entered.notified())
+                    .await
+                    .expect("the controlled terminal read must have started");
+                let (detach_reply, detached) = tokio::sync::oneshot::channel();
+                commands
+                    .send(SessionCommand::ToggleMcpServer {
+                        server_name: "echoagent_organization_memory".into(),
+                        enabled: false,
+                        persist_enabled_state: false,
+                        server_config: None,
+                        respond_to: detach_reply,
+                    })
+                    .unwrap();
+                tokio::time::timeout(std::time::Duration::from_secs(1), detached)
+                    .await
+                    .expect("cold-terminal task polling must not block the knowledge safety gate")
+                    .unwrap()
+                    .unwrap();
+                assert!(matches!(
+                    pending_list.try_recv(),
+                    Err(tokio::sync::oneshot::error::TryRecvError::Empty)
+                ));
+                warmed.notify_one();
+                assert_eq!(pending_list.await.unwrap(), Some(Vec::new()));
+                actor_loop.abort();
+                let _ = actor_loop.await;
+            })
+            .await;
+    }
+}
 /// Best-effort removal of this session's per-session scratch staging on
 /// teardown. A no-op in builds without a scratch producer.
 fn cleanup_session_scratch(_session: &SessionActor) {}
@@ -167,6 +329,134 @@ async fn shutdown_workflows(session: &SessionActor) {
         Err(_) => tracing::warn!("workflow shutdown persistence flush timed out"),
     }
 }
+
+async fn flush_shutdown_persistence(
+    persistence: &mpsc::UnboundedSender<PersistenceMsg>,
+    checked_sync: bool,
+) -> Result<(), String> {
+    let (respond_to, ack) = tokio::sync::oneshot::channel();
+    let barrier = if checked_sync {
+        PersistenceMsg::FlushAndSyncAndAck { respond_to }
+    } else {
+        PersistenceMsg::FlushAndAck { respond_to }
+    };
+    persistence
+        .send(barrier)
+        .map_err(|_| "session persistence actor closed before the final flush".to_string())?;
+    ack.await
+        .map_err(|_| {
+            "session persistence actor dropped the final flush acknowledgement".to_string()
+        })?
+        .map_err(|error| format!("final session persistence flush failed: {error}"))
+}
+
+async fn finish_checked_shutdown_persistence(
+    persistence: &mpsc::UnboundedSender<PersistenceMsg>,
+    completion: tokio::sync::watch::Sender<Option<Result<(), String>>>,
+) {
+    loop {
+        let result = flush_shutdown_persistence(persistence, true).await;
+        let saved = result.is_ok();
+        completion.send_replace(Some(result));
+        if saved {
+            return;
+        }
+        // The host's timeout may return while this actor remains on its
+        // LocalSet. Retry only the final save, never SessionEnd hooks.
+        tokio::time::sleep(std::time::Duration::from_millis(500)).await;
+    }
+}
+
+#[cfg(test)]
+mod checked_shutdown_persistence_tests {
+    use super::{PersistenceMsg, finish_checked_shutdown_persistence, flush_shutdown_persistence};
+
+    #[tokio::test]
+    async fn final_flush_reports_write_errors_and_lost_acknowledgements() {
+        let (persistence, mut receiver) = tokio::sync::mpsc::unbounded_channel();
+        let actor = tokio::spawn(async move {
+            let Some(PersistenceMsg::FlushAndSyncAndAck { respond_to }) = receiver.recv().await
+            else {
+                panic!("final flush barrier expected");
+            };
+            respond_to
+                .send(Err(std::io::Error::other("disk full")))
+                .unwrap();
+        });
+        assert!(
+            flush_shutdown_persistence(&persistence, true)
+                .await
+                .unwrap_err()
+                .contains("disk full")
+        );
+        actor.await.unwrap();
+        assert!(
+            flush_shutdown_persistence(&persistence, true)
+                .await
+                .unwrap_err()
+                .contains("closed before")
+        );
+
+        let (persistence, mut receiver) = tokio::sync::mpsc::unbounded_channel();
+        let actor = tokio::spawn(async move {
+            let Some(PersistenceMsg::FlushAndSyncAndAck { respond_to }) = receiver.recv().await
+            else {
+                panic!("final flush barrier expected");
+            };
+            drop(respond_to);
+        });
+        assert!(
+            flush_shutdown_persistence(&persistence, true)
+                .await
+                .unwrap_err()
+                .contains("dropped the final")
+        );
+        actor.await.unwrap();
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn a_host_timeout_does_not_complete_or_discard_the_pending_final_save() {
+        let (persistence, mut receiver) = tokio::sync::mpsc::unbounded_channel();
+        let (completion, status) = tokio::sync::watch::channel(None);
+        let save = tokio::spawn(async move {
+            finish_checked_shutdown_persistence(&persistence, completion).await;
+        });
+        let Some(PersistenceMsg::FlushAndSyncAndAck { respond_to }) = receiver.recv().await else {
+            panic!("final flush barrier expected");
+        };
+        tokio::time::sleep(std::time::Duration::from_secs(12)).await;
+        assert_eq!(*status.borrow(), None);
+        assert!(!save.is_finished());
+        respond_to.send(Ok(())).unwrap();
+        save.await.unwrap();
+        assert_eq!(*status.borrow(), Some(Ok(())));
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn final_save_retries_the_barrier_after_an_error_without_a_false_ack() {
+        let (persistence, mut receiver) = tokio::sync::mpsc::unbounded_channel();
+        let (completion, mut status) = tokio::sync::watch::channel(None);
+        let save = tokio::spawn(async move {
+            finish_checked_shutdown_persistence(&persistence, completion).await;
+        });
+        let Some(PersistenceMsg::FlushAndSyncAndAck { respond_to }) = receiver.recv().await else {
+            panic!("final flush barrier expected");
+        };
+        respond_to
+            .send(Err(std::io::Error::other("disk full")))
+            .unwrap();
+        status.changed().await.unwrap();
+        assert!(status.borrow().as_ref().unwrap().is_err());
+        assert!(!save.is_finished());
+        let Some(PersistenceMsg::FlushAndSyncAndAck { respond_to }) = receiver.recv().await else {
+            panic!("same actor must retry the final persistence barrier");
+        };
+        respond_to.send(Ok(())).unwrap();
+        save.await.unwrap();
+        assert_eq!(*status.borrow(), Some(Ok(())));
+    }
+}
+
 async fn log_session_ended(session: &SessionActor) {
     let model_id = session.current_model_id().await;
     if let Some(signals) = session.signals_handle().snapshot().await {
@@ -503,7 +793,15 @@ pub(super) async fn run_session(
                         return;
                     };
 
+                    let (cmd, checked_shutdown) = match cmd {
+                        SessionCommand::ShutdownChecked { completion } => (
+                            SessionCommand::Shutdown(crate::session::ShutdownKind::CancelRunningTurn),
+                            Some(completion),
+                        ),
+                        command => (command, None),
+                    };
                     match cmd {
+                        SessionCommand::ShutdownChecked { .. } => unreachable!("checked shutdown is normalized above"),
                         SessionCommand::Initialize { system_prompt } => {
                             session.initialize(system_prompt).await;
                             let s = session.clone();
@@ -737,10 +1035,13 @@ pub(super) async fn run_session(
                             let _ = respond_to.send(result);
                         }
                         SessionCommand::ListTasks { respond_to } => {
-                            let result = session.agent.borrow().tool_bridge()
-                                .list_tasks()
-                                .await;
-                            let _ = respond_to.send(result);
+                            // This read can be queued behind a cold terminal's
+                            // WarmShell. Polling must not stall knowledge/MCP
+                            // safety gates and the rest of the session actor.
+                            let bridge = session.agent.borrow().tool_bridge().clone();
+                            tokio::task::spawn_local(async move {
+                                let _ = respond_to.send(bridge.list_tasks().await);
+                            });
                         }
                         SessionCommand::GetHooksList { respond_to } => {
                             use crate::extensions::hooks::hook_spec_to_info;
@@ -2182,6 +2483,25 @@ pub(super) async fn run_session(
                             log_session_ended(&session).await;
                             turn_end_queue.drain().await;
                             finish_session_exit_feedback(&session).await;
+                            // Hooks, memory, replay and feedback can all queue
+                            // writes. The final barrier must follow all of them.
+                            if let Some(completion) = checked_shutdown {
+                                if session.is_chat_kind {
+                                    // Thin chat sessions explicitly use a noop
+                                    // persistence handle and own no disk history.
+                                    completion.send_replace(Some(Ok(())));
+                                } else {
+                                    finish_checked_shutdown_persistence(
+                                        &session.notifications.persistence_tx,
+                                        completion,
+                                    ).await;
+                                }
+                            } else if let Err(error) = flush_shutdown_persistence(
+                                &session.notifications.persistence_tx,
+                                false,
+                            ).await {
+                                tracing::warn!(%error, "final session shutdown persistence flush failed");
+                            }
                             return;
                         }
                     }

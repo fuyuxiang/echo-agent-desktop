@@ -82,7 +82,7 @@ export const useUpdateStore = create<UpdateStore>((set, get) => ({
       set({ status: "checking", downloaded: 0, total: undefined, error: undefined, errorStage: undefined });
       try {
         await installAppUpdate(update.version, (progress) => {
-          if (progress.event === "downloaded" || progress.event === "installed") {
+          if (progress.event === "downloaded" || progress.event === "installed" || progress.event === "installer-started") {
             stage = "install";
             set({ status: "installing", downloaded: progress.downloaded });
             return;

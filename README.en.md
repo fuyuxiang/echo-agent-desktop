@@ -33,7 +33,7 @@ Check [GitHub Releases](https://github.com/fuyuxiang/echo-agent-desktop/releases
 
 ### Run from source
 
-You need Node.js **22 or 24**, pnpm **10**, Rust **1.92.0+** (stable), the Protocol Buffers compiler `protoc`, and your platform's native build tools. macOS requires Xcode Command Line Tools. Windows requires the Visual Studio 2022 C++ build tools and Windows SDK. The embedded Agent Runtime source is committed in this repository; no submodule initialization is needed.
+You need Node.js **22 or 24**, pnpm **10**, Rust **1.96.0+** (stable), the Protocol Buffers compiler `protoc`, and your platform's native build tools. macOS requires Xcode Command Line Tools. Windows requires the Visual Studio 2022 C++ build tools and Windows SDK. The embedded Agent Runtime source is committed in this repository; no submodule initialization is needed.
 
 **macOS**
 

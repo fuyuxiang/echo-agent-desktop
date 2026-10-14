@@ -7,9 +7,12 @@ use std::{
     fs::{self, File},
     io::{Read, Write},
     path::{Component, Path, PathBuf},
-    sync::Mutex,
+    sync::{
+        atomic::{AtomicBool, Ordering},
+        Mutex,
+    },
 };
-use tauri::{AppHandle, Manager, State};
+use tauri::{AppHandle, State};
 use tauri_plugin_dialog::DialogExt;
 use zip::{write::SimpleFileOptions, ZipArchive, ZipWriter};
 
@@ -69,7 +72,64 @@ pub struct Preview {
     ui_keys: Vec<String>,
 }
 #[derive(Default)]
-pub struct BackupState(Mutex<Option<(String, PathBuf)>>);
+pub struct BackupState(Mutex<Option<(String, PathBuf)>>, AtomicBool);
+
+struct RestoreOperation<'a> {
+    flag: &'a AtomicBool,
+    release: bool,
+}
+
+impl<'a> RestoreOperation<'a> {
+    fn begin(flag: &'a AtomicBool) -> Result<Self, String> {
+        if flag
+            .compare_exchange(false, true, Ordering::AcqRel, Ordering::Acquire)
+            .is_err()
+        {
+            return Err("备份恢复正在进行，请稍候".into());
+        }
+        Ok(Self {
+            flag,
+            release: true,
+        })
+    }
+
+    fn keep_until_restart(mut self) {
+        self.release = false;
+    }
+}
+
+impl Drop for RestoreOperation<'_> {
+    fn drop(&mut self) {
+        if self.release {
+            self.flag.store(false, Ordering::Release);
+        }
+    }
+}
+
+/// Create the pending file without replacing another restore. Keep the
+/// validated candidate intact until restart has actually been scheduled.
+fn stage_restore_candidate(source: &Path, pending: &Path) -> Result<(), String> {
+    match fs::hard_link(source, pending) {
+        Ok(()) => Ok(()),
+        Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => {
+            Err("已有待恢复备份，不能覆盖；请先处理或重启应用".into())
+        }
+        Err(_) => {
+            let parent = pending.parent().ok_or("备份恢复目录无效")?;
+            let mut copy = tempfile::NamedTempFile::new_in(parent).map_err(|e| e.to_string())?;
+            copy_hash(
+                File::open(source).map_err(|e| e.to_string())?,
+                &mut copy,
+                MAX_TOTAL,
+            )?;
+            copy.as_file().sync_all().map_err(|e| e.to_string())?;
+            crate::paths::harden_private_file(copy.path())?;
+            copy.persist_noclobber(pending)
+                .map_err(|e| format!("无法准备恢复备份（不会覆盖已有文件）：{e}"))?;
+            Ok(())
+        }
+    }
+}
 impl Drop for BackupState {
     fn drop(&mut self) {
         if let Ok(candidate) = self.0.get_mut() {
@@ -569,7 +629,7 @@ fn apply_pending_at(home: &Path, app_data: &Path) -> Result<(), String> {
 /// Runs after single-instance acquisition, before any background service starts.
 pub fn apply_pending(app: &AppHandle) -> Result<(), String> {
     let home = crate::paths::echo_agent_home_dir();
-    let app_data = app.path().app_data_dir().map_err(|e| e.to_string())?;
+    let app_data = crate::paths::desktop_data_dir(app)?;
     if let Err(error) = apply_pending_at(&home, &app_data) {
         // If rollback itself failed, stop startup to avoid using partial data.
         if home.join("restore-journal.json").exists() {
@@ -607,7 +667,7 @@ pub async fn backup_export(
         return Ok(None);
     };
     let path = path.into_path().map_err(|e| e.to_string())?;
-    let app_data = app.path().app_data_dir().map_err(|e| e.to_string())?;
+    let app_data = crate::paths::desktop_data_dir(&app)?;
     tauri::async_runtime::spawn_blocking(move || {
         export(
             &crate::paths::echo_agent_home_dir(),
@@ -625,6 +685,9 @@ pub async fn backup_inspect(
     app: AppHandle,
     state: State<'_, BackupState>,
 ) -> Result<Option<Preview>, String> {
+    if state.1.load(Ordering::Acquire) {
+        return Err("备份恢复正在进行，请稍候".into());
+    }
     let (tx, rx) = tokio::sync::oneshot::channel();
     app.dialog()
         .file()
@@ -672,6 +735,10 @@ pub async fn backup_inspect(
     .await
     .map_err(|e| e.to_string())??;
     let mut guard = state.0.lock().map_err(|e| e.to_string())?;
+    if state.1.load(Ordering::Acquire) {
+        let _ = fs::remove_file(copy);
+        return Err("备份恢复已开始，当前选择不会替换正在恢复的备份".into());
+    }
     if let Some((_, old)) = guard.take() {
         let _ = fs::remove_file(old);
     }
@@ -679,25 +746,54 @@ pub async fn backup_inspect(
     Ok(Some(preview))
 }
 #[tauri::command]
-pub fn backup_restore(
+pub async fn backup_restore(
     app: AppHandle,
     state: State<'_, BackupState>,
     token: String,
 ) -> Result<(), String> {
-    let mut guard = state.0.lock().map_err(|e| e.to_string())?;
-    let (expected, path) = guard.as_ref().ok_or("请先选择并校验备份")?;
-    if expected != &token {
-        return Err("备份预览已过期，请重新选择".into());
-    }
-    let source = path.clone();
+    let operation = RestoreOperation::begin(&state.1)?;
+    let source = {
+        let mut guard = state.0.lock().map_err(|e| e.to_string())?;
+        let (expected, path) = guard.as_ref().ok_or("请先选择并校验备份")?;
+        if expected != &token {
+            return Err("备份预览已过期，请重新选择".into());
+        }
+        let path = path.clone();
+        guard.take();
+        path
+    };
     let pending = crate::paths::echo_agent_home_dir().join("restore-pending.zip");
-    fs::rename(&source, &pending).map_err(|e| e.to_string())?;
-    if let Err(error) = crate::request_graceful_restart(app) {
-        fs::rename(&pending, &source)
-            .map_err(|rollback| format!("{error}；备份文件回退失败：{rollback}"))?;
+    // Recording confirmation must succeed before a pending restore is made
+    // visible to the next startup; a refused exit never schedules restoration.
+    if let Err(error) = crate::prepare_application_exit(&app).await {
+        *state.0.lock().map_err(|e| e.to_string())? = Some((token, source));
         return Err(error);
     }
-    guard.take();
+    if let Err(error) = stage_restore_candidate(&source, &pending) {
+        crate::abort_prepared_exit(&app, error.clone(), false);
+        let mut guard = state.0.lock().map_err(|e| e.to_string())?;
+        if guard.is_none() {
+            *guard = Some((token, source));
+        }
+        return Err(error);
+    }
+    if let Err(error) = crate::restart_prepared_application(app).await {
+        if let Err(rollback) = fs::remove_file(&pending) {
+            operation.keep_until_restart();
+            return Err(format!(
+                "{error}；待恢复文件撤销失败：{rollback}。原备份已保留，请先修复目录权限"
+            ));
+        }
+        let mut guard = state.0.lock().map_err(|e| e.to_string())?;
+        if guard.is_none() {
+            *guard = Some((token, source));
+        }
+        return Err(error);
+    }
+    if let Err(error) = fs::remove_file(&source) {
+        tracing::warn!(%error, "validated backup candidate retained after scheduling restart");
+    }
+    operation.keep_until_restart();
     Ok(())
 }
 #[tauri::command]
@@ -727,6 +823,38 @@ pub fn backup_acknowledge_ui() -> Result<(), String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn restoration_is_exclusive_and_failures_release_the_lease() {
+        let flag = AtomicBool::new(false);
+        let operation = RestoreOperation::begin(&flag).unwrap();
+        assert!(RestoreOperation::begin(&flag).is_err());
+        drop(operation);
+        assert!(RestoreOperation::begin(&flag).is_ok());
+    }
+
+    #[test]
+    fn successful_restore_lease_stays_exclusive_until_restart() {
+        let flag = AtomicBool::new(false);
+        RestoreOperation::begin(&flag).unwrap().keep_until_restart();
+        assert!(RestoreOperation::begin(&flag).is_err());
+    }
+
+    #[test]
+    fn restore_staging_preserves_candidate_and_never_replaces_another_pending_backup() {
+        let root = tempfile::tempdir().unwrap();
+        let source = root.path().join("candidate.zip");
+        let another = root.path().join("another.zip");
+        let pending = root.path().join("restore-pending.zip");
+        fs::write(&source, b"validated candidate").unwrap();
+        fs::write(&another, b"different backup").unwrap();
+        stage_restore_candidate(&source, &pending).unwrap();
+        assert_eq!(fs::read(&source).unwrap(), b"validated candidate");
+        assert!(stage_restore_candidate(&another, &pending).is_err());
+        assert_eq!(fs::read(&pending).unwrap(), b"validated candidate");
+        fs::remove_file(&pending).unwrap();
+        assert_eq!(fs::read(&source).unwrap(), b"validated candidate");
+    }
     #[test]
     fn archive_round_trip_excludes_credentials_and_detects_corruption() {
         let home = tempfile::tempdir().unwrap();

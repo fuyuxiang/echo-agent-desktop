@@ -248,7 +248,7 @@ fn embedding_provider() -> Option<ApiEmbeddingProvider> {
 }
 
 fn load_sources() -> Result<Vec<LocalSource>, String> {
-    let value = crate::org::org_local_kb_sources_get()?;
+    let value = crate::org::read_local_kb_sources()?;
     let items = value
         .as_array()
         .ok_or_else(|| "personal knowledge sources must be an array".to_owned())?;
@@ -274,6 +274,45 @@ fn load_sources() -> Result<Vec<LocalSource>, String> {
 
 pub(crate) fn configured() -> bool {
     load_sources().is_ok_and(|sources| !sources.is_empty())
+}
+
+fn authorized_source<'a>(
+    source_id: &str,
+    original_path: &str,
+    sources: &'a [LocalSource],
+) -> Option<&'a LocalSource> {
+    let path = Path::new(original_path);
+    // Recheck the real file, too: a deleted file or a newly planted symlink
+    // must not regain access through a still-persisted index entry.
+    let metadata = std::fs::symlink_metadata(path).ok()?;
+    if !metadata.is_file() || metadata.file_type().is_symlink() {
+        return None;
+    }
+    let canonical = path.canonicalize().ok()?;
+    sources.iter().find(|source| {
+        source.enabled && source.id == source_id && canonical.starts_with(&source.root)
+    })
+}
+
+fn authorize_manifest(manifest: &mut IndexManifest, sources: &[LocalSource]) {
+    manifest.entries.retain_mut(|entry| {
+        let Some(source) = authorized_source(&entry.source_id, &entry.original_path, sources)
+        else {
+            return false;
+        };
+        entry.source_label.clone_from(&source.label);
+        true
+    });
+}
+
+fn authorize_results(items: &mut Vec<PersonalKnowledgeEntry>, sources: &[LocalSource]) {
+    items.retain_mut(|entry| {
+        let Some(source) = authorized_source(&entry.source, &entry.path, sources) else {
+            return false;
+        };
+        entry.source_label.clone_from(&source.label);
+        true
+    });
 }
 
 fn supported_file(path: &Path) -> bool {
@@ -691,6 +730,32 @@ async fn embed_pending(max_batches: Option<usize>) -> Result<(usize, usize), Str
     let batch_limit = max_batches.unwrap_or(usize::MAX);
     let mut embedded = 0usize;
     for batch in pending.chunks(32).take(batch_limit) {
+        if !crate::org::local_knowledge_allowed().await {
+            return Err("signed organization policy disables personal knowledge".into());
+        }
+        let mut authorized = load_manifest();
+        authorize_manifest(&mut authorized, &load_sources()?);
+        let allowed_paths = authorized
+            .entries
+            .iter()
+            .map(|entry| entry.cache_path.as_str())
+            .collect::<HashSet<_>>();
+        let batch = {
+            let index = open_index()?;
+            batch
+                .iter()
+                .filter(|(chunk_id, _)| {
+                    index
+                        .get_chunk(chunk_id)
+                        .ok()
+                        .flatten()
+                        .is_some_and(|chunk| allowed_paths.contains(chunk.path.as_str()))
+                })
+                .collect::<Vec<_>>()
+        };
+        if batch.is_empty() {
+            continue;
+        }
         let texts = batch
             .iter()
             .map(|(_, text)| text.as_str())
@@ -707,15 +772,37 @@ async fn embed_pending(max_batches: Option<usize>) -> Result<(usize, usize), Str
         {
             return Err("personal knowledge embedding response has invalid dimensions".into());
         }
+        // An in-flight provider call cannot be unsent. Do not commit its output
+        // after a source/policy was revoked, or pass it to a later search.
+        if !crate::org::local_knowledge_allowed().await {
+            return Err("signed organization policy disables personal knowledge".into());
+        }
+        let mut current = load_manifest();
+        authorize_manifest(&mut current, &load_sources()?);
+        let current_paths = current
+            .entries
+            .iter()
+            .map(|entry| entry.cache_path.as_str())
+            .collect::<HashSet<_>>();
         let index = open_index()?;
+        let mut batch_embedded = 0usize;
         for ((chunk_id, _), embedding) in batch.iter().zip(embeddings.iter()) {
+            if !index
+                .get_chunk(chunk_id)
+                .map_err(|error| format!("validate embedded chunk: {error}"))?
+                .is_some_and(|chunk| current_paths.contains(chunk.path.as_str()))
+            {
+                continue;
+            }
             index
                 .upsert_embedding(chunk_id, embedding)
                 .map_err(|error| format!("store personal knowledge embedding: {error}"))?;
             embedded += 1;
+            batch_embedded += 1;
         }
         update_runtime_status(|status| {
-            status.embedded_chunk_count = status.embedded_chunk_count.saturating_add(batch.len());
+            status.embedded_chunk_count =
+                status.embedded_chunk_count.saturating_add(batch_embedded);
             status.pending_embedding_count = total.saturating_sub(embedded);
             status.message = Some(format!("正在生成语义索引（{embedded}/{total}）"));
         });
@@ -1020,7 +1107,8 @@ async fn search_hybrid(
             crate::agent_runtime::MEMORY_EMBEDDING_ENDPOINT.to_owned(),
             None,
         )
-        .with_search_config(config);
+        .with_search_config(config)
+        .with_query_only_embedding_search();
     let coarse = tokio::select! {
         _ = cancellation.cancelled() => return Err(SEARCH_CANCELLED.to_owned()),
         result = tokio::time::timeout(SEARCH_TIMEOUT, backend.search(query, candidate_count, 0.1)) => {
@@ -1029,8 +1117,18 @@ async fn search_hybrid(
                 .map_err(|error| format!("personal knowledge hybrid search failed: {error}"))?
         }
     };
+    // A source may have been revoked while the embedding query was running.
+    // Exclude it before reranking so revoked snippets never reach that service.
+    let mut authorized = manifest.clone();
+    authorize_manifest(&mut authorized, &load_sources()?);
+    let allowed_cache_paths = authorized
+        .entries
+        .iter()
+        .map(|entry| entry.cache_path.as_str())
+        .collect::<HashSet<_>>();
     let candidates = coarse
         .into_iter()
+        .filter(|result| allowed_cache_paths.contains(result.path.as_str()))
         .map(|result| SearchResult {
             chunk_id: result.chunk_id,
             path: result.path,
@@ -1324,7 +1422,10 @@ pub(crate) async fn search(
 
     // Prompt-time retrieval reads only the last committed index snapshot. File
     // walking, document extraction and embeddings are always background work.
-    let manifest = load_manifest();
+    let mut manifest = load_manifest();
+    // Revocation is synchronous authorization, independent of eventual index
+    // cleanup and its potentially slow embedding worker.
+    authorize_manifest(&mut manifest, &load_sources()?);
     if should_refresh_in_background(&manifest) {
         if let Some(app) = app {
             schedule_rebuild(app.clone(), false);
@@ -1343,7 +1444,7 @@ pub(crate) async fn search(
     let mut degraded_reason = (status.state == "indexing")
         .then(|| "个人知识索引正在后台更新，本次使用上一版完整索引".to_owned());
     let mut retrieval_mode = "keyword";
-    let items = if status.embedded_chunk_count > 0 {
+    let mut items = if status.embedded_chunk_count > 0 {
         match search_hybrid(query, limit, &manifest, cancellation).await {
             Ok((items, reranked, rerank_error)) if !items.is_empty() => {
                 if let Some(error) = rerank_error {
@@ -1369,6 +1470,12 @@ pub(crate) async fn search(
             .get_or_insert_with(|| "语义索引正在后台生成，本次已使用关键词索引".to_owned());
         indexed_lexical_search_async(query, limit, &manifest, cancellation).await?
     };
+    // Lexical jobs, embeddings and reranking can outlive a source/policy edit.
+    // Reconcile against the current authority immediately before returning.
+    if !crate::org::local_knowledge_allowed().await {
+        return Err("signed organization policy disables personal knowledge".into());
+    }
+    authorize_results(&mut items, &load_sources()?);
     Ok(PersonalKnowledgeSearchResponse {
         items,
         retrieval_mode: retrieval_mode.to_owned(),
@@ -1436,6 +1543,116 @@ pub fn personal_knowledge_index_status() -> PersonalKnowledgeIndexStatus {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn source_fixture() -> (tempfile::TempDir, Vec<LocalSource>, IndexManifest) {
+        let directory = tempfile::tempdir().unwrap();
+        let mut sources = Vec::new();
+        let mut entries = Vec::new();
+        for id in ["active", "revoked"] {
+            let root = directory.path().join(id);
+            std::fs::create_dir(&root).unwrap();
+            let path = root.join("中文 资料.md");
+            std::fs::write(&path, format!("{id} 资料指纹")).unwrap();
+            sources.push(LocalSource {
+                id: id.into(),
+                label: format!("{id} 当前名称"),
+                root: root.canonicalize().unwrap().to_string_lossy().into_owned(),
+                enabled: true,
+            });
+            entries.push(ManifestEntry {
+                original_path: path.to_string_lossy().into_owned(),
+                cache_path: format!("/cache/{id}.md"),
+                title: format!("{id} 资料"),
+                source_id: id.into(),
+                source_label: "旧名称".into(),
+                modified_millis: 1,
+                size: 10,
+            });
+        }
+        (
+            directory,
+            sources,
+            IndexManifest {
+                version: INDEX_VERSION,
+                embedding_model: "test".into(),
+                last_updated_at: Some(1),
+                entries,
+            },
+        )
+    }
+
+    #[test]
+    fn revoked_source_is_excluded_from_existing_manifest_without_rebuild() {
+        let (_directory, sources, mut manifest) = source_fixture();
+        assert_eq!(manifest.entries.len(), 2);
+        authorize_manifest(&mut manifest, &sources[..1]);
+        assert_eq!(manifest.entries.len(), 1);
+        assert_eq!(manifest.entries[0].source_id, "active");
+        assert_eq!(manifest.entries[0].source_label, "active 当前名称");
+    }
+
+    #[test]
+    fn disabled_or_rebound_source_cannot_reuse_old_index_paths() {
+        let (_directory, mut sources, manifest) = source_fixture();
+        sources[0].enabled = false;
+        let mut disabled = manifest.clone();
+        authorize_manifest(&mut disabled, &sources);
+        assert_eq!(disabled.entries.len(), 1);
+        assert_eq!(disabled.entries[0].source_id, "revoked");
+        sources[0].enabled = true;
+        sources[0].root = sources[1].root.clone();
+        let mut rebound = manifest;
+        authorize_manifest(&mut rebound, &sources);
+        assert_eq!(rebound.entries.len(), 1);
+        assert_eq!(rebound.entries[0].source_id, "revoked");
+    }
+
+    #[test]
+    fn completed_query_drops_results_revoked_while_it_was_running() {
+        let (_directory, sources, manifest) = source_fixture();
+        let mut items = map_results(
+            manifest
+                .entries
+                .iter()
+                .map(|entry| SearchResult {
+                    chunk_id: format!("{}:0", entry.cache_path),
+                    path: entry.cache_path.clone(),
+                    start_line: 3,
+                    end_line: 4,
+                    score: 0.9,
+                    snippet: "真实索引结果".into(),
+                    source: "workspace".into(),
+                    created_at: 1,
+                })
+                .collect(),
+            &manifest,
+        );
+        assert_eq!(items.len(), 2);
+        authorize_results(&mut items, &sources[..1]);
+        assert_eq!(items.len(), 1);
+        assert_eq!(items[0].source, "active");
+        assert_eq!(items[0].source_label, "active 当前名称");
+    }
+
+    #[test]
+    fn deleted_source_files_are_excluded_before_index_cleanup() {
+        let (_directory, sources, mut manifest) = source_fixture();
+        std::fs::remove_file(&manifest.entries[1].original_path).unwrap();
+        authorize_manifest(&mut manifest, &sources);
+        assert_eq!(manifest.entries.len(), 1);
+        assert_eq!(manifest.entries[0].source_id, "active");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn source_file_replaced_with_symlink_cannot_escape_authorized_root() {
+        let (_directory, sources, mut manifest) = source_fixture();
+        let original = PathBuf::from(&manifest.entries[0].original_path);
+        std::fs::remove_file(&original).unwrap();
+        std::os::unix::fs::symlink(&manifest.entries[1].original_path, &original).unwrap();
+        authorize_manifest(&mut manifest, &sources[..1]);
+        assert!(manifest.entries.is_empty());
+    }
 
     #[test]
     fn personal_retrieval_uses_requested_models() {

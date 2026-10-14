@@ -2,7 +2,7 @@ use std::path::{Path, PathBuf};
 use std::sync::{Mutex, OnceLock};
 
 use serde::{Deserialize, Serialize};
-use tauri::{AppHandle, Manager};
+use tauri::AppHandle;
 
 const DESKTOP_PREFERENCES_FILE: &str = "desktop-preferences.json";
 const MAX_DESKTOP_PREFERENCES_BYTES: u64 = 16 * 1024;
@@ -47,8 +47,7 @@ impl Default for DesktopPreferences {
 }
 
 fn preferences_path(app: &AppHandle) -> Result<PathBuf, String> {
-    app.path()
-        .app_data_dir()
+    crate::paths::desktop_data_dir(app)
         .map(|dir| dir.join(DESKTOP_PREFERENCES_FILE))
         .map_err(|error| format!("无法定位桌面偏好设置：{error}"))
 }

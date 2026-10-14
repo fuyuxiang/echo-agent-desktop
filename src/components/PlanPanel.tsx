@@ -14,7 +14,7 @@ import {
   agentResolvePlanApproval,
   setPlanMode as agentSetPlanMode,
 } from "@/lib/agent-client";
-import type { PlanEntry, PlanEntryPriority, PlanEntryStatus } from "@/lib/types";
+import type { Plan, PlanEntry, PlanEntryPriority, PlanEntryStatus } from "@/lib/types";
 import {
   reorderPlan,
   addPlanEntry,
@@ -86,6 +86,9 @@ export function PlanPanel({
   // Track when each task started (for elapsed time display).
   const startTimesRef = useRef<Record<number, number>>({});
   const [newStep, setNewStep] = useState("");
+  const hasUncommittedInput = editingIdx !== null || Boolean(newStep.trim());
+  const hasEmptyRevision = Boolean(plan && dirty && plan.entries.length === 0);
+  const lastDeletedPlanRef = useRef<Plan | null>(null);
   const sessionEpochRef = useRef(0);
   const currentSessionRef = useRef(sessionId);
   currentSessionRef.current = sessionId;
@@ -103,8 +106,13 @@ export function PlanPanel({
     startTimesRef.current = {};
     setApprovalBusy(false);
     setApprovalError(null);
+    lastDeletedPlanRef.current = null;
     return () => { sessionEpochRef.current += 1; };
   }, [sessionId]);
+
+  useEffect(() => {
+    if (!dirty) lastDeletedPlanRef.current = null;
+  }, [dirty]);
 
   // Elapsed timer: tick every second while there are in_progress tasks.
   useEffect(() => {
@@ -149,11 +157,15 @@ export function PlanPanel({
 
   const handleTogglePlanMode = useCallback(async () => {
     if (!sessionId) return;
+    const epoch = sessionEpochRef.current;
+    const notify = (message: string) => {
+      if (currentSessionRef.current === sessionId && sessionEpochRef.current === epoch) onToast?.(message);
+    };
     try {
       await agentSetPlanMode(sessionId, !planMode);
-      onToast?.(planMode ? "已请求退出计划模式" : "已请求进入计划模式");
+      notify(planMode ? "已请求退出计划模式" : "已请求进入计划模式");
     } catch (e) {
-      onToast?.(`切换失败：${String(e).replace(/^Error:\s*/, "")}`);
+      notify(`切换失败：${String(e).replace(/^Error:\s*/, "")}`);
     }
   }, [sessionId, planMode, onToast]);
 
@@ -161,7 +173,15 @@ export function PlanPanel({
     outcome: "approved" | "cancelled" | "abandoned",
     feedback?: string,
   ) => {
-    if (!planApproval || approvalPendingRef.current) return false;
+    if (!planApproval || approvalPendingRef.current || hasUncommittedInput
+      || (hasEmptyRevision && outcome !== "abandoned")) return false;
+    // The approved response cannot carry revised plan content. Request changes
+    // through the existing feedback contract so the Runtime stays in plan mode
+    // and asks for approval again after adopting the actual local revision.
+    const resolvedOutcome = outcome === "approved" && dirty && plan ? "cancelled" : outcome;
+    const resolvedFeedback = outcome === "approved" && dirty && plan
+      ? planRevisionPrompt(plan, false)
+      : feedback;
     const epoch = sessionEpochRef.current;
     const requestId = planApproval.requestId;
     const isCurrentSession = () => currentSessionRef.current === sessionId
@@ -174,25 +194,27 @@ export function PlanPanel({
     try {
       const acknowledged = await agentResolvePlanApproval(
         planApproval.requestId,
-        outcome,
-        feedback,
+        resolvedOutcome,
+        resolvedFeedback,
       );
       if (!acknowledged) throw new Error("后端未找到该计划审批请求，请重试");
       runtimeAcknowledged = true;
       await onApprovalResolved?.(
-        outcome,
+        resolvedOutcome,
         plan?.entries.map((entry) => entry.content.trim()).filter(Boolean) ?? [],
       );
       dismissPlanApproval(planApproval.requestId, planApproval.sessionId);
-      if (plan) markPlanRevisionSynced(plan, planApproval.sessionId);
+      if (plan && resolvedOutcome === "approved") markPlanRevisionSynced(plan, planApproval.sessionId);
       return true;
     } catch (error) {
       const message = String(error).replace(/^Error:\s*/, "");
       if (runtimeAcknowledged) {
         await Promise.resolve(onApprovalSyncFailed?.(message)).catch(() => undefined);
       }
-      if (isCurrentSession()) setApprovalError(message);
-      onToast?.(`审批失败：${message}`);
+      if (isCurrentSession()) {
+        setApprovalError(message);
+        onToast?.(`审批失败：${message}`);
+      }
       return false;
     } finally {
       if (isCurrentSession()) {
@@ -206,6 +228,9 @@ export function PlanPanel({
     onApprovalResolved,
     onApprovalSyncFailed,
     onToast,
+    dirty,
+    hasUncommittedInput,
+    hasEmptyRevision,
     plan,
     planApproval,
     sessionId,
@@ -213,34 +238,55 @@ export function PlanPanel({
 
   const syncPlan = useCallback(async (execute: boolean) => {
     if (!plan) return;
+    const epoch = sessionEpochRef.current;
+    const requestId = planApproval?.requestId;
+    const notify = (message: string) => {
+      // Successful approval may already have dismissed its own request. A new
+      // request, session switch or unmount still invalidates its UI feedback.
+      if (currentSessionRef.current === sessionId && sessionEpochRef.current === epoch
+        && (currentApprovalRef.current === requestId
+          || (requestId !== undefined && currentApprovalRef.current === undefined))) onToast?.(message);
+    };
     try {
+      if (hasUncommittedInput || hasEmptyRevision || approvalPendingRef.current) return;
       if (planApproval) {
+        const approvingOriginal = execute && !dirty;
         const accepted = execute
           ? await resolveApproval("approved")
           : await resolveApproval("cancelled", planRevisionPrompt(plan, false));
         if (accepted) {
-          onToast?.(execute ? "计划已批准，开始执行" : "修订已送回 Agent 继续规划");
+          notify(approvingOriginal ? "计划已批准，开始执行" : "修订已送回 Agent，等待更新计划并重新审批；尚未批准执行");
         }
         return;
       }
       if (!onSend) return;
       const accepted = await onSend(planRevisionPrompt(plan, execute));
       if (accepted === false) {
-        onToast?.("当前会话正在工作，修订计划尚未同步");
+        notify("当前会话正在工作，修订计划尚未同步");
         return;
       }
       markPlanRevisionSynced(plan, sessionId);
-      onToast?.(execute ? "修订计划已同步，开始执行" : "修订计划已同步到 Agent");
+      notify(execute ? "修订计划已同步，开始执行" : "修订计划已同步到 Agent");
     } catch (error) {
-      onToast?.(`同步失败：${String(error).replace(/^Error:\s*/, "")}`);
+      notify(`同步失败：${String(error).replace(/^Error:\s*/, "")}`);
     }
-  }, [markPlanRevisionSynced, onSend, onToast, plan, planApproval, resolveApproval, sessionId]);
+  }, [dirty, hasEmptyRevision, hasUncommittedInput, markPlanRevisionSynced, onSend, onToast, plan, planApproval, resolveApproval, sessionId]);
 
   const updateLocalPlan = useCallback((next: NonNullable<typeof plan>) => {
     setPlan(next, { sessionId, localRevision: true });
   }, [sessionId, setPlan]);
 
-  const handleApprove = useCallback(() => void resolveApproval("approved"), [resolveApproval]);
+  const handleApprove = useCallback(() => {
+    const epoch = sessionEpochRef.current;
+    const targetSession = sessionId;
+    const requestId = planApproval?.requestId;
+    void resolveApproval("approved").then((accepted) => {
+      if (accepted && dirty && sessionEpochRef.current === epoch && currentSessionRef.current === targetSession
+        && (currentApprovalRef.current === requestId || currentApprovalRef.current === undefined)) {
+        onToast?.("修订已送回 Agent，等待更新计划并重新审批；尚未批准执行");
+      }
+    });
+  }, [dirty, onToast, planApproval?.requestId, resolveApproval, sessionId]);
 
   const handleRevise = useCallback(() => {
     const feedback = plan
@@ -268,20 +314,29 @@ export function PlanPanel({
   const handleDeleteEntry = useCallback(
     (idx: number) => {
       if (!plan) return;
+      if (editingIdx !== null) {
+        onToast?.("请先保存或按 Esc 取消步骤编辑，再删除步骤");
+        return;
+      }
+      lastDeletedPlanRef.current = plan;
       const entries = plan.entries.filter((_, i) => i !== idx);
       updateLocalPlan({ ...plan, entries });
       onToast?.(`已删除 #${idx + 1}`);
     },
-    [plan, updateLocalPlan, onToast],
+    [editingIdx, plan, updateLocalPlan, onToast],
   );
 
   // 计划编辑器(对齐 EchoAgent plan-editor):上移/下移/状态循环/新增步骤。
   const handleMove = useCallback(
     (idx: number, dir: -1 | 1) => {
       if (!plan) return;
+      if (editingIdx !== null) {
+        onToast?.("请先保存或按 Esc 取消步骤编辑，再移动步骤");
+        return;
+      }
       updateLocalPlan(reorderPlan(plan, idx, idx + dir));
     },
-    [plan, updateLocalPlan],
+    [editingIdx, onToast, plan, updateLocalPlan],
   );
   const handleCycleStatus = useCallback(
     (idx: number) => {
@@ -327,34 +382,37 @@ export function PlanPanel({
   );
 
   const approvalActions = planApproval ? (
-    <div className="plan-panel__approval">
-      <button
-        className="plan-panel__approve-btn"
-        onClick={handleApprove}
-        disabled={approvalBusy}
-      >
-        <CheckIcon size="sm" /> 批准执行
-      </button>
-      <button
-        className="plan-panel__reject-btn"
-        onClick={handleRevise}
-        disabled={approvalBusy}
-      >
-        修改计划
-      </button>
-      <button
-        className="plan-panel__reject-btn"
-        onClick={handleAbandon}
-        disabled={approvalBusy}
-      >
-        <XCloseIcon size="sm" /> 放弃计划
-      </button>
+    <>
+      <div className="plan-panel__approval">
+        <button
+          className="plan-panel__approve-btn"
+          onClick={handleApprove}
+          disabled={approvalBusy || hasUncommittedInput || hasEmptyRevision}
+        >
+          <CheckIcon size="sm" /> {dirty ? "同步修改并重新审批" : "批准执行"}
+        </button>
+        <button
+          className="plan-panel__reject-btn"
+          onClick={handleRevise}
+          disabled={approvalBusy || hasUncommittedInput || hasEmptyRevision}
+        >
+          修改计划
+        </button>
+        <button
+          className="plan-panel__reject-btn"
+          onClick={handleAbandon}
+          disabled={approvalBusy || hasUncommittedInput}
+        >
+          <XCloseIcon size="sm" /> 放弃计划
+        </button>
+      </div>
+      {hasUncommittedInput && <p className="plan-panel__hint" role="status">请先保存或按 Esc 取消步骤编辑，并添加或清空新增步骤，再提交计划。</p>}
       {approvalError && <p role="alert">{approvalError}</p>}
-    </div>
+    </>
   ) : null;
 
   // Empty states
-  if ((planMode || planApproval) && (!plan || plan.entries.length === 0)) {
+  if ((planMode || planApproval) && (!plan || plan.entries.length === 0) && !hasEmptyRevision) {
     return (
       <div className="plan-panel plan-panel--empty">
         <TaskListIcon size="xl" color="var(--echo-text-tertiary)" />
@@ -373,7 +431,7 @@ export function PlanPanel({
     );
   }
 
-  if (!plan || plan.entries.length === 0) {
+  if (!plan || (plan.entries.length === 0 && !hasEmptyRevision)) {
     return (
       <div className="plan-panel plan-panel--empty">
         <TaskListIcon size="xl" color="var(--echo-text-tertiary)" />
@@ -389,7 +447,7 @@ export function PlanPanel({
   const inProgress = plan.entries.filter((e) => e.status === "in_progress").length;
   const total = plan.entries.length;
   const progressPct = total > 0 ? Math.round((completed / total) * 100) : 0;
-  const allDone = completed === total;
+  const allDone = total > 0 && completed === total;
   const awaitingApproval = planApproval != null;
 
   return (
@@ -403,6 +461,7 @@ export function PlanPanel({
             <button
               className="plan-panel__sync-btn"
               onClick={() => void syncPlan(false)}
+              disabled={approvalBusy || hasUncommittedInput || hasEmptyRevision}
               title="将当前编辑后的计划发送给 Agent"
             >
               同步修订
@@ -430,6 +489,18 @@ export function PlanPanel({
       </div>
 
       {/* Status hints */}
+      {hasEmptyRevision && (
+        <div className="plan-panel__hint" role="status">
+          <p>计划已清空，请新增步骤后同步修订，或放弃当前计划。空计划不会提交执行。</p>
+          {lastDeletedPlanRef.current && (
+            <button type="button" className="plan-panel__sync-btn" onClick={() => {
+              const previous = lastDeletedPlanRef.current;
+              if (previous) updateLocalPlan(previous);
+              lastDeletedPlanRef.current = null;
+            }}>撤销删除</button>
+          )}
+        </div>
+      )}
       {inProgress > 0 && (
         <div className="plan-panel__active-hint">
           <LoaderIcon size="sm" /> {inProgress} 项进行中

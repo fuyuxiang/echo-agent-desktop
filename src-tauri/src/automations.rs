@@ -376,18 +376,35 @@ pub fn has_active_automations() -> bool {
     }
 }
 
+fn with_autostart_write_permission<T>(
+    review: Option<&str>,
+    packaged_validation: Option<&str>,
+    operation: impl FnOnce() -> T,
+) -> Option<T> {
+    // These explicit acceptance modes must never change the user's OS login
+    // item, whose plugin key is the package name rather than the profile ID.
+    if review == Some("1") || packaged_validation == Some("1") {
+        return None;
+    }
+    Some(operation())
+}
+
 fn sync_autostart_enabled(app: &AppHandle, enabled: bool) {
     #[cfg(any(target_os = "macos", target_os = "windows", target_os = "linux"))]
     {
-        let manager = app.autolaunch();
-        let result = if enabled {
-            manager.enable()
-        } else {
-            manager.disable()
-        };
-        if let Err(error) = result {
-            tracing::warn!(%error, enabled, "failed to synchronize automation autostart");
-        }
+        let review = std::env::var("ECHO_DESKTOP_REVIEW").ok();
+        let packaged_validation = std::env::var("ECHO_DESKTOP_VALIDATION").ok();
+        with_autostart_write_permission(review.as_deref(), packaged_validation.as_deref(), || {
+            let manager = app.autolaunch();
+            let result = if enabled {
+                manager.enable()
+            } else {
+                manager.disable()
+            };
+            if let Err(error) = result {
+                tracing::warn!(%error, enabled, "failed to synchronize automation autostart");
+            }
+        });
     }
     #[cfg(not(any(target_os = "macos", target_os = "windows", target_os = "linux")))]
     let _ = (app, enabled);
@@ -1016,7 +1033,7 @@ fn recurring_next(
     match sched.freq {
         ScheduleFreq::DAILY => {
             for i in 0..2 {
-                let date = (from + Duration::days(i)).date_naive();
+                let date = from.date_naive() + Duration::days(i);
                 if let Some(candidate) = at_local(date, h, m) {
                     if candidate > from {
                         return Some(candidate);
@@ -1029,7 +1046,7 @@ fn recurring_next(
             let interval = sched.interval.clamp(1, 2) as i64;
             let anchor_week = week_start(anchor.date_naive());
             for i in 0..(7 * interval + 7) {
-                let date = (from + Duration::days(i)).date_naive();
+                let date = from.date_naive() + Duration::days(i);
                 if !sched.byday.iter().any(|d| d == weekday_code(date)) {
                     continue;
                 }
@@ -1049,7 +1066,7 @@ fn recurring_next(
                 return None;
             }
             for i in 0..62 {
-                let date = (from + Duration::days(i)).date_naive();
+                let date = from.date_naive() + Duration::days(i);
                 if !sched.bymonthday.contains(&date.day()) {
                     continue;
                 }
@@ -1090,7 +1107,7 @@ fn recurring_next(
                 sched.byday.clone()
             };
             for i in 0..8 {
-                let date = (from + Duration::days(i)).date_naive();
+                let date = from.date_naive() + Duration::days(i);
                 if !byday.iter().any(|d| d == weekday_code(date)) {
                     continue;
                 }
@@ -2566,6 +2583,34 @@ mod tests {
     use super::*;
     use chrono::TimeZone;
 
+    #[test]
+    fn explicit_validation_modes_never_write_the_system_login_item() {
+        use std::cell::Cell;
+        let writes = Cell::new(0);
+        for (review, packaged) in [(Some("1"), None), (None, Some("1")), (Some("1"), Some("1"))] {
+            for enabled in [false, true] {
+                let result = with_autostart_write_permission(review, packaged, || {
+                    writes.set(writes.get() + 1);
+                    enabled
+                });
+                assert!(result.is_none());
+            }
+        }
+        assert_eq!(writes.get(), 0);
+    }
+
+    #[test]
+    fn ordinary_profiles_keep_the_existing_autostart_behavior() {
+        for (review, packaged) in [(None, None), (Some("0"), None), (None, Some("0"))] {
+            for enabled in [false, true] {
+                assert_eq!(
+                    with_autostart_write_permission(review, packaged, || enabled),
+                    Some(enabled)
+                );
+            }
+        }
+    }
+
     /// Helper: build a local DateTime from components.
     fn local(y: i32, mo: u32, d: u32, h: u32, mi: u32) -> DateTime<Local> {
         Local
@@ -2576,6 +2621,52 @@ mod tests {
 
     fn date(y: i32, m: u32, d: u32) -> NaiveDate {
         NaiveDate::from_ymd_opt(y, m, d).unwrap()
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn daily_schedule_uses_calendar_days_across_dst() {
+        let output = std::process::Command::new(std::env::current_exe().unwrap())
+            .args([
+                "--exact",
+                "automations::tests::dst_calendar_child",
+                "--nocapture",
+            ])
+            .env("TZ", "America/New_York")
+            .env("ECHO_DST_REVIEW_CHILD", "1")
+            .output()
+            .unwrap();
+        assert!(
+            output.status.success(),
+            "{}",
+            String::from_utf8_lossy(&output.stdout)
+        );
+        assert!(String::from_utf8_lossy(&output.stdout).contains("running 1 test"));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn dst_calendar_child() {
+        if std::env::var("ECHO_DST_REVIEW_CHILD").as_deref() != Ok("1") {
+            return;
+        }
+        let sched = AutomationSchedule {
+            freq: ScheduleFreq::DAILY,
+            byhour: 9,
+            ..Default::default()
+        };
+        // Adding 24 hours to 23:30 on the eve of a 23-hour day reaches
+        // Monday. Calendar-day scheduling must still find Sunday at 09:00.
+        let from = local(2026, 3, 7, 23, 30);
+        assert_eq!(
+            recurring_next(&sched, &from, from),
+            Some(local(2026, 3, 8, 9, 0))
+        );
+        let from = local(2026, 10, 31, 23, 30);
+        assert_eq!(
+            recurring_next(&sched, &from, from),
+            Some(local(2026, 11, 1, 9, 0))
+        );
     }
 
     // --- parse_hhmm ---

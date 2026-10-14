@@ -29,9 +29,51 @@ pub struct JsonlStorageAdapter {
     dir_mode: SessionDirMode,
     #[cfg(test)]
     update_append_probe: Option<std::sync::Arc<AppendProbe>>,
+    #[cfg(test)]
+    checked_sync_probe: Option<std::sync::Arc<dyn Fn() -> io::Result<()> + Send + Sync>>,
+    #[cfg(test)]
+    chat_append_probe: Option<std::sync::Arc<dyn Fn() -> io::Result<()> + Send + Sync>>,
+    #[cfg(test)]
+    plan_mode_write_probe: Option<std::sync::Arc<dyn Fn() -> io::Result<()> + Send + Sync>>,
 }
 #[cfg(test)]
 type AppendProbe = dyn Fn(AppendDurability) -> io::Result<()> + Send + Sync;
+
+/// Checked teardown syncs local SessionEnd artifacts and propagates errors.
+fn sync_directory_checked(directory: &Path) -> io::Result<()> {
+    let metadata = std::fs::symlink_metadata(directory)?;
+    if !metadata.is_dir() || metadata.file_type().is_symlink() {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidData,
+            "session directory is not an owned directory",
+        ));
+    }
+    for entry in std::fs::read_dir(directory)? {
+        let entry = entry?;
+        let kind = entry.file_type()?;
+        if kind.is_dir() {
+            sync_directory_checked(&entry.path())?;
+        } else if kind.is_file() {
+            let file = OpenOptions::new()
+                .read(true)
+                .write(true)
+                .open(entry.path())?;
+            super::sync_file_durable(&file)?;
+        } else {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidData,
+                format!(
+                    "cannot confirm durability for non-regular session artifact: {}",
+                    entry.path().display()
+                ),
+            ));
+        }
+    }
+    #[cfg(unix)]
+    std::fs::File::open(directory)?.sync_all()?;
+    Ok(())
+}
+
 impl Default for JsonlStorageAdapter {
     fn default() -> Self {
         Self::new()
@@ -43,6 +85,12 @@ impl JsonlStorageAdapter {
             dir_mode: SessionDirMode::FromRoot(crate::util::echo_agent_home::echo_agent_home()),
             #[cfg(test)]
             update_append_probe: None,
+            #[cfg(test)]
+            checked_sync_probe: None,
+            #[cfg(test)]
+            chat_append_probe: None,
+            #[cfg(test)]
+            plan_mode_write_probe: None,
         }
     }
     pub fn with_root(root_dir: PathBuf) -> Self {
@@ -50,6 +98,12 @@ impl JsonlStorageAdapter {
             dir_mode: SessionDirMode::FromRoot(root_dir),
             #[cfg(test)]
             update_append_probe: None,
+            #[cfg(test)]
+            checked_sync_probe: None,
+            #[cfg(test)]
+            chat_append_probe: None,
+            #[cfg(test)]
+            plan_mode_write_probe: None,
         }
     }
     /// Create an adapter that writes directly to `session_dir`, bypassing
@@ -61,6 +115,12 @@ impl JsonlStorageAdapter {
             dir_mode: SessionDirMode::Explicit(session_dir),
             #[cfg(test)]
             update_append_probe: None,
+            #[cfg(test)]
+            checked_sync_probe: None,
+            #[cfg(test)]
+            chat_append_probe: None,
+            #[cfg(test)]
+            plan_mode_write_probe: None,
         }
     }
     #[cfg(test)]
@@ -71,7 +131,37 @@ impl JsonlStorageAdapter {
         Self {
             dir_mode: SessionDirMode::Explicit(session_dir),
             update_append_probe: Some(std::sync::Arc::new(append_probe)),
+            checked_sync_probe: None,
+            chat_append_probe: None,
+            plan_mode_write_probe: None,
         }
+    }
+    #[cfg(test)]
+    pub(crate) fn with_checked_sync_probe(
+        session_dir: PathBuf,
+        probe: impl Fn() -> io::Result<()> + Send + Sync + 'static,
+    ) -> Self {
+        let mut adapter = Self::with_explicit_session_dir(session_dir);
+        adapter.checked_sync_probe = Some(std::sync::Arc::new(probe));
+        adapter
+    }
+    #[cfg(test)]
+    pub(crate) fn with_chat_append_probe(
+        session_dir: PathBuf,
+        probe: impl Fn() -> io::Result<()> + Send + Sync + 'static,
+    ) -> Self {
+        let mut adapter = Self::with_explicit_session_dir(session_dir);
+        adapter.chat_append_probe = Some(std::sync::Arc::new(probe));
+        adapter
+    }
+    #[cfg(test)]
+    pub(crate) fn with_plan_mode_write_probe(
+        session_dir: PathBuf,
+        probe: impl Fn() -> io::Result<()> + Send + Sync + 'static,
+    ) -> Self {
+        let mut adapter = Self::with_explicit_session_dir(session_dir);
+        adapter.plan_mode_write_probe = Some(std::sync::Arc::new(probe));
+        adapter
     }
     /// Load chat history from a specific directory.
     /// Used by fork bootstrap to load the copied parent conversation.
@@ -297,24 +387,46 @@ impl JsonlStorageAdapter {
     }
     fn append_jsonl_line_sync_with(
         path: &Path,
+        line: Vec<u8>,
+        durability: AppendDurability,
+        sync_file: impl FnMut(&std::fs::File) -> io::Result<()>,
+        sync_parent: impl FnMut() -> io::Result<()>,
+    ) -> io::Result<()> {
+        Self::append_jsonl_line_sync_commit_aware_with(
+            path,
+            line,
+            durability,
+            sync_file,
+            sync_parent,
+        )
+        .map_err(super::AppendUpdateError::into_io_error)
+    }
+    /// A complete replay line must never be appended again after a barrier error.
+    /// Partial writes remain uncommitted and are healed by the next append.
+    fn append_jsonl_line_sync_commit_aware_with(
+        path: &Path,
         mut line: Vec<u8>,
         durability: AppendDurability,
         mut sync_file: impl FnMut(&std::fs::File) -> io::Result<()>,
         mut sync_parent: impl FnMut() -> io::Result<()>,
-    ) -> io::Result<()> {
+    ) -> Result<(), super::AppendUpdateError> {
+        use super::AppendUpdateError::{Committed, NotCommitted};
+
         debug_assert!(line.ends_with(b"\n"), "JSONL record must end with \\n");
-        let lock = Self::lock_append(path)?;
+        let lock = Self::lock_append(path).map_err(NotCommitted)?;
         let result = (|| {
             let mut file = OpenOptions::new()
                 .read(true)
                 .create(true)
                 .append(true)
-                .open(path)?;
-            let len = file.metadata()?.len();
+                .open(path)
+                .map_err(NotCommitted)?;
+            let len = file.metadata().map_err(NotCommitted)?.len();
             if len > 0 {
-                file.seek(io::SeekFrom::Start(len - 1))?;
+                file.seek(io::SeekFrom::Start(len - 1))
+                    .map_err(NotCommitted)?;
                 let mut last = [0u8; 1];
-                file.read_exact(&mut last)?;
+                file.read_exact(&mut last).map_err(NotCommitted)?;
                 if last[0] != b'\n' {
                     tracing::warn!(
                         path = %path.display(),
@@ -323,12 +435,14 @@ impl JsonlStorageAdapter {
                     line.insert(0, b'\n');
                 }
             }
-            file.write_all(&line)?;
-            file.flush()?;
+            file.write_all(&line).map_err(NotCommitted)?;
+            file.flush()
+                .map_err(|error| Committed(super::committed_barrier_error(error)))?;
             if matches!(durability, AppendDurability::Durable) {
-                sync_file(&file)?;
+                sync_file(&file)
+                    .map_err(|error| Committed(super::committed_barrier_error(error)))?;
                 drop(file);
-                sync_parent()?;
+                sync_parent().map_err(|error| Committed(super::committed_barrier_error(error)))?;
             } else {
                 drop(file);
             }
@@ -526,17 +640,29 @@ impl JsonlStorageAdapter {
         path: PathBuf,
         update: &super::SessionUpdate,
         durability: AppendDurability,
-    ) -> io::Result<()> {
+    ) -> Result<(), super::AppendUpdateError> {
         #[cfg(test)]
         if let Some(append_probe) = &self.update_append_probe {
-            append_probe(durability)?;
+            append_probe(durability).map_err(super::AppendUpdateError::NotCommitted)?;
         }
-        let envelope = SessionUpdateEnvelope::from_update(update)
-            .map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e))?;
-        let mut line = serde_json::to_vec(&envelope)
-            .map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e))?;
+        let envelope = SessionUpdateEnvelope::from_update(update).map_err(|e| {
+            super::AppendUpdateError::NotCommitted(io::Error::new(io::ErrorKind::InvalidData, e))
+        })?;
+        let mut line = serde_json::to_vec(&envelope).map_err(|e| {
+            super::AppendUpdateError::NotCommitted(io::Error::new(io::ErrorKind::InvalidData, e))
+        })?;
         line.push(b'\n');
-        Self::append_jsonl_line_blocking(path, line, durability).await
+        tokio::task::spawn_blocking(move || {
+            Self::append_jsonl_line_sync_commit_aware_with(
+                &path,
+                line,
+                durability,
+                Self::sync_file_durable,
+                || Self::sync_parent_directory(&path),
+            )
+        })
+        .await
+        .map_err(|error| super::AppendUpdateError::NotCommitted(io::Error::other(error)))?
     }
     async fn append_update_with_bookkeeping(
         &self,
@@ -545,8 +671,7 @@ impl JsonlStorageAdapter {
         durability: AppendDurability,
     ) -> Result<(), super::AppendUpdateError> {
         self.append_update_to_file(self.updates_file(info), update, durability)
-            .await
-            .map_err(super::AppendUpdateError::NotCommitted)?;
+            .await?;
         self.apply_summary_patch(
             info,
             super::summary_write::SummaryPatch {
@@ -1134,7 +1259,38 @@ impl StorageAdapter for JsonlStorageAdapter {
             .await
     }
     async fn append_chat_message(&self, info: &Info, message: &ConversationItem) -> io::Result<()> {
-        self.append_jsonl(self.chat_file(info), message).await?;
+        self.append_chat_message_commit_aware(info, message)
+            .await
+            .map_err(super::AppendUpdateError::into_io_error)
+    }
+    async fn append_chat_message_commit_aware(
+        &self,
+        info: &Info,
+        message: &ConversationItem,
+    ) -> Result<(), super::AppendUpdateError> {
+        #[cfg(test)]
+        if let Some(probe) = &self.chat_append_probe {
+            probe().map_err(super::AppendUpdateError::NotCommitted)?;
+        }
+        let mut line = serde_json::to_vec(message).map_err(|error| {
+            super::AppendUpdateError::NotCommitted(io::Error::new(
+                io::ErrorKind::InvalidData,
+                error,
+            ))
+        })?;
+        line.push(b'\n');
+        let path = self.chat_file(info);
+        tokio::task::spawn_blocking(move || {
+            Self::append_jsonl_line_sync_commit_aware_with(
+                &path,
+                line,
+                AppendDurability::Buffered,
+                Self::sync_file_durable,
+                || Self::sync_parent_directory(&path),
+            )
+        })
+        .await
+        .map_err(|error| super::AppendUpdateError::NotCommitted(io::Error::other(error)))??;
         self.apply_summary_patch(
             info,
             super::summary_write::SummaryPatch {
@@ -1145,6 +1301,7 @@ impl StorageAdapter for JsonlStorageAdapter {
             },
         )
         .await
+        .map_err(super::AppendUpdateError::Committed)
     }
     async fn append_cwd_switch_commit_aware(
         &self,
@@ -1226,6 +1383,10 @@ impl StorageAdapter for JsonlStorageAdapter {
         info: &Info,
         state: &crate::session::plan_mode::PlanModeSnapshot,
     ) -> io::Result<()> {
+        #[cfg(test)]
+        if let Some(probe) = &self.plan_mode_write_probe {
+            probe()?;
+        }
         let json = serde_json::to_vec_pretty(state)
             .map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e))?;
         super::write_bytes_atomic_async(&self.plan_mode_state_file(info), json).await
@@ -1513,6 +1674,37 @@ impl StorageAdapter for JsonlStorageAdapter {
                 }
             }
             Ok(())
+        })
+        .await
+        .map_err(io::Error::other)?
+    }
+    async fn sync_session_files_checked(&self, info: &Info) -> io::Result<()> {
+        #[cfg(test)]
+        if let Some(probe) = &self.checked_sync_probe {
+            probe()?;
+        }
+        let directory = self.session_dir(info);
+        let adapter = self.clone();
+        let info = info.clone();
+        tokio::task::spawn_blocking(move || {
+            // A committed replay line can still have failed its summary
+            // bookkeeping. A directory/missing/corrupt summary is not a
+            // restorable session and must not become a successful save ACK.
+            adapter.read_summary_sync(&info)?;
+            for path in [adapter.updates_file(&info), adapter.chat_file(&info)] {
+                match std::fs::symlink_metadata(&path) {
+                    Ok(metadata) if metadata.is_file() => {}
+                    Err(error) if error.kind() == io::ErrorKind::NotFound => {}
+                    Ok(_) => {
+                        return Err(io::Error::new(
+                            io::ErrorKind::InvalidData,
+                            format!("session history is not a regular file: {}", path.display()),
+                        ));
+                    }
+                    Err(error) => return Err(error),
+                }
+            }
+            sync_directory_checked(&directory)
         })
         .await
         .map_err(io::Error::other)?

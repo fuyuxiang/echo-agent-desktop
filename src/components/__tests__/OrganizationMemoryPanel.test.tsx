@@ -94,6 +94,59 @@ describe("OrganizationMemoryPanel", () => {
     expect(onStartConversation).toHaveBeenCalledOnce();
   });
 
+  it("账号切换后丢弃旧账号的迟到列表和预览", async () => {
+    let resolvePreview!: (value: { kind: "text"; content: string }) => void;
+    api.orgPreviewDocument.mockReturnValue(new Promise((resolve) => { resolvePreview = resolve; }));
+    render(<OrganizationMemoryPanel />);
+    await screen.findByText("Alice · https://memory.example.com");
+    fireEvent.click(screen.getByRole("button", { name: /^文档/ }));
+    fireEvent.click(screen.getAllByRole("button", { name: "查看" })[0]);
+
+    api.orgListDocuments.mockResolvedValue({ items: [], total: 0, page: 1, size: 20 });
+    act(() => useOrgSessionStore.getState().setSession({
+      loggedIn: true, serverUrl: "https://other.example.com",
+      user: { id: "u2", username: "bob", displayName: "Bob", role: "member", clearance: 0 },
+    }));
+    await screen.findByText("Bob · https://other.example.com");
+    await act(async () => resolvePreview({ kind: "text", content: "Alice 私有文档内容" }));
+
+    fireEvent.click(screen.getByRole("button", { name: /^文档/ }));
+    expect(screen.queryByText("个人文档")).toBeNull();
+    expect(screen.queryByText("Alice 私有文档内容")).toBeNull();
+    expect(screen.queryByRole("dialog")).toBeNull();
+  });
+
+  it("退出后丢弃迟到的工作区恢复，重新登录失败不展示旧文档", async () => {
+    let resolveDocuments!: (value: { items: ReturnType<typeof document>[]; total: number; page: number; size: number }) => void;
+    api.orgListDocuments.mockReturnValue(new Promise((resolve) => { resolveDocuments = resolve; }));
+    render(<OrganizationMemoryPanel />);
+    await waitFor(() => expect(api.orgListDocuments).toHaveBeenCalledOnce());
+    act(() => useOrgSessionStore.getState().clearSession());
+    await screen.findByLabelText("密码");
+    await act(async () => resolveDocuments({
+      items: [document("old", "旧账号保密文档", personalScope.id, personalScope.name)],
+      total: 1, page: 1, size: 20,
+    }));
+    api.orgListScopes.mockRejectedValueOnce(new Error("新账号组织服务不可达"));
+    act(() => useOrgSessionStore.getState().setSession({
+      loggedIn: true, serverUrl: "https://new.example.com",
+      user: { id: "u2", username: "bob", displayName: "Bob", role: "member", clearance: 0 },
+    }));
+    await screen.findByText("Bob · https://new.example.com");
+    fireEvent.click(screen.getByRole("button", { name: /^文档/ }));
+    expect(screen.queryByText("旧账号保密文档")).toBeNull();
+  });
+
+  it("更新文档原件选择失败时显示恢复提示", async () => {
+    agentClientMocks.filesystemPickFiles.mockRejectedValueOnce(new Error("文件选择器不可用"));
+    render(<OrganizationMemoryPanel />);
+    await screen.findByText("Alice · https://memory.example.com");
+    fireEvent.click(screen.getByRole("button", { name: /^文档/ }));
+    fireEvent.click(screen.getAllByRole("button", { name: "新版本" })[0]);
+    expect(await screen.findByText("选择新版本失败：文件选择器不可用")).toBeInTheDocument();
+    expect(api.orgNewDocumentVersion).not.toHaveBeenCalled();
+  });
+
   it("查看范围只过滤列表，不改变写入目标", async () => {
     render(<OrganizationMemoryPanel cwd="/workspace/payments" />);
     await screen.findByText("Alice · https://memory.example.com");

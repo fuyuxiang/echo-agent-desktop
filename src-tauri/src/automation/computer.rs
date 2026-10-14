@@ -231,8 +231,8 @@ impl ComputerController {
             || !y.is_finite()
             || x < 0.0
             || y < 0.0
-            || x > f64::from(frame.meta.image_width)
-            || y > f64::from(frame.meta.image_height)
+            || x >= f64::from(frame.meta.image_width)
+            || y >= f64::from(frame.meta.image_height)
         {
             return Err("操作坐标超出截图范围".into());
         }
@@ -1687,6 +1687,12 @@ mod tests {
             (80.0, 60.0)
         );
         assert!(controller.resolve_point("current", 101.0, 0.0).is_err());
+        // Width/height are dimensions, not inclusive pixel coordinates. Their
+        // transformed edge can belong to a different monitor or application.
+        assert!(controller.resolve_point("current", 100.0, 0.0).is_err());
+        assert!(controller.resolve_point("current", 0.0, 50.0).is_err());
+        assert!(controller.resolve_point("current", f64::NAN, 0.0).is_err());
+        assert!(controller.resolve_point("current", 99.0, 49.0).is_ok());
     }
 
     #[test]

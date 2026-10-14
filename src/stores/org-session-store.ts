@@ -4,12 +4,29 @@ import { orgSession, type OrgSession } from "@/lib/org-client";
 interface OrgSessionState {
   session: OrgSession | null;
   hydrated: boolean;
+  /** Changes whenever the account or its authorized scopes change. */
+  boundaryRevision: number;
   hydrate: () => Promise<OrgSession | null>;
   setSession: (session: OrgSession) => void;
   clearSession: () => void;
 }
 
 let hydrationInFlight: Promise<OrgSession | null> | null = null;
+let sessionMutation = 0;
+
+export function organizationSessionBoundary(session: OrgSession | null): string {
+  if (!session?.loggedIn) return "signed-out";
+  const user = session.user ?? session.bootstrap?.user;
+  return JSON.stringify([
+    session.serverUrl,
+    user?.id,
+    user?.role,
+    user?.clearance,
+    session.bootstrap?.scopes?.map((scope) => [scope.id, scope.kind, scope.canPublishDocuments])
+      .sort((a, b) => String(a[0]).localeCompare(String(b[0]))),
+    session.bootstrap?.policy,
+  ]);
+}
 
 export interface OrganizationKnowledgeAvailability {
   available: boolean;
@@ -58,42 +75,69 @@ export function organizationKnowledgeAvailability(
 export const useOrgSessionStore = create<OrgSessionState>((set, get) => ({
   session: null,
   hydrated: false,
+  boundaryRevision: 0,
 
   hydrate: async () => {
     if (get().hydrated) return get().session;
     if (hydrationInFlight) return hydrationInFlight;
 
-    hydrationInFlight = (async () => {
+    const mutation = sessionMutation;
+    const pending = (async () => {
       try {
         const session = await orgSession();
-        set({ session, hydrated: true });
+        if (mutation !== sessionMutation) return get().session;
+        set((state) => ({
+          session,
+          hydrated: true,
+          boundaryRevision: state.boundaryRevision + Number(
+            organizationSessionBoundary(state.session) !== organizationSessionBoundary(session),
+          ),
+        }));
         return session;
       } catch {
+        if (mutation !== sessionMutation) return get().session;
         // Organization connectivity must never block the local desktop shell.
         // The organization page retries and surfaces the detailed error.
         set({ session: null, hydrated: true });
         return null;
       } finally {
-        hydrationInFlight = null;
+        if (mutation === sessionMutation) hydrationInFlight = null;
       }
     })();
+    hydrationInFlight = pending;
     return hydrationInFlight;
   },
 
-  setSession: (session) => set({ session, hydrated: true }),
-  clearSession: () => set((state) => ({
-    session: {
-      loggedIn: false,
-      serverUrl: state.session?.serverUrl,
-      username: state.session?.username ?? state.session?.user?.username,
-      requiresReauthentication: false,
-    },
-    hydrated: true,
-  })),
+  setSession: (session) => {
+    sessionMutation += 1;
+    hydrationInFlight = null;
+    set((state) => ({
+      session,
+      hydrated: true,
+      boundaryRevision: state.boundaryRevision + Number(
+        organizationSessionBoundary(state.session) !== organizationSessionBoundary(session),
+      ),
+    }));
+  },
+  clearSession: () => {
+    sessionMutation += 1;
+    hydrationInFlight = null;
+    set((state) => ({
+      session: {
+        loggedIn: false,
+        serverUrl: state.session?.serverUrl,
+        username: state.session?.username ?? state.session?.user?.username,
+        requiresReauthentication: false,
+      },
+      hydrated: true,
+      boundaryRevision: state.boundaryRevision + 1,
+    }));
+  },
 }));
 
 /** Test/support reset; does not touch native credentials. */
 export function resetOrgSessionMirror(): void {
   hydrationInFlight = null;
-  useOrgSessionStore.setState({ session: null, hydrated: false });
+  sessionMutation += 1;
+  useOrgSessionStore.setState({ session: null, hydrated: false, boundaryRevision: 0 });
 }

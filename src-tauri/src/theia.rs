@@ -15,6 +15,41 @@ use uuid::Uuid;
 
 use crate::shell_fs::FilesystemAccess;
 
+fn isolated_data_dir(home: Option<&std::ffi::OsStr>) -> Option<PathBuf> {
+    home.filter(|value| !value.is_empty())
+        .map(PathBuf::from)
+        // initialize_runtime_home sets ECHO_AGENT_HOME even for a default run.
+        // Keep that installation's existing Tauri editor profile in place.
+        .filter(|home| dirs::home_dir().is_none_or(|default| *home != default.join(".echo-agent")))
+        .map(|home| home.join("theia"))
+}
+
+/// Respect explicitly isolated runs without moving existing installations'
+/// editor settings and layout from Tauri's original application data folder.
+pub(crate) fn data_dir(app: &AppHandle) -> Result<PathBuf, String> {
+    if let Some(path) = isolated_data_dir(std::env::var_os("ECHO_AGENT_HOME").as_deref()) {
+        return Ok(path);
+    }
+    app.path().app_data_dir().map_err(|error| error.to_string())
+}
+
+/// Plugins initialize application-owned global state before registering their
+/// commands. Create this storage natively so the workspace mutation bridge does
+/// not mistake framework initialization for an out-of-project file edit.
+fn prepare_plugin_global_storage(config_dir: &Path) -> Result<(), String> {
+    let storage = config_dir.join("globalStorage");
+    match fs::symlink_metadata(&storage) {
+        Ok(metadata) if metadata.is_dir() && !metadata.file_type().is_symlink() => Ok(()),
+        Ok(_) => Err("IDE 插件数据目录不是普通目录，请保留原数据并检查目录配置".into()),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+            fs::create_dir_all(&storage)
+                .map_err(|error| format!("无法创建 IDE 插件数据目录：{error}"))?;
+            crate::paths::harden_private_dir(&storage)
+        }
+        Err(error) => Err(format!("无法读取 IDE 插件数据目录：{error}")),
+    }
+}
+
 #[derive(Default)]
 pub struct TheiaServer {
     process: Mutex<Option<RunningServer>>,
@@ -55,6 +90,10 @@ pub struct TheiaEndpoint {
 impl TheiaServer {
     pub fn begin_shutdown(&self) {
         self.shutting_down.store(true, Ordering::Release);
+    }
+
+    pub(crate) fn cancel_shutdown(&self) {
+        self.shutting_down.store(false, Ordering::Release);
     }
 
     fn ensure_start_allowed(&self) -> Result<(), String> {
@@ -309,12 +348,10 @@ pub async fn coding_theia_start(
     let node = node_compatible_path(&node_executable(&app))?;
     check_node(&node)?;
     server.ensure_start_allowed()?;
-    let data_dir = app
-        .path()
-        .app_data_dir()
-        .map_err(|error| error.to_string())?;
+    let data_dir = data_dir(&app)?;
     let config_dir = data_dir.join("theia-config");
     fs::create_dir_all(&config_dir).map_err(|error| format!("无法创建 IDE 配置目录：{error}"))?;
+    prepare_plugin_global_storage(&config_dir)?;
     let config_dir = node_compatible_path(&config_dir)?;
     let log_path = data_dir.join("theia.log");
     // Keep the failure that triggered an automatic restart available for diagnosis.
@@ -429,6 +466,80 @@ pub async fn coding_theia_start(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn plugin_global_storage_preexists_before_workspace_bridge_and_preserves_state() {
+        let temp = tempfile::tempdir().unwrap();
+        let config = temp.path().join("中文 IDE 配置");
+        fs::create_dir_all(&config).unwrap();
+        prepare_plugin_global_storage(&config).unwrap();
+        let storage = config.join("globalStorage");
+        assert!(storage.is_dir());
+        fs::write(
+            storage.join("existing-state.json"),
+            b"existing synthetic plugin state",
+        )
+        .unwrap();
+        prepare_plugin_global_storage(&config).unwrap();
+        assert_eq!(
+            fs::read(storage.join("existing-state.json")).unwrap(),
+            b"existing synthetic plugin state"
+        );
+        fs::remove_file(storage.join("existing-state.json")).unwrap();
+        fs::remove_dir(&storage).unwrap();
+        fs::write(&storage, b"keep this conflicting file").unwrap();
+        assert!(prepare_plugin_global_storage(&config).is_err());
+        assert_eq!(fs::read(&storage).unwrap(), b"keep this conflicting file");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn plugin_global_storage_does_not_follow_or_replace_symlink() {
+        let temp = tempfile::tempdir().unwrap();
+        let config = temp.path().join("config");
+        let outside = temp.path().join("other-synthetic-data");
+        fs::create_dir_all(&config).unwrap();
+        fs::create_dir_all(&outside).unwrap();
+        fs::write(outside.join("keeper"), b"preserve unrelated bytes").unwrap();
+        std::os::unix::fs::symlink(&outside, config.join("globalStorage")).unwrap();
+        assert!(prepare_plugin_global_storage(&config).is_err());
+        assert!(fs::symlink_metadata(config.join("globalStorage"))
+            .unwrap()
+            .file_type()
+            .is_symlink());
+        assert_eq!(
+            fs::read(outside.join("keeper")).unwrap(),
+            b"preserve unrelated bytes"
+        );
+    }
+
+    #[test]
+    fn failed_update_shutdown_can_restart_the_ide() {
+        let server = TheiaServer::default();
+        assert!(server.ensure_start_allowed().is_ok());
+        server.begin_shutdown();
+        assert!(server.ensure_start_allowed().is_err());
+        server.cancel_shutdown();
+        assert!(server.ensure_start_allowed().is_ok());
+    }
+
+    #[test]
+    fn explicit_data_home_isolates_theia_settings_and_logs() {
+        let directory = tempfile::tempdir().unwrap();
+        let home = directory.path().join("中文 测试数据");
+        assert_eq!(
+            isolated_data_dir(Some(home.as_os_str())),
+            Some(home.join("theia"))
+        );
+        assert_eq!(isolated_data_dir(None), None);
+        assert_eq!(isolated_data_dir(Some(std::ffi::OsStr::new(""))), None);
+        if let Some(default) = dirs::home_dir() {
+            assert_eq!(
+                isolated_data_dir(Some(default.join(".echo-agent").as_os_str())),
+                None
+            );
+        }
+    }
 
     #[test]
     fn port_conflict_checks_only_the_current_start_attempt() {

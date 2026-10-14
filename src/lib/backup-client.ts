@@ -28,9 +28,13 @@ export async function restoreUiBeforeBootstrap(): Promise<void> {
   if (entries.some(([key, value]) => !BACKUP_UI_KEYS.includes(key as typeof BACKUP_UI_KEYS[number]) || typeof value !== "string")) {
     throw new Error("恢复的界面数据格式无效，已保留恢复文件");
   }
-  const previous = new Map(entries.map(([key]) => [key, localStorage.getItem(key)]));
+  const keys = [...BACKUP_UI_KEYS, "echoagent.projects.pending-backend-sync"];
+  const previous = new Map(keys.map((key) => [key, localStorage.getItem(key)]));
   try {
-    for (const [key, value] of entries) localStorage.setItem(key, value);
+    for (const key of BACKUP_UI_KEYS) {
+      if (key in restored) localStorage.setItem(key, restored[key]);
+      else localStorage.removeItem(key);
+    }
     // Backend snapshot is authoritative after restoration, never push stale cache.
     localStorage.removeItem("echoagent.projects.pending-backend-sync");
     await invoke("backup_acknowledge_ui");

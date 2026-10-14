@@ -550,8 +550,6 @@ checksum = "1505bd5d3d116872e7271a6d4e16d81d0c8570876c8de68093a09ac269d8aac0"
 [[package]]
 name = "auto-launch"
 version = "0.5.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "1f012b8cc0c850f34117ec8252a44418f2e34a2cf501de89e29b241ae5f79471"
 dependencies = [
  "dirs 4.0.0",
  "thiserror 1.0.69",
@@ -4138,8 +4136,10 @@ dependencies = [
  "md-5",
  "notify-debouncer-full",
  "notify-rust",
+ "objc2",
  "objc2-app-kit",
  "objc2-foundation",
+ "objc2-web-kit",
  "open",
  "process-wrap",
  "quick-xml 0.38.4",
@@ -12315,8 +12315,6 @@ dependencies = [
 [[package]]
 name = "tauri-plugin-updater"
 version = "2.9.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "27cbc31740f4d507712550694749572ec0e43bdd66992db7599b89fbfd6b167b"
 dependencies = [
  "base64 0.22.1",
  "dirs 6.0.0",

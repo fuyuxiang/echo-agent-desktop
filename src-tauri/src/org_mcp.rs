@@ -1810,7 +1810,7 @@ mod tests {
             payload["tool_timeouts"]["knowledge_ask"],
             ORGANIZATION_AGENTIC_TOOL_TIMEOUT_SECS
         );
-        assert!(ORGANIZATION_AGENTIC_TOOL_TIMEOUT_SECS > 120);
+        const { assert!(ORGANIZATION_AGENTIC_TOOL_TIMEOUT_SECS > 120) };
         assert_eq!(payload["headers"][ORGANIZATION_SCOPES_HEADER], "team-a");
     }
 

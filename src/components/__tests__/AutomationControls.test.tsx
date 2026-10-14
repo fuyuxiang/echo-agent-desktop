@@ -123,4 +123,91 @@ describe("AutomationControls", () => {
     await act(async () => { fireEvent.click(reject); });
     expect(automationClient.automationResolveApproval).toHaveBeenCalledWith("approval-1", false);
   });
+
+  it("切换会话后旧状态查询不会覆盖当前会话", async () => {
+    let finishOld!: (value: typeof availableStatus) => void;
+    vi.mocked(automationClient.automationStatus).mockImplementation((id) => id === "session-1"
+      ? new Promise((resolve) => { finishOld = resolve; })
+      : Promise.resolve({ ...availableStatus, sessionId: id, paused: true }));
+    const view = render(<AutomationControls sessionId="session-1" streaming={false} placement="toolbar" />);
+    await waitFor(() => expect(finishOld).toBeDefined());
+    view.rerender(<AutomationControls sessionId="session-2" streaming={false} placement="toolbar" />);
+    await screen.findByText("浏览器控制已暂停，你可以安全接管");
+    await act(async () => { finishOld(availableStatus); });
+    expect(screen.getByText("浏览器控制已暂停，你可以安全接管")).toBeInTheDocument();
+  });
+
+  it("较新的状态事件优先于正在返回的旧查询", async () => {
+    let finish!: (value: typeof availableStatus) => void;
+    vi.mocked(automationClient.automationStatus).mockReturnValue(new Promise((resolve) => { finish = resolve; }));
+    render(<AutomationControls sessionId="session-1" streaming={false} placement="toolbar" />);
+    await waitFor(() => expect(automationClient.automationStatus).toHaveBeenCalled());
+    const onStatus = vi.mocked(automationClient.onAutomationStatus).mock.calls[0][0];
+    await act(async () => { onStatus({ ...availableStatus, paused: true }); finish(availableStatus); });
+    expect(screen.getByText("浏览器控制已暂停，你可以安全接管")).toBeInTheDocument();
+  });
+
+  it("已关闭的确认不会由迟到的查询或事件重新打开", async () => {
+    const request = { requestId: "closed-1", sessionId: "session-1", tool: "browser_click", title: "已取消操作", description: "不应显示", details: {} };
+    let finish!: (value: typeof request[]) => void;
+    vi.mocked(automationClient.automationPendingApprovals).mockReturnValue(new Promise((resolve) => { finish = resolve; }));
+    render(<AutomationControls sessionId="session-1" streaming={false} placement="approval" />);
+    await waitFor(() => expect(automationClient.automationPendingApprovals).toHaveBeenCalled());
+    const closed = vi.mocked(automationClient.onAutomationApprovalClosed).mock.calls[0][0];
+    const opened = vi.mocked(automationClient.onAutomationApproval).mock.calls[0][0];
+    await act(async () => { closed({ requestId: request.requestId, sessionId: request.sessionId }); opened(request); finish([request]); });
+    expect(screen.queryByText("已取消操作")).toBeNull();
+  });
+
+  it("部分监听注册失败时清理已注册监听", async () => {
+    const unlisten = vi.fn();
+    vi.mocked(automationClient.onAutomationStatus).mockResolvedValueOnce(unlisten);
+    vi.mocked(automationClient.onAutomationApproval).mockRejectedValueOnce(new Error("监听失败"));
+    const view = render(<AutomationControls sessionId="session-1" streaming={false} placement="toolbar" />);
+    await screen.findByText("监听失败");
+    view.unmount();
+    expect(unlisten).toHaveBeenCalledTimes(1);
+  });
+
+  it("切换任务后不再提示旧任务的接管结果", async () => {
+    let finishPause!: (value: typeof availableStatus) => void;
+    vi.mocked(automationClient.automationPause).mockReturnValue(new Promise((resolve) => { finishPause = resolve; }));
+    vi.mocked(automationClient.automationStatus).mockImplementation(async (sessionId) => ({ ...availableStatus, sessionId }));
+    const onToast = vi.fn();
+    const view = render(<AutomationControls sessionId="session-1" streaming={false} placement="toolbar" onToast={onToast} />);
+    await screen.findByText("Chrome 将在需要时自动启动");
+    fireEvent.click(screen.getByRole("button", { name: "接管" }));
+    expect(automationClient.automationPause).toHaveBeenCalledWith("session-1");
+    view.rerender(<AutomationControls sessionId="session-2" streaming={false} placement="toolbar" onToast={onToast} />);
+    await screen.findByText("Chrome 将在需要时自动启动");
+    await act(async () => { finishPause({ ...availableStatus, paused: true }); });
+    expect(onToast).not.toHaveBeenCalled();
+    expect(screen.getByRole("button", { name: "接管" })).toBeEnabled();
+  });
+
+  it("离开旧任务后不提示其确认回复错误", async () => {
+    let failResolve!: (error: Error) => void;
+    const request = { requestId: "old-approval", sessionId: "session-1", tool: "browser_click", title: "旧任务确认", description: "核对目标", details: {} };
+    vi.mocked(automationClient.automationPendingApprovals).mockImplementation(async (sessionId) => sessionId === "session-1" ? [request] : []);
+    vi.mocked(automationClient.automationResolveApproval).mockReturnValueOnce(new Promise((_, reject) => { failResolve = reject; }));
+    const onToast = vi.fn();
+    const view = render(<AutomationControls sessionId="session-1" streaming={false} placement="approval" onToast={onToast} />);
+    fireEvent.click(await screen.findByRole("button", { name: "拒绝" }));
+    view.rerender(<AutomationControls sessionId="session-2" streaming={false} placement="approval" onToast={onToast} />);
+    await act(async () => { failResolve(new Error("旧任务回复已失效")); });
+    expect(onToast).not.toHaveBeenCalled();
+    expect(screen.queryByText("旧任务确认")).toBeNull();
+  });
+
+  it("查询返回前收到新确认时仍保留快照中较早的待确认操作", async () => {
+    const earlier = { requestId: "earlier", sessionId: "session-1", tool: "browser_click", title: "较早确认", description: "核对目标", details: {} };
+    let finish!: (value: typeof earlier[]) => void;
+    vi.mocked(automationClient.automationPendingApprovals).mockReturnValue(new Promise((resolve) => { finish = resolve; }));
+    render(<AutomationControls sessionId="session-1" streaming={false} placement="approval" />);
+    await waitFor(() => expect(automationClient.automationPendingApprovals).toHaveBeenCalled());
+    const opened = vi.mocked(automationClient.onAutomationApproval).mock.calls[0][0];
+    await act(async () => { opened({ ...earlier, requestId: "later", title: "较晚确认" }); finish([earlier]); });
+    expect(screen.getByText("较早确认")).toBeInTheDocument();
+    expect(screen.getByText("还有 1 个操作等待确认")).toBeInTheDocument();
+  });
 });

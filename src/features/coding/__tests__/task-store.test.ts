@@ -54,6 +54,13 @@ function record(overrides: Partial<VerificationRecord> = {}): VerificationRecord
   };
 }
 
+function deferred<T>() {
+  let resolve!: (value: T) => void;
+  let reject!: (error: Error) => void;
+  const promise = new Promise<T>((accept, fail) => { resolve = accept; reject = fail; });
+  return { promise, resolve, reject };
+}
+
 describe("task store", () => {
   beforeEach(() => {
     for (const fn of Object.values(api)) fn.mockReset();
@@ -193,5 +200,91 @@ describe("task store", () => {
 
     expect(useTaskStore.getState().task?.id).toBe("t1");
     expect(useTaskStore.getState().error).toContain("请先停止任务再删除");
+  });
+
+  it("开始新任务后忽略之前尚未返回的选择请求", async () => {
+    const pending = deferred<CodingTask>();
+    api.getTask.mockReturnValue(pending.promise);
+    useTaskStore.getState().setRoot("/repo");
+    const selecting = useTaskStore.getState().selectTask("t1");
+    useTaskStore.getState().reset();
+    pending.resolve(task());
+    await selecting;
+    expect(useTaskStore.getState().task).toBeNull();
+    expect(useTaskStore.getState().loading).toBe(false);
+  });
+
+  it("切换项目会取消旧项目的加载状态", async () => {
+    const pending = deferred<CodingTask>();
+    api.getTask.mockReturnValue(pending.promise);
+    useTaskStore.getState().setRoot("/repo");
+    const selecting = useTaskStore.getState().selectTask("t1");
+    useTaskStore.getState().setRoot("/other");
+    expect(useTaskStore.getState().loading).toBe(false);
+    pending.resolve(task());
+    await selecting;
+    expect(useTaskStore.getState().task).toBeNull();
+  });
+
+  it("任务列表响应乱序时保留最新列表", async () => {
+    const pending = deferred<Array<{ id: string; name: string; phase: "idle"; updatedAt: string }>>();
+    api.listTasks.mockReturnValueOnce(pending.promise).mockResolvedValueOnce([]);
+    useTaskStore.getState().setRoot("/repo");
+    const beforeDelete = useTaskStore.getState().refreshSummaries();
+    await useTaskStore.getState().refreshSummaries();
+    pending.resolve([{ id: "deleted", name: "已删除", phase: "idle", updatedAt: "" }]);
+    await beforeDelete;
+    expect(useTaskStore.getState().summaries).toEqual([]);
+  });
+
+  it("往返切换项目后丢弃第一次访问的旧列表", async () => {
+    const pending = deferred<Array<{ id: string; name: string; phase: "idle"; updatedAt: string }>>();
+    api.listTasks.mockReturnValueOnce(pending.promise).mockResolvedValueOnce([]);
+    useTaskStore.getState().setRoot("/repo");
+    const beforeSwitch = useTaskStore.getState().refreshSummaries();
+    useTaskStore.getState().setRoot("/other");
+    useTaskStore.getState().setRoot("/repo");
+    await useTaskStore.getState().refreshSummaries();
+    pending.resolve([{ id: "stale", name: "旧访问", phase: "idle", updatedAt: "" }]);
+    await beforeSwitch;
+    expect(useTaskStore.getState().summaries).toEqual([]);
+  });
+
+  it("旧项目创建失败不会污染新项目错误状态", async () => {
+    const pending = deferred<CodingTask>();
+    api.createTask.mockReturnValue(pending.promise);
+    useTaskStore.getState().setRoot("/repo");
+    const creating = useTaskStore.getState().createTask("task", "requirement");
+    useTaskStore.getState().setRoot("/other");
+    pending.reject(new Error("旧项目创建失败"));
+    await creating;
+    expect(useTaskStore.getState().error).toBeNull();
+  });
+
+  it("旧项目重命名的迟到响应不会改写新项目同名任务", async () => {
+    const pending = deferred<CodingTask>();
+    api.renameTask.mockReturnValue(pending.promise);
+    useTaskStore.getState().setRoot("/repo");
+    const renaming = useTaskStore.getState().renameTask("t1", "旧项目新名字");
+    useTaskStore.getState().setRoot("/other");
+    useTaskStore.setState({ task: task({ name: "新项目任务" }) });
+    pending.resolve(task({ name: "旧项目新名字" }));
+    await renaming;
+    expect(useTaskStore.getState().task?.name).toBe("新项目任务");
+    expect(api.listTasks).not.toHaveBeenCalled();
+  });
+
+  it("删除完成后在途选择不会重新打开已删除任务", async () => {
+    const pending = deferred<CodingTask>();
+    api.getTask.mockReturnValue(pending.promise);
+    api.deleteTask.mockResolvedValue(undefined);
+    api.listTasks.mockResolvedValue([]);
+    useTaskStore.getState().setRoot("/repo");
+    const selecting = useTaskStore.getState().selectTask("t1");
+    await useTaskStore.getState().deleteTask("t1");
+    pending.resolve(task());
+    await selecting;
+    expect(useTaskStore.getState().task).toBeNull();
+    expect(useTaskStore.getState().loading).toBe(false);
   });
 });

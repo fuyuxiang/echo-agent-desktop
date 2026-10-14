@@ -12,6 +12,8 @@ import type { ConfirmationOptions } from "@/components/AppDialog";
 import { useTaskStore } from "../store/task-store";
 import { codingApi } from "./tauri-api";
 import type { CodingTask, DetectedCommand } from "./types";
+import { codingRuntimeKey, useCodingRuntimeStore } from "./coding-task-runtime";
+import { useCodingActionScope } from "../hooks/useCodingActionScope";
 
 interface VerificationRunnerOptions {
   cwd: string;
@@ -37,36 +39,55 @@ export function useVerificationRunner({
   requestConfirmation,
   onToast,
 }: VerificationRunnerOptions) {
-  const [runningVerification, setRunningVerification] = useState(false);
+  const runningVerification = useCodingRuntimeStore((state) => task
+    ? Boolean(state.verificationBatches[codingRuntimeKey(cwd, task.id)]) : false);
   const [activeRunId, setActiveRunId] = useState<string | null>(null);
   const activeRunIdRef = useRef<string | null>(null);
   const autoVerificationRef = useRef<string | null>(null);
+  const isCurrent = useCodingActionScope(cwd, task?.id);
+
+  useEffect(() => {
+    activeRunIdRef.current = null;
+    setActiveRunId(null);
+    autoVerificationRef.current = null;
+    setCommandOutput("");
+  }, [cwd, task?.id, setCommandOutput]);
 
   const executeVerifications = useCallback(
     async (batch: DetectedCommand[]) => {
-      if (!cwd || !task || runningVerification) return;
+      if (!isCurrent() || !cwd || !task || runningVerification) return;
       const taskId = task.id;
       if (!["verifying", "paused", "stopped", "blocked", "delivered"].includes(task.phase)) {
         onToast?.("当前任务正在执行，暂不能启动新的验证批次");
         return;
       }
-      setRunningVerification(true);
+      // Claim before beginVerification emits its phase event. Otherwise the
+      // background manager can start the same batch and clear its evidence.
+      const owner = useCodingRuntimeStore.getState().claimVerificationBatch(cwd, taskId);
+      if (!owner) return;
+      const refreshCurrent = async () => {
+        const selected = useTaskStore.getState();
+        if (selected.root === cwd && selected.task?.id === taskId) await selected.refreshTaskState();
+      };
       try {
         const startedTask = await codingApi.beginVerification(cwd, taskId);
-        autoVerificationRef.current = `${cwd}:${taskId}:${startedTask.updatedAt}`;
-        await useTaskStore.getState().refreshTaskState();
+        if (isCurrent()) autoVerificationRef.current = `${cwd}:${taskId}:${startedTask.updatedAt}`;
+        await refreshCurrent();
       } catch (error) {
-        onToast?.(`无法启动验证：${String(error).replace(/^Error:\s*/, "")}`);
-        setRunningVerification(false);
+        if (isCurrent()) onToast?.(`无法启动验证：${String(error).replace(/^Error:\s*/, "")}`);
+        useCodingRuntimeStore.getState().releaseVerificationBatch(cwd, taskId, owner);
         return;
       }
-      setCommandOutput("");
+      if (isCurrent()) setCommandOutput("");
       let mayReport = batch.length === 0;
       try {
         for (const command of batch) {
           const runId = crypto.randomUUID();
-          activeRunIdRef.current = runId;
-          setActiveRunId(runId);
+          useCodingRuntimeStore.getState().setActiveRunId(cwd, taskId, runId);
+          if (isCurrent()) {
+            activeRunIdRef.current = runId;
+            setActiveRunId(runId);
+          }
           try {
             const approvalToken = command.requiresApproval
               ? await codingApi.approvePlanCommand(cwd, taskId, command.command)
@@ -84,37 +105,40 @@ export function useVerificationRunner({
             if (record.status !== "passed") break;
           } catch (error) {
             const detail = String(error).replace(/^Error:\s*/, "");
-            onToast?.(`执行 ${command.command} 失败：${detail}`);
+            if (isCurrent()) onToast?.(`执行 ${command.command} 失败：${detail}`);
             await codingApi.reportStartFailed(
               cwd,
               taskId,
               `验证命令“${command.command}”未能执行：${detail}`,
             ).catch(() => undefined);
-            await useTaskStore.getState().refreshTaskState().catch(() => undefined);
+            await refreshCurrent().catch(() => undefined);
             mayReport = false;
             break;
           }
         }
         if (mayReport) {
           await codingApi.reportVerification(cwd, taskId);
-          await useTaskStore.getState().refreshTaskState();
+          await refreshCurrent();
         }
       } catch (error) {
         const detail = String(error).replace(/^Error:\s*/, "");
-        onToast?.(`无法更新验证结果：${detail}`);
+        if (isCurrent()) onToast?.(`无法更新验证结果：${detail}`);
         await codingApi.reportStartFailed(
           cwd,
           taskId,
           `无法收敛本轮验证结果：${detail}`,
         ).catch(() => undefined);
-        await useTaskStore.getState().refreshTaskState().catch(() => undefined);
+        await refreshCurrent().catch(() => undefined);
       } finally {
-        activeRunIdRef.current = null;
-        setActiveRunId(null);
-        setRunningVerification(false);
+        useCodingRuntimeStore.getState().setActiveRunId(cwd, taskId, null);
+        useCodingRuntimeStore.getState().releaseVerificationBatch(cwd, taskId, owner);
+        if (isCurrent()) {
+          activeRunIdRef.current = null;
+          setActiveRunId(null);
+        }
       }
     },
-    [cwd, onToast, runningVerification, setCommandOutput, task],
+    [cwd, isCurrent, onToast, runningVerification, setCommandOutput, task],
   );
 
   const runVerifications = useCallback((batch: DetectedCommand[]) => {

@@ -95,4 +95,35 @@ describe("MarketplacePanel 外部链接", () => {
       screen.queryByRole("textbox", { name: "市场源 Git URL" }),
     ).toBeNull());
   });
+
+  it("移除确认明确说明当前 Echo 范围、管理安装卸载和外部文件保留", async () => {
+    render(<MarketplacePanel sessionId="session-1" />);
+    await screen.findByText("Demo Plugin");
+    fireEvent.click(screen.getByRole("button", { name: "移除源" }));
+    const dialog = await screen.findByRole("alertdialog");
+    expect(dialog).toHaveTextContent("当前 Echo 配置");
+    expect(dialog).toHaveTextContent("卸载从该源安装在 Echo 管理目录中的插件");
+    expect(dialog).toHaveTextContent("其他应用的配置和文件将保留");
+    expect(mocks.action).not.toHaveBeenCalled();
+    fireEvent.click(screen.getByRole("button", { name: "取消" }));
+    expect(mocks.action).not.toHaveBeenCalled();
+  });
+
+  it("Runtime update_available remains installed and exposes update instead of reinstall", async () => {
+    const source = { sourceName: 'Owned Catalog', sourceKind: 'git', sourceUrlOrPath: 'https://example.test/owned.git',
+      plugins: [{ name: 'Owned Plugin', relativePath: 'plugins/owned', version: '2.0.0', installedVersion: '1.0.0',
+        installStatus: 'update_available', skillCount: 1, hasHooks: false, hasAgents: false, hasMcp: false }] };
+    mocks.list.mockResolvedValue({ sources: [source] }); mocks.action.mockResolvedValue({ status: 'success' });
+    render(<MarketplacePanel sessionId="session-1" />);
+    const update = await screen.findByRole('button', { name: '更新' });
+    expect(screen.getByText(/已安装.*v1\.0\.0/)).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: '卸载' })).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: '安装' })).not.toBeInTheDocument();
+    mocks.list.mockResolvedValue({ sources: [{ ...source, plugins: [{ ...source.plugins[0], installStatus: 'installed', installedVersion: '2.0.0' }] }] });
+    fireEvent.click(update);
+    await waitFor(() => expect(mocks.action).toHaveBeenCalledWith('session-1', { type: 'update',
+      sourceUrlOrPath: source.sourceUrlOrPath, pluginRelativePath: 'plugins/owned' }));
+    await waitFor(() => expect(screen.queryByRole('button', { name: '更新' })).not.toBeInTheDocument());
+    expect(screen.getByRole('button', { name: '卸载' })).toBeInTheDocument();
+  });
 });

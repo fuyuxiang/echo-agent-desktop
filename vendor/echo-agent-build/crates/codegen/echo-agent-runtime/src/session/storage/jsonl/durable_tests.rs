@@ -94,7 +94,7 @@ async fn append_commit_is_reported_when_bookkeeping_fails() {
 }
 
 #[test]
-fn directory_barrier_failure_is_retried_even_after_file_exists() {
+fn directory_barrier_failure_is_committed_and_retry_does_not_append_again() {
     let mut attempts = 0;
     let dir = tempfile::tempdir().unwrap();
     let path = dir.path().join("updates.jsonl");
@@ -106,25 +106,74 @@ fn directory_barrier_failure_is_retried_even_after_file_exists() {
             Ok(())
         }
     };
-    assert!(
-        JsonlStorageAdapter::append_jsonl_line_sync_with(
+    assert!(matches!(
+        JsonlStorageAdapter::append_jsonl_line_sync_commit_aware_with(
             &path,
             b"{\"record\":1}\n".to_vec(),
             AppendDurability::Durable,
             std::fs::File::sync_all,
             &mut flaky_parent,
-        )
-        .is_err()
-    );
-    JsonlStorageAdapter::append_jsonl_line_sync_with(
+        ),
+        Err(crate::session::storage::AppendUpdateError::Committed(error))
+            if error.to_string() == "directory barrier failed"
+    ));
+    assert_eq!(std::fs::read_to_string(&path).unwrap(), "{\"record\":1}\n");
+
+    // The complete line already landed. Retry only the failed directory barrier.
+    flaky_parent().unwrap();
+    assert_eq!(attempts, 2);
+    assert_eq!(std::fs::read_to_string(path).unwrap().lines().count(), 1);
+}
+
+#[tokio::test]
+async fn file_barrier_failure_is_committed_and_retry_does_not_append_again() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("updates.jsonl");
+    let error = JsonlStorageAdapter::append_jsonl_line_sync_commit_aware_with(
         &path,
         b"{\"record\":1}\n".to_vec(),
         AppendDurability::Durable,
-        std::fs::File::sync_all,
-        &mut flaky_parent,
+        |_| Err(io::Error::other("file barrier failed")),
+        || panic!("directory sync must follow a successful file sync"),
     )
-    .unwrap();
-    assert_eq!(attempts, 2);
+    .unwrap_err();
+    assert!(
+        matches!(&error, crate::session::storage::AppendUpdateError::Committed(source)
+        if source.to_string() == "file barrier failed")
+    );
+    assert!(
+        matches!(
+            crate::session::persistence::DurableAppendError::from(error),
+            crate::session::persistence::DurableAppendError::AcknowledgementLost(_)
+        ),
+        "a replay line without its sync barrier must not be accepted as a durable tool checkpoint"
+    );
+    assert_eq!(std::fs::read_to_string(&path).unwrap(), "{\"record\":1}\n");
+
+    JsonlStorageAdapter::sync_file_path_durable(path.clone())
+        .await
+        .unwrap();
+    JsonlStorageAdapter::sync_parent_directory(&path).unwrap();
+    assert_eq!(std::fs::read_to_string(path).unwrap().lines().count(), 1);
+}
+
+#[test]
+fn failure_before_opening_replay_file_is_not_committed() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("updates.jsonl");
+    std::fs::create_dir(&path).unwrap();
+    assert!(matches!(
+        JsonlStorageAdapter::append_jsonl_line_sync_commit_aware_with(
+            &path,
+            b"{\"record\":1}\n".to_vec(),
+            AppendDurability::Durable,
+            |_| panic!("file sync must not run before an append"),
+            || panic!("directory sync must not run before an append"),
+        ),
+        Err(crate::session::storage::AppendUpdateError::NotCommitted(_))
+    ));
+    assert!(path.is_dir());
+    assert_eq!(std::fs::read_dir(path).unwrap().count(), 0);
 }
 
 #[test]

@@ -23,6 +23,7 @@ export function ImpactAnalysisView({ root, symbol, onOpenSymbol }: ImpactAnalysi
   const [graph, setGraph] = useState<ImpactGraph | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
+  const [attempt, setAttempt] = useState(0);
 
   useEffect(() => {
     let cancelled = false;
@@ -42,7 +43,7 @@ export function ImpactAnalysisView({ root, symbol, onOpenSymbol }: ImpactAnalysi
     return () => {
       cancelled = true;
     };
-  }, [root, symbol]);
+  }, [root, symbol, attempt]);
 
   const directByFile = useMemo(() => groupByFile(graph?.direct ?? []), [graph]);
   const transitiveByFile = useMemo(() => groupByFile(graph?.transitive ?? []), [graph]);
@@ -51,7 +52,9 @@ export function ImpactAnalysisView({ root, symbol, onOpenSymbol }: ImpactAnalysi
     return <div className="coding-views__empty">正在分析 `{symbol}` 的影响范围…</div>;
   }
   if (error) {
-    return <div className="coding-views__error">影响分析失败：{error}</div>;
+    return <div className="coding-views__error" role="alert">影响分析失败：{error}
+      <button type="button" onClick={() => setAttempt((value) => value + 1)}>重试影响分析</button>
+    </div>;
   }
   if (!graph) {
     return <div className="coding-views__empty">暂无影响范围数据</div>;

@@ -68,12 +68,34 @@ pub struct InstalledRepo {
 /// Lives here (not in echo-agent-plugin-marketplace) to keep dependency direction sane.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct MarketplaceProvenance {
-    /// Canonical source identity (git URL or local path).
+    /// Public source reference (git URL or local path, possibly a local alias).
     pub source_url_or_path: String,
+    /// Identity captured when copying/installing the plugin, independent of
+    /// later local symlink changes. Absent in older registry records.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub canonical_source_identity: Option<String>,
     /// User-facing source name (display only, not used for matching).
     pub source_display_name: String,
     /// Plugin subdirectory within marketplace (e.g., "plugins/echo-agent-code-review").
     pub plugin_subdir: String,
+}
+
+impl MarketplaceProvenance {
+    pub fn identity_with_aliases(
+        &self,
+        aliases: &std::collections::BTreeMap<String, String>,
+    ) -> String {
+        use super::marketplace_scope::{source_identity, stored_source_identity};
+        if let Some(identity) = &self.canonical_source_identity {
+            return stored_source_identity(identity);
+        }
+        // A legacy copied snapshot must retain the owner captured at revocation,
+        // even if the live catalog's same alias subsequently points elsewhere.
+        aliases
+            .get(&stored_source_identity(&self.source_url_or_path))
+            .map(|identity| stored_source_identity(identity))
+            .unwrap_or_else(|| source_identity(&self.source_url_or_path))
+    }
 }
 
 /// A plugin discovered within an installed repo.

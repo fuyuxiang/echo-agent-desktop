@@ -46,6 +46,57 @@ The JSON Schema catalog at
 `vendor/theia-platform/packages/core/src/browser/catalog.json` comes from the
 official `@theia/core@1.74.0` npm package, matching the vendored source tag.
 
+### VS Code Git and Git Base built-in extensions
+
+- Upstream code: https://github.com/microsoft/vscode/tree/1.95.3/extensions/git
+  and https://github.com/microsoft/vscode/tree/1.95.3/extensions/git-base
+- Theia's built-in extension packaging: https://github.com/eclipse-theia/vscode-builtin-extensions
+- Registry metadata: https://open-vsx.org/api/vscode/git/1.95.3 and
+  https://open-vsx.org/api/vscode/git-base/1.95.3
+- Pinned VSIX files: `vendor/theia-vsix/vscode.git-1.95.3.vsix` and
+  `vendor/theia-vsix/vscode.git-base-1.95.3.vsix`
+- SHA-256 (also checked against the registry's published `.sha256` files):
+  Git `44909b81d3266860f02733c08475ab5fc66c0c1d7259b3c1b164e783559d9291`;
+  Git Base `956c41e4e8377a6b113a6a64fcd5308deaad44a827288f6bfcd5cf1c83037483`
+- License: MIT, Copyright Microsoft Corporation. Each VSIX contains
+  `extension/LICENSE-vscode.txt`, retained in the staged runtime.
+- Compatibility: Git declares VS Code API `^1.5.0` and requires `vscode.git-base`;
+  Git Base declares API `0.10.0`. The vendored Theia 1.74.0 declares supported
+  VS Code API `1.130.0`; both fixed built-ins use the existing plugin host and
+  SCM integration, without restoring the removed `@theia/git` package.
+
+The downloaded built-ins are unchanged. Their presence and artifact validation
+do not substitute for native application acceptance of the actual Git provider,
+stage/commit actions, or repository isolation.
+
+## Tauri updater plugin
+
+- Source: https://github.com/tauri-apps/plugins-workspace/tree/updater-v2.9.0/plugins/updater
+- Version: `2.9.0` (unchanged from the original dependency)
+- Integration: source snapshot under `vendor/tauri-plugin-updater/`
+- License: Apache-2.0 OR MIT
+- Local licenses: `vendor/tauri-plugin-updater/LICENSE_APACHE-2.0`,
+  `vendor/tauri-plugin-updater/LICENSE_MIT`
+- Local patch and upstream package checksum: `vendor/tauri-plugin-updater/ECHOAGENT_PATCH.md`
+
+EchoAgent adds an opt-in installation method that returns control to the host
+after starting a Windows installer, so recording and task persistence can finish
+before the desktop application exits. Installer launch failures are returned to
+the host. The default plugin API, update signature checks, TLS/CA validation,
+and archive extraction protections remain intact.
+
+## auto-launch
+
+- Source: https://github.com/zzzgydi/auto-launch
+- Version: `0.5.0` (unchanged transitive dependency of Tauri autostart)
+- Integration: source under `vendor/auto-launch/`, desktop Cargo source patch
+- License: MIT; local copy `vendor/auto-launch/LICENSE`
+- Patch provenance/checksum: `vendor/auto-launch/ECHOAGENT_PATCH.md`
+
+The local patch quotes Windows login command arguments and escapes macOS
+LaunchAgent XML, preserving paths with spaces, Chinese and XML characters.
+Public APIs and other platform startup mechanisms remain unchanged.
+
 ## Node.js runtime
 
 - Source: https://nodejs.org/

@@ -134,4 +134,13 @@ describe("ImpactAnalysisView", () => {
       expect(screen.getByText("深度 2 · 0 直接 · 0 传递")).toBeInTheDocument(),
     );
   });
+
+  it("索引读取暂时失败后可原位重试相同符号", async () => {
+    vi.mocked(codingApi.impactAnalyze).mockRejectedValueOnce(new Error("索引暂时不可用")).mockResolvedValueOnce(makeGraph());
+    render(<ImpactAnalysisView root="/repo" symbol="authenticate" onOpenSymbol={vi.fn()} />);
+    fireEvent.click(await screen.findByRole("button", { name: "重试影响分析" }));
+    expect(await screen.findByText("受影响测试")).toBeInTheDocument();
+    expect(codingApi.impactAnalyze).toHaveBeenCalledTimes(2);
+    expect(screen.queryByRole("alert")).not.toBeInTheDocument();
+  });
 });

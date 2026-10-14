@@ -1667,7 +1667,20 @@ export async function pluginsAction(
   sessionId: string,
   action: unknown,
 ): Promise<unknown> {
-  return invoke("plugins_action", { sessionId, action });
+  return requireSuccessfulAdminAction(await invoke("plugins_action", { sessionId, action }));
+}
+
+// A fulfilled IPC transports both successful and rejected management actions.
+// Only the typed success outcome can advance the UI to a success state.
+function requireSuccessfulAdminAction(value: unknown): unknown {
+  if (value && typeof value === "object" && !Array.isArray(value)) {
+    const outcome = value as { status?: unknown; message?: unknown };
+    if (outcome.status === "success") return value;
+    if (typeof outcome.message === "string" && outcome.message.trim()) {
+      throw new Error(outcome.message);
+    }
+  }
+  throw new Error("操作未完成，请重试或重新加载列表。");
 }
 
 /** List marketplace sources + plugins via `echo.agent/marketplace/list`. */
@@ -1680,7 +1693,7 @@ export async function marketplaceAction(
   sessionId: string,
   action: unknown,
 ): Promise<unknown> {
-  return invoke("marketplace_action", { sessionId, action });
+  return requireSuccessfulAdminAction(await invoke("marketplace_action", { sessionId, action }));
 }
 
 // ---------- notification center ----------
@@ -2193,37 +2206,44 @@ export async function subscribeAgentEvents(handlers: {
     unlisteners.push(await listen<T>(event, (e) => cb(e.payload)));
   };
 
-  if (handlers.onUpdate) {
-    unlisteners.push(
-      await listen<SessionUpdate & { sessionId?: string }>("agent://update", (e) => {
-        // Backend now tags each update with its sessionId. We forward it via
-        // a side field so the store can filter (ignore updates for sessions
-        // other than the current one — e.g. inspiration generation).
-        const { sessionId, ...update } = e.payload;
-        (update as SessionUpdate & { __sessionId?: string }).__sessionId = sessionId;
-        handlers.onUpdate!(update as SessionUpdate & { __sessionId?: string });
-      }),
-    );
+  try {
+    if (handlers.onUpdate) {
+      unlisteners.push(
+        await listen<SessionUpdate & { sessionId?: string }>("agent://update", (e) => {
+          // Backend now tags each update with its sessionId. We forward it via
+          // a side field so the store can filter (ignore updates for sessions
+          // other than the current one — e.g. inspiration generation).
+          const { sessionId, ...update } = e.payload;
+          (update as SessionUpdate & { __sessionId?: string }).__sessionId = sessionId;
+          handlers.onUpdate!(update as SessionUpdate & { __sessionId?: string });
+        }),
+      );
+    }
+    await wire<PermissionRequest>("agent://permission", handlers.onPermission);
+    await wire<PermissionClosedEvent>("agent://permission-closed", handlers.onPermissionClosed);
+    await wire<PromptComplete>("agent://complete", handlers.onComplete);
+    await wire<SessionSummaryEvent>("agent://summary", handlers.onSummary);
+    await wire<TurnUsageEvent>("agent://turn-usage", handlers.onTurnUsage);
+    await wire<McpServerStatusEvent>("agent://mcp-status", handlers.onMcpStatus);
+    await wire<FolderTrustRequest>("agent://folder-trust", handlers.onFolderTrust);
+    await wire<PlanApprovalRequest>("agent://plan-approval", handlers.onPlanApproval);
+    await wire("agent://plan-mode", handlers.onPlanMode);
+    await wire("agent://permission-mode", handlers.onPermissionMode);
+    await wire("agent://git-head", handlers.onGitHead);
+    await wire("agent://models-update", handlers.onModelsUpdate);
+    await wire("agent://task-update", handlers.onTaskUpdate);
+    await wire<AutomationUpdateEvent>("agent://automation-update", handlers.onAutomationUpdate);
+    await wire<QuestionRequest>("agent://question", handlers.onQuestion);
+    await wire<QuestionClosedEvent>("agent://question-closed", handlers.onQuestionClosed);
+    await wire<{ reason: string }>("agent://agent-died", handlers.onAgentDied);
+    await wire<SubagentLiveEvent>("agent://subagent", handlers.onSubagent);
+    await wire<TurnErrorEvent>("agent://turn-error", handlers.onTurnError);
+  } catch (error) {
+    // Retry initialization from a clean listener set. Partial subscriptions
+    // otherwise survive and duplicate updates/queue advancement on the retry.
+    unlisteners.forEach((unlisten) => unlisten());
+    throw error;
   }
-  await wire<PermissionRequest>("agent://permission", handlers.onPermission);
-  await wire<PermissionClosedEvent>("agent://permission-closed", handlers.onPermissionClosed);
-  await wire<PromptComplete>("agent://complete", handlers.onComplete);
-  await wire<SessionSummaryEvent>("agent://summary", handlers.onSummary);
-  await wire<TurnUsageEvent>("agent://turn-usage", handlers.onTurnUsage);
-  await wire<McpServerStatusEvent>("agent://mcp-status", handlers.onMcpStatus);
-  await wire<FolderTrustRequest>("agent://folder-trust", handlers.onFolderTrust);
-  await wire<PlanApprovalRequest>("agent://plan-approval", handlers.onPlanApproval);
-  await wire("agent://plan-mode", handlers.onPlanMode);
-  await wire("agent://permission-mode", handlers.onPermissionMode);
-  await wire("agent://git-head", handlers.onGitHead);
-  await wire("agent://models-update", handlers.onModelsUpdate);
-  await wire("agent://task-update", handlers.onTaskUpdate);
-  await wire<AutomationUpdateEvent>("agent://automation-update", handlers.onAutomationUpdate);
-  await wire<QuestionRequest>("agent://question", handlers.onQuestion);
-  await wire<QuestionClosedEvent>("agent://question-closed", handlers.onQuestionClosed);
-  await wire<{ reason: string }>("agent://agent-died", handlers.onAgentDied);
-  await wire<SubagentLiveEvent>("agent://subagent", handlers.onSubagent);
-  await wire<TurnErrorEvent>("agent://turn-error", handlers.onTurnError);
 
   // Close the subscribe-after-emit race. Backend registries retain the typed
   // request until its bool-ACKed resolution, so replay is safe; stores dedupe

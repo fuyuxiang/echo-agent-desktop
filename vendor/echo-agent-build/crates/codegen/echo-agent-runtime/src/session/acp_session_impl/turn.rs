@@ -266,6 +266,28 @@ fn provider_tool_name_hint(
     None
 }
 
+/// Apply only after the provider compatibility repair. A call that still has
+/// no function name cannot be dispatched or corrected safely: feeding it back
+/// as a tool result can make a malformed provider stream resample forever.
+/// Named calls retain their existing argument-validation/correction path.
+fn validate_repaired_provider_tool_calls(
+    calls: &[echo_agent_sampling_types::ToolCall],
+) -> Result<(), acp::Error> {
+    if calls.iter().any(|call| call.name.trim().is_empty()) {
+        let message = "模型服务返回的工具调用格式错误：缺少工具名称且无法恢复。请重试或切换模型。";
+        return Err(
+            acp::Error::new(acp::ErrorCode::InternalError.into(), message).data(
+                serde_json::json!({
+                    "message": message,
+                    "error_kind": "model_response_format",
+                    "reason": "missing_function_name",
+                }),
+            ),
+        );
+    }
+    Ok(())
+}
+
 impl SessionActor {
     /// Repair malformed but recoverable client-side tool calls returned by
     /// third-party OpenAI-compatible endpoints.  Parsing through the actual
@@ -2819,6 +2841,17 @@ impl SessionActor {
                     self.current_model_id().await,
                 );
             }
+            // Preserve the completed response's usage accounting, but reject
+            // unrecoverable tool framing before recording it in chat history,
+            // emitting completion or dispatching any call from the batch.
+            if let Err(error) = validate_repaired_provider_tool_calls(response.tool_calls()) {
+                tracing::error!(
+                    session_id = %self.session_info.id,
+                    tool_call_count = response.tool_calls().len(),
+                    "model provider returned an unrecoverable tool call without a function name"
+                );
+                return Err(error);
+            }
             let mut tool_calls = response.tool_calls().to_vec();
             let over_cap = self.media_gen_over_cap(&tool_calls);
             if echo_agent_tools::media_gen_limits::should_resample_egregious(
@@ -3551,8 +3584,60 @@ mod user_echo_broadcast_tests {
 }
 #[cfg(test)]
 mod provider_tool_call_compat_tests {
-    use super::{arguments_match_advertised_schema, provider_tool_name_hint};
+    use super::{
+        arguments_match_advertised_schema, provider_tool_name_hint,
+        validate_repaired_provider_tool_calls,
+    };
     use std::collections::HashSet;
+
+    fn call(name: &str, arguments: &str) -> echo_agent_sampling_types::ToolCall {
+        echo_agent_sampling_types::ToolCall {
+            id: "provider-call-stable".into(),
+            name: name.to_string(),
+            arguments: arguments.into(),
+        }
+    }
+
+    #[test]
+    fn unrecoverable_provider_calls_return_an_actionable_format_error() {
+        for (name, arguments) in [("", "验收成功"), (" \t", r#"{"unrelated":true}"#), ("", "")]
+        {
+            let error =
+                validate_repaired_provider_tool_calls(&[call(name, arguments)]).unwrap_err();
+            assert_eq!(i32::from(error.code), -32603);
+            let data = error.data.unwrap();
+            assert_eq!(data["error_kind"], "model_response_format");
+            assert_eq!(data["reason"], "missing_function_name");
+            let message = data["message"].as_str().unwrap();
+            assert!(message.contains("重试或切换模型"));
+            assert!(!message.contains("验收成功"));
+        }
+    }
+
+    #[test]
+    fn unrecoverable_provider_call_rejects_the_whole_batch_before_dispatch() {
+        let calls = [
+            call("read_file", r#"{"target_file":"README.md"}"#),
+            call("", "验收成功"),
+        ];
+        assert!(validate_repaired_provider_tool_calls(&calls).is_err());
+        assert_eq!(calls[0].name, "read_file");
+        assert_eq!(calls[1].arguments.as_ref(), "验收成功");
+    }
+
+    #[test]
+    fn repaired_names_and_named_argument_correction_remain_compatible() {
+        let arguments = serde_json::json!({"query": "connected tools"});
+        let name = provider_tool_name_hint(&arguments, &HashSet::from(["search_tool"]))
+            .expect("the existing compatibility hint still recovers a name");
+        let repaired = call(name, &arguments.to_string());
+        let named_invalid_arguments = call("read_file", "not valid JSON");
+        validate_repaired_provider_tool_calls(&[repaired.clone(), named_invalid_arguments])
+            .unwrap();
+        assert_eq!(repaired.id.as_ref(), "provider-call-stable");
+        assert_eq!(repaired.name, "search_tool");
+        validate_repaired_provider_tool_calls(&[]).unwrap();
+    }
 
     #[test]
     fn missing_name_recovery_rejects_empty_input_tools_for_read_file_arguments() {

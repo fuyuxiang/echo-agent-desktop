@@ -28,7 +28,16 @@ export function CloudStoragePanel({ onToast, onUnsavedChange }: {
 }) {
   const [providers, setProviders] = useState<Array<{ id: string; label: string }>>([]);
   const [configs, setConfigs] = useState<StorageProviderConfig[]>([]);
+  const configsRef = useRef<StorageProviderConfig[]>([]);
   const [selectedProvider, setSelectedProvider] = useState<string | null>(null);
+  const selectedProviderRef = useRef<string | null>(null);
+  // Keep registry-only providers and make disabled persisted configs manageable.
+  const providerOptions = [...providers, ...configs
+    .filter((config) => !config.enabled && !providers.some((provider) => provider.id === config.id))
+    .map(({ id, label }) => ({ id, label }))];
+  const selectedEnabled = Boolean(selectedProvider
+    && configs.find((config) => config.id === selectedProvider)?.enabled !== false
+    && providers.some((provider) => provider.id === selectedProvider));
   const [entries, setEntries] = useState<StorageEntry[]>([]);
   const [currentPath, setCurrentPath] = useState("/");
   const [loading, setLoading] = useState(false);
@@ -83,6 +92,7 @@ export function CloudStoragePanel({ onToast, onUnsavedChange }: {
     try {
       const loaded = await hydrateStorageProviders();
       if (configGeneration.current !== generation) return;
+      configsRef.current = loaded;
       setConfigs(loaded);
       setProviders(listStorageProviders());
     } catch (error) {
@@ -108,34 +118,56 @@ export function CloudStoragePanel({ onToast, onUnsavedChange }: {
 
   const saveConfig = async () => {
     if (configSavingRef.current) return;
-    configSavingRef.current = true;
-    setConfigSaving(true);
     const id = draft.id.trim() || `webdav-${Date.now()}`;
     const config = { ...draft, id, label: draft.label.trim() || "WebDAV", baseUrl: draft.baseUrl.trim() };
-    try {
-      await saveStorageProviderConfig(config);
-      registerStorageProvider(createTauriWebDavProvider(config));
-      setConfigs((current) => [...current.filter((item) => item.id !== config.id), config]);
-      setProviders(listStorageProviders());
-      if (!config.enabled && selectedProvider === config.id) {
-        setSelectedProvider(null);
-        setEntries([]);
+    const persist = async () => {
+      if (configSavingRef.current) return;
+      configSavingRef.current = true;
+      setConfigSaving(true);
+      try {
+        await saveStorageProviderConfig(config);
+        registerStorageProvider(createTauriWebDavProvider(config));
+        const next = [...configsRef.current.filter((item) => item.id !== config.id), config];
+        configsRef.current = next;
+        setConfigs(next);
+        setProviders(listStorageProviders());
+        if (selectedProviderRef.current === config.id) {
+          browseGeneration.current += 1;
+          previewReadGeneration.current += 1;
+          setLoading(false);
+          setReadingPath(null);
+          setBrowseError(null);
+          setEntries([]);
+          if (!config.enabled) setPreview(null);
+          else void browse(config.id, currentPath);
+        }
+        setDraft({ id: "", label: "", kind: "webdav", baseUrl: "", username: "", password: "", enabled: true });
+        setShowConfig(false);
+        onToast?.("WebDAV 存储源已保存");
+      } catch (error) {
+        onToast?.(`保存失败：${String(error).replace(/^Error:\s*/, "")}`);
+      } finally {
+        configSavingRef.current = false;
+        setConfigSaving(false);
       }
-      setDraft({ id: "", label: "", kind: "webdav", baseUrl: "", username: "", password: "", enabled: true });
-      setShowConfig(false);
-      onToast?.("WebDAV 存储源已保存");
-    } catch (error) {
-      onToast?.(`保存失败：${String(error).replace(/^Error:\s*/, "")}`);
-    } finally {
-      configSavingRef.current = false;
-      setConfigSaving(false);
+    };
+    if (!config.enabled && selectedProvider === config.id && previewDirty) {
+      requestConfirmation({
+        title: "舍弃未保存的文件修改？",
+        description: `“${preview?.name}”的修改尚未保存，禁用存储源会关闭文件预览。`,
+        confirmLabel: "舍弃修改并禁用",
+        danger: true,
+        action: persist,
+      });
+      return;
     }
+    await persist();
   };
 
   const removeConfig = () => {
     if (!selectedProvider) return;
     const providerId = selectedProvider;
-    const label = providers.find((provider) => provider.id === providerId)?.label ?? providerId;
+    const label = providerOptions.find((provider) => provider.id === providerId)?.label ?? providerId;
     requestConfirmation({
       title: `移除存储源“${label}”？`,
       description: "只会移除本机的连接配置，远端文件不会被删除。",
@@ -144,12 +176,19 @@ export function CloudStoragePanel({ onToast, onUnsavedChange }: {
       action: async () => {
         await removeStorageProviderConfig(providerId);
         unregisterStorageProvider(providerId);
-        setConfigs((current) => current.filter((item) => item.id !== providerId));
+        const next = configsRef.current.filter((item) => item.id !== providerId);
+        configsRef.current = next;
+        setConfigs(next);
         setProviders(listStorageProviders());
+        selectedProviderRef.current = null;
         setSelectedProvider(null);
         setEntries([]);
         setPreview(null);
+        browseGeneration.current += 1;
         previewReadGeneration.current += 1;
+        setLoading(false);
+        setReadingPath(null);
+        setBrowseError(null);
         onToast?.("已移除存储源");
       },
       onError: (error) => onToast?.(`移除失败：${String(error).replace(/^Error:\s*/, "")}`),
@@ -157,6 +196,7 @@ export function CloudStoragePanel({ onToast, onUnsavedChange }: {
   };
 
   const browse = async (providerId: string, path: string) => {
+    if (configsRef.current.some((config) => config.id === providerId && !config.enabled)) return;
     const provider = getStorageProvider(providerId);
     if (!provider) return;
     const generation = ++browseGeneration.current;
@@ -200,6 +240,10 @@ export function CloudStoragePanel({ onToast, onUnsavedChange }: {
   const selectProvider = (id: string) => {
     if (id === selectedProvider) return;
     leavePreview(() => {
+      browseGeneration.current += 1;
+      setLoading(false);
+      setBrowseError(null);
+      selectedProviderRef.current = id || null;
       setSelectedProvider(id || null);
       setEntries([]);
       setCurrentPath("/");
@@ -407,11 +451,11 @@ export function CloudStoragePanel({ onToast, onUnsavedChange }: {
     <div className="storage-panel" role="region" aria-label="云存储">
       <div className="storage-panel__head">
         <span className="storage-panel__title">存储源</span>
-        {providers.length > 0 ? (
+        {providerOptions.length > 0 ? (
           <select className="form-control" aria-label="选择云存储源" value={selectedProvider ?? ""} onChange={(e) => selectProvider(e.target.value)}>
             <option value="">选择存储源…</option>
-            {providers.map((p) => (
-              <option key={p.id} value={p.id}>{p.label}</option>
+            {providerOptions.map((p) => (
+              <option key={p.id} value={p.id}>{p.label}{configs.some((config) => config.id === p.id && !config.enabled) ? "（已禁用）" : ""}</option>
             ))}
           </select>
         ) : (
@@ -453,7 +497,7 @@ export function CloudStoragePanel({ onToast, onUnsavedChange }: {
       )}
 
       {/* 面包屑 */}
-      {selectedProvider && (
+      {selectedProvider && selectedEnabled && (
         <div className="storage-panel__breadcrumb">
           {currentPath !== "/" && (
             <button type="button" onClick={goUp} className="storage-panel__up">↑ 上级</button>
@@ -468,7 +512,7 @@ export function CloudStoragePanel({ onToast, onUnsavedChange }: {
         </div>
       )}
 
-      {browseError && selectedProvider && (
+      {browseError && selectedProvider && selectedEnabled && (
         <div className="panel-inline-error" role="alert">
           <span>目录加载失败：{browseError}</span>
           <button type="button" onClick={() => void browse(selectedProvider, currentPath)} disabled={loading}>
@@ -479,11 +523,14 @@ export function CloudStoragePanel({ onToast, onUnsavedChange }: {
 
       {/* 文件列表 */}
       {!configLoading && !configError && !selectedProvider && !showConfig && (
-        <div className="storage-panel__empty">{providers.length ? "选择一个存储源以浏览文件。" : "连接 WebDAV 存储源，即可浏览、上传和下载云端文件。"}</div>
+        <div className="storage-panel__empty">{providerOptions.length ? "选择一个存储源以浏览文件。" : "连接 WebDAV 存储源，即可浏览、上传和下载云端文件。"}</div>
       )}
-      {loading ? (
+      {selectedProvider && !selectedEnabled && (
+        <div className="storage-panel__empty">此存储源已禁用，可编辑配置重新启用或移除配置。</div>
+      )}
+      {selectedEnabled && loading ? (
         <div className="storage-panel__loading">加载中…</div>
-      ) : selectedProvider && entries.length > 0 ? (
+      ) : selectedEnabled && entries.length > 0 ? (
         <ul className="storage-panel__list">
           {entries.map((e) => (
             <li key={e.path} className={"storage-panel__entry" + (e.isDir ? " dir" : "") + (preview?.providerId === selectedProvider && preview.path === e.path ? " storage-panel__entry--selected" : "")}>
@@ -515,10 +562,10 @@ export function CloudStoragePanel({ onToast, onUnsavedChange }: {
             </li>
           ))}
         </ul>
-      ) : selectedProvider && !loading && !browseError ? (
+      ) : selectedEnabled && !loading && !browseError ? (
         <div className="storage-panel__empty">空目录</div>
       ) : null}
-      {preview && (
+      {preview && selectedEnabled && (
         <div ref={previewRef} className="storage-panel__preview" role="region" aria-label={`文件预览：${preview.name}`} tabIndex={-1}>
           <div>
             <strong>{preview.name}</strong>

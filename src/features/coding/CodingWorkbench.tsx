@@ -420,7 +420,8 @@ export function CodingWorkbench({
         disposed
         || event.root !== cwd
         || useTaskStore.getState().task?.id !== event.taskId
-        || activeRunIdRef.current !== event.runId
+        || (activeRunIdRef.current !== event.runId
+          && useCodingRuntimeStore.getState().activeRunIds[codingRuntimeKey(cwd, event.taskId)] !== event.runId)
       ) return;
       // Cap retained output so a verbose build cannot grow the renderer's memory.
       setCommandOutput((current) => {
@@ -785,14 +786,7 @@ export function CodingWorkbench({
       await openParallelWorkspace();
       return;
     }
-    useTaskStore.setState({
-      task: null,
-      changeSet: null,
-      verifications: [],
-      problems: [],
-      ledger: [],
-      orchestrator: null,
-    });
+    useTaskStore.getState().reset(true);
     setContextPaths([]);
     setStarterExample(null);
     setTheiaPanel("agent");
@@ -1544,7 +1538,7 @@ export function CodingWorkbench({
                 onRunRed={runRedTest}
                 onRun={(command) => void runVerifications([command])}
                 onRunAll={() => void runVerifications(verificationCommands)}
-                onCancel={() => { if (activeRunId || redRunId) void codingApi.cancelVerification((activeRunId || redRunId)!); }}
+                onCancel={() => { if (activeRunId || redRunId || backgroundRunId) void codingApi.cancelVerification((activeRunId || redRunId || backgroundRunId)!); }}
                 onOpenOutput={(record) => setTheiaVerificationOutput([record.stdout, record.stderr].filter(Boolean).join("\n"))}
               />
               {(runningVerification || theiaVerificationOutput || commandOutput) && (

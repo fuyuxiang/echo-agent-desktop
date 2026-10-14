@@ -3030,7 +3030,7 @@ mod tests {
         let key = [7_u8; 16];
         let cipher = aes::Aes128::new_from_slice(&key).unwrap();
         let mut plaintext = b"hello Weixin".to_vec();
-        plaintext.extend(std::iter::repeat(4_u8).take(4));
+        plaintext.extend(std::iter::repeat_n(4_u8, 4));
         let mut encrypted = plaintext.clone();
         cipher.encrypt_block(aes::cipher::generic_array::GenericArray::from_mut_slice(
             &mut encrypted,

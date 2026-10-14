@@ -246,6 +246,32 @@ describe("session-store transcripts", () => {
     expect(useSessionStore.getState().agentMode).toBe("computer_use");
   });
 
+  it("CORE19 消费真实 ACP flat plan entries 并按会话投影", () => {
+    const store = useSessionStore.getState();
+    store.setSession("A");
+    const entries = [
+      { content: "批准后保存实际成果", priority: "medium", status: "pending" },
+      { content: "核对成果内容", priority: "high", status: "pending" },
+    ];
+    store.applyUpdate({ sessionUpdate: "plan", entries, __sessionId: "B" } as never);
+    expect(useSessionStore.getState().plan).toBeNull();
+    expect(useSessionStore.getState().transcripts.B.plan).toEqual({ entries });
+    store.setSession("B");
+    expect(useSessionStore.getState().plan).toEqual({ entries });
+  });
+
+  it("CORE19 空 ACP entries 优先于旧 nested plan 且清理旧计划", () => {
+    const store = useSessionStore.getState();
+    store.setSession("A");
+    const plan = { entries: [{ content: "旧步骤", priority: "medium", status: "pending" }] } as const;
+    store.applyUpdate({ type: "plan", plan } as never);
+    expect(useSessionStore.getState().plan).toEqual(plan);
+    store.setPlan({ entries: [...plan.entries] }, { localRevision: true });
+    store.applyUpdate({ sessionUpdate: "plan", entries: [], plan } as never);
+    expect(useSessionStore.getState().plan).toEqual({ entries: [] });
+    expect(useSessionStore.getState().planRevisionDirty).toBe(false);
+  });
+
   it("计划审批重放去重，并按 requestId 解除", () => {
     const store = useSessionStore.getState();
     store.setSession("A");

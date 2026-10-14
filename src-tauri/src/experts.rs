@@ -420,7 +420,7 @@ fn candidate_roots() -> Vec<PathBuf> {
     }
     crate::paths::push_unique_path(&mut out, crate::paths::experts_marketplace_dir());
 
-    if let Some(h) = dirs::home_dir() {
+    if let Some(h) = crate::paths::legacy_catalog_user_home() {
         crate::paths::push_unique_path(&mut out, h.join("EchoAgent").join("agents"));
         crate::paths::push_unique_path(&mut out, h.join("agents"));
     }

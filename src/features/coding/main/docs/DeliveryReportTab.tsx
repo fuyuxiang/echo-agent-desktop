@@ -9,6 +9,7 @@ import {
 } from "lucide-react";
 
 import { codingApi } from "../../lib/tauri-api";
+import { useCodingActionScope } from "../../hooks/useCodingActionScope";
 import type { DeliveryReport, GateStatus, QualityGate, ReviewKind, TddEvidence } from "../../lib/types";
 
 interface DeliveryReportTabProps {
@@ -83,6 +84,16 @@ export function DeliveryReportTab({
   const [waiverReason, setWaiverReason] = useState("");
   const [waiving, setWaiving] = useState(false);
   const [reloadVersion, setReloadVersion] = useState(0);
+  const isCurrent = useCodingActionScope(root, taskId);
+
+  useEffect(() => {
+    setReport(null);
+    setError(null);
+    setAcceptingId(null);
+    setReviewing(false);
+    setWaiving(false);
+    setWaiverReason("");
+  }, [root, taskId]);
 
   useEffect(() => {
     setConfirmingId(null);
@@ -150,17 +161,20 @@ export function DeliveryReportTab({
     setAcceptingId(criterionId);
     try {
       await codingApi.confirmAcceptance(root, taskId, criterionId);
+      if (!isCurrent()) return;
       const next = await codingApi.deliveryReport(root, taskId);
+      if (!isCurrent()) return;
       setReport(next);
       setError(null);
       setConfirmingId(null);
       onReviewChanged?.();
       onToast?.("验收标准已确认并写入交付证据");
     } catch (cause) {
+      if (!isCurrent()) return;
       const message = String(cause).replace(/^Error:\s*/, "");
       onToast?.(`确认验收失败：${message}`);
     } finally {
-      setAcceptingId(null);
+      if (isCurrent()) setAcceptingId(null);
     }
   };
 
@@ -169,14 +183,18 @@ export function DeliveryReportTab({
     setReviewing(true);
     try {
       await codingApi.confirmReview(root, taskId, kind);
-      setReport(await codingApi.deliveryReport(root, taskId));
+      if (!isCurrent()) return;
+      const next = await codingApi.deliveryReport(root, taskId);
+      if (!isCurrent()) return;
+      setReport(next);
       setConfirmingReview(null);
       onReviewChanged?.();
       onToast?.("审查确认已绑定当前代码版本");
     } catch (cause) {
+      if (!isCurrent()) return;
       onToast?.(`审查确认失败：${String(cause).replace(/^Error:\s*/, "")}`);
     } finally {
-      setReviewing(false);
+      if (isCurrent()) setReviewing(false);
     }
   };
 
@@ -185,15 +203,19 @@ export function DeliveryReportTab({
     setWaiving(true);
     try {
       const evidence = await codingApi.waiveTestFirst(root, taskId, waiverReason);
+      if (!isCurrent()) return;
       onTddChanged?.(evidence);
-      setReport(await codingApi.deliveryReport(root, taskId));
+      const next = await codingApi.deliveryReport(root, taskId);
+      if (!isCurrent()) return;
+      setReport(next);
       setWaiverReason("");
       onReviewChanged?.();
       onToast?.("测试先行豁免原因已记录");
     } catch (cause) {
+      if (!isCurrent()) return;
       onToast?.(`记录豁免失败：${String(cause).replace(/^Error:\s*/, "")}`);
     } finally {
-      setWaiving(false);
+      if (isCurrent()) setWaiving(false);
     }
   };
 

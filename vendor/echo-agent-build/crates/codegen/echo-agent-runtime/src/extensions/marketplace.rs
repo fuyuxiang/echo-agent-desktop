@@ -13,6 +13,29 @@ use crate::agent::MvpAgent;
 
 type ExtResult = Result<acp::ExtResponse, acp::Error>;
 
+fn load_mutable_marketplace_registry() -> Result<
+    echo_agent_core::plugins::install_registry::InstallRegistry,
+    echo_agent_hooks_plugins_types::ActionOutcome,
+> {
+    use echo_agent_core::plugins::install_registry::InstallRegistry;
+    let mut registry = InstallRegistry::try_load_from(InstallRegistry::resolve_install_dir())
+        .map_err(|error| echo_agent_hooks_plugins_types::ActionOutcome {
+            status: echo_agent_hooks_plugins_types::OutcomeStatus::InternalError,
+            message: format!("Failed to read install registry: {error}"),
+            requires_reload: false,
+            requires_restart: false,
+        })?;
+    crate::plugin::freeze_revoked_registry_provenance(&mut registry).map_err(|error| {
+        echo_agent_hooks_plugins_types::ActionOutcome {
+            status: echo_agent_hooks_plugins_types::OutcomeStatus::InternalError,
+            message: format!("Failed to preserve revoked source ownership: {error}"),
+            requires_reload: false,
+            requires_restart: false,
+        }
+    })?;
+    Ok(registry)
+}
+
 fn load_filtered_marketplace_sources() -> Vec<echo_agent_plugin_marketplace::MarketplaceSource> {
     crate::plugin::load_filtered_marketplace_sources()
 }
@@ -132,28 +155,116 @@ async fn handle_action(agent: &MvpAgent, args: &acp::ExtRequest) -> ExtResult {
         MarketplaceAction::Install {
             source_url_or_path,
             plugin_relative_path,
-        } => handle_install(agent, &sid, &source_url_or_path, &plugin_relative_path).await,
+        } => {
+            let outcome = handle_install(&source_url_or_path, &plugin_relative_path).await;
+            reload_after_plugin_change(agent, &sid, outcome).await
+        }
         MarketplaceAction::Update {
             source_url_or_path,
             plugin_relative_path,
-        } => handle_update(agent, &sid, &source_url_or_path, &plugin_relative_path).await,
+        } => {
+            let outcome = handle_update(&source_url_or_path, &plugin_relative_path).await;
+            reload_after_plugin_change(agent, &sid, outcome).await
+        }
         MarketplaceAction::Uninstall {
             source_url_or_path,
             plugin_relative_path,
-        } => handle_uninstall(agent, &sid, &source_url_or_path, &plugin_relative_path).await,
-        MarketplaceAction::AddSource { url } => handle_add_source(&url).await,
+        } => {
+            let outcome = handle_uninstall(&source_url_or_path, &plugin_relative_path).await;
+            reload_after_plugin_change(agent, &sid, outcome).await
+        }
+        MarketplaceAction::AddSource { url } => {
+            let outcome = handle_add_source(&url).await;
+            reload_after_plugin_change(agent, &sid, outcome).await
+        }
         MarketplaceAction::RemoveSource { source_url_or_path } => {
-            handle_remove_source(&source_url_or_path).await
+            let outcome = handle_remove_source(&source_url_or_path).await;
+            reload_after_plugin_change(agent, &sid, outcome).await
         }
     };
 
     super::to_ext_response(Ok(outcome))
 }
 
+async fn reload_after_plugin_change(
+    agent: &MvpAgent,
+    sid: &acp::SessionId,
+    outcome: echo_agent_hooks_plugins_types::ActionOutcome,
+) -> echo_agent_hooks_plugins_types::ActionOutcome {
+    use echo_agent_hooks_plugins_types::PluginsAction;
+    if !outcome.requires_reload {
+        return outcome;
+    }
+    let reload = agent
+        .execute_plugins_action(sid, PluginsAction::Reload)
+        .await;
+    complete_plugin_reload(outcome, reload)
+}
+
+fn complete_plugin_reload(
+    mut outcome: echo_agent_hooks_plugins_types::ActionOutcome,
+    reload: Option<echo_agent_hooks_plugins_types::ActionOutcome>,
+) -> echo_agent_hooks_plugins_types::ActionOutcome {
+    use echo_agent_hooks_plugins_types::OutcomeStatus;
+    match reload {
+        Some(reload) if reload.status == OutcomeStatus::Success => {
+            outcome.requires_reload = false;
+        }
+        reload => {
+            let reason = reload
+                .map(|value| value.message)
+                .unwrap_or_else(|| "session unavailable".into());
+            outcome.status = OutcomeStatus::InternalError;
+            outcome.message.push_str(&format!("\nThe change was saved, but live plugins could not reload: {reason}. Run /plugins reload or restart the application."));
+            outcome.requires_restart = true;
+        }
+    }
+    outcome
+}
+
+fn plugin_setup_outcome(
+    message: String,
+    warnings: &[String],
+) -> echo_agent_hooks_plugins_types::ActionOutcome {
+    use echo_agent_hooks_plugins_types::{ActionOutcome, OutcomeStatus};
+    ActionOutcome {
+        status: if warnings.is_empty() {
+            OutcomeStatus::Success
+        } else {
+            OutcomeStatus::InternalError
+        },
+        message: if warnings.is_empty() {
+            message
+        } else {
+            format!(
+                "{message}\nPlugin files were saved, but setup is incomplete: {}. Enable the plugin in Plugins or retry Update.",
+                warnings.join("; ")
+            )
+        },
+        requires_reload: true,
+        requires_restart: false,
+    }
+}
+
 fn refresh_sources(
     sources: &[echo_agent_plugin_marketplace::MarketplaceSource],
     source_url_or_path: Option<&str>,
 ) -> echo_agent_hooks_plugins_types::ActionOutcome {
+    refresh_sources_with(sources, source_url_or_path, |url, branch| {
+        let cache_root = echo_agent_plugin_marketplace::git::default_cache_root();
+        echo_agent_plugin_marketplace::git::force_sync_source_cache(url, branch, &cache_root)
+            .map(|_| ())
+            .map_err(|error| error.to_string())
+    })
+}
+
+fn refresh_sources_with(
+    sources: &[echo_agent_plugin_marketplace::MarketplaceSource],
+    source_url_or_path: Option<&str>,
+    mut sync_git: impl FnMut(&str, Option<&str>) -> Result<(), String>,
+) -> echo_agent_hooks_plugins_types::ActionOutcome {
+    use echo_agent_hooks_plugins_types::OutcomeStatus;
+    let mut selected = 0;
     let mut refreshed = 0;
     let mut errors = Vec::new();
     for source in sources {
@@ -168,30 +279,51 @@ fn refresh_sources(
                 continue;
             }
         }
-        if let echo_agent_plugin_marketplace::SourceKind::Git { url, branch } = &source.kind {
-            let cache_root = echo_agent_plugin_marketplace::git::default_cache_root();
-            if let Err(e) = echo_agent_plugin_marketplace::git::force_sync_source_cache(
-                url,
-                branch.as_deref(),
-                &cache_root,
-            ) {
-                errors.push(format!("{}: {e}", source.name));
+        selected += 1;
+        let result = match &source.kind {
+            echo_agent_plugin_marketplace::SourceKind::Git { url, branch } => {
+                sync_git(url, branch.as_deref())
             }
+            echo_agent_plugin_marketplace::SourceKind::Local { path } => {
+                std::fs::read_dir(path).map(|_| ()).map_err(|error| {
+                    format!(
+                        "Cannot read local marketplace directory {}: {error}",
+                        path.display()
+                    )
+                })
+            }
+        };
+        match result {
+            Ok(()) => refreshed += 1,
+            Err(error) => errors.push(format!("{}: {error}", source.name)),
         }
-        refreshed += 1;
     }
 
-    let msg = if errors.is_empty() {
-        format!("Refreshed {refreshed} source(s).")
+    let (status, msg) = if selected == 0 && source_url_or_path.is_some() {
+        (
+            OutcomeStatus::NotFound,
+            format!(
+                "Marketplace source not found: {}",
+                source_url_or_path.unwrap_or_default()
+            ),
+        )
+    } else if errors.is_empty() {
+        (
+            OutcomeStatus::Success,
+            format!("Refreshed {refreshed} source(s)."),
+        )
     } else {
-        format!(
-            "Refreshed {refreshed} source(s) with {} error(s): {}",
-            errors.len(),
-            errors.join("; ")
+        (
+            OutcomeStatus::InternalError,
+            format!(
+                "Refreshed {refreshed} of {selected} source(s); {} failed: {}. Check the source configuration and retry Refresh.",
+                errors.len(),
+                errors.join("; ")
+            ),
         )
     };
     echo_agent_hooks_plugins_types::ActionOutcome {
-        status: echo_agent_hooks_plugins_types::OutcomeStatus::Success,
+        status,
         message: msg,
         requires_reload: false,
         requires_restart: false,
@@ -199,8 +331,6 @@ fn refresh_sources(
 }
 
 async fn handle_update(
-    agent: &MvpAgent,
-    sid: &acp::SessionId,
     source_url_or_path: &str,
     plugin_relative_path: &str,
 ) -> echo_agent_hooks_plugins_types::ActionOutcome {
@@ -295,10 +425,16 @@ async fn handle_update(
 
     let provenance = echo_agent_core::plugins::install_registry::MarketplaceProvenance {
         source_url_or_path: source_url_or_path.to_string(),
+        canonical_source_identity: Some(
+            echo_agent_core::plugins::marketplace_scope::source_identity(source_url_or_path),
+        ),
         source_display_name: source.name.clone(),
         plugin_subdir: plugin_relative_path.to_string(),
     };
-    let mut registry = echo_agent_core::plugins::install_registry::InstallRegistry::load();
+    let mut registry = match load_mutable_marketplace_registry() {
+        Ok(registry) => registry,
+        Err(outcome) => return outcome,
+    };
     let require_sha = crate::plugin::marketplace_require_sha();
     let update_result = installer::update_from_marketplace_entry_transactional(
         &marketplace_root,
@@ -315,24 +451,15 @@ async fn handle_update(
             for w in &post_warnings {
                 tracing::warn!("{w}");
             }
-            let reload_outcome = agent
-                .execute_plugins_action(sid, echo_agent_hooks_plugins_types::PluginsAction::Reload)
-                .await;
-            let mut msg = format!(
-                "Updated {} ({} -> {})",
-                result.repo_key,
-                result.old_version.as_deref().unwrap_or("?"),
-                result.new_version.as_deref().unwrap_or("?")
-            );
-            if reload_outcome.is_none() {
-                msg.push_str("\nRestart or run /plugins reload to activate the update.");
-            }
-            ActionOutcome {
-                status: OutcomeStatus::Success,
-                message: msg,
-                requires_reload: false,
-                requires_restart: false,
-            }
+            plugin_setup_outcome(
+                format!(
+                    "Updated {} ({} -> {})",
+                    result.repo_key,
+                    result.old_version.as_deref().unwrap_or("?"),
+                    result.new_version.as_deref().unwrap_or("?")
+                ),
+                &post_warnings,
+            )
         }
         Err(echo_agent_core::plugins::install_registry::InstallError::PluginNotFound {
             ..
@@ -353,8 +480,6 @@ async fn handle_update(
     }
 }
 async fn handle_install(
-    agent: &MvpAgent,
-    sid: &acp::SessionId,
     source_url_or_path: &str,
     plugin_relative_path: &str,
 ) -> echo_agent_hooks_plugins_types::ActionOutcome {
@@ -407,10 +532,16 @@ async fn handle_install(
         // URL-sourced plugin: clone from remote git URL.
         let provenance = echo_agent_core::plugins::install_registry::MarketplaceProvenance {
             source_url_or_path: source_url_or_path.to_string(),
+            canonical_source_identity: Some(
+                echo_agent_core::plugins::marketplace_scope::source_identity(source_url_or_path),
+            ),
             source_display_name: source.name.clone(),
             plugin_subdir: plugin_relative_path.to_string(),
         };
-        let mut registry = echo_agent_core::plugins::install_registry::InstallRegistry::load();
+        let mut registry = match load_mutable_marketplace_registry() {
+            Ok(registry) => registry,
+            Err(outcome) => return outcome,
+        };
         let require_sha = crate::plugin::marketplace_require_sha();
         match installer::install_from_remote_url(
             &remote_url,
@@ -428,21 +559,13 @@ async fn handle_install(
                 for w in &post_warnings {
                     tracing::warn!("{w}");
                 }
-                let _ = agent
-                    .execute_plugins_action(
-                        sid,
-                        echo_agent_hooks_plugins_types::PluginsAction::Reload,
-                    )
-                    .await;
-                ActionOutcome {
-                    status: OutcomeStatus::Success,
-                    message: format!(
+                plugin_setup_outcome(
+                    format!(
                         "Installed from {}: {plugin_relative_path} (key: {repo_key})",
                         source.name,
                     ),
-                    requires_reload: false,
-                    requires_restart: false,
-                }
+                    &post_warnings,
+                )
             }
             Ok(installer::MarketplaceInstallResult::AlreadyInstalled { repo_key }) => {
                 ActionOutcome {
@@ -530,11 +653,17 @@ async fn handle_install(
 
         let provenance = echo_agent_core::plugins::install_registry::MarketplaceProvenance {
             source_url_or_path: source_url_or_path.to_string(),
+            canonical_source_identity: Some(
+                echo_agent_core::plugins::marketplace_scope::source_identity(source_url_or_path),
+            ),
             source_display_name: source.name.clone(),
             plugin_subdir: plugin_relative_path.to_string(),
         };
 
-        let mut registry = echo_agent_core::plugins::install_registry::InstallRegistry::load();
+        let mut registry = match load_mutable_marketplace_registry() {
+            Ok(registry) => registry,
+            Err(outcome) => return outcome,
+        };
         let install_result = installer::install_from_marketplace(
             &marketplace_root,
             plugin_relative_path,
@@ -549,21 +678,13 @@ async fn handle_install(
                 for w in &post_warnings {
                     tracing::warn!("{w}");
                 }
-                let _ = agent
-                    .execute_plugins_action(
-                        sid,
-                        echo_agent_hooks_plugins_types::PluginsAction::Reload,
-                    )
-                    .await;
-                ActionOutcome {
-                    status: OutcomeStatus::Success,
-                    message: format!(
+                plugin_setup_outcome(
+                    format!(
                         "Installed from {}: {plugin_relative_path} (key: {repo_key})",
                         source.name,
                     ),
-                    requires_reload: false,
-                    requires_restart: false,
-                }
+                    &post_warnings,
+                )
             }
             Ok(installer::MarketplaceInstallResult::AlreadyInstalled { repo_key }) => {
                 ActionOutcome {
@@ -586,15 +707,16 @@ async fn handle_install(
 }
 
 async fn handle_uninstall(
-    agent: &MvpAgent,
-    sid: &acp::SessionId,
     source_url_or_path: &str,
     plugin_relative_path: &str,
 ) -> echo_agent_hooks_plugins_types::ActionOutcome {
     use echo_agent_hooks_plugins_types::{ActionOutcome, OutcomeStatus};
     use echo_agent_plugin_marketplace::installer;
 
-    let mut registry = echo_agent_core::plugins::install_registry::InstallRegistry::load();
+    let mut registry = match load_mutable_marketplace_registry() {
+        Ok(registry) => registry,
+        Err(outcome) => return outcome,
+    };
 
     // Find the installed entry by marketplace provenance.
     let found = installer::find_installed_marketplace_plugin(
@@ -639,15 +761,10 @@ async fn handle_uninstall(
         };
     }
 
-    // Trigger plugin reload so the removed plugin disappears from the session.
-    let _ = agent
-        .execute_plugins_action(sid, echo_agent_hooks_plugins_types::PluginsAction::Reload)
-        .await;
-
     ActionOutcome {
         status: OutcomeStatus::Success,
         message: format!("Uninstalled {plugin_relative_path} (key: {repo_key})"),
-        requires_reload: false,
+        requires_reload: true,
         requires_restart: false,
     }
 }
@@ -725,7 +842,9 @@ fn scan_source(
     drop(lease);
 
     // Cross-reference with install registry.
-    let registry = echo_agent_core::plugins::install_registry::InstallRegistry::load();
+    let registry = crate::plugin::marketplace_lookup_registry(
+        &echo_agent_core::plugins::install_registry::InstallRegistry::load(),
+    );
     let plugins = discovered
         .into_iter()
         .map(|p| {
@@ -863,7 +982,10 @@ async fn handle_add_source(url: &str) -> echo_agent_hooks_plugins_types::ActionO
                 if p == path)
         }),
     };
-    if already_configured {
+    if already_configured
+        && !crate::plugin::marketplace_disabled_sources()
+            .contains(&echo_agent_core::plugins::marketplace_scope::source_identity(&identity))
+    {
         return ActionOutcome {
             status: OutcomeStatus::ValidationError,
             message: format!("Marketplace source already configured: {identity}"),
@@ -924,6 +1046,7 @@ async fn handle_add_source(url: &str) -> echo_agent_hooks_plugins_types::ActionO
         let name = name.clone();
         tokio::task::spawn_blocking(move || {
             let _flock = acquire_init_lock(&echo_agent_home)?;
+            plugin::preserve_revoked_marketplace_installs_before_add()?;
             add_marketplace_source(&config_path, &name, &input, is_official)
         })
         .await
@@ -960,7 +1083,7 @@ async fn handle_add_source(url: &str) -> echo_agent_hooks_plugins_types::ActionO
 /// flag) in one atomic `toml_edit` write, so a crash can't leave a source
 /// without its flag. Idempotent on normalized git URL / local path; preserves
 /// comments.
-fn add_marketplace_source(
+pub(crate) fn add_marketplace_source(
     config_path: &std::path::Path,
     name: &str,
     source: &crate::plugin::MarketplaceAddInput,
@@ -976,6 +1099,11 @@ fn add_marketplace_source(
             format!("invalid TOML: {e}"),
         )
     })?;
+    let identity = match source {
+        crate::plugin::MarketplaceAddInput::GitUrl(url) => url.clone(),
+        crate::plugin::MarketplaceAddInput::LocalPath(path) => path.to_string_lossy().into_owned(),
+    };
+    crate::plugin::clear_marketplace_source_revocation(&mut doc, &identity)?;
 
     let marketplace_item = doc
         .entry("marketplace")
@@ -1002,11 +1130,11 @@ fn add_marketplace_source(
     use crate::plugin::MarketplaceAddInput;
     let already_present = match source {
         MarketplaceAddInput::GitUrl(git_url) => {
-            let normalized = git_url.trim_end_matches(".git");
+            let normalized = echo_agent_core::plugins::marketplace_scope::source_identity(git_url);
             sources.iter().any(|t| {
-                t.get("git")
-                    .and_then(|v| v.as_str())
-                    .is_some_and(|u| u.trim_end_matches(".git") == normalized)
+                t.get("git").and_then(|v| v.as_str()).is_some_and(|u| {
+                    echo_agent_core::plugins::marketplace_scope::source_identity(u) == normalized
+                })
             })
         }
         MarketplaceAddInput::LocalPath(path) => {
@@ -1062,103 +1190,45 @@ async fn handle_remove_source(
 /// flock for the whole read-modify-write so a concurrent auto-register can't
 /// re-add the source mid-removal.
 fn remove_source_locked(source_url_or_path: &str) -> echo_agent_hooks_plugins_types::ActionOutcome {
-    use crate::plugin;
     use echo_agent_hooks_plugins_types::{ActionOutcome, OutcomeStatus};
-
-    let echo_agent_home = echo_agent_config::echo_agent_home();
-    let _flock = match acquire_init_lock(&echo_agent_home) {
-        Ok(lock) => lock,
-        Err(error) => {
-            return ActionOutcome {
-                status: OutcomeStatus::InternalError,
-                message: format!("Failed to lock config: {error}"),
-                requires_reload: false,
-                requires_restart: false,
-            };
-        }
-    };
-
-    let uninstalled = plugin::uninstall_marketplace_source_plugins(source_url_or_path);
-
-    // Remove the source and (if official) set the flag in ONE atomic write so a
-    // crash can't drop the flag and re-add the source next startup.
-    let config_path = echo_agent_home.join("config.toml");
-    let is_official = echo_agent_plugin_marketplace::is_official_source_url(source_url_or_path);
-    let mut removed_from_config = false;
-    let content = match crate::util::config::read_to_string_or_empty(&config_path) {
-        Ok(c) => c,
-        Err(e) => {
-            return ActionOutcome {
-                status: OutcomeStatus::InternalError,
-                message: format!("Failed to read config: {e}"),
-                requires_reload: false,
-                requires_restart: false,
-            };
-        }
-    };
-    if let Some(removed) = plugin::remove_toml_marketplace_block(&content, source_url_or_path) {
-        let final_content = if is_official {
-            match set_official_flag_in_toml(&removed) {
-                Ok(c) => c,
-                Err(e) => {
-                    return ActionOutcome {
-                        status: OutcomeStatus::InternalError,
-                        message: format!("Failed to update config: {e}"),
-                        requires_reload: false,
-                        requires_restart: false,
-                    };
-                }
-            }
-        } else {
-            removed
-        };
-        if let Err(e) = crate::util::config::atomic_write_string(&config_path, &final_content) {
-            return ActionOutcome {
-                status: OutcomeStatus::InternalError,
-                message: format!("Failed to write config: {e}"),
-                requires_reload: false,
-                requires_restart: false,
-            };
-        }
-        removed_from_config = true;
-    }
-
-    if !removed_from_config && !plugin::try_remove_source_from_json_files(source_url_or_path) {
-        return ActionOutcome {
-            status: OutcomeStatus::NotFound,
-            message: format!("Source not found in config: {source_url_or_path}"),
-            requires_reload: false,
+    match crate::plugin::remove_marketplace_source(source_url_or_path) {
+        Ok(uninstalled) => ActionOutcome {
+            status: OutcomeStatus::Success,
+            message: if uninstalled.is_empty() {
+                format!(
+                    "Revoked marketplace source in this Echo profile: {source_url_or_path}. External application files are unchanged."
+                )
+            } else {
+                format!(
+                    "Revoked marketplace source and uninstalled {} managed plugin(s): {}",
+                    uninstalled.len(),
+                    uninstalled.join(", ")
+                )
+            },
+            requires_reload: true,
             requires_restart: false,
-        };
-    }
-
-    // JSON-store-only removal: set the flag separately (the config.toml path
-    // already set it atomically above).
-    if is_official
-        && !removed_from_config
-        && let Err(e) = set_official_marketplace_auto_installed(&config_path)
-    {
-        tracing::warn!(
-            error = %e,
-            path = %config_path.display(),
-            "failed to set official_marketplace_auto_installed flag",
-        );
-    }
-
-    let msg = if uninstalled.is_empty() {
-        format!("Removed marketplace source: {source_url_or_path}")
-    } else {
-        format!(
-            "Removed marketplace source and uninstalled {} plugin(s): {}",
-            uninstalled.len(),
-            uninstalled.join(", ")
-        )
-    };
-    ActionOutcome {
-        status: OutcomeStatus::Success,
-        message: msg,
-        requires_reload: true,
-        requires_restart: false,
+        },
+        Err(error) => {
+            let identity =
+                echo_agent_core::plugins::marketplace_scope::source_identity(source_url_or_path);
+            let persisted = crate::plugin::marketplace_disabled_sources().contains(&identity);
+            ActionOutcome {
+                status: if error.kind() == std::io::ErrorKind::NotFound {
+                    OutcomeStatus::NotFound
+                } else {
+                    OutcomeStatus::InternalError
+                },
+                message: if persisted {
+                    format!(
+                        "The source was revoked, but managed file cleanup failed: {error}. Retry removal to clean the remaining managed files, or re-add the source to manage them."
+                    )
+                } else {
+                    format!("Failed to remove marketplace source: {error}")
+                },
+                requires_reload: persisted,
+                requires_restart: false,
+            }
+        }
     }
 }
 
@@ -1210,6 +1280,7 @@ fn read_marketplace_bool_flag(config_path: &std::path::Path, key: &str) -> bool 
         .unwrap_or(false)
 }
 
+#[cfg(test)]
 fn set_official_flag_in_toml(content: &str) -> std::io::Result<String> {
     set_marketplace_bool_flag_in_toml(content, "official_marketplace_auto_installed")
 }
@@ -1508,6 +1579,104 @@ mod official_source_tests {
     }
 
     #[test]
+    fn scoped_marketplace_revocation_readd_clears_only_matching_tombstone_atomically() {
+        let tmp = tempfile::tempdir().unwrap();
+        let config_path = tmp.path().join("config.toml");
+        std::fs::write(&config_path, "# Keep user comment\n[marketplace]\ndisabled_sources = [\"https://example.invalid/selected\", \"https://example.invalid/other\"]\n").unwrap();
+        let input = crate::plugin::MarketplaceAddInput::GitUrl(
+            "https://example.invalid/selected.git".into(),
+        );
+        add_marketplace_source(&config_path, "selected", &input, false).unwrap();
+        let raw = std::fs::read_to_string(&config_path).unwrap();
+        assert!(raw.starts_with("# Keep user comment"));
+        let config: toml::Value = toml::from_str(&raw).unwrap();
+        assert_eq!(
+            config["marketplace"]["disabled_sources"]
+                .as_array()
+                .unwrap()
+                .len(),
+            1
+        );
+        assert_eq!(
+            config["marketplace"]["disabled_sources"][0].as_str(),
+            Some("https://example.invalid/other")
+        );
+        assert_eq!(
+            config["marketplace"]["sources"][0]["git"].as_str(),
+            Some("https://example.invalid/selected.git")
+        );
+    }
+
+    #[test]
+    fn scoped_marketplace_reload_failure_preserves_partial_change_and_recovery_feedback() {
+        use echo_agent_hooks_plugins_types::{ActionOutcome, OutcomeStatus};
+        let applied = || ActionOutcome {
+            status: OutcomeStatus::Success,
+            message: "Installed files".into(),
+            requires_reload: true,
+            requires_restart: false,
+        };
+        for reload in [
+            None,
+            Some(ActionOutcome {
+                status: OutcomeStatus::InternalError,
+                message: "reload rejected".into(),
+                requires_reload: false,
+                requires_restart: false,
+            }),
+        ] {
+            let result = complete_plugin_reload(applied(), reload);
+            assert_eq!(
+                result.status,
+                OutcomeStatus::InternalError,
+                "A missing/rejected live reload must not certify installation activation"
+            );
+            assert!(result.requires_reload && result.requires_restart);
+            assert!(
+                result.message.contains("Installed files")
+                    && result.message.contains("Run /plugins reload or restart")
+            );
+        }
+        let result = complete_plugin_reload(
+            applied(),
+            Some(ActionOutcome {
+                status: OutcomeStatus::Success,
+                message: "reloaded".into(),
+                requires_reload: false,
+                requires_restart: false,
+            }),
+        );
+        assert_eq!(result.status, OutcomeStatus::Success);
+        assert!(!result.requires_reload && !result.requires_restart);
+    }
+
+    #[test]
+    fn scoped_marketplace_setup_failure_is_not_masked_by_successful_reload() {
+        use echo_agent_hooks_plugins_types::{ActionOutcome, OutcomeStatus};
+        let applied = plugin_setup_outcome(
+            "Installed files".into(),
+            &["Could not enable plugin: disk write denied".into()],
+        );
+        assert_eq!(applied.status, OutcomeStatus::InternalError);
+        assert!(applied.requires_reload && applied.message.contains("disk write denied"));
+        let reloaded = complete_plugin_reload(
+            applied,
+            Some(ActionOutcome {
+                status: OutcomeStatus::Success,
+                message: "reloaded".into(),
+                requires_reload: false,
+                requires_restart: false,
+            }),
+        );
+        assert_eq!(reloaded.status, OutcomeStatus::InternalError);
+        assert!(
+            reloaded
+                .message
+                .contains("Enable the plugin in Plugins or retry Update")
+        );
+    }
+
+    #[test]
     fn removing_last_nonofficial_source_preserves_flag_and_blocks_readd() {
         // Regression: removing the last (non-official) source must not wipe the
         // sticky flag, or a gated startup would re-add the removed official source.
@@ -1766,6 +1935,7 @@ mod default_skills_purge_tests {
             )]),
             marketplace: plugin_subdir.map(|subdir| MarketplaceProvenance {
                 source_url_or_path: "https://example.com/market.git".into(),
+                canonical_source_identity: None,
                 source_display_name: "Test".into(),
                 plugin_subdir: subdir.into(),
             }),
@@ -1916,6 +2086,102 @@ mod default_skills_purge_tests {
         let after_second = std::fs::read_to_string(&config_path).unwrap();
         assert_eq!(after_first, after_second);
         assert!(other_path.exists());
+    }
+}
+
+#[cfg(test)]
+mod refresh_feedback_tests {
+    use super::*;
+    use echo_agent_hooks_plugins_types::OutcomeStatus;
+    use echo_agent_plugin_marketplace::{MarketplaceSource, SourceKind};
+
+    #[test]
+    fn scoped_marketplace_refresh_unknown_target_does_not_report_success() {
+        let result = refresh_sources(&[], Some("https://example.invalid/missing.git"));
+        assert_eq!(result.status, OutcomeStatus::NotFound);
+        assert!(!result.requires_reload && !result.requires_restart);
+    }
+
+    #[test]
+    fn scoped_marketplace_refresh_missing_local_directory_does_not_report_success() {
+        let root = tempfile::tempdir().unwrap();
+        let source = MarketplaceSource {
+            name: "deleted owned catalog".into(),
+            kind: SourceKind::Local {
+                path: root.path().join("deleted"),
+            },
+        };
+        let result = refresh_sources(&[source], None);
+        assert_eq!(result.status, OutcomeStatus::InternalError);
+        assert!(result.message.contains("deleted owned catalog"));
+    }
+
+    #[test]
+    fn scoped_marketplace_refresh_existing_local_directory_succeeds_without_git() {
+        let root = tempfile::tempdir().unwrap();
+        let source = MarketplaceSource {
+            name: "owned catalog".into(),
+            kind: SourceKind::Local {
+                path: root.path().to_owned(),
+            },
+        };
+        let result = refresh_sources_with(&[source], None, |_, _| panic!("Unexpected Git access"));
+        assert_eq!(result.status, OutcomeStatus::Success);
+        assert_eq!(result.message, "Refreshed 1 source(s).");
+    }
+
+    #[test]
+    fn scoped_marketplace_refresh_partial_git_failure_reports_real_counts_and_retry() {
+        let root = tempfile::tempdir().unwrap();
+        let sources = [
+            MarketplaceSource {
+                name: "local".into(),
+                kind: SourceKind::Local {
+                    path: root.path().to_owned(),
+                },
+            },
+            MarketplaceSource {
+                name: "offline".into(),
+                kind: SourceKind::Git {
+                    url: "https://example.invalid/owned.git".into(),
+                    branch: Some("main".into()),
+                },
+            },
+        ];
+        let result = refresh_sources_with(&sources, None, |url, branch| {
+            assert_eq!(url, "https://example.invalid/owned.git");
+            assert_eq!(branch, Some("main"));
+            Err("Connection refused".into())
+        });
+        assert_eq!(result.status, OutcomeStatus::InternalError);
+        assert!(result.message.contains("Refreshed 1 of 2"));
+        assert!(result.message.contains("offline: Connection refused"));
+        assert!(result.message.contains("retry Refresh"));
+        assert!(!result.requires_reload && !result.requires_restart);
+    }
+
+    #[test]
+    fn scoped_marketplace_refresh_filter_does_not_access_unselected_sources() {
+        let sources = [MarketplaceSource {
+            name: "unrelated".into(),
+            kind: SourceKind::Git {
+                url: "https://example.invalid/unrelated.git".into(),
+                branch: None,
+            },
+        }];
+        let result = refresh_sources_with(
+            &sources,
+            Some("https://example.invalid/missing.git"),
+            |_, _| panic!("Unselected source was accessed"),
+        );
+        assert_eq!(result.status, OutcomeStatus::NotFound);
+    }
+
+    #[test]
+    fn scoped_marketplace_refresh_empty_catalog_remains_a_successful_noop() {
+        let result = refresh_sources_with(&[], None, |_, _| panic!("Unexpected Git access"));
+        assert_eq!(result.status, OutcomeStatus::Success);
+        assert_eq!(result.message, "Refreshed 0 source(s).");
     }
 }
 

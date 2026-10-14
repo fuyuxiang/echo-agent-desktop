@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Upload } from "lucide-react";
 import {
   SearchIcon, AddCircleIcon, RefreshCwIcon, PuzzlePieceIcon, DeleteIcon,
@@ -12,6 +12,7 @@ import { UploadSkillModal } from "./UploadSkillModal";
 import { listenOrgSkillsChanged, orgSetSkillPreference } from "@/lib/org-client";
 import { useAppDialog } from "../../AppDialog";
 import { SkillCapabilityStatus } from "./SkillCapabilityStatus";
+import { useOrgSessionStore } from "@/stores/org-session-store";
 
 interface Props {
   pills: React.ReactNode;
@@ -116,23 +117,36 @@ export function SkillsTab({ pills, onToast }: Props) {
   const [error, setError] = useState("");
   const [importOpen, setImportOpen] = useState(false);
   const [uploadSkill, setUploadSkill] = useState<SkillInfo | null>(null);
+  const reloadGeneration = useRef(0);
   const { requestConfirmation, dialog } = useAppDialog();
 
   const reloadSkills = useCallback(async (silent = false) => {
+    const generation = ++reloadGeneration.current;
     setLoading(true);
     setError("");
     try {
-      setSkills(await skillsList());
+      const next = await skillsList();
+      if (reloadGeneration.current === generation) setSkills(next);
     } catch (e) {
+      if (reloadGeneration.current !== generation) return;
       const message = String(e).replace(/^Error:\s*/, "");
       setError(message);
       if (!silent) onToast?.(`加载技能失败：${message}`);
     } finally {
-      setLoading(false);
+      if (reloadGeneration.current === generation) setLoading(false);
     }
   }, [onToast]);
 
-  useEffect(() => { void reloadSkills(true); }, [reloadSkills]);
+  useEffect(() => {
+    void reloadSkills(true);
+    return () => { reloadGeneration.current += 1; };
+  }, [reloadSkills]);
+  useEffect(() => useOrgSessionStore.subscribe((next, previous) => {
+    if (next.boundaryRevision === previous.boundaryRevision) return;
+    setSkills((current) => current.filter((skill) => !skill.orgManaged && skill.scope !== "server"));
+    setUploadSkill(null);
+    void reloadSkills(true);
+  }), [reloadSkills]);
   useEffect(() => {
     let disposed = false;
     let unlisten: (() => void) | undefined;

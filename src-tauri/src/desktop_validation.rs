@@ -1,8 +1,257 @@
 //! Release gate: a real WebView renders the app and completes a native IPC call.
 //! Only active in a deliberately isolated validation launch.
 use tauri::Manager;
+static REVIEW_EVALUATIONS: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
+#[cfg(target_os = "macos")]
+static CODE_AGENT_REVIEW_STARTED: std::sync::atomic::AtomicBool =
+    std::sync::atomic::AtomicBool::new(false);
+#[cfg(target_os = "macos")]
+static LOCAL_REVIEW_STARTED: std::sync::atomic::AtomicBool =
+    std::sync::atomic::AtomicBool::new(false);
 
-#[cfg(windows)]
+#[cfg(target_os = "macos")]
+fn code_agent_review_scope() -> Result<serde_json::Value, String> {
+    use std::os::unix::fs::PermissionsExt;
+    let home = crate::paths::redirected_data_home()
+        .ok_or("Code Agent review requires a redirected home")?;
+    let configured = std::path::PathBuf::from(
+        std::env::var_os("ECHO_AGENT_HOME").ok_or("Code Agent review home is missing")?,
+    );
+    let metadata = std::fs::symlink_metadata(&home).map_err(|error| error.to_string())?;
+    let temporary =
+        std::fs::canonicalize(std::env::temp_dir()).map_err(|error| error.to_string())?;
+    let private_tmp = std::fs::canonicalize("/private/tmp").map_err(|error| error.to_string())?;
+    if !metadata.is_dir()
+        || metadata.file_type().is_symlink()
+        || metadata.permissions().mode() & 0o077 != 0
+        || std::fs::canonicalize(&home).map_err(|error| error.to_string())? != home
+        || home != configured
+        || !home
+            .file_name()
+            .and_then(|name| name.to_str())
+            .is_some_and(|name| name.starts_with("echo-native-review-agent-"))
+        || !((home.starts_with(&temporary) && home != temporary)
+            || (home.starts_with(&private_tmp) && home != private_tmp))
+    {
+        return Err("Code Agent review requires its canonical private temporary home".into());
+    }
+    Ok(serde_json::json!({
+        "home": home,
+        "nonce": format!("{}{}", uuid::Uuid::now_v7(), uuid::Uuid::now_v7()),
+    }))
+}
+
+#[cfg(target_os = "macos")]
+fn webdav_review_scope() -> Result<serde_json::Value, String> {
+    use std::os::unix::fs::PermissionsExt;
+    use std::path::{Path, PathBuf};
+    let ordinary_private = |path: &Path, directory: bool| -> Result<(), String> {
+        let metadata = std::fs::symlink_metadata(path).map_err(|error| error.to_string())?;
+        if metadata.file_type().is_symlink()
+            || metadata.is_dir() != directory
+            || (!directory && !metadata.is_file())
+            || metadata.permissions().mode() & 0o077 != 0
+            || std::fs::canonicalize(path).map_err(|error| error.to_string())? != path
+        {
+            return Err(
+                "WebDAV review requires canonical private ordinary files/directories".into(),
+            );
+        }
+        Ok(())
+    };
+    let home =
+        crate::paths::redirected_data_home().ok_or("WebDAV review requires a redirected home")?;
+    ordinary_private(&home, true)?;
+    let configured =
+        PathBuf::from(std::env::var_os("ECHO_AGENT_HOME").ok_or("WebDAV review home is missing")?);
+    let temporary =
+        std::fs::canonicalize(std::env::temp_dir()).map_err(|error| error.to_string())?;
+    let private_tmp = std::fs::canonicalize("/private/tmp").map_err(|error| error.to_string())?;
+    if home != configured
+        || !home
+            .file_name()
+            .and_then(|name| name.to_str())
+            .is_some_and(|name| name.starts_with("echo-native-review-"))
+        || !((home.starts_with(&temporary) && home != temporary)
+            || (home.starts_with(&private_tmp) && home != private_tmp))
+    {
+        return Err("WebDAV review may only use its nested temporary review home".into());
+    }
+    let manifest = PathBuf::from(
+        std::env::var_os("ECHO_WEBDAV_REVIEW_MANIFEST")
+            .ok_or("WebDAV review manifest is missing")?,
+    );
+    if manifest != home.join("native-webdav-manifest.private.json") {
+        return Err("WebDAV review manifest is outside its dedicated home".into());
+    }
+    ordinary_private(&manifest, false)?;
+    if std::fs::metadata(&manifest)
+        .map_err(|error| error.to_string())?
+        .len()
+        > 32 * 1024
+    {
+        return Err("WebDAV review manifest exceeds the fixture limit".into());
+    }
+    let bytes = std::fs::read(&manifest).map_err(|error| error.to_string())?;
+    if bytes.len() > 32 * 1024 {
+        return Err("WebDAV review manifest exceeds the fixture limit".into());
+    }
+    let scope: serde_json::Value =
+        serde_json::from_slice(&bytes).map_err(|_| "Invalid WebDAV review manifest")?;
+    let text = |key: &str| {
+        scope[key]
+            .as_str()
+            .ok_or_else(|| format!("WebDAV review field {key} is missing"))
+    };
+    if scope["schema"] != 1
+        || scope["readOnlySharesPhysicalRoot"] != true
+        || Path::new(text("home")?) != home
+    {
+        return Err("WebDAV review manifest has a different scope".into());
+    }
+    let root = PathBuf::from(text("root")?);
+    let run = root
+        .parent()
+        .ok_or("WebDAV review server root has no parent")?;
+    if root.file_name().and_then(|name| name.to_str()) != Some("physical-root")
+        || run.parent() != Some(private_tmp.as_path())
+        || !run
+            .file_name()
+            .and_then(|name| name.to_str())
+            .is_some_and(|name| name.starts_with("echo-webdav-real-"))
+        || Path::new(text("requestAudit")?) != run.join("requests.redacted.jsonl")
+    {
+        return Err("WebDAV review server is outside its dedicated temporary scope".into());
+    }
+    ordinary_private(run, true)?;
+    ordinary_private(&root, true)?;
+    for share in ["rw", "ro"] {
+        let path = root.join(share);
+        let metadata = std::fs::symlink_metadata(&path).map_err(|error| error.to_string())?;
+        if !metadata.is_dir()
+            || metadata.file_type().is_symlink()
+            || std::fs::canonicalize(&path).map_err(|error| error.to_string())? != path
+        {
+            return Err("WebDAV review shares must be ordinary scoped directories".into());
+        }
+    }
+    let rw = url::Url::parse(text("readWriteUrl")?).map_err(|_| "Invalid WebDAV review URL")?;
+    let ro = url::Url::parse(text("readOnlyUrl")?).map_err(|_| "Invalid WebDAV review URL")?;
+    for (endpoint, path) in [(&rw, "/rw"), (&ro, "/ro")] {
+        if endpoint.scheme() != "http"
+            || endpoint.host_str() != Some("127.0.0.1")
+            || endpoint.port().is_none()
+            || endpoint.path() != path
+            || !endpoint.username().is_empty()
+            || endpoint.password().is_some()
+            || endpoint.query().is_some()
+            || endpoint.fragment().is_some()
+        {
+            return Err("WebDAV review only accepts its credential-free loopback endpoints".into());
+        }
+    }
+    let nonce = text("nonce")?;
+    if rw.origin() != ro.origin()
+        || nonce.len() != 32
+        || !nonce
+            .bytes()
+            .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
+        || text("username")?.is_empty()
+        || text("username")?.len() > 128
+        || text("password")?.len() < 20
+        || text("password")?.len() > 256
+        || text("seedName")? != "原始 中文.txt"
+        || text("seedContent")?.is_empty()
+        || text("seedContent")?.len() > 4096
+    {
+        return Err("WebDAV review fixture fields are invalid".into());
+    }
+    Ok(scope)
+}
+
+#[cfg(target_os = "macos")]
+fn local_review_scope() -> Result<serde_json::Value, String> {
+    use std::os::unix::fs::PermissionsExt;
+    use std::path::{Path, PathBuf};
+    let ordinary_private = |path: &Path, directory: bool| -> Result<(), String> {
+        let metadata = std::fs::symlink_metadata(path).map_err(|error| error.to_string())?;
+        if metadata.file_type().is_symlink()
+            || metadata.is_dir() != directory
+            || (!directory && !metadata.is_file())
+            || metadata.permissions().mode() & 0o077 != 0
+            || std::fs::canonicalize(path).map_err(|error| error.to_string())? != path
+        {
+            return Err("Local review requires canonical private ordinary paths".into());
+        }
+        Ok(())
+    };
+    let home = crate::paths::redirected_data_home().ok_or("Local review home is missing")?;
+    ordinary_private(&home, true)?;
+    let configured =
+        PathBuf::from(std::env::var_os("ECHO_AGENT_HOME").ok_or("Local review home is missing")?);
+    let temporary = std::fs::canonicalize(std::env::temp_dir()).map_err(|e| e.to_string())?;
+    let private_tmp = std::fs::canonicalize("/private/tmp").map_err(|e| e.to_string())?;
+    if home != configured
+        || !home
+            .file_name()
+            .and_then(|name| name.to_str())
+            .is_some_and(|name| name.starts_with("echo-native-review-local-"))
+        || !((home.starts_with(&temporary) && home != temporary)
+            || (home.starts_with(&private_tmp) && home != private_tmp))
+    {
+        return Err("Local review requires its dedicated private temporary home".into());
+    }
+    let manifest = PathBuf::from(
+        std::env::var_os("ECHO_LOCAL_REVIEW_MANIFEST").ok_or("Local review manifest is missing")?,
+    );
+    if manifest != home.join("native-local-manifest.private.json") {
+        return Err("Local review manifest must be inside its dedicated home".into());
+    }
+    ordinary_private(&manifest, false)?;
+    if std::fs::metadata(&manifest)
+        .map_err(|e| e.to_string())?
+        .len()
+        > 32 * 1024
+    {
+        return Err("Local review manifest exceeds the fixture limit".into());
+    }
+    let bytes = std::fs::read(&manifest).map_err(|e| e.to_string())?;
+    if bytes.len() > 32 * 1024 {
+        return Err("Local review manifest exceeds the fixture limit".into());
+    }
+    let scope: serde_json::Value =
+        serde_json::from_slice(&bytes).map_err(|_| "Invalid local review manifest")?;
+    let nonce = scope["nonce"]
+        .as_str()
+        .ok_or("Local review nonce is missing")?;
+    if scope["schema"] != 1
+        || scope["home"].as_str().map(Path::new) != Some(home.as_path())
+        || !(24..=128).contains(&nonce.len())
+        || !nonce
+            .bytes()
+            .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'_'))
+    {
+        return Err("Local review manifest has an invalid scope".into());
+    }
+    let receiver = scope["receiverUrl"]
+        .as_str()
+        .ok_or("Local receiver URL is missing")?;
+    let endpoint = url::Url::parse(receiver).map_err(|_| "Invalid local receiver URL")?;
+    if endpoint.scheme() != "http"
+        || endpoint.host_str() != Some("127.0.0.1")
+        || !endpoint.port().is_some_and(|port| port > 0)
+        || endpoint.path() != format!("/echo-review/{nonce}")
+        || !endpoint.username().is_empty()
+        || endpoint.password().is_some()
+        || endpoint.query().is_some()
+        || endpoint.fragment().is_some()
+    {
+        return Err("Local review only accepts its fixed credential-free loopback receiver".into());
+    }
+    Ok(serde_json::json!({ "schema": 1, "home": home, "nonce": nonce, "receiverUrl": receiver }))
+}
+
+#[cfg(any(windows, target_os = "macos"))]
 async fn wait_for_theia_frontend_ready(
     log_path: &std::path::Path,
     offset: u64,
@@ -174,6 +423,87 @@ pub async fn desktop_validation_ready(
     app: tauri::AppHandle,
     window: tauri::WebviewWindow,
 ) -> Result<(), String> {
+    if std::env::var("ECHO_DESKTOP_REVIEW").as_deref() == Ok("1") {
+        require_review_launch(&window)?;
+        if std::env::var("ECHO_DESKTOP_REVIEW_EXIT").as_deref() == Ok("1") {
+            return Ok(());
+        }
+        REVIEW_EVALUATIONS.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        if std::env::var("ECHO_DESKTOP_REVIEW_BROWSER").as_deref() == Ok("1") {
+            return crate::native_browser_validation::launch(&window);
+        }
+        if std::env::var("ECHO_DESKTOP_REVIEW_IDE").as_deref() == Ok("1") {
+            return crate::native_ide_validation::launch(window).await;
+        }
+        if std::env::var("ECHO_DESKTOP_REVIEW_CORE").as_deref() == Ok("1") {
+            return crate::native_core_validation::launch(&window);
+        }
+        if std::env::var("ECHO_DESKTOP_REVIEW_CAPABILITIES").as_deref() == Ok("1") {
+            return crate::native_capabilities_validation::launch(&window);
+        }
+        if std::env::var("ECHO_DESKTOP_REVIEW_LOCAL").as_deref() == Ok("1") {
+            #[cfg(target_os = "macos")]
+            {
+                let scope = local_review_scope()?;
+                if LOCAL_REVIEW_STARTED.swap(true, std::sync::atomic::Ordering::AcqRel) {
+                    return Ok(());
+                }
+                return window
+                    .eval(format!(
+                        "{}\nwindow.__echoNativeLocalReviewLaunch({scope});",
+                        include_str!("../../scripts/fixtures/native-local-review.js")
+                    ))
+                    .map_err(|error| error.to_string());
+            }
+            #[cfg(not(target_os = "macos"))]
+            return Err("Native local UI review currently requires macOS".into());
+        }
+        if std::env::var("ECHO_DESKTOP_REVIEW_CODE_AGENT").as_deref() == Ok("1") {
+            #[cfg(target_os = "macos")]
+            {
+                let scope = code_agent_review_scope()?;
+                if CODE_AGENT_REVIEW_STARTED.swap(true, std::sync::atomic::Ordering::AcqRel) {
+                    return Ok(());
+                }
+                return window
+                    .eval(format!(
+                        "{}({scope});",
+                        include_str!("../../scripts/fixtures/native-coding-agent-review.js")
+                    ))
+                    .map_err(|error| error.to_string());
+            }
+            #[cfg(not(target_os = "macos"))]
+            return Err("Native Code Agent review currently requires macOS".into());
+        }
+        if std::env::var("ECHO_DESKTOP_REVIEW_CODE").as_deref() == Ok("1") {
+            return crate::native_coding_validation::run(app, window).await;
+        }
+        if std::env::var("ECHO_DESKTOP_REVIEW_WEBDAV").as_deref() == Ok("1") {
+            #[cfg(target_os = "macos")]
+            {
+                let scope = webdav_review_scope()?;
+                return window
+                    .eval(format!(
+                        "{}\nwindow.__echoNativeWebDavReviewLaunch({scope});",
+                        include_str!("../../scripts/fixtures/native-webdav-review.js")
+                    ))
+                    .map_err(|error| error.to_string());
+            }
+            #[cfg(not(target_os = "macos"))]
+            return Err("Native WebDAV UI review currently requires macOS".into());
+        }
+        let review_script = format!(
+            "{}\n{}\n{}\n{}",
+            include_str!("../../scripts/fixtures/native-knowledge-review.js"),
+            include_str!("../../scripts/fixtures/native-automation-review.js"),
+            include_str!("../../scripts/fixtures/native-plan-review.js"),
+            include_str!("../../scripts/fixtures/native-desktop-review.js"),
+        );
+        window
+            .eval(&review_script)
+            .map_err(|error| error.to_string())?;
+        return Ok(());
+    }
     if std::env::var("ECHO_DESKTOP_VALIDATION").as_deref() != Ok("1") {
         return Ok(());
     }
@@ -237,16 +567,11 @@ pub async fn desktop_validation_ready(
             authorized.to_string_lossy().into_owned(),
         )
         .await;
-        #[cfg(windows)]
         let frontend_result: Result<(), String> = if let Ok(endpoint) = &result {
             let started = (|| {
                 // Exercise the same iframe path as the product UI. Backend readiness
                 // alone does not start every Theia IPC worker or a restored terminal.
-                let log_path = app
-                    .path()
-                    .app_data_dir()
-                    .map_err(|error| error.to_string())?
-                    .join("theia.log");
+                let log_path = crate::theia::data_dir(&app)?.join("theia.log");
                 let offset = std::fs::metadata(&log_path)
                     .map_err(|error| error.to_string())?
                     .len();
@@ -293,10 +618,7 @@ pub async fn desktop_validation_ready(
             Ok(())
         };
         app.state::<crate::theia::TheiaServer>().stop();
-        #[cfg(windows)]
-        return result.map(|_| ()).and(frontend_result);
-        #[cfg(not(windows))]
-        result.map(|_| ())
+        result.map(|_| ()).and(frontend_result)
     }
     .await
     .err();
@@ -321,6 +643,71 @@ pub async fn desktop_validation_ready(
         }))
         .map_err(|e| e.to_string())?,
     )?;
+    crate::request_graceful_exit(app);
+    Ok(())
+}
+
+fn require_review_launch(window: &tauri::WebviewWindow) -> Result<(), String> {
+    if std::env::var("ECHO_DESKTOP_REVIEW").as_deref() != Ok("1")
+        || window.label() != "main"
+        || std::env::var_os("ECHO_AGENT_HOME").is_none()
+        || crate::paths::redirected_data_home().is_none()
+    {
+        return Err("Native review requires an isolated home and main window".into());
+    }
+    Ok(())
+}
+
+#[tauri::command]
+pub fn desktop_review_context(window: tauri::WebviewWindow) -> Result<serde_json::Value, String> {
+    require_review_launch(&window)?;
+    let phase =
+        std::env::var("ECHO_DESKTOP_REVIEW_PHASE").unwrap_or_else(|_| "first-launch".into());
+    if !matches!(phase.as_str(), "first-launch" | "restart") {
+        return Err("Native review phase is invalid".into());
+    }
+    Ok(serde_json::json!({
+        "phase": phase,
+        "pid": std::process::id(),
+        "home": crate::paths::echo_agent_home_dir(),
+        "evaluations": REVIEW_EVALUATIONS.load(std::sync::atomic::Ordering::Relaxed),
+        "mediaRequested": std::env::var("ECHO_DESKTOP_REVIEW_MEDIA").as_deref() == Ok("1"),
+        "extendedRequested": std::env::var("ECHO_DESKTOP_REVIEW_EXTENDED").as_deref() == Ok("1"),
+        "webdavRequested": std::env::var("ECHO_DESKTOP_REVIEW_WEBDAV").as_deref() == Ok("1"),
+        "codeAgentRequested": std::env::var("ECHO_DESKTOP_REVIEW_CODE_AGENT").as_deref() == Ok("1"),
+        "localRequested": std::env::var("ECHO_DESKTOP_REVIEW_LOCAL").as_deref() == Ok("1"),
+        "capabilitiesRequested": std::env::var("ECHO_DESKTOP_REVIEW_CAPABILITIES").as_deref() == Ok("1"),
+        "coreRequested": std::env::var("ECHO_DESKTOP_REVIEW_CORE").as_deref() == Ok("1"),
+        "ideRequested": std::env::var("ECHO_DESKTOP_REVIEW_IDE").as_deref() == Ok("1"),
+        "browserRequested": std::env::var("ECHO_DESKTOP_REVIEW_BROWSER").as_deref() == Ok("1"),
+    }))
+}
+
+#[tauri::command]
+pub async fn desktop_review_complete(
+    app: tauri::AppHandle,
+    window: tauri::WebviewWindow,
+    report: serde_json::Value,
+) -> Result<(), String> {
+    require_review_launch(&window)?;
+    let encoded = serde_json::to_vec_pretty(&report).map_err(|error| error.to_string())?;
+    if encoded.len() > 128 * 1024 {
+        return Err("Native review report too large".into());
+    }
+    crate::paths::write_private_file(
+        &crate::paths::echo_agent_home_dir().join("native-review.json"),
+        &encoded,
+    )?;
+    // Development reloads and repeated ready events must not overwrite the
+    // original failure proof. Each native launch retains all renderer reports.
+    use std::io::Write;
+    let mut history = std::fs::OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(crate::paths::echo_agent_home_dir().join("native-review-history.jsonl"))
+        .map_err(|error| error.to_string())?;
+    serde_json::to_writer(&mut history, &report).map_err(|error| error.to_string())?;
+    writeln!(history).map_err(|error| error.to_string())?;
     crate::request_graceful_exit(app);
     Ok(())
 }

@@ -1,4 +1,4 @@
-import { render, screen } from "@testing-library/react";
+import { act, render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
@@ -144,6 +144,47 @@ describe("DeliveryReportTab", () => {
     await userEvent.type(reason, "仅维护测试数据，无生产代码行为变更");
     await userEvent.click(screen.getByRole("button", { name: "说明并豁免" }));
     expect(api.waiveTestFirst).toHaveBeenCalledWith("/repo", "t1", "仅维护测试数据，无生产代码行为变更");
+  });
+
+  it("切换任务后旧豁免响应不会改写当前报告或TDD状态", async () => {
+    let resolve!: (value: { waiverReason: string }) => void;
+    api.waiveTestFirst.mockReturnValue(new Promise((accept) => { resolve = accept; }));
+    api.deliveryReport.mockImplementation((_root: string, id: string) => Promise.resolve(report({
+      task: task({ id, name: id === "t1" ? "旧任务" : "新任务", phase: "paused", phaseReason: "等待红灯测试验证" }),
+    })));
+    const onTddChanged = vi.fn();
+    const props = { root: "/repo", onOpenFile: vi.fn(), onTddChanged };
+    const view = render(<DeliveryReportTab {...props} taskId="t1" />);
+    await userEvent.type(await screen.findByRole("textbox", { name: "测试先行不适用原因" }), "旧任务原因");
+    await userEvent.click(screen.getByRole("button", { name: "说明并豁免" }));
+    view.rerender(<DeliveryReportTab {...props} taskId="t2" />);
+    expect(await screen.findByRole("heading", { name: "新任务" })).toBeInTheDocument();
+    await act(async () => { resolve({ waiverReason: "旧任务原因" }); });
+    expect(onTddChanged).not.toHaveBeenCalled();
+    expect(screen.queryByRole("heading", { name: "旧任务" })).not.toBeInTheDocument();
+    expect(screen.getByRole("heading", { name: "新任务" })).toBeInTheDocument();
+    expect(screen.getByRole("textbox", { name: "测试先行不适用原因" })).toHaveValue("");
+  });
+
+  it("切换项目后旧验收响应不会再加载或显示原项目报告", async () => {
+    let resolve!: () => void;
+    api.confirmAcceptance.mockReturnValue(new Promise<void>((accept) => { resolve = accept; }));
+    api.deliveryReport.mockImplementation((root: string) => Promise.resolve(report({
+      task: task({ name: root === "/repo" ? "旧任务" : "新项目任务", acceptanceCriteria: [
+        { id: "ac1", content: "登录流程可用", satisfied: false, evidence: [] },
+      ] }),
+    })));
+    const onReviewChanged = vi.fn();
+    const props = { taskId: "t1", onOpenFile: vi.fn(), onReviewChanged };
+    const view = render(<DeliveryReportTab {...props} root="/repo" />);
+    await userEvent.click(await screen.findByRole("button", { name: "人工确认已满足" }));
+    await userEvent.click(screen.getByRole("button", { name: "确认已满足" }));
+    view.rerender(<DeliveryReportTab {...props} root="/other" />);
+    expect(await screen.findByRole("heading", { name: "新项目任务" })).toBeInTheDocument();
+    await act(async () => { resolve(); });
+    expect(onReviewChanged).not.toHaveBeenCalled();
+    expect(api.deliveryReport).toHaveBeenCalledTimes(2);
+    expect(screen.getByRole("heading", { name: "新项目任务" })).toBeInTheDocument();
   });
 
   it("expands an unmet gate's evidence by default", async () => {

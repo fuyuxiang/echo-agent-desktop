@@ -164,24 +164,60 @@ pub async fn app_update_install(
     // `download` verifies the signature before returning. Publish the install
     // phase only after that succeeds, and return authoritative error stages.
     emit_progress(&app, "downloaded", downloaded, None);
-    crate::process_supervisor::with_external_installer_launch(|| update.install(bytes))
+    crate::prepare_application_exit(&app)
+        .await
         .map_err(|error| {
-            AppUpdateInstallError::new(
-                AppUpdateErrorStage::Install,
-                format!("无法启动更新安装器：{error}"),
-            )
-        })?
-        .map_err(|error| {
-            AppUpdateInstallError::new(
-                AppUpdateErrorStage::Install,
-                format!("更新安装失败：{error}"),
-            )
+            AppUpdateInstallError::new(AppUpdateErrorStage::Install, format!("更新未安装：{error}"))
         })?;
+    #[cfg(not(windows))]
+    if let Err(error) = crate::process_supervisor::permit_application_relaunch() {
+        let message = format!("无法准备更新后重启：{error}");
+        crate::abort_prepared_exit(&app, message.clone(), false);
+        return Err(AppUpdateInstallError::new(
+            AppUpdateErrorStage::Install,
+            message,
+        ));
+    }
+    // Flush recordings, sessions and owned IDE/automation processes before a
+    // Windows installer is launched or another platform replaces our bundle.
+    if let Err(message) = crate::shutdown_application_for_exit(&app).await {
+        crate::abort_prepared_exit(&app, message.clone(), true);
+        return Err(AppUpdateInstallError::new(
+            AppUpdateErrorStage::Install,
+            message,
+        ));
+    }
+    let installed = tauri::async_runtime::spawn_blocking(move || {
+        crate::process_supervisor::with_external_installer_launch(|| {
+            update.install_without_exit(bytes)
+        })
+        .map_err(|error| format!("无法启动更新安装器：{error}"))?
+        .map_err(|error| format!("更新安装失败：{error}"))
+    })
+    .await
+    .map_err(|error| format!("更新安装任务失败：{error}"))
+    .and_then(|result| result);
+    if let Err(message) = installed {
+        crate::abort_prepared_exit(&app, message.clone(), true);
+        return Err(AppUpdateInstallError::new(
+            AppUpdateErrorStage::Install,
+            message,
+        ));
+    }
 
-    emit_progress(&app, "installed", downloaded, None);
+    emit_progress(
+        &app,
+        if cfg!(windows) {
+            "installer-started"
+        } else {
+            "installed"
+        },
+        downloaded,
+        None,
+    );
 
-    // On Windows the updater exits after starting the installer and never
-    // reaches this line. macOS/Linux replace the bundle in-place and need an
-    // explicit restart.
-    app.restart();
+    // Windows already handed off to the validated external installer. Other
+    // platforms replaced the bundle in-place and need a controlled restart.
+    crate::complete_prepared_exit(app, !cfg!(windows));
+    Ok(())
 }

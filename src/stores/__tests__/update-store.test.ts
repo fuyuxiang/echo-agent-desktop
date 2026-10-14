@@ -124,4 +124,14 @@ describe("update-store", () => {
       errorStage: "install",
     });
   });
+
+  it("Windows安装器启动事件保持安装阶段，不伪报更新完成", async () => {
+    useUpdateStore.setState({ status: "available", update: { version: "0.3.9", mandatory: false } });
+    installAppUpdate.mockImplementationOnce(async (_version, onProgress) => {
+      onProgress({ event: "installer-started", downloaded: 100 });
+      expect(useUpdateStore.getState().status).toBe("installing");
+    });
+    await useUpdateStore.getState().install();
+    expect(useUpdateStore.getState()).toMatchObject({ status: "installing", downloaded: 100 });
+  });
 });

@@ -1,6 +1,6 @@
 import { useState } from "react";
 import type { ToolCallView } from "@/stores/session-store";
-import { isOfficeCreateTool, officeReceiptFromToolCall } from "@/lib/document-export";
+import { isOfficeCreateTool, officeInputFromToolCall, officeReceiptFromToolCall } from "@/lib/document-export";
 import type { DiffContent, CommandOutputContent, ImageToolContent } from "@/lib/types";
 import { checkCommandRisk, riskLabel } from "@/lib/command-risk";
 import { precheckCommand } from "@/lib/sandbox-guard";
@@ -77,8 +77,7 @@ export function ToolCallCard({ tc, onOpen }: ToolCallCardProps) {
     );
 
   const officeTool = isOfficeCreateTool(tc);
-  const officeInput = tc.rawInput && typeof tc.rawInput === "object"
-    ? tc.rawInput as Record<string, unknown> : null;
+  const officeInput = officeInputFromToolCall(tc);
   const officeTitle = typeof officeInput?.title === "string" ? officeInput.title : "办公文档";
   const shortTitle = officeTool ? `生成 ${officeTitle}` : shortenTitle(tc.title, tc.kind);
 

@@ -1,19 +1,19 @@
 use super::*;
 use crate::session::storage::jsonl::AppendDurability;
 
-struct ActorGuard {
-    handle: PersistenceHandle,
+pub(super) struct ActorGuard {
+    pub(super) handle: PersistenceHandle,
     task: tokio::task::JoinHandle<()>,
 }
 
 impl ActorGuard {
-    async fn stop(self) {
+    pub(super) async fn stop(self) {
         self.task.abort();
         let _ = self.task.await;
     }
 }
 
-fn test_actor(info: Info, storage: Arc<dyn StorageAdapter>) -> ActorGuard {
+pub(super) fn test_actor(info: Info, storage: Arc<dyn StorageAdapter>) -> ActorGuard {
     test_actor_with_remote_sync(info, storage, None)
 }
 
@@ -49,6 +49,9 @@ fn test_actor_inner(
             info,
             storage,
             pending_notification: None,
+            pending_updates: VecDeque::new(),
+            pending_chat_writes: VecDeque::new(),
+            pending_plan_modes: VecDeque::new(),
             rx,
             remote_sync,
             // Resumed-style actor for these tests; upgrade backfill is fresh-only.
@@ -261,7 +264,8 @@ async fn pending_drain_disposition_controls_remote_sync() {
             .handle
             .append_update_durably(neutral_update(&info, "durable"))
             .await,
-        Err(DurableAppendError::Committed(_))
+        // The pending line committed, but the new durable update was skipped.
+        Err(DurableAppendError::NotCommitted(_))
     ));
     let synced = recv_observed(&mut observed).await;
     assert_eq!(synced.session_id, info.id);
@@ -386,13 +390,306 @@ async fn durable_append_drains_pending_update_in_fifo_order() {
     actor.stop().await;
 }
 
-async fn flush_ack(handle: &PersistenceHandle) -> io::Result<()> {
+pub(super) async fn flush_ack(handle: &PersistenceHandle) -> io::Result<()> {
     let (tx, rx) = tokio::sync::oneshot::channel();
     handle
         .tx
         .send(PersistenceMsg::FlushAndAck { respond_to: tx })
         .unwrap();
     rx.await.unwrap()
+}
+
+pub(super) async fn checked_flush_ack(handle: &PersistenceHandle) -> io::Result<()> {
+    let (respond_to, response) = tokio::sync::oneshot::channel();
+    handle
+        .tx
+        .send(PersistenceMsg::FlushAndSyncAndAck { respond_to })
+        .unwrap();
+    response.await.unwrap()
+}
+
+fn extension_update(info: &Info, text: &str) -> SessionUpdate {
+    SessionUpdate::EchoAgent(Box::new(EchoAgentSessionNotification {
+        session_id: info.id.clone(),
+        update: EchoAgentSessionUpdate::AutoCompactFailed {
+            error: text.to_string(),
+        },
+        meta: None,
+    }))
+}
+
+fn persisted_update_labels(updates: &[SessionUpdate]) -> Vec<String> {
+    updates
+        .iter()
+        .map(|update| match update {
+            SessionUpdate::Acp(notification) => match &notification.update {
+                acp::SessionUpdate::AgentMessageChunk(chunk)
+                | acp::SessionUpdate::AgentThoughtChunk(chunk) => {
+                    let acp::ContentBlock::Text(text) = &chunk.content else {
+                        panic!("text expected")
+                    };
+                    text.text.clone()
+                }
+                _ => panic!("test ACP chunk expected"),
+            },
+            SessionUpdate::EchoAgent(notification) => {
+                let EchoAgentSessionUpdate::AutoCompactFailed { error } = &notification.update
+                else {
+                    panic!("test extension update expected")
+                };
+                error.clone()
+            }
+        })
+        .collect()
+}
+
+#[tokio::test]
+async fn failed_displaced_acp_and_extension_updates_are_retried_in_fifo_order() {
+    use std::sync::atomic::{AtomicBool, Ordering};
+    let dir = tempfile::tempdir().unwrap();
+    let info = Info {
+        id: acp::SessionId::new("retained-update-fifo"),
+        cwd: "/test".into(),
+    };
+    let failing = Arc::new(AtomicBool::new(true));
+    let fault = failing.clone();
+    let storage = Arc::new(JsonlStorageAdapter::with_update_append_probe(
+        dir.path().to_path_buf(),
+        move |_| {
+            if fault.load(Ordering::SeqCst) {
+                Err(io::Error::other("injected update write failure"))
+            } else {
+                Ok(())
+            }
+        },
+    ));
+    storage
+        .init_session(&info, default_model_id())
+        .await
+        .unwrap();
+    let (remote, mut observed) = RemoteSync::test_observer();
+    let actor = test_actor_with_remote_sync(info.clone(), storage.clone(), Some(remote));
+    let thought = SessionUpdate::Acp(Box::new(acp::SessionNotification::new(
+        info.id.clone(),
+        acp::SessionUpdate::AgentThoughtChunk(acp::ContentChunk::new(acp::ContentBlock::Text(
+            acp::TextContent::new("second-thought"),
+        ))),
+    )));
+    for update in [
+        neutral_update(&info, "first-message"),
+        thought,
+        extension_update(&info, "third-extension"),
+        neutral_update(&info, "fourth-message"),
+    ] {
+        actor
+            .handle
+            .tx
+            .send(PersistenceMsg::Update(update))
+            .unwrap();
+    }
+    assert!(
+        checked_flush_ack(&actor.handle)
+            .await
+            .unwrap_err()
+            .to_string()
+            .contains("injected update")
+    );
+    assert!(
+        storage
+            .load_session(&info)
+            .await
+            .unwrap()
+            .updates
+            .is_empty()
+    );
+    assert!(
+        observed.try_recv().is_err(),
+        "uncommitted records must not be synced remotely"
+    );
+    failing.store(false, Ordering::SeqCst);
+    checked_flush_ack(&actor.handle).await.unwrap();
+    checked_flush_ack(&actor.handle).await.unwrap();
+    assert_eq!(
+        persisted_update_labels(&storage.load_session(&info).await.unwrap().updates),
+        [
+            "first-message",
+            "second-thought",
+            "third-extension",
+            "fourth-message"
+        ]
+    );
+    for _ in 0..3 {
+        recv_observed(&mut observed).await;
+    }
+    assert!(
+        observed.try_recv().is_err(),
+        "retry must sync each committed ACP record once"
+    );
+    assert_eq!(
+        std::fs::read_to_string(dir.path().join("updates.jsonl"))
+            .unwrap()
+            .lines()
+            .count(),
+        4
+    );
+    actor.stop().await;
+}
+
+#[tokio::test]
+async fn committed_update_failures_do_not_duplicate_lines_on_final_save_retry() {
+    let dir = tempfile::tempdir().unwrap();
+    let info = Info {
+        id: acp::SessionId::new("committed-update-retry"),
+        cwd: "/test".into(),
+    };
+    let storage = Arc::new(JsonlStorageAdapter::with_explicit_session_dir(
+        dir.path().to_path_buf(),
+    ));
+    storage
+        .init_session(&info, default_model_id())
+        .await
+        .unwrap();
+    let summary = std::fs::read(dir.path().join("summary.json")).unwrap();
+    break_summary_writes(dir.path());
+    let actor = test_actor(info.clone(), storage.clone());
+    actor
+        .handle
+        .tx
+        .send(PersistenceMsg::Update(extension_update(
+            &info,
+            "committed-extension",
+        )))
+        .unwrap();
+    actor
+        .handle
+        .tx
+        .send(PersistenceMsg::Update(neutral_update(&info, "later-chunk")))
+        .unwrap();
+    assert!(checked_flush_ack(&actor.handle).await.is_err());
+    assert!(
+        checked_flush_ack(&actor.handle).await.is_err(),
+        "empty pending queue must not ACK a session whose committed summary patch failed"
+    );
+    std::fs::remove_dir(dir.path().join("summary.json")).unwrap();
+    std::fs::write(dir.path().join("summary.json"), summary).unwrap();
+    checked_flush_ack(&actor.handle).await.unwrap();
+    checked_flush_ack(&actor.handle).await.unwrap();
+    assert_eq!(
+        persisted_update_labels(&storage.load_session(&info).await.unwrap().updates),
+        ["committed-extension", "later-chunk"]
+    );
+    assert_eq!(
+        std::fs::read_to_string(dir.path().join("updates.jsonl"))
+            .unwrap()
+            .lines()
+            .count(),
+        2
+    );
+    actor.stop().await;
+}
+
+#[tokio::test]
+async fn checked_save_reports_sync_failure_and_retries_without_reappending() {
+    use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
+    let dir = tempfile::tempdir().unwrap();
+    let info = Info {
+        id: acp::SessionId::new("checked-file-sync"),
+        cwd: "/test".into(),
+    };
+    let failing = Arc::new(AtomicBool::new(true));
+    let attempts = Arc::new(AtomicUsize::new(0));
+    let fault = failing.clone();
+    let observed = attempts.clone();
+    let storage = Arc::new(JsonlStorageAdapter::with_checked_sync_probe(
+        dir.path().to_path_buf(),
+        move || {
+            observed.fetch_add(1, Ordering::SeqCst);
+            if fault.load(Ordering::SeqCst) {
+                Err(io::Error::other("injected local file sync failure"))
+            } else {
+                Ok(())
+            }
+        },
+    ));
+    storage
+        .init_session(&info, default_model_id())
+        .await
+        .unwrap();
+    std::fs::create_dir_all(dir.path().join("goal")).unwrap();
+    std::fs::write(dir.path().join("goal/state.json"), "{\"saved\":true}").unwrap();
+    let actor = test_actor(info.clone(), storage.clone());
+    actor
+        .handle
+        .tx
+        .send(PersistenceMsg::Update(neutral_update(&info, "saved-once")))
+        .unwrap();
+    flush_ack(&actor.handle).await.unwrap();
+    assert_eq!(
+        attempts.load(Ordering::SeqCst),
+        0,
+        "legacy flush does not require the new local sync barrier"
+    );
+    assert!(
+        checked_flush_ack(&actor.handle)
+            .await
+            .unwrap_err()
+            .to_string()
+            .contains("local file sync")
+    );
+    failing.store(false, Ordering::SeqCst);
+    checked_flush_ack(&actor.handle).await.unwrap();
+    assert_eq!(attempts.load(Ordering::SeqCst), 2);
+    assert_eq!(
+        std::fs::read_to_string(dir.path().join("updates.jsonl"))
+            .unwrap()
+            .lines()
+            .count(),
+        1
+    );
+    assert_eq!(
+        std::fs::read_to_string(dir.path().join("goal/state.json")).unwrap(),
+        "{\"saved\":true}"
+    );
+    actor.stop().await;
+}
+
+#[cfg(unix)]
+#[tokio::test]
+async fn checked_sync_refuses_unowned_artifacts_then_succeeds_after_repair() {
+    let dir = tempfile::tempdir().unwrap();
+    let outside = tempfile::tempdir().unwrap();
+    let info = Info {
+        id: acp::SessionId::new("checked-sync-boundary"),
+        cwd: "/test".into(),
+    };
+    let storage = Arc::new(JsonlStorageAdapter::with_explicit_session_dir(
+        dir.path().to_path_buf(),
+    ));
+    storage
+        .init_session(&info, default_model_id())
+        .await
+        .unwrap();
+    std::fs::write(outside.path().join("unowned.json"), "unowned").unwrap();
+    std::os::unix::fs::symlink(
+        outside.path().join("unowned.json"),
+        dir.path().join("unowned-link"),
+    )
+    .unwrap();
+    let actor = test_actor(info, storage);
+    assert!(
+        checked_flush_ack(&actor.handle)
+            .await
+            .unwrap_err()
+            .to_string()
+            .contains("non-regular session artifact")
+    );
+    std::fs::remove_file(dir.path().join("unowned-link")).unwrap();
+    checked_flush_ack(&actor.handle).await.unwrap();
+    assert_eq!(
+        std::fs::read_to_string(outside.path().join("unowned.json")).unwrap(),
+        "unowned"
+    );
+    actor.stop().await;
 }
 
 async fn probe_writable(handle: &PersistenceHandle) -> io::Result<()> {

@@ -11,6 +11,7 @@
  */
 import { afterEach, describe, it, expect, vi, beforeEach } from "vitest";
 import { render, screen, fireEvent, waitFor, act, within } from "@testing-library/react";
+import type { Plan } from "@/lib/types";
 
 // session-store mock:可控的 streaming / sessionId / messages。
 let storeState: {
@@ -18,7 +19,9 @@ let storeState: {
   streaming: boolean;
   streamingMessageId: string | null;
   error: string | null;
-  plan: null;
+  plan: Plan | null;
+  planRevisionDirty?: boolean;
+  transcripts?: Record<string, { planRevisionDirty: boolean }>;
   sessionId: string | null;
   agentMode: "default" | "browser_use" | "computer_use";
   control?: {
@@ -165,6 +168,8 @@ describe("ChatView pause/yield/resume 闭环", () => {
       streamingMessageId: null,
       error: null,
       plan: null,
+      planRevisionDirty: false,
+      transcripts: {},
       sessionId: "s1",
       agentMode: "default",
       control: undefined,
@@ -179,6 +184,40 @@ describe("ChatView pause/yield/resume 闭环", () => {
     vi.mocked(rewindExecute).mockReset().mockResolvedValue({ targetPromptIndex: 0 });
     vi.mocked(rewindPoints).mockReset().mockResolvedValue([]);
     vi.mocked(setCodingMode).mockClear();
+  });
+
+  it("已打开计划清空后仍保留真实编辑器和新增草稿，收起后可重开", () => {
+    setStore({ plan: { entries: [{ content: "最后一步", priority: "medium", status: "pending" }] }, transcripts: { s1: { planRevisionDirty: false } } });
+    const { rerender } = renderChat();
+    fireEvent.click(screen.getByRole("button", { name: "计划 0/1" }));
+    fireEvent.change(screen.getByRole("textbox", { name: "新增步骤" }), { target: { value: "保留待确认的新增草稿" } });
+    setStore({ plan: { entries: [] }, planRevisionDirty: true, transcripts: { s1: { planRevisionDirty: true } } });
+    rerender(<ThemeProvider><ChatView {...baseProps} /></ThemeProvider>);
+    expect(screen.getByRole("textbox", { name: "新增步骤" })).toHaveValue("保留待确认的新增草稿");
+    fireEvent.click(screen.getByRole("button", { name: "计划 0/0" }));
+    expect(screen.queryByRole("textbox", { name: "新增步骤" })).not.toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "计划 0/0" }));
+    expect(screen.getByRole("textbox", { name: "新增步骤" })).toBeInTheDocument();
+  });
+
+  it("CORE19 真实 ACP flat plan 经生产 store 后显示可打开的计划入口", async () => {
+    const actual = await vi.importActual<typeof import("@/stores/session-store")>("@/stores/session-store");
+    actual.useSessionStore.setState({ sessionId: null, transcripts: {}, plan: null });
+    const productionStore = actual.useSessionStore.getState();
+    productionStore.setSession("s1");
+    productionStore.applyUpdate({
+      sessionUpdate: "plan",
+      entries: [
+        { content: "批准后保存实际成果", priority: "medium", status: "pending" },
+        { content: "核对成果内容", priority: "high", status: "pending" },
+      ],
+      __sessionId: "s1",
+    } as never);
+    setStore({ plan: actual.useSessionStore.getState().plan });
+    renderChat();
+    fireEvent.click(screen.getByRole("button", { name: "计划 0/2" }));
+    expect(screen.getByText("批准后保存实际成果")).toBeInTheDocument();
+    expect(screen.getByText("核对成果内容")).toBeInTheDocument();
   });
 
   afterEach(() => {

@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   SearchIcon, MyExpertIcon, ChevronLeftIcon, SparklesIcon,
   RefreshCwIcon,
@@ -37,6 +37,18 @@ export function ExpertsTab({ pills, onGoHome, onToast, createExpertRequested, on
   const [search, setSearch] = useState("");
   /** Expert whose detail modal is currently open. */
   const [modalExpert, setModalExpert] = useState<ExpertItem | null>(null);
+  const [summoning, setSummoning] = useState(false);
+  const [summonError, setSummonError] = useState("");
+  const summonGeneration = useRef(0);
+  const summonInFlight = useRef(false);
+  const closeExpert = () => {
+    summonGeneration.current += 1;
+    summonInFlight.current = false;
+    setSummoning(false);
+    setSummonError("");
+    setModalExpert(null);
+  };
+  useEffect(() => () => { summonGeneration.current += 1; }, []);
   const setPendingExpert = usePendingExpertStore((s) => s.set);
 
   const [root, setRoot] = useState("");
@@ -151,63 +163,85 @@ export function ExpertsTab({ pills, onGoHome, onToast, createExpertRequested, on
 
   /** Read the full prompt, set pending expert, navigate home. */
   const handleSummonFromModal = useCallback(async (expert: ExpertItem, promptOverride?: string) => {
-    setModalExpert(null);
+    if (summonInFlight.current) return;
+    summonInFlight.current = true;
+    const generation = ++summonGeneration.current;
+    setSummoning(true);
+    setSummonError("");
+    try {
 
-    // Read the full agent prompt from disk.
-    let fullPrompt = "";
-    if (expert.plugin && expert.agentName && root) {
-      try {
-        const raw = await expertsReadAgentPrompt(root, expert.plugin, expert.agentName);
-        // Strip frontmatter to get just the body.
-        const trimmed = raw.trimStart();
-        if (trimmed.startsWith("---")) {
-          const afterOpen = trimmed.indexOf("\n");
-          if (afterOpen !== -1) {
-            const rest = trimmed.slice(afterOpen + 1);
-            const closeMatch = rest.match(/\n---\s*(\n|$)/);
-            if (closeMatch && closeMatch.index !== undefined) {
-              // Body starts AFTER the closing --- fence (index + full match length).
-              fullPrompt = rest.slice(closeMatch.index + closeMatch[0].length).trim();
+      // Read the full agent prompt from disk.
+      let fullPrompt = "";
+      if (expert.plugin && expert.agentName && root) {
+        try {
+          const raw = await expertsReadAgentPrompt(root, expert.plugin, expert.agentName);
+          // Strip frontmatter to get just the body.
+          const trimmed = raw.trimStart();
+          if (trimmed.startsWith("---")) {
+            const afterOpen = trimmed.indexOf("\n");
+            if (afterOpen !== -1) {
+              const rest = trimmed.slice(afterOpen + 1);
+              const closeMatch = rest.match(/\n---\s*(\n|$)/);
+              if (closeMatch && closeMatch.index !== undefined) {
+                // Body starts AFTER the closing --- fence (index + full match length).
+                fullPrompt = rest.slice(closeMatch.index + closeMatch[0].length).trim();
+              } else {
+                fullPrompt = raw.trim();
+              }
             } else {
               fullPrompt = raw.trim();
             }
           } else {
             fullPrompt = raw.trim();
           }
-        } else {
-          fullPrompt = raw.trim();
+        } catch (reason) {
+          throw new Error(`读取专家提示词失败：${String(reason).replace(/^Error:\s*/, "")}`);
         }
-      } catch { /* fallback: empty prompt */ }
-    }
+        if (!fullPrompt) throw new Error("专家提示词为空，请检查专家包后重试");
+      }
+      if (summonGeneration.current !== generation) return;
 
-    // For team experts: link member agents into ~/.echo-agent/agents/ so EchoAgent's
-    // Task tool can spawn them by bare name during multi-agent orchestration.
-    // MUST be awaited — EchoAgent scans ~/.echo-agent/agents/ at session start, so if the
-    // copy hasn't finished when the user sends their first message, the member
-    // agents won't be discoverable.
-    if (expert.type === "team" && expert.plugin && root) {
-      try {
-        const linked = await expertsLinkAgents(root, expert.plugin);
-        onToast?.(`专家团已就绪：${linked} 名成员已链接`);
-      } catch (e) {
-        onToast?.(`专家团成员链接失败：${String(e).replace(/^Error:\s*/, "")}`);
+      // For team experts: link member agents into ~/.echo-agent/agents/ so EchoAgent's
+      // Task tool can spawn them by bare name during multi-agent orchestration.
+      // MUST be awaited — EchoAgent scans ~/.echo-agent/agents/ at session start, so if the
+      // copy hasn't finished when the user sends their first message, the member
+      // agents won't be discoverable.
+      if (expert.type === "team" && expert.plugin && root) {
+        try {
+          const linked = await expertsLinkAgents(root, expert.plugin);
+          onToast?.(`专家团已就绪：${linked} 名成员已链接`);
+        } catch (e) {
+          throw new Error(`专家团成员链接失败：${String(e).replace(/^Error:\s*/, "")}`);
+        }
+      }
+      if (summonGeneration.current !== generation) return;
+
+      const name = expert.title || expert.name;
+      setPendingExpert({
+        name,
+        prompt: fullPrompt,
+        description: expert.desc || name,
+        quickPrompt: promptOverride || expert.init || undefined,
+        expertId: expert.id,
+        source: "marketplace",
+        avatarLocal: expert.avatarLocal,
+      });
+
+      // Navigate to home page.
+      setModalExpert(null);
+      onGoHome?.();
+    } catch (reason) {
+      if (summonGeneration.current !== generation) return;
+      const message = String(reason).replace(/^Error:\s*/, "");
+      setSummonError(message);
+      onToast?.(message);
+    } finally {
+      if (summonGeneration.current === generation) {
+        summonInFlight.current = false;
+        setSummoning(false);
       }
     }
-
-    const name = expert.title || expert.name;
-    setPendingExpert({
-      name,
-      prompt: fullPrompt,
-      description: expert.desc || name,
-      quickPrompt: promptOverride || expert.init || undefined,
-      expertId: expert.id,
-      source: "marketplace",
-      avatarLocal: expert.avatarLocal,
-    });
-
-    // Navigate to home page.
-    onGoHome?.();
-  }, [root, setPendingExpert, onGoHome]);
+  }, [root, setPendingExpert, onGoHome, onToast]);
 
   /** For local agents: set pending + go home. */
   const handleUseLocal = useCallback((a: AgentEntry) => {
@@ -343,8 +377,10 @@ export function ExpertsTab({ pills, onGoHome, onToast, createExpertRequested, on
       {modalExpert && (
         <ExpertDetailModal
           expert={modalExpert}
-          onClose={() => setModalExpert(null)}
+          onClose={closeExpert}
           onSummon={handleSummonFromModal}
+          busy={summoning}
+          error={summonError}
         />
       )}
     </div>

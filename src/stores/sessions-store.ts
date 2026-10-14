@@ -46,6 +46,8 @@ function withLifecycleTimestamp<T extends Partial<SessionSummary> & { sessionId:
 interface SessionsState {
   /** Complete task/session catalog across historical working directories. */
   independent: SessionSummary[];
+  /** Renderer-lifetime deletion barriers against stale native events/lists. */
+  deletedSessionIds: string[];
   /** Recent working directories shown only in cwd pickers. */
   workspaces: WorkspaceInfo[];
   /** 任务分组 collapsed? (default expanded). */
@@ -110,8 +112,9 @@ export function selectHasFilter(s: {
   return s.filterStatus !== null || s.filterDate !== null;
 }
 
-export const useSessionsStore = create<SessionsState>((set) => ({
+export const useSessionsStore = create<SessionsState>((set, get) => ({
   independent: [],
+  deletedSessionIds: [],
   workspaces: [],
   tasksOpen: true,
   projectsOpen: true,
@@ -132,7 +135,7 @@ export const useSessionsStore = create<SessionsState>((set) => ({
         state.independent.map((entry) => [entry.sessionId, entry]),
       );
       const persistedControls = readPersistedSessionControls();
-      const independent = incoming.map((entry) => {
+      const independent = incoming.filter((entry) => !state.deletedSessionIds.includes(entry.sessionId)).map((entry) => {
         const patch = pendingSessionPatches[entry.sessionId];
         const existingStatus = existingById.get(entry.sessionId)?.status;
         const persistedControl = persistedControls[entry.sessionId];
@@ -153,6 +156,7 @@ export const useSessionsStore = create<SessionsState>((set) => ({
       const pendingSessionPatches = { ...state.pendingSessionPatches };
       const persistedControls = readPersistedSessionControls();
       for (const entry of incoming) {
+        if (state.deletedSessionIds.includes(entry.sessionId)) continue;
         const patch = pendingSessionPatches[entry.sessionId];
         delete pendingSessionPatches[entry.sessionId];
         let merged = patch
@@ -202,6 +206,7 @@ export const useSessionsStore = create<SessionsState>((set) => ({
     }),
 
   upsert: (incoming) => {
+    if (get().deletedSessionIds.includes(incoming.sessionId)) return;
     const s = withLifecycleTimestamp(incoming);
     if (s.status !== undefined && s.updatedAt) {
       persistSessionStatus(s.sessionId, s.status, s.updatedAt);
@@ -264,6 +269,7 @@ export const useSessionsStore = create<SessionsState>((set) => ({
       persistSessionControl(id);
       const removed = state.independent.find((x) => x.sessionId === id);
       const independent = state.independent.filter((x) => x.sessionId !== id);
+      const deletedSessionIds = [...state.deletedSessionIds.filter((sessionId) => sessionId !== id), id].slice(-512);
 
       // Optimistically update the matching working-directory picker entry.
       const authoritativeCwd = removed?.cwd ?? explicitCwd ?? null;
@@ -289,10 +295,11 @@ export const useSessionsStore = create<SessionsState>((set) => ({
       // If neither the visible lists nor an explicit cwd knew this id, preserve
       // object identity and counts instead of applying a speculative decrement.
       const found = !!removed || !!state.pendingSessionPatches[id];
-      if (!found && !explicitCwd) return { drafts };
+      if (!found && !explicitCwd) return { drafts, deletedSessionIds };
 
       return {
         independent,
+        deletedSessionIds,
         workspaces,
         drafts,
         pendingSessionPatches,

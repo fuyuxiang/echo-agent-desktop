@@ -28,3 +28,23 @@ it("Rust and renderer serialize the same backup UI allowlist", async () => {
   const section = source.slice(source.indexOf("pub const UI_KEYS"), source.indexOf("#[derive", source.indexOf("pub const UI_KEYS")));
   expect([...section.matchAll(/"(echoagent\.[^"]+)"/g)].map((match) => match[1])).toEqual([...BACKUP_UI_KEYS]);
 });
+
+it("replaces the full restored snapshot and clears drafts absent from the backup", async () => {
+  localStorage.setItem("echoagent.outbox.v1", "stale queued message");
+  localStorage.setItem("echoagent.drafts.v1", "stale draft");
+  localStorage.setItem("organization-token", "retain");
+  invoke.mockResolvedValueOnce({ "echoagent.theme": "dark" });
+  await restoreUiBeforeBootstrap();
+  expect(localStorage.getItem("echoagent.outbox.v1")).toBeNull();
+  expect(localStorage.getItem("echoagent.drafts.v1")).toBeNull();
+  expect(localStorage.getItem("organization-token")).toBe("retain");
+});
+it("rolls back keys removed from the snapshot when acknowledgement fails", async () => {
+  localStorage.setItem("echoagent.outbox.v1", "queued message");
+  localStorage.setItem("echoagent.projects.pending-backend-sync", "pending");
+  invoke.mockResolvedValueOnce({ "echoagent.theme": "dark" }).mockRejectedValueOnce(new Error("ack failed"));
+  await expect(restoreUiBeforeBootstrap()).rejects.toThrow("ack failed");
+  expect(localStorage.getItem("echoagent.outbox.v1")).toBe("queued message");
+  expect(localStorage.getItem("echoagent.projects.pending-backend-sync")).toBe("pending");
+  expect(localStorage.getItem("echoagent.theme")).toBeNull();
+});

@@ -6,7 +6,7 @@
  *
  * 插件来源：~/.echo-agent/plugins/、项目 .echo-agent/plugins/、marketplace 安装。
  */
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import {
   PuzzlePieceIcon,
   RefreshCwIcon,
@@ -30,45 +30,60 @@ export function PluginsPanel({ sessionId, onToast, onBrowseMarket }: PluginsPane
   const [loading, setLoading] = useState(false);
   const [loadError, setLoadError] = useState<string | null>(null);
   const [busy, setBusy] = useState<string | null>(null);
+  const reloadGeneration = useRef(0);
+  const actionInFlight = useRef(false);
+  const currentSession = useRef(sessionId);
+  currentSession.current = sessionId;
 
   const reload = useCallback(async () => {
+    const generation = ++reloadGeneration.current;
     setLoading(true);
     setLoadError(null);
     try {
       const resp = await pluginsList(sessionId);
+      if (reloadGeneration.current !== generation) return;
       setPlugins(resp.plugins ?? []);
     } catch (e) {
+      if (reloadGeneration.current !== generation) return;
       const message = String(e).replace(/^Error:\s*/, "");
       setLoadError(message);
       onToast?.(`加载插件失败：${message}`);
     } finally {
-      setLoading(false);
+      if (reloadGeneration.current === generation) setLoading(false);
     }
   }, [sessionId, onToast]);
 
   useEffect(() => {
-    reload();
+    void reload();
+    return () => { reloadGeneration.current += 1; };
   }, [reload]);
+
+  useEffect(() => { setPlugins([]); }, [sessionId]);
 
   const handleToggle = useCallback(
     async (plugin: PluginEntry) => {
+      if (actionInFlight.current) return;
       if (!sessionId) {
         onToast?.("需要先开启一个会话才能操作插件");
         return;
       }
-      setBusy(plugin.name);
+      const pluginId = plugin.id ?? plugin.name;
+      actionInFlight.current = true;
+      setBusy(pluginId);
       try {
         await pluginsAction(sessionId, {
           type: plugin.enabled ? "disable" : "enable",
           // Runtime actions use the stable backend-generated ID; display names
           // are not unique across project/user/marketplace scopes.
-          pluginId: plugin.id ?? plugin.name,
+          pluginId,
         });
+        if (currentSession.current !== sessionId) return;
         onToast?.(plugin.enabled ? `已禁用「${plugin.name}」` : `已启用「${plugin.name}」`);
-        reload();
+        await reload();
       } catch (e) {
         onToast?.(`操作失败：${String(e).replace(/^Error:\s*/, "")}`);
       } finally {
+        actionInFlight.current = false;
         setBusy(null);
       }
     },
@@ -167,10 +182,10 @@ export function PluginsPanel({ sessionId, onToast, onBrowseMarket }: PluginsPane
               <button
                 className={`plugins-panel__toggle ${p.enabled ? "plugins-panel__toggle--on" : ""}`}
                 onClick={() => handleToggle(p)}
-                disabled={busy === p.name}
+                disabled={busy !== null || !sessionId}
                 title={p.enabled ? "禁用" : "启用"}
               >
-                {busy === p.name ? "…" : p.enabled ? "已启用" : "已禁用"}
+                {busy === (p.id ?? p.name) ? "…" : p.enabled ? "已启用" : "已禁用"}
               </button>
             </div>
           </div>

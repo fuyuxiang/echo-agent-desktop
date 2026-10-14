@@ -48,6 +48,47 @@ describe("org-session-store", () => {
     expect(useOrgSessionStore.getState().hydrated).toBe(true);
   });
 
+  it("退出后忽略启动恢复的迟到账号", async () => {
+    let resolve!: (session: { loggedIn: boolean; serverUrl: string }) => void;
+    mocks.orgSession.mockReturnValue(new Promise((done) => { resolve = done; }));
+    const pending = useOrgSessionStore.getState().hydrate();
+    useOrgSessionStore.getState().clearSession();
+    resolve({ loggedIn: true, serverUrl: "https://old.example.com" });
+
+    await pending;
+    expect(useOrgSessionStore.getState().session?.loggedIn).toBe(false);
+  });
+
+  it("切换账号后忽略启动恢复的迟到错误", async () => {
+    let reject!: (error: Error) => void;
+    mocks.orgSession.mockReturnValue(new Promise((_, fail) => { reject = fail; }));
+    const pending = useOrgSessionStore.getState().hydrate();
+    const next = { loggedIn: true, serverUrl: "https://new.example.com" };
+    useOrgSessionStore.getState().setSession(next);
+    reject(new Error("previous server offline"));
+
+    await expect(pending).resolves.toEqual(next);
+    expect(useOrgSessionStore.getState().session).toEqual(next);
+  });
+
+  it("权限范围变化推进边界代次，同一范围健康刷新保留代次", () => {
+    const session = {
+      loggedIn: true, serverUrl: "https://memory.example.com",
+      bootstrap: {
+        apiVersion: 1,
+        user: { id: "u1", username: "alice", displayName: "Alice", role: "member" as const, clearance: 1 },
+        scopes: [{ id: "team-1", kind: "team" as const, name: "研发团队" }],
+        policy: {}, serverTime: 1,
+      },
+    };
+    useOrgSessionStore.getState().setSession(session);
+    const revision = useOrgSessionStore.getState().boundaryRevision;
+    useOrgSessionStore.getState().setSession({ ...session, organizationMemoryEnabled: false });
+    expect(useOrgSessionStore.getState().boundaryRevision).toBe(revision);
+    useOrgSessionStore.getState().setSession({ ...session, bootstrap: { ...session.bootstrap, scopes: [] } });
+    expect(useOrgSessionStore.getState().boundaryRevision).toBe(revision + 1);
+  });
+
   it("统一判定组织知识能力并绑定服务器与账号身份", () => {
     useOrgSessionStore.setState({
       hydrated: true,

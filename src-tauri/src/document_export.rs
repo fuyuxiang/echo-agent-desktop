@@ -3,7 +3,7 @@
 
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
-use std::io::Read;
+use std::io::{Read, Seek};
 use std::path::{Path, PathBuf};
 use std::process::Stdio;
 use tauri::{AppHandle, Manager};
@@ -119,6 +119,8 @@ fn validate_output(path: &Path, format: &str) -> Result<(u64, String), String> {
         if &head != b"%PDF-" {
             return Err("生成的 PDF 文件头无效".into());
         }
+        file.rewind()
+            .map_err(|error| format!("无法计算完整文件摘要：{error}"))?;
     } else {
         let expected = match format {
             "docx" => "word/document.xml",
@@ -297,4 +299,45 @@ pub async fn document_export(
         access.authorize_file(Path::new(&receipt.path))?;
     }
     Ok(result)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn pdf_receipt_hash_covers_the_header_and_entire_file() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("中文成果.pdf");
+        let bytes = b"%PDF-1.7\n1 0 obj\n<< /Type /Catalog >>\nendobj\n%%EOF\n";
+        std::fs::write(&path, bytes).unwrap();
+        let (size, digest) = validate_output(&path, "pdf").unwrap();
+        assert_eq!(size, bytes.len() as u64);
+        assert_eq!(digest, format!("{:x}", Sha256::digest(bytes)));
+    }
+
+    #[test]
+    fn pdf_receipt_hash_covers_streamed_utf8_content_across_buffer_boundaries() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("多缓冲区.pdf");
+        for length in [65_531, 65_536, 131_073] {
+            let mut bytes = b"%PDF-1.7\n".to_vec();
+            bytes.extend(std::iter::repeat_n(b'x', length));
+            bytes.extend_from_slice("中文内容\n%%EOF\n".as_bytes());
+            std::fs::write(&path, &bytes).unwrap();
+            let (size, digest) = validate_output(&path, "pdf").unwrap();
+            assert_eq!(size, bytes.len() as u64);
+            assert_eq!(digest, format!("{:x}", Sha256::digest(&bytes)));
+        }
+    }
+
+    #[test]
+    fn pdf_receipt_still_rejects_empty_truncated_and_invalid_headers() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("错误文件.pdf");
+        for bytes in [b"".as_slice(), b"%PDF".as_slice(), b"wrong PDF".as_slice()] {
+            std::fs::write(&path, bytes).unwrap();
+            assert!(validate_output(&path, "pdf").is_err());
+        }
+    }
 }

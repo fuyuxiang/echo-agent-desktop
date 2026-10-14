@@ -39,7 +39,7 @@ interface TaskState {
   refreshTaskState: () => Promise<void>;
   applyPhase: (taskId: string, phase: CodingTask["phase"]) => void;
   applyVerification: (record: VerificationRecord) => void;
-  reset: () => void;
+  reset: (preserveSummaries?: boolean) => void;
 }
 
 function message(error: unknown): string {
@@ -48,6 +48,9 @@ function message(error: unknown): string {
 
 let selectionGeneration = 0;
 let stateGeneration = 0;
+let workspaceGeneration = 0;
+let summariesGeneration = 0;
+let selectionTarget: string | null = null;
 
 export const useTaskStore = create<TaskState>((set, get) => ({
   root: "",
@@ -65,6 +68,9 @@ export const useTaskStore = create<TaskState>((set, get) => ({
     if (get().root === root) return;
     selectionGeneration += 1;
     stateGeneration += 1;
+    workspaceGeneration += 1;
+    summariesGeneration += 1;
+    selectionTarget = null;
     set({
       root,
       summaries: [],
@@ -74,6 +80,7 @@ export const useTaskStore = create<TaskState>((set, get) => ({
       problems: [],
       ledger: [],
       orchestrator: null,
+      loading: false,
       error: null,
     });
   },
@@ -81,11 +88,14 @@ export const useTaskStore = create<TaskState>((set, get) => ({
   refreshSummaries: async () => {
     const { root } = get();
     if (!root) return;
+    const workspace = workspaceGeneration;
+    const generation = ++summariesGeneration;
+    const isCurrent = () => get().root === root && workspace === workspaceGeneration && generation === summariesGeneration;
     try {
       const summaries = await codingApi.listTasks(root);
-      if (get().root === root) set({ summaries, error: null });
+      if (isCurrent()) set({ summaries, error: null });
     } catch (error) {
-      if (get().root === root) set({ error: message(error) });
+      if (isCurrent()) set({ error: message(error) });
     }
   },
 
@@ -93,12 +103,13 @@ export const useTaskStore = create<TaskState>((set, get) => ({
     const { root } = get();
     if (!root) return;
     const generation = ++selectionGeneration;
+    selectionTarget = taskId;
     stateGeneration += 1;
     set({ loading: true });
     try {
       const task = await codingApi.getTask(root, taskId);
       if (generation !== selectionGeneration || get().root !== root) return;
-      set({ task, error: null });
+      set({ task, changeSet: null, verifications: [], problems: [], ledger: [], orchestrator: null, error: null });
       await get().refreshTaskState();
     } catch (error) {
       if (generation === selectionGeneration && get().root === root) {
@@ -112,11 +123,15 @@ export const useTaskStore = create<TaskState>((set, get) => ({
   createTask: async (name, requirement) => {
     const { root } = get();
     if (!root) return null;
+    const workspace = workspaceGeneration;
+    const generation = ++selectionGeneration;
+    selectionTarget = null;
+    stateGeneration += 1;
+    const isCurrent = () => get().root === root && workspace === workspaceGeneration && generation === selectionGeneration;
     try {
       const task = await codingApi.createTask(root, name, requirement);
-      selectionGeneration += 1;
-      stateGeneration += 1;
-      if (get().root !== root) return null;
+      if (!isCurrent()) return null;
+      selectionTarget = task.id;
       set({
         task,
         changeSet: null,
@@ -124,12 +139,13 @@ export const useTaskStore = create<TaskState>((set, get) => ({
         problems: [],
         ledger: [],
         orchestrator: null,
+        loading: false,
         error: null,
       });
       await get().refreshSummaries();
       return task;
     } catch (error) {
-      set({ error: message(error) });
+      if (isCurrent()) set({ loading: false, error: message(error) });
       return null;
     }
   },
@@ -137,12 +153,15 @@ export const useTaskStore = create<TaskState>((set, get) => ({
   renameTask: async (taskId, name) => {
     const { root } = get();
     if (!root) return;
+    const workspace = workspaceGeneration;
+    const isCurrent = () => get().root === root && workspace === workspaceGeneration;
     try {
       const task = await codingApi.renameTask(root, taskId, name);
+      if (!isCurrent()) return;
       set((state) => ({ task: state.task?.id === taskId ? task : state.task }));
       await get().refreshSummaries();
     } catch (error) {
-      set({ error: message(error) });
+      if (isCurrent()) set({ error: message(error) });
       throw error;
     }
   },
@@ -150,8 +169,17 @@ export const useTaskStore = create<TaskState>((set, get) => ({
   deleteTask: async (taskId) => {
     const { root } = get();
     if (!root) return;
+    const workspace = workspaceGeneration;
+    const isCurrent = () => get().root === root && workspace === workspaceGeneration;
     try {
       await codingApi.deleteTask(root, taskId);
+      if (!isCurrent()) return;
+      if (selectionTarget === taskId || get().task?.id === taskId) {
+        selectionGeneration += 1;
+        stateGeneration += 1;
+        selectionTarget = null;
+        set({ loading: false });
+      }
       set((state) => (state.task?.id === taskId
         ? {
             ...state,
@@ -165,7 +193,7 @@ export const useTaskStore = create<TaskState>((set, get) => ({
         : state));
       await get().refreshSummaries();
     } catch (error) {
-      set({ error: message(error) });
+      if (isCurrent()) set({ error: message(error) });
       throw error;
     }
   },
@@ -221,15 +249,22 @@ export const useTaskStore = create<TaskState>((set, get) => ({
       return { verifications: [...state.verifications, record] };
     }),
 
-  reset: () =>
+  reset: (preserveSummaries = false) => {
+    selectionGeneration += 1;
+    stateGeneration += 1;
+    workspaceGeneration += 1;
+    summariesGeneration += 1;
+    selectionTarget = null;
     set({
-      summaries: [],
+      summaries: preserveSummaries ? get().summaries : [],
       task: null,
       changeSet: null,
       verifications: [],
       problems: [],
       ledger: [],
       orchestrator: null,
+      loading: false,
       error: null,
-    }),
+    });
+  },
 }));
