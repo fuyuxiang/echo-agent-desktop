@@ -2,6 +2,7 @@ import { act, fireEvent, render, screen, waitFor } from "@testing-library/react"
 import { useContext, useLayoutEffect, useRef, useState } from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { SidebarResizeHandle } from "../SidebarResizeHandle";
+import { GlobalTooltip } from "../GlobalTooltip";
 import { SidebarLayoutContext, SIDEBAR_WIDTH_KEY, useAppSidebarLayout } from "@/lib/sidebar-layout";
 
 function Panel({ open, close }: { open: boolean; close: () => void }) {
@@ -22,14 +23,14 @@ function Harness() {
   return <SidebarLayoutContext.Provider value={layout.context}>
     <div ref={layout.bodyRef} style={layout.style} className={layout.resizing ? "resizing" : ""} data-testid="body">
       <aside id="app-sidebar" className="sidebar" hidden={layout.collapsed}>
-        <button aria-label="收起侧边栏" onClick={() => layout.setCollapsed(true)}>收起</button>
+        <button aria-label="收起侧边栏" data-tip="收起侧边栏" onClick={() => layout.setCollapsed(true)}>收起</button>
       </aside>
       <SidebarResizeHandle layout={layout} />
       {layout.collapsed && <button aria-label="展开侧边栏" onClick={() => layout.setCollapsed(false)}>展开</button>}
       <button onClick={() => setPanelOpen(true)}>打开面板</button>
       <button onClick={() => setPanelOpen(false)}>关闭面板</button>
       <Panel open={panelOpen} close={() => setPanelOpen(false)} />
-      <output data-testid="panel-max">{layout.context.panelMaxWidth}</output>
+      <span data-testid="panel-max">{layout.context.panelMaxWidth}</span>
     </div>
   </SidebarLayoutContext.Provider>;
 }
@@ -50,9 +51,189 @@ beforeEach(() => {
   localStorage.clear();
   Object.defineProperty(window, "innerWidth", { configurable: true, value: 1440 });
 });
-afterEach(() => vi.restoreAllMocks());
+afterEach(() => {
+  vi.useRealTimers();
+  vi.restoreAllMocks();
+});
 
 describe("全局侧栏宽度交互", () => {
+  it("shows one delayed body-portalled hover hint and preserves the keyboard help description", () => {
+    vi.useFakeTimers();
+    render(<><Harness /><GlobalTooltip /></>);
+    const separator = handle();
+    const helpId = separator.getAttribute("aria-describedby")!;
+    expect(separator).toHaveAttribute("data-tip-placement", "pointer-side");
+
+    fireEvent.pointerOver(separator, { clientY: 300, pointerType: "mouse" });
+    act(() => vi.advanceTimersByTime(349));
+    expect(screen.queryByRole("tooltip")).not.toBeInTheDocument();
+    act(() => vi.advanceTimersByTime(1));
+
+    const tooltip = screen.getByRole("tooltip");
+    expect(tooltip).toHaveTextContent("拖动调整宽度，双击恢复默认");
+    expect(tooltip.parentElement).toBe(document.body);
+    expect(screen.getAllByRole("tooltip")).toHaveLength(1);
+    expect(separator.getAttribute("aria-describedby")?.split(/\s+/)).toEqual(expect.arrayContaining([helpId, tooltip.id]));
+
+    fireEvent.pointerOut(separator, { relatedTarget: document.body });
+    expect(screen.queryByRole("tooltip")).not.toBeInTheDocument();
+    expect(separator).toHaveAttribute("aria-describedby", helpId);
+  });
+
+  it("shows keyboard guidance immediately and removes its description on Escape or blur", () => {
+    render(<><Harness /><GlobalTooltip /></>);
+    const separator = handle();
+    const helpId = separator.getAttribute("aria-describedby")!;
+    act(() => separator.focus());
+    expect(screen.getByRole("tooltip")).toHaveTextContent("← → 调整宽度，Enter 收起，Home 恢复默认");
+
+    fireEvent.keyDown(separator, { key: "Escape" });
+    expect(screen.queryByRole("tooltip")).not.toBeInTheDocument();
+    expect(separator).toHaveAttribute("aria-describedby", helpId);
+
+    act(() => separator.blur());
+    act(() => separator.focus());
+    expect(screen.getByRole("tooltip")).toBeInTheDocument();
+    act(() => separator.blur());
+    expect(screen.queryByRole("tooltip")).not.toBeInTheDocument();
+    expect(separator).toHaveAttribute("aria-describedby", helpId);
+  });
+
+  it.each(["divider", "button"])("keeps one focus hint when %s has focus and the other control is hovered", (focusedControl) => {
+    vi.useFakeTimers();
+    render(<><Harness /><GlobalTooltip /></>);
+    const separator = handle();
+    const button = screen.getByRole("button", { name: "收起侧边栏" });
+    const focused = focusedControl === "divider" ? separator : button;
+    const hovered = focusedControl === "divider" ? button : separator;
+    const focusedText = focusedControl === "divider" ? "← → 调整宽度，Enter 收起，Home 恢复默认" : "收起侧边栏";
+    const hoveredText = focusedControl === "divider" ? "收起侧边栏" : "拖动调整宽度，双击恢复默认";
+
+    act(() => focused.focus());
+    fireEvent.pointerOver(hovered, { clientY: 300, pointerType: "mouse" });
+    act(() => vi.advanceTimersByTime(350));
+    expect(screen.getAllByRole("tooltip")).toHaveLength(1);
+    expect(screen.getByRole("tooltip")).toHaveTextContent(focusedText);
+
+    act(() => focused.blur());
+    expect(screen.getAllByRole("tooltip")).toHaveLength(1);
+    expect(screen.getByRole("tooltip")).toHaveTextContent(hoveredText);
+    fireEvent.pointerOut(hovered, { relatedTarget: document.body });
+    expect(screen.queryByRole("tooltip")).not.toBeInTheDocument();
+  });
+
+  it("does not revive an escaped hover hint while moving inside the divider and waits on reentry", () => {
+    vi.useFakeTimers();
+    render(<><Harness /><GlobalTooltip /></>);
+    const separator = handle();
+    fireEvent.pointerOver(separator, { clientY: 200, pointerType: "mouse" });
+    act(() => vi.advanceTimersByTime(350));
+    expect(screen.getByRole("tooltip")).toBeInTheDocument();
+
+    fireEvent.keyDown(separator, { key: "Escape" });
+    fireEvent.pointerMove(separator, { clientY: 300, pointerType: "mouse" });
+    act(() => vi.advanceTimersByTime(500));
+    expect(screen.queryByRole("tooltip")).not.toBeInTheDocument();
+
+    fireEvent.pointerOut(separator, { relatedTarget: document.body });
+    fireEvent.pointerOver(separator, { clientY: 400, pointerType: "mouse" });
+    act(() => vi.advanceTimersByTime(349));
+    expect(screen.queryByRole("tooltip")).not.toBeInTheDocument();
+    act(() => vi.advanceTimersByTime(1));
+    expect(screen.getByRole("tooltip")).toHaveTextContent("拖动调整宽度，双击恢复默认");
+  });
+
+  it("hovering another control after Escape does not revive the dismissed divider focus hint", () => {
+    vi.useFakeTimers();
+    render(<><Harness /><GlobalTooltip /></>);
+    const separator = handle();
+    const button = screen.getByRole("button", { name: "收起侧边栏" });
+    act(() => separator.focus());
+    expect(screen.getByRole("tooltip")).toHaveTextContent("← → 调整宽度，Enter 收起，Home 恢复默认");
+    fireEvent.keyDown(separator, { key: "Escape" });
+
+    fireEvent.pointerOver(button, { pointerType: "mouse" });
+    act(() => vi.advanceTimersByTime(349));
+    expect(screen.queryByRole("tooltip")).not.toBeInTheDocument();
+    act(() => vi.advanceTimersByTime(1));
+    expect(screen.getAllByRole("tooltip")).toHaveLength(1);
+    expect(screen.getByRole("tooltip")).toHaveTextContent("收起侧边栏");
+
+    fireEvent.pointerOut(button, { relatedTarget: document.body });
+    expect(screen.queryByRole("tooltip")).not.toBeInTheDocument();
+    act(() => separator.blur());
+    act(() => separator.focus());
+    expect(screen.getByRole("tooltip")).toHaveTextContent("← → 调整宽度，Enter 收起，Home 恢复默认");
+  });
+
+  it("preserves static help and the visible tooltip description through keyboard resizing", () => {
+    render(<><Harness /><GlobalTooltip /></>);
+    const separator = handle();
+    const helpId = separator.getAttribute("aria-describedby")!;
+    act(() => separator.focus());
+    const tooltip = screen.getByRole("tooltip");
+
+    for (const key of ["ArrowRight", "End", "Home"]) {
+      fireEvent.keyDown(separator, { key });
+      expect(screen.getByRole("tooltip")).toBe(tooltip);
+      expect(separator.getAttribute("aria-describedby")?.split(/\s+/)).toEqual([helpId, tooltip.id]);
+      expect(document.getElementById(helpId)).toHaveTextContent("Escape 取消拖动");
+    }
+
+    act(() => separator.blur());
+    expect(separator).toHaveAttribute("aria-describedby", helpId);
+  });
+
+  it.each(["pointerup", "pointercancel", "Escape"])("replaces another control's hint with drag status and clears everything on %s", (finish) => {
+    vi.useFakeTimers();
+    render(<><Harness /><GlobalTooltip /></>);
+    const button = screen.getByRole("button", { name: "收起侧边栏" });
+    act(() => button.focus());
+    fireEvent.pointerOver(button, { pointerType: "mouse" });
+    act(() => vi.advanceTimersByTime(350));
+    expect(screen.getByRole("tooltip")).toHaveTextContent("收起侧边栏");
+    fireEvent.pointerOut(button, { relatedTarget: handle() });
+    fireEvent.pointerOver(handle(), { pointerType: "mouse" });
+    expect(screen.getByRole("tooltip")).toHaveTextContent("收起侧边栏");
+
+    pointer(handle(), "pointerdown", 264);
+    expect(screen.queryByRole("tooltip")).not.toBeInTheDocument();
+    expect(screen.getAllByRole("status")).toHaveLength(1);
+    pointer(window, "pointermove", 350);
+    act(() => vi.advanceTimersByTime(25));
+    expect(screen.getByRole("status")).toHaveTextContent("宽度 350 像素");
+
+    if (finish === "Escape") fireEvent.keyDown(window, { key: "Escape" });
+    else pointer(window, finish, 350);
+    fireEvent.pointerMove(handle(), { clientY: 300, pointerType: "mouse" });
+    act(() => vi.advanceTimersByTime(500));
+    expect(screen.queryByRole("status")).not.toBeInTheDocument();
+    expect(screen.queryByRole("tooltip")).not.toBeInTheDocument();
+    expect(width()).toBe(finish === "pointerup" ? "350px" : "264px");
+  });
+
+  it("replaces hover guidance with drag status and leaves no stale hint after release", () => {
+    vi.useFakeTimers();
+    render(<><Harness /><GlobalTooltip /></>);
+    fireEvent.pointerOver(handle(), { clientY: 300, pointerType: "mouse" });
+    act(() => vi.advanceTimersByTime(350));
+    expect(screen.getByRole("tooltip")).toBeInTheDocument();
+
+    pointer(handle(), "pointerdown", 264);
+    expect(screen.queryByRole("tooltip")).not.toBeInTheDocument();
+    expect(screen.getByRole("status")).toHaveTextContent("宽度 264 像素");
+    expect(screen.getByRole("status").parentElement).toBe(document.body);
+    pointer(window, "pointermove", 350);
+    act(() => vi.advanceTimersByTime(25));
+    expect(screen.getByRole("status")).toHaveTextContent("宽度 350 像素");
+
+    pointer(window, "pointerup", 350);
+    act(() => vi.advanceTimersByTime(500));
+    expect(screen.queryByRole("status")).not.toBeInTheDocument();
+    expect(screen.queryByRole("tooltip")).not.toBeInTheDocument();
+    expect(handle()).toHaveFocus();
+  });
+
   it("previews bounded widths and persists only the completed drag", async () => {
     const stored = vi.spyOn(Storage.prototype, "setItem");
     render(<Harness />);
@@ -90,12 +271,15 @@ describe("全局侧栏宽度交互", () => {
     render(<Harness />);
     await drag(264, 350, false);
     expect(width()).toBe("350px");
+    expect(screen.getByRole("status")).toHaveTextContent("宽度 350 像素");
     if (reason === "Escape") fireEvent.keyDown(window, { key: reason });
     else if (reason === "blur") fireEvent.blur(window);
     else pointer(reason === "lostpointercapture" ? handle() : window, reason, 350);
     expect(width()).toBe("264px");
     expect(screen.getByTestId("body")).not.toHaveClass("resizing");
     expect(localStorage.getItem(SIDEBAR_WIDTH_KEY)).toBe("264");
+    expect(screen.queryByRole("status")).not.toBeInTheDocument();
+    expect(screen.queryByRole("tooltip")).not.toBeInTheDocument();
     pointer(window, "pointermove", 390);
     expect(width()).toBe("264px");
   });

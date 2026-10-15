@@ -1,17 +1,20 @@
 import { useEffect, useId, useRef, useState, type KeyboardEvent, type PointerEvent } from "react";
 import { SIDEBAR_COLLAPSE_THRESHOLD, SIDEBAR_DEFAULT_WIDTH, SIDEBAR_MIN_WIDTH, type useAppSidebarLayout } from "@/lib/sidebar-layout";
+import { PointerSideHint } from "./PointerSideHint";
 
 type Layout = ReturnType<typeof useAppSidebarLayout>;
-type Drag = { pointerId: number; startX: number; origin: number; raw: number; collapsed: boolean; moved: boolean };
+type Drag = { pointerId: number; startX: number; y: number; origin: number; raw: number; collapsed: boolean; moved: boolean };
 
 export function SidebarResizeHandle({ layout }: { layout: Layout }) {
   const helpId = useId();
+  const hintId = useId();
   const handleRef = useRef<HTMLDivElement>(null);
   const layoutRef = useRef(layout);
   layoutRef.current = layout;
   const dragRef = useRef<Drag | null>(null);
   const frameRef = useRef<number | null>(null);
   const [hint, setHint] = useState("");
+  const [pointerY, setPointerY] = useState<number | null>(null);
   const [ghostWidth, setGhostWidth] = useState<number | null>(null);
 
   const finishRef = useRef<(commit: boolean) => void>(() => {});
@@ -24,7 +27,7 @@ export function SidebarResizeHandle({ layout }: { layout: Layout }) {
     const current = layoutRef.current;
     current.setPreviewWidth(null);
     current.setResizing(false);
-    setHint(""); setGhostWidth(null);
+    setHint(""); setGhostWidth(null); setPointerY(null);
     if (handleRef.current?.hasPointerCapture?.(drag.pointerId)) handleRef.current.releasePointerCapture(drag.pointerId);
     if (!commit || !drag.moved) return;
     if (drag.collapsed) {
@@ -43,18 +46,21 @@ export function SidebarResizeHandle({ layout }: { layout: Layout }) {
       const drag = dragRef.current;
       if (!drag || event.pointerId !== drag.pointerId) return;
       drag.raw = drag.origin + event.clientX - drag.startX;
+      drag.y = event.clientY;
       drag.moved ||= Math.abs(event.clientX - drag.startX) > 3;
       if (frameRef.current !== null) return;
       frameRef.current = requestAnimationFrame(() => {
         frameRef.current = null;
         if (dragRef.current !== drag) return;
         const current = layoutRef.current;
+        setPointerY(drag.y);
         if (drag.collapsed) {
           setGhostWidth(Math.max(0, Math.min(drag.raw, current.restoreMaxWidth)));
           setHint(drag.raw >= 40 ? "松开展开侧边栏" : "向右拖动展开侧边栏");
         } else {
           current.setPreviewWidth(drag.raw);
-          setHint(drag.raw < SIDEBAR_COLLAPSE_THRESHOLD ? "松开收起侧边栏" : "");
+          setHint(drag.raw < SIDEBAR_COLLAPSE_THRESHOLD ? "松开收起侧边栏"
+            : `宽度 ${Math.round(Math.max(SIDEBAR_MIN_WIDTH, Math.min(drag.raw, current.maxWidth)))} 像素`);
         }
       });
     };
@@ -69,7 +75,9 @@ export function SidebarResizeHandle({ layout }: { layout: Layout }) {
     };
     const cancel = () => finishRef.current(false);
     const key = (event: globalThis.KeyboardEvent) => {
-      if (event.key === "Escape" && dragRef.current) { event.preventDefault(); event.stopPropagation(); cancel(); }
+      if (event.key !== "Escape") return;
+      if (dragRef.current) { event.preventDefault(); event.stopPropagation(); }
+      cancel();
     };
     window.addEventListener("pointermove", move);
     window.addEventListener("pointerup", end);
@@ -90,7 +98,9 @@ export function SidebarResizeHandle({ layout }: { layout: Layout }) {
     if (event.button !== 0 || event.isPrimary === false || dragRef.current) return;
     event.preventDefault(); event.stopPropagation();
     event.currentTarget.focus({ preventScroll: true });
-    dragRef.current = { pointerId: event.pointerId, startX: event.clientX, origin: layout.collapsed ? 0 : layout.width,
+    setPointerY(event.clientY);
+    setHint(layout.collapsed ? "向右拖动展开侧边栏" : `宽度 ${Math.round(layout.width)} 像素`);
+    dragRef.current = { pointerId: event.pointerId, startX: event.clientX, y: event.clientY, origin: layout.collapsed ? 0 : layout.width,
       raw: layout.collapsed ? 0 : layout.width, collapsed: layout.collapsed, moved: false };
     layout.setResizing(true);
     try { event.currentTarget.setPointerCapture(event.pointerId); } catch { /* Window listeners also support older webviews. */ }
@@ -112,20 +122,25 @@ export function SidebarResizeHandle({ layout }: { layout: Layout }) {
     event.preventDefault(); event.stopPropagation();
   };
 
+  const left = Math.max(0, (ghostWidth ?? (layout.collapsed ? 0 : layout.width)) - 4);
+
   return <>
     <div ref={handleRef} className={"sidebar-resize" + (layout.resizing ? " sidebar-resize--active" : "")}
-      style={{ left: Math.max(0, (ghostWidth ?? (layout.collapsed ? 0 : layout.width)) - 4) }}
+      style={{ left }}
       role="separator" aria-orientation="vertical" aria-label="调整侧边栏宽度" aria-controls="app-sidebar"
       aria-describedby={helpId} aria-valuemin={layout.collapsed ? 0 : SIDEBAR_MIN_WIDTH}
       aria-valuemax={layout.collapsed ? layout.restoreMaxWidth : layout.maxWidth}
       aria-valuenow={layout.collapsed ? 0 : Math.round(layout.width)}
       aria-valuetext={layout.collapsed ? "侧边栏已收起" : `${Math.round(layout.width)} 像素`}
-      tabIndex={0} data-sidebar-resize data-tip={layout.collapsed ? "向右拖动展开侧边栏" : "拖动调整宽度，双击恢复默认"}
+      tabIndex={0} data-sidebar-resize data-tip-placement="pointer-side"
+      data-tip={layout.collapsed ? "向右拖动展开侧边栏" : "拖动调整宽度，双击恢复默认"}
+      data-tip-focus={layout.collapsed ? "Enter 或 → 展开侧边栏，Home 恢复默认宽度" : "← → 调整宽度，Enter 收起，Home 恢复默认"}
+      data-tip-disabled={layout.resizing ? "" : undefined}
       onPointerDown={begin} onLostPointerCapture={(event) => {
         if (event.pointerId === dragRef.current?.pointerId) finishRef.current(false);
-      }} onDoubleClick={reset} onKeyDown={keyDown}>
-      {hint && <span className="sidebar-resize__hint" role="status">{hint}</span>}
-    </div>
+      }} onDoubleClick={reset} onKeyDown={keyDown} />
+    {layout.resizing && hint && <PointerSideHint anchorRef={handleRef} pointerY={pointerY}
+      text={hint} id={hintId} role="status" />}
     <span id={helpId} className="sr-only">左右方向键调整宽度，Enter 收起或展开，Home 恢复默认，Escape 取消拖动。</span>
   </>;
 }

@@ -34,6 +34,9 @@
   z-index: 21;
   cursor: ew-resize;
   touch-action: none;
+  /* Divider geometry must stay synchronous, including reduced-motion rules
+   * that give every element a tiny nonzero transition duration. */
+  transition-property: none;
   -webkit-app-region: no-drag;
   outline: none;
 }
@@ -55,20 +58,6 @@
 .sidebar-resize--active::after {
   width: 2px;
   background: var(--echo-brand);
-}
-.sidebar-resize__hint {
-  position: absolute;
-  top: 50%;
-  left: 12px;
-  padding: 6px 10px;
-  border-radius: 6px;
-  background: var(--echo-bg-primary);
-  border: 1px solid var(--echo-border-default);
-  box-shadow: 0 3px 12px rgba(0, 0, 0, 0.12);
-  color: var(--echo-text-strong);
-  font-size: .75rem;
-  white-space: nowrap;
-  pointer-events: none;
 }
 .app__body--sidebar-resizing,
 .app__body--sidebar-resizing * { cursor: ew-resize !important; user-select: none !important; }
@@ -323,6 +312,9 @@
 }
 .global-tooltip[data-placement="top"] {
   animation-name: global-tooltip__fade-in-up;
+}
+.global-tooltip.pointer-side-hint {
+  line-height: 1.4;
 }
 @keyframes global-tooltip__fade-in {
   from { opacity: 0; transform: translateY(-2px); }

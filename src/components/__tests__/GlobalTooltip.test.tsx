@@ -1,5 +1,5 @@
-import { fireEvent, render, screen, waitFor } from "@testing-library/react";
-import { describe, expect, it } from "vitest";
+import { act, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { GlobalTooltip } from "../GlobalTooltip";
 import { useModalFocus } from "@/lib/use-modal-focus";
 
@@ -25,6 +25,8 @@ function ProgrammaticDialog({ children }: { children?: React.ReactNode }) {
     </div>
   );
 }
+
+afterEach(() => vi.useRealTimers());
 
 describe("GlobalTooltip", () => {
   it("通过 body portal 显示 data-tip，不受父级层叠与裁剪影响", async () => {
@@ -221,5 +223,88 @@ describe("GlobalTooltip", () => {
     expect(trigger).not.toHaveAttribute("title");
     fireEvent.pointerOut(trigger, { relatedTarget: document.body });
     expect(trigger).toHaveAttribute("title", "最新状态");
+  });
+
+  it("焦点提示优先，失焦后仍需完成另一控件的悬停等待", () => {
+    vi.useFakeTimers();
+    render(
+      <>
+        <button data-tip="焦点帮助">焦点控件</button>
+        <button data-tip="悬停帮助">悬停控件</button>
+        <GlobalTooltip />
+      </>,
+    );
+    const focused = screen.getByRole("button", { name: "焦点控件" });
+    const hovered = screen.getByRole("button", { name: "悬停控件" });
+
+    fireEvent.focusIn(focused);
+    fireEvent.pointerOver(hovered, { pointerType: "mouse" });
+    act(() => vi.advanceTimersByTime(100));
+    expect(screen.getAllByRole("tooltip")).toHaveLength(1);
+    expect(screen.getByRole("tooltip")).toHaveTextContent("焦点帮助");
+
+    fireEvent.focusOut(focused, { relatedTarget: document.body });
+    expect(screen.queryByRole("tooltip")).not.toBeInTheDocument();
+    act(() => vi.advanceTimersByTime(249));
+    expect(screen.queryByRole("tooltip")).not.toBeInTheDocument();
+    act(() => vi.advanceTimersByTime(1));
+    expect(screen.getByRole("tooltip")).toHaveTextContent("悬停帮助");
+  });
+
+  it("禁用当前提示后恢复属性不会自行重新弹出，重新进入才恢复提示", async () => {
+    vi.useFakeTimers();
+    const content = (disabled: boolean) => <>
+      <button data-tip="拖动帮助" data-tip-placement="pointer-side" data-tip-disabled={disabled ? "" : undefined}>调整</button>
+      <GlobalTooltip />
+    </>;
+    const view = render(content(false));
+    const trigger = screen.getByRole("button", { name: "调整" });
+    fireEvent.pointerOver(trigger, { pointerType: "mouse" });
+    act(() => vi.advanceTimersByTime(350));
+    expect(screen.getByRole("tooltip")).toBeInTheDocument();
+
+    view.rerender(content(true));
+    await act(async () => {});
+    expect(screen.queryByRole("tooltip")).not.toBeInTheDocument();
+    view.rerender(content(false));
+    await act(async () => {});
+    fireEvent.pointerMove(trigger, { clientY: 100, pointerType: "mouse" });
+    act(() => vi.advanceTimersByTime(500));
+    expect(screen.queryByRole("tooltip")).not.toBeInTheDocument();
+
+    fireEvent.pointerOut(trigger, { relatedTarget: document.body });
+    fireEvent.pointerOver(trigger, { pointerType: "mouse" });
+    act(() => vi.advanceTimersByTime(349));
+    expect(screen.queryByRole("tooltip")).not.toBeInTheDocument();
+    act(() => vi.advanceTimersByTime(1));
+    expect(screen.getByRole("tooltip")).toHaveTextContent("拖动帮助");
+  });
+
+  it.each(["focus", "hover"])("React 移除 data-tip 后仍能清理原 %s 控件并显示下一控件", async (interaction) => {
+    vi.useFakeTimers();
+    const content = (hasTip: boolean) => <>
+      <button data-tip={hasTip ? "旧提示" : undefined}>原控件</button>
+      <button data-tip="新提示">新控件</button>
+      <GlobalTooltip />
+    </>;
+    const view = render(content(true));
+    const previous = screen.getByRole("button", { name: "原控件" });
+    const next = screen.getByRole("button", { name: "新控件" });
+    if (interaction === "focus") fireEvent.focusIn(previous);
+    else {
+      fireEvent.pointerOver(previous, { pointerType: "mouse" });
+      act(() => vi.advanceTimersByTime(350));
+    }
+    expect(screen.getByRole("tooltip")).toHaveTextContent("旧提示");
+
+    view.rerender(content(false));
+    await act(async () => {});
+    expect(screen.queryByRole("tooltip")).not.toBeInTheDocument();
+    expect(previous).not.toHaveAttribute("aria-describedby");
+    if (interaction === "focus") fireEvent.focusOut(previous, { relatedTarget: document.body });
+    else fireEvent.pointerOut(previous, { relatedTarget: next });
+    fireEvent.pointerOver(next, { pointerType: "mouse" });
+    act(() => vi.advanceTimersByTime(350));
+    expect(screen.getByRole("tooltip")).toHaveTextContent("新提示");
   });
 });

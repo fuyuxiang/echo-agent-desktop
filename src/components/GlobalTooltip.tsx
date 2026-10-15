@@ -2,6 +2,7 @@ import { useCallback, useEffect, useId, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import { useAnchoredFloating } from "@/lib/use-anchored-floating";
 import { useModalPresence } from "@/lib/use-modal-focus";
+import { PointerSideHint } from "./PointerSideHint";
 
 const POINTER_SHOW_DELAY_MS = 350;
 const NATIVE_TITLE_MARKER = "data-global-tooltip-native";
@@ -15,6 +16,7 @@ interface SuppressedNativeTitle {
 interface ActiveTooltip {
   element: HTMLElement;
   text: string;
+  pointerY: number | null;
   /** Remount the positioned bubble when the anchor changes. */
   key: number;
 }
@@ -26,8 +28,10 @@ function normalizedAccessibleText(value: string | null | undefined): string {
 function tooltipText(
   element: HTMLElement,
   suppressedTitles: Map<HTMLElement, SuppressedNativeTitle>,
+  focused = false,
 ): string {
-  return element.dataset.tip?.trim()
+  return (focused ? element.dataset.tipFocus?.trim() : "")
+    || element.dataset.tip?.trim()
     || element.getAttribute("title")?.trim()
     || suppressedTitles.get(element)?.text.trim()
     || "";
@@ -59,7 +63,11 @@ export function GlobalTooltip() {
   const hoveredRef = useRef<HTMLElement | null>(null);
   const focusedRef = useRef<HTMLElement | null>(null);
   const pointerTimerRef = useRef<number | null>(null);
-  const interactionHiddenRef = useRef(false);
+  const pointerYRef = useRef<number | null>(null);
+  const hoverReadyRef = useRef(false);
+  const pointerDownRef = useRef(false);
+  const hiddenFocusedRef = useRef<HTMLElement | null>(null);
+  const hiddenHoveredRef = useRef<HTMLElement | null>(null);
   const suppressedTitlesRef = useRef(new Map<HTMLElement, SuppressedNativeTitle>());
   const nextKeyRef = useRef(1);
 
@@ -117,24 +125,29 @@ export function GlobalTooltip() {
   }, [restoreNativeTitle]);
 
   const showCurrent = useCallback(() => {
-    if (interactionHiddenRef.current) {
+    if (pointerDownRef.current) {
       setActive(null);
       return;
     }
-    const element = focusedRef.current ?? hoveredRef.current;
+    const focused = focusedRef.current !== null && focusedRef.current !== hiddenFocusedRef.current;
+    const element = focused ? focusedRef.current
+      : hoverReadyRef.current && hoveredRef.current !== hiddenHoveredRef.current ? hoveredRef.current : null;
     const text = element
-      ? tooltipText(element, suppressedTitlesRef.current)
+      ? tooltipText(element, suppressedTitlesRef.current, focused)
       : "";
     if (
-      !element || !text || !element.isConnected
+      !element || !text || !element.isConnected || element.hasAttribute("data-tip-disabled")
       || (element.hasAttribute("aria-haspopup") && element.getAttribute("aria-expanded") === "true")
     ) {
       setActive(null);
       return;
     }
+    const pointerY = !focused && element.dataset.tipPlacement === "pointer-side" ? pointerYRef.current : null;
     setActive((current) => {
-      if (current?.element === element && current.text === text) return current;
-      const next = { element, text, key: nextKeyRef.current };
+      if (current?.element === element && current.text === text && current.pointerY === pointerY) return current;
+      // Pointer movement updates position without replaying the entrance animation.
+      if (current?.element === element) return { ...current, text, pointerY };
+      const next = { element, text, pointerY, key: nextKeyRef.current };
       nextKeyRef.current += 1;
       return next;
     });
@@ -142,7 +155,10 @@ export function GlobalTooltip() {
 
   const hideCurrent = useCallback(() => {
     cancelPointerTimer();
-    interactionHiddenRef.current = true;
+    // Dismissing one control must not let a later hover resurrect its old
+    // keyboard hint. Each input source resumes on a fresh enter/focus event.
+    hiddenFocusedRef.current = focusedRef.current;
+    hiddenHoveredRef.current = hoveredRef.current;
     setActive(null);
   }, [cancelPointerTimer]);
 
@@ -150,7 +166,11 @@ export function GlobalTooltip() {
     cancelPointerTimer();
     hoveredRef.current = null;
     focusedRef.current = null;
-    interactionHiddenRef.current = false;
+    hoverReadyRef.current = false;
+    pointerYRef.current = null;
+    pointerDownRef.current = false;
+    hiddenFocusedRef.current = null;
+    hiddenHoveredRef.current = null;
     restoreAllNativeTitles();
     setActive(null);
   }, [cancelPointerTimer, restoreAllNativeTitles]);
@@ -169,24 +189,41 @@ export function GlobalTooltip() {
       if (!target || target === hoveredRef.current) return;
       suppressNativeTitle(target);
       hoveredRef.current = target;
-      interactionHiddenRef.current = false;
+      pointerYRef.current = event.clientY;
+      hoverReadyRef.current = false;
+      hiddenHoveredRef.current = pointerDownRef.current ? target : null;
       cancelPointerTimer();
       // A short dwell prevents hints from flashing while the pointer merely
       // crosses a toolbar. Keyboard focus remains immediate below.
       pointerTimerRef.current = window.setTimeout(() => {
         pointerTimerRef.current = null;
+        hoverReadyRef.current = true;
         showCurrent();
       }, POINTER_SHOW_DELAY_MS);
     };
     const onPointerOut = (event: PointerEvent) => {
-      const target = tooltipTarget(event.target, suppressedTitlesRef.current);
-      if (!target || target !== hoveredRef.current) return;
+      const target = hoveredRef.current;
+      if (!target || !(event.target instanceof Node) || !target.contains(event.target)) return;
       if (event.relatedTarget instanceof Node && target.contains(event.relatedTarget)) return;
       hoveredRef.current = null;
+      hoverReadyRef.current = false;
+      pointerYRef.current = null;
       cancelPointerTimer();
       restoreInactiveTitle(target);
       showCurrent();
     };
+    const onPointerMove = (event: PointerEvent) => {
+      if (event.pointerType === "touch" || !(event.target instanceof Node) || !hoveredRef.current?.contains(event.target)) return;
+      pointerYRef.current = event.clientY;
+      if (hoveredRef.current.dataset.tipPlacement === "pointer-side" && hoverReadyRef.current) showCurrent();
+    };
+    const onPointerDown = () => {
+      // A pointer gesture can focus its trigger before React starts a drag.
+      // Suppress that focus hint as well as any previous control's tooltip.
+      pointerDownRef.current = true;
+      hideCurrent();
+    };
+    const onPointerEnd = () => { pointerDownRef.current = false; };
     const onFocusIn = (event: FocusEvent) => {
       const target = tooltipTarget(event.target, suppressedTitlesRef.current);
       if (!target) return;
@@ -195,13 +232,12 @@ export function GlobalTooltip() {
       if (target.closest("[data-global-tooltip-skip-focus]")) return;
       suppressNativeTitle(target);
       focusedRef.current = target;
-      interactionHiddenRef.current = false;
-      cancelPointerTimer();
+      hiddenFocusedRef.current = pointerDownRef.current ? target : null;
       showCurrent();
     };
     const onFocusOut = (event: FocusEvent) => {
-      const target = tooltipTarget(event.target, suppressedTitlesRef.current);
-      if (!target || target !== focusedRef.current) return;
+      const target = focusedRef.current;
+      if (!target || !(event.target instanceof Node) || !target.contains(event.target)) return;
       if (event.relatedTarget instanceof Node && target.contains(event.relatedTarget)) return;
       focusedRef.current = null;
       restoreInactiveTitle(target);
@@ -218,6 +254,10 @@ export function GlobalTooltip() {
 
     document.addEventListener("pointerover", onPointerOver);
     document.addEventListener("pointerout", onPointerOut);
+    document.addEventListener("pointermove", onPointerMove);
+    document.addEventListener("pointerdown", onPointerDown, true);
+    window.addEventListener("pointerup", onPointerEnd);
+    window.addEventListener("pointercancel", onPointerEnd);
     document.addEventListener("focusin", onFocusIn);
     document.addEventListener("focusout", onFocusOut);
     // Opening an action or popover should dismiss its hint immediately.
@@ -227,6 +267,10 @@ export function GlobalTooltip() {
     return () => {
       document.removeEventListener("pointerover", onPointerOver);
       document.removeEventListener("pointerout", onPointerOut);
+      document.removeEventListener("pointermove", onPointerMove);
+      document.removeEventListener("pointerdown", onPointerDown, true);
+      window.removeEventListener("pointerup", onPointerEnd);
+      window.removeEventListener("pointercancel", onPointerEnd);
       document.removeEventListener("focusin", onFocusIn);
       document.removeEventListener("focusout", onFocusOut);
       document.removeEventListener("click", hideCurrent, true);
@@ -235,7 +279,11 @@ export function GlobalTooltip() {
       cancelPointerTimer();
       hoveredRef.current = null;
       focusedRef.current = null;
-      interactionHiddenRef.current = false;
+      hoverReadyRef.current = false;
+      pointerYRef.current = null;
+      pointerDownRef.current = false;
+      hiddenFocusedRef.current = null;
+      hiddenHoveredRef.current = null;
       restoreAllNativeTitles();
     };
   }, [
@@ -264,7 +312,7 @@ export function GlobalTooltip() {
       const tooltipTextChanged = records.some((record) => {
         if (record.type !== "attributes" || !(record.target instanceof HTMLElement)) return false;
         if (!candidateSet.has(record.target)) return false;
-        if (record.attributeName === "data-tip") return true;
+        if (record.attributeName === "data-tip" || record.attributeName === "data-tip-focus") return true;
         // A present title was added or changed by React. An absent title with
         // our marker is merely the mutation caused by suppressNativeTitle.
         return record.attributeName === "title" && record.target.hasAttribute("title");
@@ -272,21 +320,21 @@ export function GlobalTooltip() {
       for (const element of candidates) suppressNativeTitle(element);
       if (records.some((record) => (
         record.type === "attributes"
-        && record.attributeName === "aria-expanded"
         && record.target instanceof HTMLElement
         && candidateSet.has(record.target)
-        && record.target.getAttribute("aria-expanded") === "true"
+        && ((record.attributeName === "aria-expanded" && record.target.getAttribute("aria-expanded") === "true")
+          || (record.attributeName === "data-tip-disabled" && record.target.hasAttribute("data-tip-disabled")))
       ))) {
         hideCurrent();
         return;
       }
       // Suppressing a native title mutates the DOM. Do not let that observer
       // notification bypass the pointer dwell timer.
-      if (tooltipTextChanged && pointerTimerRef.current === null) showCurrent();
+      if (tooltipTextChanged && (focusedRef.current || pointerTimerRef.current === null)) showCurrent();
     });
     observer.observe(document.body, {
       attributes: true,
-      attributeFilter: ["data-tip", "title", "aria-expanded"],
+      attributeFilter: ["data-tip", "data-tip-focus", "title", "aria-expanded", "data-tip-disabled"],
       childList: true,
       subtree: true,
     });
@@ -294,27 +342,13 @@ export function GlobalTooltip() {
   }, [dismiss, hideCurrent, showCurrent, suppressNativeTitle]);
 
   return active ? (
-    <TooltipBubble key={active.key} anchor={active.element} text={active.text} />
+    <TooltipBubble key={active.key} anchor={active.element} text={active.text} pointerY={active.pointerY} />
   ) : null;
 }
 
-function TooltipBubble({ anchor, text }: { anchor: HTMLElement; text: string }) {
+function TooltipBubble({ anchor, text, pointerY }: { anchor: HTMLElement; text: string; pointerY: number | null }) {
   const tooltipId = useId();
   const anchorRef = useRef<HTMLElement>(anchor);
-  const tooltipRef = useRef<HTMLDivElement>(null);
-  const { style, placement } = useAnchoredFloating(
-    anchorRef,
-    tooltipRef,
-    true,
-    {
-      preferredPlacement: "bottom",
-      align: "center",
-      width: "content",
-      estimatedHeight: 30,
-      offset: 6,
-      zIndex: "var(--echo-layer-tooltip)",
-    },
-  );
 
   useEffect(() => {
     const labelledByText = (anchor.getAttribute("aria-labelledby") ?? "")
@@ -344,13 +378,24 @@ function TooltipBubble({ anchor, text }: { anchor: HTMLElement; text: string }) 
       if (remaining.length > 0) anchor.setAttribute("aria-describedby", remaining.join(" "));
       else anchor.removeAttribute("aria-describedby");
     };
-  }, [anchor, tooltipId]);
+  }, [anchor, text, tooltipId]);
 
+  return anchor.dataset.tipPlacement === "pointer-side"
+    ? <PointerSideHint anchorRef={anchorRef} pointerY={pointerY} text={text} id={tooltipId} />
+    : <AnchoredTooltip anchorRef={anchorRef} text={text} id={tooltipId} />;
+}
+
+function AnchoredTooltip({ anchorRef, text, id }: { anchorRef: React.RefObject<HTMLElement>; text: string; id: string }) {
+  const tooltipRef = useRef<HTMLDivElement>(null);
+  const { style, placement } = useAnchoredFloating(anchorRef, tooltipRef, true, {
+    preferredPlacement: "bottom", align: "center", width: "content", estimatedHeight: 30,
+    offset: 6, zIndex: "var(--echo-layer-tooltip)",
+  });
   return createPortal(
     <div
       ref={tooltipRef}
-      id={tooltipId}
-      className={`global-tooltip${anchor.closest('[aria-modal="true"]') ? " global-tooltip--dialog" : ""}`}
+      id={id}
+      className={`global-tooltip${anchorRef.current?.closest('[aria-modal="true"]') ? " global-tooltip--dialog" : ""}`}
       role="tooltip"
       data-placement={placement ?? undefined}
       style={style}
