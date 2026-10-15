@@ -706,6 +706,10 @@ pub fn is_context_length_error(message: &str) -> bool {
         || m.contains("maximum prompt length")
         || m.contains("maximum context length")
         || m.contains("context_length_exceeded")
+        || m.contains("context window exceeds limit")
+        || m.contains("context_window_exceeded")
+        || m.contains("input token limit exceeded")
+        || m.contains("input is too long")
         || (m.contains("current message") && m.contains("exceeds budget"))
 }
 
@@ -914,6 +918,8 @@ mod tests {
             "This model's maximum context length is 200000 tokens",
             "invalid_request_error: prompt is too long: 300000 tokens > 200000 maximum",
             "error type: context_length_exceeded",
+            "API error (status 400 Bad Request): bad_request_error: invalid params, context window exceeds limit (2013)",
+            "input token limit exceeded",
             "Failed to start sampling: [conversation] Current message (1000000 tokens) exceeds budget (500000 tokens)",
             "API error (status 400 Bad Request): invalid-argument: Failed to start sampling: [conversation] Current message (1000000 tokens) exceeds budget (500000 tokens)",
             "compact failed: API error (status 400 Bad Request): invalid-argument: Failed to start sampling: [conversation] Current message (1000000 tokens) exceeds budget (500000 tokens)",

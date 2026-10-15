@@ -156,6 +156,7 @@ mod tests {
     #[test]
     fn try_into_all_input_variants() {
         let rf: Result<ReadFileInput, _> = ToolInput::ReadFile(ReadFileInput {
+            document: None,
             path: "x".into(),
             offset: None,
             limit: None,

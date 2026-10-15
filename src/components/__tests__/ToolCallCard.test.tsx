@@ -19,6 +19,28 @@ const base: ToolCallView = {
 };
 
 describe("ToolCallCard", () => {
+  it("展示真实读取覆盖和阶段记录，不把读取完成当作分析完成", () => {
+    const tc: ToolCallView = { ...base, kind: "read_file", title: "Read 比赛.xlsx", documentProgress: {
+      source: "比赛.xlsx", revision: "a".repeat(64), readRecords: 12, totalRecords: 100, checkpointCount: 2, complete: false,
+    } };
+    render(<><ToolCallCard tc={tc} /><ToolCallDetailBody tc={tc} /></>);
+    expect(screen.getByRole("status", { name: "资料读取进度" })).toHaveTextContent("已保存 2 份阶段记录");
+    expect(screen.getByRole("progressbar")).toHaveAttribute("value", "12");
+    expect(screen.queryByText("已分析全部内容")).not.toBeInTheDocument();
+  });
+  it("PDF 使用页数、显示当前范围并能打开保存的阶段记录", () => {
+    const onOpenPath = vi.fn();
+    render(<ToolCallDetailBody onOpenPath={onOpenPath} tc={{ ...base, documentProgress: {
+      source: "扫描.pdf", revision: "a".repeat(64), readRecords: 10, totalRecords: 50,
+      readPages: 1, totalPages: 5, scope: "第 1 页", checkpointCount: 1, complete: false,
+      checkpointPath: "/tmp/session/findings.md",
+    } }} />);
+    expect(screen.getByRole("status", { name: "资料读取进度" })).toHaveTextContent("已读取 1 / 5 页");
+    expect(screen.getByText("本次范围：第 1 页")).toBeInTheDocument();
+    expect(screen.getByRole("progressbar")).toHaveAttribute("value", "1");
+    fireEvent.click(screen.getByRole("button", { name: "查看阶段记录" }));
+    expect(onOpenPath).toHaveBeenCalledWith("/tmp/session/findings.md");
+  });
   it.each(["use_tool", "echoagent-office__office_create"])("间接 Office 调用 %s 展示实际文档标题", (title) => {
     render(<ToolCallCard tc={{
       ...base,

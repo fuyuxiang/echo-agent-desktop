@@ -1,5 +1,6 @@
 import { useState } from "react";
 import type { ToolCallView } from "@/stores/session-store";
+import { documentProgressCount, documentProgressLabel } from "@/lib/document-progress";
 import { isOfficeCreateTool, officeInputFromToolCall, officeReceiptFromToolCall } from "@/lib/document-export";
 import type { DiffContent, CommandOutputContent, ImageToolContent } from "@/lib/types";
 import { checkCommandRisk, riskLabel } from "@/lib/command-risk";
@@ -92,7 +93,8 @@ export function ToolCallCard({ tc, onOpen }: ToolCallCardProps) {
   const kindLabel = officeTool ? "文档" : specialized
     ? `${rendererIcon(renderer)} ${rendererLabel(renderer)}`
     : prettyKind(tc.kind);
-  const summary = officeTool ? shortTitle : specialized ? summarizeTool(tc, renderer) : shortTitle;
+  const summary = tc.documentProgress ? documentProgressLabel(tc.documentProgress)
+    : officeTool ? shortTitle : specialized ? summarizeTool(tc, renderer) : shortTitle;
 
   return (
     <button
@@ -103,7 +105,10 @@ export function ToolCallCard({ tc, onOpen }: ToolCallCardProps) {
       aria-label={`${officeTool ? "办公文档" : tc.kind} ${summary} ${statusLabel}`}
     >
       <span className="toolcall__kind">{kindLabel}</span>
-      <span className="toolcall__title">{summary}</span>
+      <span className="toolcall__title">{tc.documentProgress?.source ?? summary}</span>
+      {tc.documentProgress && <span className="toolcall__document-count" aria-hidden="true">
+        {documentProgressCount(tc.documentProgress)}
+      </span>}
       <span className={"toolcall__status-mark toolcall__status-mark--" + tc.status}>
         {statusMark}
       </span>
@@ -192,6 +197,20 @@ export function ToolCallDetailBody({
         </span>
       </div>
       <h3 className="tool-detail__title">{officeTool ? "生成办公文档" : tc.title}</h3>
+      {tc.documentProgress && (
+        <div className="document-read-progress" role="status" aria-label="资料读取进度">
+          <span>{documentProgressLabel(tc.documentProgress)}</span>
+          {tc.documentProgress.scope && <span>本次范围：{tc.documentProgress.scope}</span>}
+          <progress aria-label={`${tc.documentProgress.source} 读取进度`}
+            value={tc.documentProgress.readPages ?? tc.documentProgress.readRecords}
+            max={Math.max(1, tc.documentProgress.totalPages ?? tc.documentProgress.totalRecords)} />
+          <span>{tc.documentProgress.complete ? "已读取全部内容" : "已读取部分内容"}
+            {tc.documentProgress.checkpointCount > 0 ? ` · 已保存 ${tc.documentProgress.checkpointCount} 份阶段记录` : ""}</span>
+          {tc.documentProgress.checkpointPath && onOpenPath && <button type="button"
+            className="document-read-progress__findings"
+            onClick={() => onOpenPath(tc.documentProgress!.checkpointPath!)}>查看阶段记录</button>}
+        </div>
+      )}
 
       {officeReceipt && (
         <div className="toolcall__text">

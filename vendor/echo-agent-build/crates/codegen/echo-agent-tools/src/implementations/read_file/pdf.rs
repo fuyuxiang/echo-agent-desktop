@@ -238,6 +238,7 @@ pub(crate) fn render_pdf_pages(
     }
 
     Ok(ReadFileOutput::PdfPageImages(PdfPageImages {
+        document_progress: None,
         pages: page_images,
         total_pages: page_count,
         file_size,
@@ -255,6 +256,7 @@ pub fn raw_text_to_file_content(text: String) -> ReadFileOutput {
     }
 
     ReadFileOutput::FileContent(FileContent {
+        document_progress: None,
         content,
         content_concise: None,
         absolute_path: std::path::PathBuf::new(),
@@ -334,6 +336,43 @@ pub(crate) fn extract_pdf_plain_text_all(bytes: Vec<u8>) -> Result<String, Strin
 /// Plain text from all PDF pages in the `Read` format.
 pub fn extract_pdf_plain_text_cursor(bytes: Vec<u8>) -> Result<String, String> {
     extract_pdf_plain_text(bytes, PageTextStyle::Cursor { total_pages: 0 })
+}
+
+pub(crate) fn extract_pdf_records(
+    bytes: &[u8],
+) -> Result<Vec<super::document::DocumentRecord>, String> {
+    let (doc, page_count) = open_pdf_document(bytes.to_vec())?;
+    let mut records = Vec::new();
+    let mut total_bytes = 0usize;
+    for page in 0..page_count {
+        let text = doc
+            .extract_text(page)
+            .map_err(|e| format!("Failed to extract PDF page {}: {e}", page + 1))?;
+        total_bytes = total_bytes.saturating_add(text.len());
+        if total_bytes > 128 * 1024 * 1024 {
+            return Err("PDF exceeds the 128 MiB indexed text limit".into());
+        }
+        let label = format!("Page {}", page + 1);
+        if text.trim().is_empty() {
+            super::document::push_record(
+                &mut records,
+                &label,
+                &label,
+                "[No extractable text. Inspect this page visually with read_file format=image and pages set to its page number.]",
+            )?;
+            records.last_mut().unwrap().requires_visual = true;
+            continue;
+        }
+        for (line, text) in text.split('\n').enumerate() {
+            super::document::push_record(
+                &mut records,
+                &label,
+                &format!("{label}, line {}", line + 1),
+                text,
+            )?;
+        }
+    }
+    Ok(records)
 }
 
 pub(crate) fn extract_pdf_text(

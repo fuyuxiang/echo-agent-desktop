@@ -170,6 +170,7 @@ mod tests {
         let resources = test_resources(tmp.path());
 
         let input = ReadFileInput {
+            document: None,
             path: "test.txt".to_string(),
             offset: None,
             limit: None,

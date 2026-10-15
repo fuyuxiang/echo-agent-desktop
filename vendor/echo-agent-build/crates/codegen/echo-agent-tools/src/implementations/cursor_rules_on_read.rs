@@ -688,6 +688,7 @@ mod tests {
 
         let shared = resources_with_echo_agent_rules_on_read(root);
         let input = ReadFileInput {
+            document: None,
             path: "main.rs".to_owned(),
             offset: None,
             limit: None,

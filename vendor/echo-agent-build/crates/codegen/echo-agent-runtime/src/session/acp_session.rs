@@ -189,6 +189,8 @@ use turn_report_slot::{CommitOutcome, TurnEpoch, TurnReportClaim};
 #[path = "acp_session_impl/turn_end_hooks.rs"]
 mod turn_end_hooks;
 use turn_end_hooks::TurnEnd;
+#[path = "acp_session_impl/document_tasks.rs"]
+mod document_tasks;
 #[path = "acp_session_impl/stop_gate.rs"]
 mod stop_gate;
 pub use stop_gate::MAX_STOP_HOOK_CONTINUATIONS_PER_TURN;

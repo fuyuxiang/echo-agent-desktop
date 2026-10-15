@@ -78,6 +78,17 @@ const userMessageTextForTest = (m: ReturnType<typeof useSessionStore.getState>["
 
 describe("session-store transcripts", () => {
   beforeEach(resetStore);
+  it.each(["FileContent", "PdfPageImages"])("保留原生 %s 资料读取进度并在任务切换后继续展示", (variant) => {
+    const store = useSessionStore.getState(); store.setSession("A");
+    store.applyUpdate({ sessionUpdate: "tool_call", toolCallId: "read-1", title: "Read 比赛.xlsx", kind: "read", status: "in_progress", __sessionId: "A" } as never);
+    store.setSession("B");
+    store.applyUpdate({ sessionUpdate: "tool_call_update", toolCallId: "read-1", status: "completed", __sessionId: "A", rawOutput: {
+      type: "ReadFile", [variant]: { document_progress: { source: "比赛.xlsx", revision: "a".repeat(64), readRecords: 12, totalRecords: 100, checkpointCount: 2, complete: false } },
+    } } as never);
+    store.setSession("A");
+    const part = useSessionStore.getState().messages.flatMap(m => m.parts).find(p => p.kind === "tool_call");
+    expect(part?.kind === "tool_call" && part.toolCall.documentProgress?.readRecords).toBe(12);
+  });
 
   it("把 Runtime 的 Office MCP rawOutput 转成可打开的任务成果", () => {
     const store = useSessionStore.getState();

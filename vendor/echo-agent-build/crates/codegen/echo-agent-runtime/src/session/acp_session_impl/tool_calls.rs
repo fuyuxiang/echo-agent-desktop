@@ -2552,6 +2552,9 @@ impl SessionActor {
                 pdf.total_pages,
             );
         }
+        let prompt_text = self
+            .bound_tool_text(prompt_text, call_id, self.tool_text_cap().await)
+            .await?;
         let tool_chat = if inline_images.is_empty() {
             ConversationItem::tool_result(call_id.to_string(), prompt_text)
         } else {

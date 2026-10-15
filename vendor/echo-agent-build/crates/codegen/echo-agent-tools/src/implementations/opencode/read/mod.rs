@@ -351,6 +351,7 @@ impl echo_agent_tool_runtime::Tool for ReadTool {
         let raw_output = raw_lines.join("\n");
 
         Ok(ReadFileOutput::FileContent(FileContent {
+            document_progress: None,
             content: formatted,
             content_concise: None,
             absolute_path: path,
@@ -441,6 +442,7 @@ async fn read_directory(
     );
 
     ReadFileOutput::FileContent(FileContent {
+        document_progress: None,
         content: formatted.clone(),
         content_concise: None,
         absolute_path: path.to_path_buf(),

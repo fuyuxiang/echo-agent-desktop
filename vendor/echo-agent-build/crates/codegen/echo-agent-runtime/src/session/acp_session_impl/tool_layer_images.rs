@@ -108,6 +108,7 @@ mod tests {
     #[test]
     fn drained_tool_success_new_drains_file_content_images() {
         let fc = FileContent {
+            document_progress: None,
             content: IMAGE_CONTENT_PLACEHOLDER.into(),
             content_concise: None,
             absolute_path: PathBuf::from("/tmp/x.png"),
@@ -162,6 +163,7 @@ mod tests {
     #[test]
     fn harvests_file_content_images_and_drains() {
         let fc = FileContent {
+            document_progress: None,
             content: IMAGE_CONTENT_PLACEHOLDER.into(),
             content_concise: None,
             absolute_path: PathBuf::from("/tmp/x.png"),

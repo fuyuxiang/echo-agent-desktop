@@ -6,9 +6,7 @@
 //! - Notifications emitted via `NotificationHandle` from Resources.
 //!
 //! Reminders are NOT implemented here (Phase 5).
-use crate::implementations::read_file::{
-    handle_pdf, is_pdf_file, raw_text_to_file_content, run_document_extraction,
-};
+use crate::implementations::read_file::{handle_pdf, is_pdf_file};
 use crate::types::context::TruncationConfig;
 use crate::types::output::{FileContent, ReadFileOutput};
 use crate::types::requirements::{Expr, ToolRequirement};
@@ -75,48 +73,84 @@ static READ_FILE_CAPABILITIES: LazyLock<echo_agent_tool_protocol::ToolCapabiliti
         }),
         ..Default::default()
     });
-const MAX_PPTX_BYTES: usize = 50 * 1024 * 1024;
-const PPTX_PROCESS_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(60);
-const MAX_MODERN_DOCUMENT_BYTES: usize = 50 * 1024 * 1024;
-const MODERN_DOCUMENT_PROCESS_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(60);
-async fn handle_pptx(
-    file_bytes: Vec<u8>,
-    path: &std::path::Path,
-) -> Result<ReadFileOutput, echo_agent_tool_runtime::ToolError> {
-    run_document_extraction(
-        file_bytes,
-        path,
-        "PPTX",
-        MAX_PPTX_BYTES,
-        PPTX_PROCESS_TIMEOUT,
-        extract_pptx_text,
-    )
-    .await
-}
-/// Extract text from a PPTX file (zip + DrawingML text runs).
-///
-/// Returns line-numbered text via the shared `raw_text_to_file_content`
-/// helper.
-fn extract_pptx_text(file_bytes: Vec<u8>) -> Result<ReadFileOutput, String> {
-    let text = crate::implementations::read_file::pptx::extract_pptx_text_from_bytes(&file_bytes)
-        .map_err(|e| format!("Failed to extract text from PPTX: {e}"))?;
-    Ok(raw_text_to_file_content(text))
-}
 async fn handle_modern_document(
     file_bytes: Vec<u8>,
     path: &std::path::Path,
     label: &'static str,
     extractor: fn(&[u8]) -> Result<String, String>,
+    input: &ReadFileInput,
+    resources: &SharedResources,
 ) -> Result<ReadFileOutput, echo_agent_tool_runtime::ToolError> {
-    run_document_extraction(
-        file_bytes,
-        path,
-        label,
-        MAX_MODERN_DOCUMENT_BYTES,
-        MODERN_DOCUMENT_PROCESS_TIMEOUT,
-        move |bytes| extractor(&bytes).map(raw_text_to_file_content),
-    )
-    .await
+    use crate::implementations::read_file::document;
+    // Keep all Office/document formats on the same bounded path. XLSX uses
+    // cell-aware records; the other extractors retain section/line locators.
+    let extract_records: fn(&[u8]) -> Result<Vec<document::DocumentRecord>, String> = match label {
+        "XLSX" => crate::implementations::read_file::office::extract_xlsx_records,
+        "DOCX" => |b| {
+            document::text_records(
+                &crate::implementations::read_file::office::extract_docx_text(b)?,
+            )
+        },
+        "OpenDocument" => |b| {
+            document::text_records(
+                &crate::implementations::read_file::office::extract_open_document_text(b)?,
+            )
+        },
+        "EPUB" => |b| {
+            document::text_records(
+                &crate::implementations::read_file::office::extract_epub_text(b)?,
+            )
+        },
+        "PPTX" => |b| {
+            document::text_records(
+                &crate::implementations::read_file::pptx::extract_pptx_text_from_bytes(b)?,
+            )
+        },
+        "PDF" => crate::implementations::read_file::pdf::extract_pdf_records,
+        _ => {
+            return Ok(ReadFileOutput::FileReadError(format!(
+                "Unsupported document format: {label}"
+            )));
+        }
+    };
+    let _ = extractor; // Kept at call sites to make format ownership explicit.
+    let result = async {
+        let (revision, records) =
+            document::extract_cached(file_bytes, resources, extract_records).await?;
+        let pages = if label == "PDF" {
+            input
+                .pages
+                .as_deref()
+                .map(|spec| {
+                    let page_count = records
+                        .iter()
+                        .filter_map(|r| r.section.strip_prefix("Page ")?.parse::<usize>().ok())
+                        .max()
+                        .unwrap_or(0);
+                    crate::implementations::read_file::pdf::parse_page_range(spec, page_count)
+                        .map(|indices| indices.into_iter().map(|i| i + 1).collect::<Vec<_>>())
+                })
+                .transpose()?
+        } else {
+            None
+        };
+        document::read_document_pages(
+            &records,
+            path,
+            &revision,
+            input.offset,
+            input.limit,
+            input
+                .document
+                .as_ref()
+                .unwrap_or(&document::DocumentOptions::default()),
+            pages.as_deref(),
+            resources,
+        )
+        .await
+    }
+    .await;
+    Ok(result.unwrap_or_else(ReadFileOutput::FileReadError))
 }
 /// Description for default toolset (full/non-concise)
 pub(crate) const DESCRIPTION_FULL: &str = r#"Read a file.
@@ -126,6 +160,8 @@ Usage:
 - By default, it reads up to {max_lines_read} lines starting from the beginning of the file
 - Line numbers (1-based) appear as anchors in the format LINE_NUMBER→LINE_CONTENT on the first returned line and on every 10th line of the file; the lines in between show content only. Count from the nearest anchor when referring to a specific line
 - This tool can read PDF, modern Office (.docx/.xlsx/.pptx), OpenDocument (.odt/.ods/.odp), ePub, Jupyter notebooks (.ipynb), and image files (e.g. PNG, JPG, etc).
+- Documents return bounded indexed records with exact source locators and a continuation offset. Continue reading automatically when the task needs more records; do not ask users to split files. Use document.mode=overview to inspect sections, document.section for an exact sheet/section name, and document.mode=search with document.query for literal search. Preserve section/query when continuing; offsets are relative to the selected scope/search results.
+- For every/all/whole-document tasks, cover the entire requested scope. Save source-backed findings periodically with document.mode=checkpoint and document.checkpoint before moving to another batch. Use document.exhaustive=true to require full reading of a scope; set false only for reference material or after verified local processing of that scope. Reading coverage is not proof of completed analysis: validate requested outputs separately.
 - When reading an image file the contents are presented visually as this tool uses multimodal LLMs."#;
 /// Schema-only advertised default (runtime still treats omit as line 1 via unwrap_or).
 fn schema_default_offset() -> Option<i64> {
@@ -133,6 +169,11 @@ fn schema_default_offset() -> Option<i64> {
 }
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize, schemars::JsonSchema)]
 pub struct ReadFileInput {
+    /// Optional structured document operation. Read/overview/search/checkpoint;
+    /// section selects a worksheet, query searches literal text, exhaustive
+    /// tracks complete coverage, checkpoint saves findings and source locators.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub document: Option<crate::implementations::read_file::document::DocumentOptions>,
     #[serde(rename = "target_file")]
     #[schemars(
         description = "The path of the file to read. You can use either a relative path in the workspace or an absolute path. If an absolute path is provided, it will be preserved as is."
@@ -464,8 +505,65 @@ pub(crate) async fn run_read_file(
         .unwrap_or("")
         .to_lowercase();
     if is_pdf_file(&file_bytes, &extension) {
+        use crate::implementations::read_file::document;
+        let task = document::task_snapshot(&resources).await;
+        let tracked = task
+            .documents
+            .contains_key(&path.to_string_lossy().to_string())
+            || (task.exhaustive
+                && task
+                    .expected_sources
+                    .contains(&path.to_string_lossy().to_string()));
+        if input.format.as_deref() != Some("image")
+            && (input.document.is_some()
+                || input.format.as_deref() == Some("text")
+                || (tracked && input.format.is_none() && input.pages.is_none()))
+        {
+            return handle_modern_document(
+                file_bytes,
+                &path,
+                "PDF",
+                |_| Ok(String::new()),
+                &input,
+                &resources,
+            )
+            .await;
+        }
+        let (revision, records) = match document::extract_cached(
+            file_bytes.clone(),
+            &resources,
+            crate::implementations::read_file::pdf::extract_pdf_records,
+        )
+        .await
+        {
+            Ok(index) => index,
+            Err(error) => return Ok(ReadFileOutput::FileReadError(error)),
+        };
+        if let Some(options) = &input.document {
+            let mut policy = options.clone();
+            policy.mode = document::DocumentMode::Overview;
+            if let Err(error) =
+                document::read_document(&records, &path, &revision, None, None, &policy, &resources)
+                    .await
+            {
+                return Ok(ReadFileOutput::FileReadError(error));
+            }
+        }
         let mut output =
             handle_pdf(file_bytes, &path, input.pages, input.format.as_deref()).await?;
+        if let ReadFileOutput::PdfPageImages(pdf) = &mut output {
+            pdf.document_progress = Some(
+                document::mark_visual_pages(
+                    &resources,
+                    &path,
+                    &revision,
+                    &records,
+                    &pdf.pages.iter().map(|p| p.page_number).collect::<Vec<_>>(),
+                )
+                .await
+                .map_err(echo_agent_tool_runtime::ToolError::invalid_arguments)?,
+            );
+        }
         if let ReadFileOutput::FileContent(ref mut fc) = output {
             crate::implementations::cursor_rules_on_read::append_cursor_rules_for_read(
                 cursor_rules_on_read_enabled(&resources).await,
@@ -480,7 +578,15 @@ pub(crate) async fn run_read_file(
         return Ok(output);
     }
     if extension == "pptx" {
-        return handle_pptx(file_bytes, &path).await;
+        return handle_modern_document(
+            file_bytes,
+            &path,
+            "PPTX",
+            crate::implementations::read_file::pptx::extract_pptx_text_from_bytes,
+            &input,
+            &resources,
+        )
+        .await;
     }
     match extension.as_str() {
         "docx" => {
@@ -489,6 +595,8 @@ pub(crate) async fn run_read_file(
                 &path,
                 "DOCX",
                 crate::implementations::read_file::office::extract_docx_text,
+                &input,
+                &resources,
             )
             .await;
         }
@@ -498,6 +606,8 @@ pub(crate) async fn run_read_file(
                 &path,
                 "XLSX",
                 crate::implementations::read_file::office::extract_xlsx_text,
+                &input,
+                &resources,
             )
             .await;
         }
@@ -507,6 +617,8 @@ pub(crate) async fn run_read_file(
                 &path,
                 "OpenDocument",
                 crate::implementations::read_file::office::extract_open_document_text,
+                &input,
+                &resources,
             )
             .await;
         }
@@ -516,6 +628,8 @@ pub(crate) async fn run_read_file(
                 &path,
                 "EPUB",
                 crate::implementations::read_file::office::extract_epub_text,
+                &input,
+                &resources,
             )
             .await;
         }
@@ -535,9 +649,39 @@ pub(crate) async fn run_read_file(
         )));
     }
     let file_content = String::from_utf8_lossy(&file_bytes).into_owned();
+    let task = crate::implementations::read_file::document::task_snapshot(&resources).await;
+    let tracked_attachment = task.exhaustive
+        && task
+            .expected_sources
+            .contains(&path.to_string_lossy().to_string());
+    if (input.document.is_some() || tracked_attachment) && !is_skill_markdown {
+        use crate::implementations::read_file::document;
+        let result = async {
+            let (revision, records) = document::extract_cached(file_bytes, &resources, |b| {
+                document::text_records(&String::from_utf8_lossy(b))
+            })
+            .await?;
+            document::read_document(
+                &records,
+                &path,
+                &revision,
+                input.offset,
+                input.limit,
+                input
+                    .document
+                    .as_ref()
+                    .unwrap_or(&document::DocumentOptions::default()),
+                &resources,
+            )
+            .await
+        }
+        .await;
+        return Ok(result.unwrap_or_else(ReadFileOutput::FileReadError));
+    }
     if file_content.is_empty() {
         let stored_offset = stored_read_offset(input.offset);
         return Ok(ReadFileOutput::FileContent(FileContent {
+            document_progress: None,
             content: String::new(),
             content_concise: None,
             absolute_path: path,
@@ -570,6 +714,32 @@ pub(crate) async fn run_read_file(
         total_lines,
     );
     let token_count = crate::util::truncate::estimate_tokens(&extracted.content);
+    if !is_legacy
+        && !is_skill_markdown
+        && token_count > MAX_NUM_TOKENS
+        && input.offset.is_none()
+        && input.limit.is_none()
+    {
+        use crate::implementations::read_file::document;
+        let result = async {
+            let (revision, records) = document::extract_cached(file_bytes, &resources, |b| {
+                document::text_records(&String::from_utf8_lossy(b))
+            })
+            .await?;
+            document::read_document(
+                &records,
+                &path,
+                &revision,
+                None,
+                None,
+                &document::DocumentOptions::default(),
+                &resources,
+            )
+            .await
+        }
+        .await;
+        return Ok(result.unwrap_or_else(ReadFileOutput::FileReadError));
+    }
     if !is_skill_markdown && token_count > MAX_NUM_TOKENS {
         let (grep_name, execute_name);
         {
@@ -643,6 +813,7 @@ pub(crate) async fn run_read_file(
     )
     .await;
     Ok(ReadFileOutput::FileContent(FileContent {
+        document_progress: None,
         content,
         content_concise,
         absolute_path: path,
@@ -823,6 +994,7 @@ mod tests {
         let tool = ReadFileTool;
         let resources = test_resources(tmp.path());
         let input = ReadFileInput {
+            document: None,
             path: "test.txt".to_string(),
             offset: None,
             limit: None,
@@ -850,6 +1022,7 @@ mod tests {
         let tool = ReadFileTool;
         let resources = test_resources(tmp.path());
         let input = ReadFileInput {
+            document: None,
             path: "nonexistent.txt".to_string(),
             offset: None,
             limit: None,
@@ -881,6 +1054,7 @@ mod tests {
         let tool = ReadFileTool;
         let resources = test_resources(tmp.path());
         let input = ReadFileInput {
+            document: None,
             path: "nonexistent.txt".to_string(),
             offset: None,
             limit: None,
@@ -905,6 +1079,7 @@ mod tests {
     }
     async fn not_found_msg(resources: Resources, path: &str) -> String {
         let input = ReadFileInput {
+            document: None,
             path: path.to_owned(),
             offset: None,
             limit: None,
@@ -1040,6 +1215,7 @@ mod tests {
         let tool = ReadFileTool;
         let resources = test_resources(tmp.path());
         let input = ReadFileInput {
+            document: None,
             path: "subdir".to_string(),
             offset: None,
             limit: None,
@@ -1071,6 +1247,7 @@ mod tests {
         let tool = ReadFileTool;
         let resources = test_resources(tmp.path());
         let input = ReadFileInput {
+            document: None,
             path: "subdir".to_string(),
             offset: None,
             limit: None,
@@ -1095,6 +1272,7 @@ mod tests {
         let tool = ReadFileTool;
         let resources = test_resources(tmp.path());
         let input = ReadFileInput {
+            document: None,
             path: "empty.txt".to_string(),
             offset: None,
             limit: None,
@@ -1122,6 +1300,7 @@ mod tests {
         let tool = ReadFileTool;
         let resources = test_resources(tmp.path());
         let input = ReadFileInput {
+            document: None,
             path: "multi.txt".to_string(),
             offset: Some(2),
             limit: Some(2),
@@ -1149,6 +1328,7 @@ mod tests {
         let tool = ReadFileTool;
         let resources = test_resources(tmp.path());
         let input = ReadFileInput {
+            document: None,
             path: file_path.to_string_lossy().to_string(),
             offset: None,
             limit: None,
@@ -1173,6 +1353,7 @@ mod tests {
         let tool = ReadFileTool;
         let resources = test_resources(tmp.path());
         let input = ReadFileInput {
+            document: None,
             path: "hello.txt".to_string(),
             offset: None,
             limit: None,
@@ -1198,6 +1379,7 @@ mod tests {
         let tool = ReadFileTool;
         let resources = test_resources(tmp.path());
         let input = ReadFileInput {
+            document: None,
             path: "test.txt".to_string(),
             offset: None,
             limit: None,
@@ -1217,7 +1399,7 @@ mod tests {
         }
     }
     #[tokio::test]
-    async fn token_limit_error_references_grep() {
+    async fn oversized_default_read_is_automatically_paged() {
         let tmp = TempDir::new().unwrap();
         let line = "x".repeat(200);
         let big_content = std::iter::repeat_n(line.as_str(), 1100)
@@ -1231,6 +1413,7 @@ mod tests {
             Default::default(),
         ));
         let input = ReadFileInput {
+            document: None,
             path: "big.txt".to_string(),
             offset: None,
             limit: None,
@@ -1242,15 +1425,12 @@ mod tests {
                 .await
                 .unwrap();
         match result {
-            ReadFileOutput::FileTooLarge(msg) => {
-                assert!(msg.contains("exceeds maximum allowed tokens"));
-                assert!(
-                    msg.contains("Grep"),
-                    "Error should reference renamed grep tool: {}",
-                    msg
-                );
+            ReadFileOutput::FileContent(fc) => {
+                assert!(fc.document_progress.is_some());
+                assert!(fc.content.len() < 20 * 1024);
+                assert!(fc.content.contains("document.mode=read"));
             }
-            other => panic!("Expected FileTooLarge, got {:?}", other),
+            other => panic!("Expected paginated content, got {other:?}"),
         }
     }
     #[tokio::test]
@@ -1268,6 +1448,7 @@ mod tests {
             Default::default(),
         ));
         let input = ReadFileInput {
+            document: None,
             path: "big.txt".to_string(),
             offset: Some(1),
             limit: Some(800),
@@ -1319,6 +1500,7 @@ mod tests {
             .into(),
         ));
         let input = ReadFileInput {
+            document: None,
             path: "big.txt".to_string(),
             offset: Some(1),
             limit: Some(800),
@@ -1515,6 +1697,7 @@ mod tests {
         let tool = ReadFileTool;
         let resources = test_resources_with_gitignore(tmp.path());
         let input = ReadFileInput {
+            document: None,
             path: "build/output.txt".to_string(),
             offset: None,
             limit: None,
@@ -1552,6 +1735,7 @@ mod tests {
         let mut resources = test_resources_with_gitignore(tmp.path());
         resources.insert(RespectGitignore(true));
         let input = ReadFileInput {
+            document: None,
             path: "build/output.o".to_string(),
             offset: None,
             limit: None,
@@ -1588,6 +1772,7 @@ mod tests {
         let tool = ReadFileTool;
         let resources = test_resources_with_gitignore(tmp.path());
         let input = ReadFileInput {
+            document: None,
             path: "build/output.txt".to_string(),
             offset: None,
             limit: None,
@@ -1624,6 +1809,7 @@ mod tests {
         let tool = ReadFileTool;
         let resources = test_resources_with_gitignore(tmp.path());
         let input = ReadFileInput {
+            document: None,
             path: "src/main.rs".to_string(),
             offset: None,
             limit: None,
@@ -1653,6 +1839,7 @@ mod tests {
         let tool = ReadFileTool;
         let resources = test_resources_with_gitignore(tmp.path());
         let input = ReadFileInput {
+            document: None,
             path: "debug.log".to_string(),
             offset: None,
             limit: None,
@@ -1684,6 +1871,7 @@ mod tests {
         let tool = ReadFileTool;
         let resources = test_resources(tmp.path());
         let input = ReadFileInput {
+            document: None,
             path: "build/output.txt".to_string(),
             offset: None,
             limit: None,
@@ -2005,6 +2193,7 @@ pub fn verify(req: &HttpRequest) -> Result<Claims, Error> {
         let tool = ReadFileTool;
         let resources = test_resources(tmp.path());
         let input = ReadFileInput {
+            document: None,
             path: ".echo-agent/skills/commit/SKILL.md".to_string(),
             offset: Some(3),
             limit: Some(1),
@@ -2050,6 +2239,7 @@ pub fn verify(req: &HttpRequest) -> Result<Claims, Error> {
             Default::default(),
         ));
         let input = ReadFileInput {
+            document: None,
             path: "skills/SKILL.md".to_string(),
             offset: None,
             limit: None,
@@ -2079,6 +2269,7 @@ pub fn verify(req: &HttpRequest) -> Result<Claims, Error> {
         let tool = ReadFileTool;
         let resources = test_resources(tmp.path());
         let input = ReadFileInput {
+            document: None,
             path: ".echo-agent/skills/my-skill/reference.md".to_string(),
             offset: Some(3),
             limit: Some(1),
@@ -2196,6 +2387,7 @@ pub fn verify(req: &HttpRequest) -> Result<Claims, Error> {
         std::fs::write(tmp.path().join(filename), content).unwrap();
         let resources = test_resources(tmp.path());
         let input = ReadFileInput {
+            document: None,
             path: filename.to_string(),
             offset: None,
             limit: None,
@@ -2323,6 +2515,7 @@ pub fn verify(req: &HttpRequest) -> Result<Claims, Error> {
         let body: String = (1..=300).map(|i| format!("line number {i}\n")).collect();
         std::fs::write(tmp.path().join("big.txt"), &body).unwrap();
         let input = ReadFileInput {
+            document: None,
             path: "big.txt".to_string(),
             offset: None,
             limit: None,
@@ -2361,6 +2554,7 @@ pub fn verify(req: &HttpRequest) -> Result<Claims, Error> {
         let tmp = TempDir::new().unwrap();
         std::fs::write(tmp.path().join("f.txt"), "alpha\nbeta\ngamma\n").unwrap();
         let input = ReadFileInput {
+            document: None,
             path: "f.txt".to_string(),
             offset: None,
             limit: None,
@@ -2386,6 +2580,7 @@ pub fn verify(req: &HttpRequest) -> Result<Claims, Error> {
         let pdf_bytes = crate::implementations::read_file::pdf::make_test_pdf(&["Hello World"]);
         std::fs::write(tmp.path().join("doc.pdf"), &pdf_bytes).unwrap();
         let input = ReadFileInput {
+            document: None,
             path: "doc.pdf".to_string(),
             offset: None,
             limit: None,
@@ -2412,6 +2607,7 @@ pub fn verify(req: &HttpRequest) -> Result<Claims, Error> {
         let pdf_bytes = crate::implementations::read_file::pdf::make_test_pdf(&["Some Text"]);
         std::fs::write(tmp.path().join("img.pdf"), &pdf_bytes).unwrap();
         let input = ReadFileInput {
+            document: None,
             path: "img.pdf".to_string(),
             offset: None,
             limit: None,
@@ -2441,6 +2637,7 @@ pub fn verify(req: &HttpRequest) -> Result<Claims, Error> {
         std::fs::write(tmp.path().join("doc.pdf"), &pdf_bytes).unwrap();
         let shared = test_resources(tmp.path()).into_shared();
         let text_input = || ReadFileInput {
+            document: None,
             path: "big.txt".to_string(),
             offset: None,
             limit: None,
@@ -2448,6 +2645,7 @@ pub fn verify(req: &HttpRequest) -> Result<Claims, Error> {
             format: None,
         };
         let pdf_input = || ReadFileInput {
+            document: None,
             path: "doc.pdf".to_string(),
             offset: None,
             limit: None,
@@ -2485,6 +2683,7 @@ pub fn verify(req: &HttpRequest) -> Result<Claims, Error> {
         std::fs::write(tmp.path().join("long.txt"), format!("{long}\nshort\n")).unwrap();
         let resources = test_resources(tmp.path());
         let input = ReadFileInput {
+            document: None,
             path: "long.txt".to_string(),
             offset: None,
             limit: None,
@@ -2531,6 +2730,7 @@ pub fn verify(req: &HttpRequest) -> Result<Claims, Error> {
         std::fs::write(tmp.path().join("payload.json"), &payload).unwrap();
         let resources = test_resources(tmp.path());
         let input = ReadFileInput {
+            document: None,
             path: "payload.json".to_string(),
             offset: None,
             limit: None,
@@ -2559,6 +2759,7 @@ pub fn verify(req: &HttpRequest) -> Result<Claims, Error> {
         }
         resources.insert(TemplateRenderer::new(kinds, Default::default()));
         let input = ReadFileInput {
+            document: None,
             path: "huge.json".to_string(),
             offset: None,
             limit: None,
@@ -2568,40 +2769,35 @@ pub fn verify(req: &HttpRequest) -> Result<Claims, Error> {
         let (_deltas, terminal) = execute_collect(test_ctx(resources.into_shared()), input).await;
         terminal
     }
-    /// A single-line file that busts the whole-read token cap gets the
-    /// shell-tool hint — line-based offset/limit cannot narrow one line.
-    /// ~120KB single line ≈ 30K estimated tokens > MAX_NUM_TOKENS (25K).
+    /// Large default reads automatically become indexed pages, including a
+    /// single line that ordinary line-based offset/limit cannot narrow.
     #[tokio::test]
-    async fn oversized_single_line_gets_shell_hint() {
+    async fn oversized_single_line_is_automatically_paged() {
         for content in [
             "z".repeat(120_000),
             format!("{}\n", "z".repeat(120_000)),
             format!("{}\r\n", "z".repeat(120_000)),
         ] {
             match read_huge_file(&content, true).await {
-                ReadFileOutput::FileTooLarge(msg) => {
-                    assert!(
-                        msg.contains("single very long line")
-                            && msg.contains("'run_terminal_command'"),
-                        "single-line overflow must steer to the execute tool, got: {msg}"
-                    );
+                ReadFileOutput::FileContent(fc) => {
+                    assert!(fc.document_progress.is_some());
+                    assert!(fc.content.len() < 20 * 1024);
+                    assert!(fc.content.contains("document.mode=read"));
                 }
-                other => panic!("expected FileTooLarge, got {other:?}"),
+                other => panic!("expected paginated content, got {other:?}"),
             }
         }
     }
-    /// No execute tool in the toolset → no shell hint (never steer the model
-    /// to a tool it cannot call).
+    /// Indexed continuation works without a terminal tool.
     #[tokio::test]
-    async fn oversized_single_line_hint_suppressed_without_execute_tool() {
+    async fn oversized_single_line_pages_without_execute_tool() {
         match read_huge_file(&"z".repeat(120_000), false).await {
-            ReadFileOutput::FileTooLarge(msg) => {
-                assert!(
-                    !msg.contains("single very long line"),
-                    "hint must be suppressed without an execute tool, got: {msg}"
-                );
+            ReadFileOutput::FileContent(fc) => {
+                assert!(fc.document_progress.is_some());
+                assert!(fc.content.len() < 20 * 1024);
+                assert!(fc.content.contains("document.mode=read"));
             }
-            other => panic!("expected FileTooLarge, got {other:?}"),
+            other => panic!("expected paginated content, got {other:?}"),
         }
     }
     /// A narrowed read (offset/limit) that still lands on one oversized line
@@ -2617,6 +2813,7 @@ pub fn verify(req: &HttpRequest) -> Result<Claims, Error> {
         kinds.insert(ToolKind::Execute, "run_terminal_command".to_string());
         resources.insert(TemplateRenderer::new(kinds, Default::default()));
         let input = ReadFileInput {
+            document: None,
             path: "huge.json".to_string(),
             offset: Some(2),
             limit: Some(1),
@@ -2634,18 +2831,17 @@ pub fn verify(req: &HttpRequest) -> Result<Claims, Error> {
             other => panic!("expected FileTooLarge, got {other:?}"),
         }
     }
-    /// Multi-line oversized files keep the standard offset/limit guidance.
+    /// Multi-line default reads use the same bounded index as long lines.
     #[tokio::test]
-    async fn oversized_multi_line_gets_standard_guidance() {
+    async fn oversized_multi_line_is_automatically_paged() {
         let content = format!("{}\n", "z".repeat(3_000)).repeat(50);
         match read_huge_file(&content, true).await {
-            ReadFileOutput::FileTooLarge(msg) => {
-                assert!(
-                    !msg.contains("single very long line") && msg.contains("offset"),
-                    "multi-line overflow must keep offset/limit guidance, got: {msg}"
-                );
+            ReadFileOutput::FileContent(fc) => {
+                assert!(fc.document_progress.is_some());
+                assert!(fc.content.len() < 20 * 1024);
+                assert!(fc.content.contains("document.mode=read"));
             }
-            other => panic!("expected FileTooLarge, got {other:?}"),
+            other => panic!("expected paginated content, got {other:?}"),
         }
     }
     #[test]

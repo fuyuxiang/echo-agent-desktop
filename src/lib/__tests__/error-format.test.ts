@@ -2,6 +2,12 @@ import { describe, it, expect } from "vitest";
 import { formatAgentError, friendlyError } from "../error-format";
 
 describe("formatAgentError", () => {
+  it("识别服务商窗口超限并保留当前任务的继续处理入口", () => {
+    const error = "API error (status 400 Bad Request): bad_request_error: invalid params, context window exceeds limit (2013)";
+    expect(formatAgentError(error)).toContain("当前任务");
+    expect(formatAgentError(error)).not.toContain("新建会话");
+    expect(formatAgentError(JSON.stringify({ data: { message: error } }))).toContain("分批处理");
+  });
   it("parses 429 TPM rate limit from Rust Debug string", () => {
     const raw = `Error { code: -32003: Unknown error, message: "Rate limited", data: Some(Object {"message": String("API error (status 429 Too Many Requests): runtime_error: tpm rate limit exceeded"), "promptUsage": Object {"inputTokens": Number(219848), "outputTokens": Number(10094), "totalTokens": Number(229942), "cachedReadTokens": Number(0), "reasoningTokens": Number(2163), "modelCalls": Number(15), "apiDurationMs": Number(211574), "modelUsage": Object {"glm-5": Object {"inputTokens": Number(219848)}}, "numTurns": Number(4)}}) }`;
     const result = formatAgentError(raw);

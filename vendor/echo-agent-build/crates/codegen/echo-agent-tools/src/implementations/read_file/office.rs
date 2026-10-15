@@ -148,8 +148,21 @@ fn shared_strings(zip: &mut ZipArchive<Cursor<&[u8]>>) -> Result<Vec<String>, St
 }
 
 fn extract_sheet(xml: &str, shared: &[String]) -> Result<String, String> {
-    let mut reader = Reader::from_str(xml);
     let mut output = String::new();
+    visit_sheet_rows(xml, shared, |_, row| {
+        bounded_push(&mut output, &row.join("\t"))?;
+        bounded_push(&mut output, "\n")
+    })?;
+    Ok(output.trim_end_matches('\n').to_string())
+}
+
+fn visit_sheet_rows(
+    xml: &str,
+    shared: &[String],
+    mut emit: impl FnMut(u32, &[String]) -> Result<(), String>,
+) -> Result<(), String> {
+    let mut reader = Reader::from_str(xml);
+    let mut row_index = 0;
     let mut row: Vec<String> = Vec::new();
     let mut row_text_bytes = 0;
     let mut cell = String::new();
@@ -160,6 +173,12 @@ fn extract_sheet(xml: &str, shared: &[String]) -> Result<String, String> {
     loop {
         match reader.read_event() {
             Ok(Event::Start(event)) if event.local_name().as_ref() == b"row" => {
+                row_index = attribute(&reader, &event, b"r")
+                    .and_then(|n| n.parse::<u32>().ok())
+                    .unwrap_or(row_index + 1);
+                if row_index == 0 || row_index > MAX_XLSX_ROWS {
+                    return Err("Invalid XLSX row index".into());
+                }
                 row.clear();
                 row_text_bytes = 0;
             }
@@ -176,7 +195,7 @@ fn extract_sheet(xml: &str, shared: &[String]) -> Result<String, String> {
                     &mut row_text_bytes,
                     column,
                     "",
-                    MAX_EXTRACTED_TEXT_BYTES - output.len(),
+                    MAX_EXTRACTED_TEXT_BYTES,
                 )?;
             }
             Ok(Event::Start(event))
@@ -204,20 +223,68 @@ fn extract_sheet(xml: &str, shared: &[String]) -> Result<String, String> {
                     &mut row_text_bytes,
                     cell_column,
                     value,
-                    MAX_EXTRACTED_TEXT_BYTES - output.len(),
+                    MAX_EXTRACTED_TEXT_BYTES,
                 )?;
                 in_cell = false;
             }
             Ok(Event::End(event)) if event.local_name().as_ref() == b"row" => {
-                bounded_push(&mut output, &row.join("\t"))?;
-                bounded_push(&mut output, "\n")?;
+                emit(row_index, &row)?;
             }
             Ok(Event::Eof) => break,
             Err(error) => return Err(format!("Failed to parse XLSX worksheet: {error}")),
             _ => {}
         }
     }
-    Ok(output.trim_end_matches('\n').to_string())
+    Ok(())
+}
+
+/// Cell-aware index. Long code cells retain their exact worksheet/cell locator
+/// across every bounded piece instead of becoming an unbounded TSV row.
+pub(crate) fn extract_xlsx_records(
+    bytes: &[u8],
+) -> Result<Vec<super::document::DocumentRecord>, String> {
+    let mut zip = archive(bytes, "XLSX archive")?;
+    let shared = shared_strings(&mut zip)?;
+    let sheets = xlsx_sheets(&mut zip)?;
+    if sheets.is_empty() {
+        return Err("XLSX contains no worksheets".into());
+    }
+    let mut records = Vec::new();
+    let mut total_bytes = 0usize;
+    for (label, name) in sheets {
+        let xml = read_entry(&mut zip, &name)?.ok_or_else(|| format!("Missing {name}"))?;
+        let before = records.len();
+        visit_sheet_rows(&xml, &shared, |row_index, row| {
+            for (column, value) in row.iter().enumerate() {
+                if value.is_empty() {
+                    continue;
+                }
+                total_bytes = total_bytes.saturating_add(value.len());
+                if total_bytes > 128 * 1024 * 1024 {
+                    return Err("Workbook exceeds the 128 MiB indexed text limit".into());
+                }
+                let mut n = column + 1;
+                let mut letters = Vec::new();
+                while n > 0 {
+                    n -= 1;
+                    letters.push((b'A' + (n % 26) as u8) as char);
+                    n /= 26;
+                }
+                let col: String = letters.into_iter().rev().collect();
+                super::document::push_record(
+                    &mut records,
+                    &label,
+                    &format!("'{}'!{col}{row_index}", label.replace('\'', "''")),
+                    value,
+                )?;
+            }
+            Ok(())
+        })?;
+        if records.len() == before {
+            super::document::push_record(&mut records, &label, &label, "[Empty worksheet]")?;
+        }
+    }
+    Ok(records)
 }
 
 fn xlsx_column_index(reference: &str) -> Option<usize> {

@@ -201,6 +201,9 @@ impl echo_agent_tool_runtime::Tool for HashlineReadTool {
 
         match result {
             ReadFileOutput::FileContent(mut fc) => {
+                if fc.document_progress.is_some() {
+                    return Ok(ReadFileOutput::FileContent(fc));
+                }
                 // Empty file: preserve the system-reminder from run_read_file.
                 if fc.raw_output.is_empty() && fc.total_lines == 0 {
                     fc.content_concise = None;
@@ -430,6 +433,7 @@ mod tests {
         let tool = HashlineReadTool;
         let resources = test_resources(tmp.path());
         let input = ReadFileInput {
+            document: None,
             path: "test.rs".to_string(),
             offset: None,
             limit: None,
@@ -474,6 +478,7 @@ mod tests {
         let tool = HashlineReadTool;
         let resources = test_resources(tmp.path());
         let input = ReadFileInput {
+            document: None,
             path: "long.txt".to_string(),
             offset: None,
             limit: None,
@@ -515,6 +520,7 @@ mod tests {
         let tool = HashlineReadTool;
         let resources = test_resources(tmp.path());
         let input = ReadFileInput {
+            document: None,
             path: "with_img.html".to_string(),
             offset: None,
             limit: None,
@@ -539,6 +545,7 @@ mod tests {
         let tool = HashlineReadTool;
         let resources = test_resources(tmp.path());
         let input = ReadFileInput {
+            document: None,
             path: "does_not_exist.rs".to_string(),
             offset: None,
             limit: None,
@@ -565,6 +572,7 @@ mod tests {
         let tool = HashlineReadTool;
         let resources = test_resources(tmp.path());
         let input = ReadFileInput {
+            document: None,
             path: "multi.txt".to_string(),
             offset: Some(2),
             limit: Some(2),
@@ -602,6 +610,7 @@ mod tests {
         let tool = HashlineReadTool;
         let resources = test_resources(tmp.path());
         let input = ReadFileInput {
+            document: None,
             path: "five.txt".to_string(),
             offset: Some(2),
             limit: Some(2),
@@ -666,6 +675,7 @@ mod tests {
         let tool = HashlineReadTool;
         let resources = test_resources(tmp.path());
         let input = ReadFileInput {
+            document: None,
             path: "five.txt".to_string(),
             offset: Some(2),
             limit: Some(2),
@@ -718,6 +728,7 @@ mod tests {
         let tool = HashlineReadTool;
         let resources = test_resources(tmp.path());
         let input = ReadFileInput {
+            document: None,
             path: "large.rs".to_string(),
             offset: Some(100),
             limit: Some(5),
@@ -754,6 +765,7 @@ mod tests {
         let tool = HashlineReadTool;
         let resources = test_resources(tmp.path());
         let input = ReadFileInput {
+            document: None,
             path: "short.txt".to_string(),
             offset: Some(100),
             limit: Some(5),
@@ -790,6 +802,7 @@ mod tests {
         let tool = HashlineReadTool;
         let resources = test_resources(tmp.path());
         let input = ReadFileInput {
+            document: None,
             path: "big.txt".to_string(),
             offset: None,
             limit: None,
@@ -826,6 +839,7 @@ mod tests {
         let tool = HashlineReadTool;
         let resources = test_resources(tmp.path());
         let input = ReadFileInput {
+            document: None,
             path: "big.txt".to_string(),
             offset: None,
             limit: Some(50),
@@ -857,6 +871,7 @@ mod tests {
         let tool = HashlineReadTool;
         let resources = test_resources(tmp.path());
         let input = ReadFileInput {
+            document: None,
             path: "big.txt".to_string(),
             offset: None,
             limit: Some(2000),

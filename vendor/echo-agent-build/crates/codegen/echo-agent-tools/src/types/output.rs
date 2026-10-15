@@ -207,6 +207,9 @@ pub struct GrepSearchOutput {
 }
 #[derive(Debug, Clone, Serialize, Deserialize, schemars::JsonSchema)]
 pub struct FileContent {
+    /// Structured document coverage for UI and recovery; never inferred from prose.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub document_progress: Option<serde_json::Value>,
     /// content here is the model friendly output which will always be present since even
     /// on failures we want to present the model with some information
     pub content: String,
@@ -264,6 +267,8 @@ pub struct PdfPageImage {
 /// Multiple rendered PDF page images.
 #[derive(Debug, Clone, Serialize, Deserialize, schemars::JsonSchema)]
 pub struct PdfPageImages {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub document_progress: Option<serde_json::Value>,
     /// Rendered page images, one per requested page
     pub pages: Vec<PdfPageImage>,
     /// Total pages in the PDF document
@@ -1370,6 +1375,7 @@ mod tests {
     fn file_content_extracted_images_survive_hub_json_roundtrip() {
         let payload = "B".repeat(40_000);
         let fc = FileContent {
+            document_progress: None,
             content: crate::util::base64_images::IMAGE_CONTENT_PLACEHOLDER.into(),
             content_concise: None,
             absolute_path: PathBuf::from("/tmp/x.png"),
@@ -1398,6 +1404,7 @@ mod tests {
     fn tool_output_read_file_extracted_images_survive_hub_roundtrip() {
         let payload = "D".repeat(18_000);
         let fc = FileContent {
+            document_progress: None,
             content: crate::util::base64_images::IMAGE_CONTENT_PLACEHOLDER.into(),
             content_concise: None,
             absolute_path: PathBuf::from("/tmp/y.png"),
@@ -1422,6 +1429,7 @@ mod tests {
     }
     fn empty_file_content(offset: Option<usize>, total_lines: usize) -> FileContent {
         FileContent {
+            document_progress: None,
             content: String::new(),
             content_concise: None,
             absolute_path: PathBuf::from("/tmp/f.txt"),
@@ -2505,6 +2513,7 @@ mod tests {
         file_size: usize,
     ) -> PdfPageImages {
         PdfPageImages {
+            document_progress: None,
             pages: page_numbers
                 .iter()
                 .map(|&n| PdfPageImage {

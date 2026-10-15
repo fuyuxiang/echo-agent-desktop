@@ -742,6 +742,13 @@ impl SessionActor {
     /// Refresh auth and push a fresh `SamplerConfig` before each turn.
     pub(crate) async fn prepare_sampler_for_turn(&self) {
         self.refresh_token_if_expired().await;
+        self.tool_bridge_handle()
+            .update_resource(
+                echo_agent_tools::implementations::read_file::document::DocumentReadBudget(
+                    self.tool_text_cap().await.saturating_sub(2048),
+                ),
+            )
+            .await;
         let mut sampler_config = self.reconstruct_full_config().await;
         if self.tool_context.task_output_token_budget.is_some()
             || self.tool_context.sampler_retry_only_before_output
@@ -856,12 +863,27 @@ impl SessionActor {
             );
             return Err(acp::Error::internal_error().data(message));
         }
-        if self.should_compact_on_error(&error).await {
+        if (self.should_compact_on_error(&error).await
+            || echo_agent_sampling_types::is_context_length_error(&error.message))
+            && self.claim_context_recovery().await
+        {
+            let configured = self.chat_state_handle.get_sampling_config().await;
             let cw = error
                 .model_metadata
                 .as_ref()
                 .and_then(|m| m.context_window)
-                .expect("should_compact_on_error guarantees context_window");
+                .filter(|&n| n > 0)
+                .unwrap_or_else(|| {
+                    configured
+                        .as_ref()
+                        .map(|c| {
+                            let reserve = u64::from(c.max_completion_tokens.unwrap_or(4096));
+                            (c.context_window.get() * 3 / 4)
+                                .max(reserve + 4096)
+                                .min(c.context_window.get())
+                        })
+                        .unwrap_or(96_000)
+                });
             {
                 let total_tokens = self.chat_state_handle.get_estimated_total_tokens().await;
                 let percentage = echo_agent_token_estimation::usage_percentage_u8(total_tokens, cw);
@@ -1143,10 +1165,29 @@ impl SessionActor {
     /// Drive one turn through the sampler, pacing a subagent's 429s via `budget`.
     pub(crate) async fn run_turn_via_sampler(
         self: &Arc<Self>,
-        request: ConversationRequest,
+        mut request: ConversationRequest,
         budget: &mut RateLimitWaitBudget,
     ) -> Result<SamplerTurnOutcome, acp::Error> {
         self.prepare_sampler_for_turn().await;
+        if let Err(error) = self.bound_request(&mut request).await {
+            if self.tool_context.task_output_token_budget.is_none()
+                && self.claim_context_recovery().await
+                && let Some(config) = self.chat_state_handle.get_sampling_config().await
+            {
+                let tokens = self.chat_state_handle.get_estimated_total_tokens().await;
+                let trigger = compaction::AutoCompactTriggerInfo {
+                    tokens_used: tokens,
+                    context_window: config.context_window.get(),
+                    percentage: echo_agent_token_estimation::usage_percentage_u8(
+                        tokens,
+                        config.context_window.get(),
+                    ),
+                };
+                self.run_compact_only(trigger, false).await?;
+                return Ok(SamplerTurnOutcome::CompactAndResubmit);
+            }
+            return Err(error);
+        }
         if !budget.can_wait() {
             return match self.submit_turn_request(request).await {
                 Ok(outcome) => Ok(outcome),
@@ -1197,6 +1238,9 @@ impl SessionActor {
         };
         match submit_outcome {
             Ok((response, metrics)) => {
+                // Cap consecutive failed recoveries, not the number of
+                // successful compactions in a long document task.
+                self.reset_context_recovery().await;
                 let span = tracing::Span::current();
                 span.record("request_id", request_id_str.as_str());
                 if let Some(ttft) = metrics.time_to_first_token_ms {

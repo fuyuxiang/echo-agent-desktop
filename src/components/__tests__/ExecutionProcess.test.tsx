@@ -7,6 +7,13 @@ import type { ChatMessage, ToolCallView } from "@/stores/session-store";
 import { useKnowledgeStore } from "@/stores/knowledge-store";
 
 describe("assistant execution process", () => {
+  it("执行过程收起后仍显示最新资料的读取覆盖", () => {
+    render(<ThemeProvider><ExecutionProcess active={false} parts={[{ kind: "tool_call", toolCall: {
+      toolCallId: "document", kind: "read_file", title: "Read 比赛.xlsx", status: "completed", content: [],
+      documentProgress: { source: "比赛.xlsx", revision: "a".repeat(64), readRecords: 12, totalRecords: 100, checkpointCount: 2, complete: false },
+    } }]} /></ThemeProvider>);
+    expect(screen.getByRole("button", { name: /比赛.xlsx · 已读取 12\/100 段内容/ })).toHaveAttribute("aria-expanded", "false");
+  });
   const renderMessage = (onOpenTool?: (tool: ToolCallView) => void) => render(
     <ThemeProvider>
       <MessageItem

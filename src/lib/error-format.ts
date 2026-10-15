@@ -170,6 +170,9 @@ function fmtDuration(ms?: number): string {
  */
 export function formatAgentError(raw: string): string | null {
   const lowerRaw = raw.toLowerCase();
+  if (/context window exceeds limit|context_length_exceeded|context_window_exceeded|maximum context length|input token limit exceeded|prompt is too long|input is too long/.test(lowerRaw)) {
+    return "⚠️ 本次内容超过模型的处理容量。请在当前任务中继续分批处理；已保存的资料和阶段记录可继续使用。";
+  }
   if (
     lowerRaw.includes("rewind/execute")
     && (lowerRaw.includes("invalid params") || lowerRaw.includes("unknown variant"))
@@ -266,7 +269,7 @@ export function formatAgentError(raw: string): string | null {
   if (innerMsg.includes("context") && innerMsg.includes("length")) {
     const usage = data?.promptUsage;
     const tokens = usage?.inputTokens ? fmtTokens(usage.inputTokens) : "过大";
-    return `⚠️ 上下文超出模型限制（当前 ${tokens} tokens）。请新建会话或缩短对话。`;
+    return `⚠️ 上下文超出模型限制（当前 ${tokens} tokens）。请在当前任务中继续分批处理，或减少本轮附带的历史内容。`;
   }
 
   // Generic: extract inner message if available

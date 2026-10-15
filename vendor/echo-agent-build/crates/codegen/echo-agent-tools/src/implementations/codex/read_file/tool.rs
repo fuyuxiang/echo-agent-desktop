@@ -259,6 +259,7 @@ impl echo_agent_tool_runtime::Tool for CodexReadFileTool {
 
         // 7. Return.
         Ok(ReadFileOutput::FileContent(FileContent {
+            document_progress: None,
             content,
             content_concise: None,
             absolute_path: path,

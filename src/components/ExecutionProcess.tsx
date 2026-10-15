@@ -1,6 +1,7 @@
 import { useEffect, useId, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { Markdown, type MarkdownConfig } from "./markdown/index";
 import { ToolCallCard } from "./ToolCallCard";
+import { documentProgressSummary } from "@/lib/document-progress";
 import { useTheme } from "./ThemeProvider";
 import type { MessagePart, ToolCallView } from "@/stores/session-store";
 import {
@@ -211,6 +212,9 @@ export function ExecutionProcess({
   }
   if (summary.changedFiles.length > 0) meta.push(`${summary.changedFiles.length} 个文件`);
   if (duration) meta.push(duration);
+  const documentSummary = documentProgressSummary(parts.flatMap(part =>
+    part.kind === "tool_call" && part.toolCall.documentProgress ? [part.toolCall.documentProgress] : []));
+  if (documentSummary) meta.unshift(documentSummary);
   if (knowledgeTrace?.personal?.state === "used") {
     meta.unshift(`${knowledgeTrace.personal.resultCount} 个知识片段`);
   }
@@ -227,7 +231,7 @@ export function ExecutionProcess({
     : summary.state;
 
   return (
-    <section className={`execution-process execution-process--${displayState}`}>
+    <section className={`execution-process execution-process--${displayState}${documentSummary ? " execution-process--documents" : ""}`}>
       <button
         type="button"
         className="execution-process__header"

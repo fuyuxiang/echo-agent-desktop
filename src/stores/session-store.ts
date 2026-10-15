@@ -1,4 +1,5 @@
 import { create } from "zustand";
+import { documentProgressFromRawOutput, type DocumentProgress } from "@/lib/document-progress";
 import type {
   Plan,
   PlanUpdate,
@@ -67,6 +68,7 @@ export type MessagePart =
 
 /** A tool-call card rendered inline. Mirrors a subset of ToolCallUpdate. */
 export interface ToolCallView {
+  documentProgress?: DocumentProgress;
   toolCallId: string;
   title: string;
   kind: string;
@@ -1480,6 +1482,7 @@ export const useSessionStore = create<SessionState>((set, get) => {
               ],
               rawInput: boundedRawInput(raw.rawInput ?? raw.raw_input),
               officeReceipt: officeReceipt ?? undefined,
+              documentProgress: documentProgressFromRawOutput(raw.rawOutput ?? raw.raw_output),
             };
             messages[idx] = upsertToolCall(messages[idx], view, streamId);
             return {
@@ -1514,6 +1517,8 @@ export const useSessionStore = create<SessionState>((set, get) => {
               );
             }
             const officeReceipt = officeReceiptFromRawOutput(raw.rawOutput ?? raw.raw_output);
+            const documentProgress = documentProgressFromRawOutput(raw.rawOutput ?? raw.raw_output);
+            if (documentProgress) deltaFields.documentProgress = documentProgress;
             if (officeReceipt) {
               deltaFields.officeReceipt = officeReceipt;
               deltaFields.content = [

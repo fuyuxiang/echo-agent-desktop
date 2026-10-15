@@ -30,3 +30,6 @@ pub use echo_agent_sampler::{
     InferenceLatencyStats, OriginClientInfo, RequestId, SamplerActor, SamplerConfig, SamplerHandle,
     SamplingChannel, SamplingClient, SamplingErrorInfo, SamplingErrorKind, SamplingEvent,
 };
+
+mod request_budget;
+pub use request_budget::estimate_request_tokens;

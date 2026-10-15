@@ -1004,6 +1004,10 @@ impl SessionActor {
         }
         self.drain_between_turn_completions().await;
         self.inject_workflow_status_reminder().await;
+        if !crate::session::PromptOrigin::from_prompt_id(prompt_id).is_synthetic() {
+            self.begin_document_task(&user_message, &prompt_blocks)
+                .await?;
+        }
         let user_message = if user_images.is_empty() {
             user_message
         } else if self.is_cursor_harness() {
@@ -1216,11 +1220,27 @@ impl SessionActor {
                         );
                     }
                 }
+                match self.document_completion_feedback().await {
+                    Ok(Some(feedback)) => {
+                        self.chat_state_handle
+                            .push_user_message(ConversationItem::stop_hook_feedback(feedback));
+                        continue;
+                    }
+                    Ok(None) => {},
+                    // Preserve the normal turn cleanup, rewind checkpoint and
+                    // transcript flush even when the document gate stalls.
+                    Err(error) => break Err(error),
+                }
                 match self
                     .run_stop_gate(prompt_id, stop_continuations_this_turn)
                     .await
                 {
-                    StopGateDecision::AllowStop => break round,
+                    StopGateDecision::AllowStop => {
+                        if let Err(error) = self.finish_document_task().await {
+                            break Err(error);
+                        }
+                        break round;
+                    }
                     StopGateDecision::KeepWorking { feedback } => {
                         stop_continuations_this_turn += 1;
                         self.chat_state_handle

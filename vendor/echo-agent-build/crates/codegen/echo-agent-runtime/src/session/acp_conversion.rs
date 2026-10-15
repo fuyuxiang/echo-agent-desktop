@@ -765,6 +765,7 @@ mod tests {
     #[test]
     fn test_acp_tool_update_read_file_success() {
         let output = ToolOutput::ReadFile(ReadFileOutput::FileContent(FileContent {
+            document_progress: None,
             content: "file content".to_string(),
             content_concise: None,
             absolute_path: PathBuf::from("/project/src/main.rs"),
@@ -939,6 +940,7 @@ mod tests {
     fn test_raw_output_json_round_trips() {
         // raw_output_json uses serde directly, so it must round-trip with ToolOutput deserialization
         let output = ToolOutput::ReadFile(ReadFileOutput::FileContent(FileContent {
+            document_progress: None,
             content: "content".to_string(),
             content_concise: None,
             absolute_path: PathBuf::from("/project/src/main.rs"),
@@ -1065,6 +1067,7 @@ mod tests {
         )
         .unwrap();
         let output = ToolOutput::ReadFile(ReadFileOutput::FileContent(FileContent {
+            document_progress: None,
             content: "content".to_string(),
             content_concise: None,
             absolute_path: PathBuf::from(
@@ -1318,6 +1321,7 @@ mod tests {
     #[test]
     fn test_no_rewriter_preserves_original_paths() {
         let output = ToolOutput::ReadFile(ReadFileOutput::FileContent(FileContent {
+            document_progress: None,
             content: "content".to_string(),
             content_concise: None,
             absolute_path: PathBuf::from(
@@ -1345,6 +1349,7 @@ mod tests {
     #[test]
     fn test_acp_tool_update_pdf_page_images() {
         let output = ToolOutput::ReadFile(ReadFileOutput::PdfPageImages(PdfPageImages {
+            document_progress: None,
             pages: vec![
                 PdfPageImage {
                     data: "base64_page1".to_string(),

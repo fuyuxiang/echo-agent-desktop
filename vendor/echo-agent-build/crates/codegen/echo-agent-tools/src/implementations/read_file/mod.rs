@@ -1,5 +1,6 @@
 //! Shared image/PDF/metadata helpers for read tools (echo_agent_build, etc.).
 
+pub mod document;
 pub mod image;
 pub mod metadata;
 pub(crate) mod office;
@@ -16,4 +17,4 @@ pub use pdf::{
 };
 
 // Internal helpers still used only inside this crate.
-pub(crate) use pdf::{handle_pdf, raw_text_to_file_content};
+pub(crate) use pdf::handle_pdf;
