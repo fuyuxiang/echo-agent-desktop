@@ -13,7 +13,7 @@ const PORT = 1420;
 // file, so we can scope the monaco-editor alias to tests only and leave the
 // production `dev` / `build` modes resolving the package through vite's
 // normal `module`-field lookup.
-const isVitest = process.env.VITEST === "true" || process.env.VITEST === true;
+const isVitest = String(process.env.VITEST) === "true";
 const monacoEditorEntry = path.resolve(
   __dirname,
   "node_modules/monaco-editor/esm/vs/editor/editor.main.js",

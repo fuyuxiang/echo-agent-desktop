@@ -103,6 +103,8 @@ import type { AutomationMode } from "./lib/automation-client";
 import { applySessionScopedFailure } from "./lib/session-scoped-failure";
 import { isGlobalShortcutBlocked } from "./lib/keyboard-scope";
 import { useModalPresence } from "./lib/use-modal-focus";
+import { useAppDialog } from "./components/AppDialog";
+import { confirmAutomationEditorExit } from "./stores/automation-editor-store";
 import { hydrateKnowledgeSources } from "./lib/kb-source-storage";
 import {
   permissionModeStatusFromEvent,
@@ -231,8 +233,10 @@ function Shell() {
   const [init, setInit] = useState<InitResult | null>(null);
   useEffect(() => {
     if (init?.ok && "__TAURI_INTERNALS__" in window) {
-      const frame = requestAnimationFrame(() => { void invoke("desktop_validation_ready").catch(console.error); });
-      return () => cancelAnimationFrame(frame);
+      // The shell has committed. Its native readiness handshake must also run
+      // when WebKit suspends animation frames for an occluded test window.
+      const timer = setTimeout(() => { void invoke("desktop_validation_ready").catch(console.error); }, 0);
+      return () => clearTimeout(timer);
     }
   }, [init?.ok]);
 
@@ -365,6 +369,7 @@ function Shell() {
   const updateStatus = useUpdateStore((state) => state.status);
   const availableUpdateVersion = useUpdateStore((state) => state.update?.version);
   const modalOpen = useModalPresence();
+  const { confirm: confirmAutomationExit, dismiss: dismissAutomationExit, dialog: automationExitDialog } = useAppDialog();
 
   const openSettings = useCallback((section: SettingsSectionId = "model") => {
     setSettingsSection(section);
@@ -1134,7 +1139,18 @@ function Shell() {
   useEffect(() => {
     let disposed = false;
     const stops: Array<() => void> = [];
-    const exit = createExitPreparationController({ preparing: setExitPreparing, failed: (message) => showToast(message, 8000) });
+    const exit = createExitPreparationController({
+      preparing: setExitPreparing,
+      failed: (message) => showToast(message, 8000),
+      beforePrepare: () => confirmAutomationEditorExit(() => confirmAutomationExit({
+        title: "退出前舍弃自动化草稿？",
+        description: "自动化任务还有未保存的输入。继续编辑会保留草稿；确认退出后，这些输入将被舍弃。",
+        cancelLabel: "继续编辑",
+        confirmLabel: "舍弃修改并退出",
+        danger: true,
+      })),
+      cancelPrepare: dismissAutomationExit,
+    });
     void Promise.allSettled([
       listen<DesktopExitNotice>("desktop://prepare-exit", ({ payload }) => exit.prepare(payload)),
       listen<DesktopExitFailure>("desktop://exit-failed", ({ payload }) => exit.fail(payload)),
@@ -1170,7 +1186,7 @@ function Shell() {
       }
     });
     return () => { disposed = true; exit.dispose(); stops.forEach((stop) => stop()); };
-  }, [showToast]);
+  }, [showToast, confirmAutomationExit, dismissAutomationExit]);
 
   useEffect(() => onSessionStatusPersistenceIssue(({ pendingCount }) => {
     showActionToast(
@@ -2754,7 +2770,7 @@ function Shell() {
 
   return (
     <div className={`app${IS_MACOS ? " app--macos" : ""}${codingWorkspaceActive ? " app--coding" : ""}`}>
-      {exitPreparing && <div className="app__exit-overlay" role="status" aria-live="polite">正在保存录音与任务数据并准备退出…</div>}
+      {exitPreparing && !automationExitDialog && <div className="app__exit-overlay" role="status" aria-live="polite">正在保存录音与任务数据并准备退出…</div>}
       {init?.ok && <CodingTaskRuntimeManager roots={[...new Set([
         ...codingWorkspaces.map((workspace) => workspace.cwd),
         codingWorkspaceCwd,
@@ -3071,6 +3087,7 @@ function Shell() {
         refreshSignal={taskRefreshSignal}
         onToast={showToast}
       />
+      {automationExitDialog}
       <SecondarySidebar onSelectExpert={handleStartWithExpert} onCreateExpert={handleCreateExpert} onToast={showToast} />
     </div>
   );

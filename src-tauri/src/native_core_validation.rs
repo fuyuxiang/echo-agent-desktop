@@ -40,7 +40,10 @@ fn validate_manifest(value: &Manifest, home: &Path, phase: &str) -> Result<(), S
             .nonce
             .bytes()
             .all(|byte| byte.is_ascii_hexdigit() && !byte.is_ascii_uppercase())
-        || value.model_id != "echoagent-ojlab/chat-qwen"
+        || !matches!(
+            value.model_id.as_str(),
+            "echoagent-ojlab/chat-qwen" | crate::native_review_model::PRIVATE_MODEL_ID
+        )
         || value.office_fixtures.len() != 3
         || (phase == "restart")
             != value
@@ -113,6 +116,7 @@ fn read_manifest() -> Result<Manifest, String> {
         serde_json::from_slice(&bytes).map_err(|_| "Invalid core review manifest")?;
     let phase = std::env::var("ECHO_DESKTOP_REVIEW_PHASE").map_err(|_| "Missing core phase")?;
     validate_manifest(&manifest, &home, &phase)?;
+    crate::native_review_model::validate_config(&home, &manifest.model_id)?;
     for directory in [
         home.join("workspaces"),
         manifest.cwd.clone(),
@@ -131,6 +135,15 @@ fn read_manifest() -> Result<Manifest, String> {
         }
     }
     Ok(manifest)
+}
+
+#[tauri::command]
+pub(crate) fn desktop_review_model_connection(
+    window: tauri::WebviewWindow,
+) -> Result<crate::native_review_model::ReviewConnection, String> {
+    require_main_internal(&window)?;
+    let manifest = read_manifest()?;
+    crate::native_review_model::connection(&manifest.home, &manifest.model_id)
 }
 
 pub(crate) fn launch(window: &tauri::WebviewWindow) -> Result<(), String> {

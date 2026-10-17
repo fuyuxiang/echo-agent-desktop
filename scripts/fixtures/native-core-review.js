@@ -133,7 +133,7 @@ window.__echoNativeCoreReview = async function ({ home, nonce } = {}) {
       && value.run_in_background !== true && value.background !== true && value.task_id == null
       && !value.resume_from && !value.resume && !value.isolation
       && (value.cwd == null || value.cwd === scope.cwd)
-      && (value.model == null || value.model === scope.modelId || value.model === 'chat-qwen')
+      && (value.model == null || value.model === scope.modelId || value.model === scope.modelId.split('/').at(-1))
       && typeof value.description === 'string' && value.description.length <= 120) return { name, prompt: value.prompt, cwd: scope.cwd };
     return null;
   };
@@ -203,7 +203,7 @@ window.__echoNativeCoreReview = async function ({ home, nonce } = {}) {
     assert(context.coreRequested === true && context.evaluations === 1 && Number.isInteger(context.pid) && context.pid > 0
       && context.home === home && context.phase === scope.phase && scope.schema === 1 && scope.home === home
       && scope.nonce === nonce && scope.cwd === `${home}/workspaces/default`
-      && ['first-launch', 'restart'].includes(scope.phase) && scope.modelId === 'echoagent-ojlab/chat-qwen', 'Native Core manifest/context mismatch');
+      && ['first-launch', 'restart'].includes(scope.phase) && ['echoagent-ojlab/chat-qwen', 'echoagent-review/claude-opus-5-5'].includes(scope.modelId), 'Native Core manifest/context mismatch');
     assert(Array.isArray(scope.officeFixtures) && scope.officeFixtures.length === 3
       && scope.officeFixtures.every((item, i) => item.format === ['xlsx', 'epub', 'ods'][i]
         && item.path === `${scope.cwd}/办公读取/中文 ${item.format}.${item.format}`
@@ -257,16 +257,16 @@ window.__echoNativeCoreReview = async function ({ home, nonce } = {}) {
         return { fixtures: scope.officeFixtures, physicalShaCheckedByParent: true, noModelCall: true };
       });
       await stage('core-restart-custom-model', async () => {
-        const saved = report.expected.customModel;
+        const saved = report.expected.customModel, binding = await call('desktop_review_model_connection');
         assert(saved?.modelId && saved.providerId, 'First phase did not save a personal Qwen connection');
         const models = await call('providers_list'), provider = models.providers.find((item) => item.id === saved.providerId);
-        assert(provider?.source === 'personal' && provider.baseUrl === 'http://123.56.188.16:8088/v1'
-          && provider.allowInsecureHttp === true && !provider.managed && !provider.apiKey
-          && models.models.some((item) => item.modelId === saved.modelId && item.remoteModelId === 'chat-qwen' && item.providerId === saved.providerId), 'Saved personal connection changed');
+        assert(provider?.source === 'personal' && provider.baseUrl === binding.baseUrl
+          && provider.allowInsecureHttp === (new URL(binding.baseUrl).protocol === 'http:') && !provider.managed && Boolean(provider.apiKey) === Boolean(binding.apiKey)
+          && models.models.some((item) => item.modelId === saved.modelId && item.remoteModelId === binding.model && item.providerId === saved.providerId), 'Saved personal connection changed');
         await select(report.expected.sessionId);
         assert((await ownSession(report.expected.sessionId)).currentModelId === saved.modelId, 'Source session lost its switched personal model');
         assert(users().some((line) => line.includes(saved.marker)) && reply().includes(saved.marker), 'Actual custom-model last turn was not restored');
-        return { modelId: saved.modelId, providerId: saved.providerId, selectedSessionId: selected(), noCredentials: true, noNewModelCall: true };
+        return { modelId: saved.modelId, providerId: saved.providerId, selectedSessionId: selected(), noCredentials: !binding.apiKey, noNewModelCall: true };
       });
     } else {
       assert((await catalog()).length === 0 && (await call('projects_load')).length === 0, 'Refusing pre-existing sessions/projects');
@@ -367,7 +367,7 @@ window.__echoNativeCoreReview = async function ({ home, nonce } = {}) {
         set(await wait(() => document.querySelector('#create-project-name'), 'project name'), name);
         set(await wait(() => document.querySelector('#create-project-model'), 'project default model'), scope.modelId);
         await delay(150);
-        (await wait(() => button(document.querySelector('[role="dialog"][aria-label="新建项目"]'), '确定'), 'project create confirm')).click();
+        (await wait(() => button(document.querySelector('[role="dialog"][aria-label="新建项目"]'), '创建项目'), 'project create confirm')).click();
         const project = await wait(async () => (await call('projects_load')).find((item) => item.name === name), 'real saved project');
         assert(project.cwd.startsWith(`${home}/`), 'Project cwd escaped own home'); e.project = { id: project.id, name, cwd: project.cwd,
           initialPlans: JSON.stringify(project.plans), initialTasks: JSON.stringify(project.tasks) };
@@ -435,7 +435,7 @@ window.__echoNativeCoreReview = async function ({ home, nonce } = {}) {
       await stage('core-subagent-no-side-effects', async () => {
         const childPrompt = `请只回复“${m.child}”；不要调用任何工具、读取或写入文件、访问网络或联系他人。`;
         const input = { prompt: childPrompt, description: '隔离返回固定字符串', subagent_type: 'general-purpose',
-          run_in_background: false, model: 'chat-qwen' };
+          run_in_background: false, model: scope.modelId.split('/').at(-1) };
         const request = `隔离子代理验收：只调用task一次，完整输入严格使用这份JSON：${JSON.stringify(input)}。不要改写prompt或增添参数；禁止其他model、worktree、目录、task_id、resume和其他工具。取得真实子代理结果后只回复该结果。`;
         const before = completions.length, childBefore = subagents.length; await send(request);
         const result = await finish(request, m.child, before, { kind: 'child', prompt: childPrompt });
@@ -447,19 +447,24 @@ window.__echoNativeCoreReview = async function ({ home, nonce } = {}) {
         assert(panel.textContent.includes('已完成'), 'Child completed state absent in UI'); return { ...result, child: e.child, events, noToolAuthorizedForChild: true };
       });
       await stage('core-custom-qwen-connection', async () => {
-        // Ordinary exact Ojlab connection: this endpoint explicitly requires
-        // no API key. No managed identity or provider credential is copied.
-        const label = `隔离个人Qwen-${nonce}`, marker = `CORE-CUSTOM-${nonce}`;
+        const binding = await call('desktop_review_model_connection');
+        const privateModel = scope.modelId === 'echoagent-review/claude-opus-5-5';
+        assert(binding.model === scope.modelId.split('/').at(-1), 'Configured model binding differs');
+        const http = new URL(binding.baseUrl).protocol === 'http:';
+        const label = `隔离个人${privateModel ? '模型' : 'Qwen'}-${nonce}`, marker = `CORE-CUSTOM-${nonce}`;
         (await wait(() => document.querySelector('button[aria-label="设置"]'), 'settings for personal model')).click();
         (await wait(() => [...document.querySelectorAll('.settings-navigation__item')].find((el) => el.textContent.trim() === '模型'), 'model settings')).click();
         (await wait(() => button(document.querySelector('.model-connections'), '添加个人连接') || button(document, '添加个人连接'), 'add personal connection')).click();
         const editor = await wait(() => document.querySelector('[role="dialog"][aria-label="添加个人连接"]'), 'personal connection editor');
-        set(editor.querySelector('#model-connection-label'), label); set(editor.querySelector('#model-base-url'), 'http://123.56.188.16:8088/v1');
-        const consent = await wait(() => editor.querySelector('.model-connection-editor__http-consent input'), 'actual HTTP consent');
-        assert(!consent.checked, 'HTTP consent must start unchecked'); consent.click();
-        await wait(() => consent.checked, 'explicit owned HTTP consent');
-        assert(editor.querySelector('#model-api-key')?.value === '', 'No credential may be entered or inherited');
-        set(editor.querySelector('#model-id-input'), 'chat-qwen');
+        set(editor.querySelector('#model-connection-label'), label); set(editor.querySelector('#model-base-url'), binding.baseUrl);
+        if (http) {
+          const consent = await wait(() => editor.querySelector('.model-connection-editor__http-consent input'), 'actual HTTP consent');
+          assert(!consent.checked, 'HTTP consent must start unchecked'); consent.click();
+          await wait(() => consent.checked, 'explicit owned HTTP consent');
+        }
+        assert(editor.querySelector('#model-api-key')?.value === '', 'Credential must start empty');
+        if (binding.apiKey) set(editor.querySelector('#model-api-key'), binding.apiKey);
+        set(editor.querySelector('#model-id-input'), binding.model);
         await delay(150);
         const testSave = button(editor, '测试并保存'); assert(testSave, 'Actual model test/save action missing'); testSave.click();
         const entry = await wait(async () => {
@@ -467,11 +472,11 @@ window.__echoNativeCoreReview = async function ({ home, nonce } = {}) {
           if (visible(alert)) throw new Error(`Actual connection test/save failed: ${alert.textContent.slice(0, 500)}`);
           if (document.contains(editor)) return null;
           const data = await call('providers_list'), provider = data.providers.find((item) => item.label === label);
-          const model = provider && data.models.find((item) => item.providerId === provider.id && item.remoteModelId === 'chat-qwen');
+          const model = provider && data.models.find((item) => item.providerId === provider.id && item.remoteModelId === binding.model);
           // credentialConfigured also means an anonymous service is usable;
           // apiKey is the actual persisted-secret indicator in this DTO.
-          assert(!provider || provider.source === 'personal' && !provider.managed && !provider.apiKey
-            && provider.baseUrl === 'http://123.56.188.16:8088/v1' && provider.allowInsecureHttp === true, 'Personal connection scope/auth was changed');
+          assert(!provider || provider.source === 'personal' && !provider.managed && Boolean(provider.apiKey) === Boolean(binding.apiKey)
+            && provider.baseUrl === binding.baseUrl && provider.allowInsecureHttp === http, 'Personal connection scope/auth was changed');
           return model ? { providerId: provider.id, modelId: model.modelId, label, marker } : null;
         }, 'real model test then persisted normal connection', 90000);
         e.customModel = entry;
@@ -480,8 +485,46 @@ window.__echoNativeCoreReview = async function ({ home, nonce } = {}) {
         await wait(async () => (await ownSession(e.sessionId)).currentModelId === entry.modelId, 'actual personal session model switch', 60000);
         const text = simple(marker), before = completions.length; await send(text);
         const response = await finish(text, marker, before, null, entry.modelId);
-        return { ...entry, testedAndSavedViaUi: true, explicitHttpConsent: true, noCredentials: true,
+        return { ...entry, testedAndSavedViaUi: true, explicitHttpConsent: http, noCredentials: !binding.apiKey,
           actualSessionModelId: (await ownSession(e.sessionId)).currentModelId, response };
+      });
+      await stage('core-automation-draft-navigation-exit', async () => {
+        const marker = `CORE-DRAFT-${nonce}`;
+        const jobsBefore = await call('automations_snapshot');
+        assert(jobsBefore.automations.length === 0, 'Core draft test requires no existing jobs');
+        const openAutomation = async () => {
+          if (document.querySelector('.app__body--collapsed')) (await wait(() => document.querySelector('button[aria-label="展开侧边栏"]'), 'draft sidebar reveal')).click();
+          (await wait(() => [...document.querySelectorAll('.sidebar__nav-item')].find(node => visible(node) && node.textContent.trim().startsWith('更多')), 'actual More navigation')).click();
+          (await wait(() => [...document.querySelectorAll('button')].find(node => visible(node) && node.textContent.trim() === '定时任务'), 'actual automation navigation')).click();
+        };
+        await openAutomation();
+        (await wait(() => button(document, '+ 添加自动化'), 'actual new automation form')).click();
+        const name = await wait(() => document.querySelector('.atm-modal-input'), 'actual automation name');
+        set(name, marker);
+        (await wait(() => [...document.querySelectorAll('.sidebar__nav-item')].find(node => visible(node) && node.textContent.trim() === '扩展'), 'leave automation via actual navigation')).click();
+        await wait(() => !document.contains(name), 'automation editor genuinely unmounted');
+        await openAutomation();
+        await wait(() => document.querySelector('.atm-modal-input')?.value === marker, 'actual draft restored after navigation');
+        // This truthful incomplete checkpoint requests the production quit
+        // path. It cannot qualify a parent pass if the guard lets us exit.
+        await invoke('desktop_review_complete', { report: { version: 1, kind: 'core-draft-exit-checkpoint', passed: false,
+          incomplete: true, home, nonce, nativeContext: context } });
+        const exitDialog = await wait(() => [...document.querySelectorAll('[role="alertdialog"]')]
+          .find(node => visible(node) && node.textContent.includes('退出前舍弃自动化草稿？')), 'actual native quit draft confirmation');
+        assert(!document.querySelector('.app__exit-overlay'), 'Busy overlay blocks the quit decision');
+        button(exitDialog, '继续编辑').click();
+        await wait(() => !visible(exitDialog) && !document.querySelector('.app__exit-overlay'), 'quit cancelled and window retained');
+        assert(document.querySelector('.atm-modal-input')?.value === marker, 'Cancelled quit lost the draft');
+        const auth = await call('agent_auth_status'); assert(auth.ready && auth.runtimeReady && auth.synchronized, 'Cancelled quit stopped the Runtime');
+        (await wait(() => button(document, '取消'), 'explicitly cancel synthetic draft')).click();
+        const discard = await wait(() => [...document.querySelectorAll('[role="alertdialog"]')]
+          .find(node => visible(node) && node.textContent.includes('舍弃未保存的修改？')), 'actual draft discard confirmation');
+        button(discard, '舍弃修改').click();
+        await wait(() => !document.querySelector('.atm-modal-input') && !visible(discard), 'synthetic draft discarded via UI');
+        assert((await call('automations_snapshot')).automations.length === 0, 'Editing a draft created an actual task');
+        await select(e.sessionId);
+        return { marker, restoredViaNavigation: true, quitConfirmationViaUi: true, exitCancelledAndRuntimeReady: true,
+          noTasksCreated: true, discardedViaUi: true };
       });
     }
   } catch (error) { report.errors.push(String(error?.message || error).slice(0, 1800)); }
@@ -490,7 +533,7 @@ window.__echoNativeCoreReview = async function ({ home, nonce } = {}) {
     const required = report.phase === 'restart' ? ['core-native-isolation', 'core-restart-owned-catalog', 'core-restart-project-ui', 'core-restart-fork-ui', 'core-restart-office-fixtures', 'core-restart-custom-model']
       : ['core-native-isolation', 'core-qwen-ready', 'core-qwen-initial-response', 'core-queue-and-send-now', 'core-stop-and-resend', 'core-rename-search-ui',
         'core-fork-original-preserved', 'core-archive-restore-ui', 'core-delete-owned-session-ui', 'core-project-move-switch-ui',
-        'core-office-xlsx-runtime-read', 'core-office-epub-runtime-read', 'core-office-ods-runtime-read', 'core-subagent-no-side-effects', 'core-custom-qwen-connection'];
+        'core-office-xlsx-runtime-read', 'core-office-epub-runtime-read', 'core-office-ods-runtime-read', 'core-subagent-no-side-effects', 'core-custom-qwen-connection', 'core-automation-draft-navigation-exit'];
     report.passed = approved && report.errors.length === 0 && required.every((id) => report.checks.filter((check) => check.id === id && check.result === 'passed').length === 1)
       && report.checks.length === required.length;
     report.finishedAt = new Date().toISOString();

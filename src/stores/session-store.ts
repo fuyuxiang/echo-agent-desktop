@@ -892,10 +892,14 @@ export const useSessionStore = create<SessionState>((set, get) => {
           };
         } else if (id != null && hasCache) {
           const t = s.transcripts[id];
-          if (!t.suppressReplay) {
+          // Mode acknowledgements can seed a new session before it is focused.
+          // Metadata alone is not cached history: suppressing that empty
+          // transcript would discard every live chunk of its first turn.
+          const suppressReplay = t.messages.length > 0;
+          if (t.suppressReplay !== suppressReplay) {
             transcripts = {
               ...s.transcripts,
-              [id]: { ...t, suppressReplay: true },
+              [id]: { ...t, suppressReplay },
             };
           }
         }

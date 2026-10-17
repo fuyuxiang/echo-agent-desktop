@@ -77,8 +77,9 @@ export function verifyIdeReport(report, manifest, pid, startedAt) {
   return report.expected;
 }
 
-export async function runNativeIdeGitReview({ executable, resourceOnly = false } = {}) {
+export async function runNativeIdeGitReview({ executable, resourceOnly = false, crashSignal = null } = {}) {
   assert.equal(process.platform, 'darwin');
+  assert([null, 'SIGTERM', 'SIGKILL'].includes(crashSignal));
   if (!resourceOnly) { assert(executable); executable = realpathSync(resolve(executable)); assert(lstatSync(executable).isFile()); }
   const output = nativeReviewOutput('native-ide-git', 'NATIVE_IDE_GIT_REVIEW_OUTPUT');
   const home = realpathSync(mkdtempSync(join(tmpdir(), 'echo-native-review-ide-git-'))); chmodSync(home, 0o700);
@@ -99,7 +100,30 @@ export async function runNativeIdeGitReview({ executable, resourceOnly = false }
   const result = { kind: 'real-native-ide-git-driver', home, cwd, output, nativeVerified: false,
     passed: false, errors: [], modelUsed: false, globalGitWritten: false, repositoryPushed: false, resourceOnly,
     isolatedUserPreferences: { 'files.autoSave': 'off' } };
-  let active, server, gitAudit, previewRequests = 0;
+  let active, server, gitAudit, previewRequests = 0, crashOwned = [];
+  if (crashSignal) result.kind = 'real-native-ide-owner-crash';
+  const table = () => execFileSync('/bin/ps', ['-axo', 'pid=,ppid=,command='], { encoding: 'utf8', maxBuffer: 4 * 1024 * 1024 });
+  const exitedPid = pid => {
+    try { return processHasExited(0, execFileSync('/bin/ps', ['-p', String(pid), '-o', 'stat='], { encoding: 'utf8' })); }
+    catch (error) { return processHasExited(error.status, ''); }
+  };
+  const ownedTheiaTree = () => {
+    if (!active?.pid) return [];
+    const snapshot = table(), candidates = [];
+    for (const root of [resolve(dirname(executable), '../Resources/theia'), resolve('src-tauri/resources/theia')]) {
+      if (!existsSync(join(root, 'node/bin/node')) || !existsSync(join(root, 'browser/lib/backend/main.js'))) continue;
+      try { candidates.push(selectOwnedTheiaBackend(snapshot, active.pid, realpathSync(join(root, 'node/bin/node')), realpathSync(join(root, 'browser/lib/backend/main.js')))); }
+      catch (error) { if (!String(error).includes('0 !== 1')) throw error; }
+    }
+    const roots = [...new Set(candidates)]; assert(roots.length <= 1, 'Ambiguous owned backend');
+    const rows = snapshot.split('\n').map(line => /^\s*(\d+)\s+(\d+)\s+/.exec(line)).filter(Boolean);
+    const owned = new Set(roots);
+    for (let added = true; added;) {
+      added = false;
+      for (const row of rows) if (owned.has(Number(row[2])) && !owned.has(Number(row[1]))) { owned.add(Number(row[1])); added = true; }
+    }
+    return [...owned];
+  };
   const env = capabilitiesGitProcessEnvironment();
   const git = async args => {
     const reply = await runCapabilitiesGitCommand('git', args, { cwd, env });
@@ -148,7 +172,23 @@ export async function runNativeIdeGitReview({ executable, resourceOnly = false }
     const log = chunk => { bytes += chunk.length; if (bytes > 8 * 1024 * 1024) { child.kill('SIGTERM'); return; }
       writeFileSync(join(output, 'first-launch-app.log'), chunk, { flag: 'a', mode: 0o600 }); };
     child.stdout.on('data', log); child.stderr.on('data', log);
+    const activateOwnedWindow = async stage => {
+      // macOS can suspend a completely occluded WKWebView's frame callbacks.
+      // Activate only the application PID this runner spawned, without AX,
+      // screenshots, keyboard input, or selecting an app by its display name.
+      let activated = false;
+      for (let attempt = 0; attempt < 20 && child.exitCode === null && child.signalCode === null; attempt++) {
+        try {
+          const script = `ObjC.import("AppKit"); var reviewOwner = $.NSRunningApplication.runningApplicationWithProcessIdentifier(${child.pid}); Boolean(reviewOwner && typeof reviewOwner.activateWithOptions === "function" && reviewOwner.activateWithOptions(3));`;
+          activated = execFileSync('/usr/bin/osascript', ['-l', 'JavaScript', '-e', script], { encoding: 'utf8', timeout: 3000 }).trim() === 'true';
+          if (activated) break;
+        } catch { /* Keep every functional assertion even if activation fails. */ }
+        await delay(250);
+      }
+      (result.windowActivation ??= []).push({ stage, pid: child.pid, activated });
+    };
     const start = Date.now();
+    await activateOwnedWindow('start');
     while (!ended && Date.now() - start < 660000) {
       try {
         for (const phase of ['stage', 'commit', 'disconnect']) {
@@ -161,6 +201,25 @@ export async function runNativeIdeGitReview({ executable, resourceOnly = false }
             assert.equal(await git(['show', `:${file}`]), version(2));
             proof = { nonce, generation, stage: phase, passed: true, indexPaths: [file], indexSha256: digest(version(2)) };
             stageHandled = true;
+            if (crashSignal) {
+              crashOwned = ownedTheiaTree(); assert(crashOwned.length > 0, 'No real backend to crash-test');
+              const evidence = { signal: crashSignal, applicationPid: child.pid, backendPid: crashOwned[0], ownedPids: crashOwned, actualNative: true };
+              const packagedGuard = resolve(dirname(executable), '../Resources/theia/parent-guard.cjs');
+              if (existsSync(packagedGuard)) {
+                evidence.guardSha256 = digest(readFileSync(packagedGuard));
+                assert.equal(evidence.guardSha256, digest(readFileSync(resolve('src-tauri/theia-parent-guard.cjs'))));
+              }
+              writeFileSync(join(output, 'crash-before.json'), JSON.stringify(evidence, null, 2), { mode: 0o600 });
+              assert(child.kill(crashSignal));
+              await Promise.race([exited, delay(5000)]); assert(ended && signal === crashSignal, 'Application did not receive the exact crash signal');
+              const deadline = Date.now() + 12000;
+              while (Date.now() < deadline && crashOwned.some(pid => !exitedPid(pid))) await delay(100);
+              evidence.remainingPids = crashOwned.filter(pid => !exitedPid(pid));
+              writeFileSync(join(output, 'crash-after.json'), JSON.stringify(evidence, null, 2), { mode: 0o600 });
+              assert.deepEqual(evidence.remainingPids, [], 'Owned backend survived the application crash');
+              result.crash = evidence; result.nativeVerified = true; result.passed = true;
+              return result;
+            }
           } else if (phase === 'commit') {
             const head = (await git(['rev-parse', 'HEAD'])).trim(); assert.notEqual(head, initialHead);
             assert.equal((await git(['rev-list', '--count', `${initialHead}..HEAD`])).trim(), '1');
@@ -207,6 +266,7 @@ export async function runNativeIdeGitReview({ executable, resourceOnly = false }
             assert(stopped, 'Owned backend did not terminate');
             proof = { nonce, generation, stage: phase, passed: true, processStopped: true, ownedParentPid: child.pid, backendPid, physicalVersion: 3, runtimeSource, runtimeProof };
             disconnectHandled = true;
+            await activateOwnedWindow('backend-recovery');
           }
           writeFileSync(join(cwd, `.native-ide-${phase}-proof.json`), JSON.stringify(proof), { flag: 'wx', mode: 0o600 });
           writeFileSync(join(output, `${phase}-physical-proof.json`), JSON.stringify(proof, null, 2), { mode: 0o600 });
@@ -242,7 +302,13 @@ export async function runNativeIdeGitReview({ executable, resourceOnly = false }
     result.previewRequests = previewRequests; result.terminal = term; result.nativeVerified = true; result.passed = true;
   } catch (error) { result.errors.push(String(error?.message || error).slice(0, 2500)); }
   finally {
+    // Failure cleanup is separate from the crash assertion and cannot make a
+    // failed crash test green. Capture only the exact direct backend child.
+    const cleanup = [...new Set([...crashOwned, ...ownedTheiaTree()])];
     if (active && active.exitCode === null && active.signalCode === null) { active.kill('SIGTERM'); await delay(2000); if (active.exitCode === null && active.signalCode === null) active.kill('SIGKILL'); }
+    for (const pid of cleanup) if (!exitedPid(pid)) { try { process.kill(pid, 'SIGTERM'); } catch (error) { if (error.code !== 'ESRCH') throw error; } }
+    if (cleanup.length) await delay(1000);
+    for (const pid of cleanup) if (!exitedPid(pid)) { try { process.kill(pid, 'SIGKILL'); } catch (error) { if (error.code !== 'ESRCH') throw error; } }
     if (server) { await new Promise(accept => { server.close(accept); server.closeAllConnections(); }); }
     result.serverStopped = !server?.listening; result.finishedAt = new Date().toISOString();
     writeFileSync(join(output, 'result.json'), JSON.stringify(result, null, 2), { mode: 0o600 });
@@ -251,8 +317,8 @@ export async function runNativeIdeGitReview({ executable, resourceOnly = false }
 }
 
 if (process.argv[1] && import.meta.url === pathToFileURL(resolve(process.argv[1])).href) {
-  const args = process.argv.slice(2); assert(args.length === 1);
-  const result = await runNativeIdeGitReview(args[0] === '--resource-only' ? { resourceOnly: true } : { executable: args[0] });
+  const args = process.argv.slice(2); assert(args.length === 1 || args.length === 2 && /^--crash=SIG(?:TERM|KILL)$/.test(args[1]));
+  const result = await runNativeIdeGitReview(args[0] === '--resource-only' ? { resourceOnly: true } : { executable: args[0], crashSignal: args[1]?.slice('--crash='.length) });
   process.stdout.write(JSON.stringify({ passed: result.passed, resourcesPrepared: !!result.resourcesPrepared, nativeVerified: result.nativeVerified,
     output: result.output, errors: result.errors }) + '\n');
   if (!result.passed && !result.resourcesPrepared) process.exitCode = 1;

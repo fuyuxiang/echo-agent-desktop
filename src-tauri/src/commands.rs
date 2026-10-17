@@ -1144,8 +1144,10 @@ pub async fn agent_init(
     if let Err(error) = reload_models_and_sync(&app, &state, &tx).await {
         tracing::error!(%error, "initial model reload failed");
     }
+    tracing::info!("initial model reload completed");
     *state.init_outcome.lock().unwrap() = Some(init_outcome.clone());
     let auth = auth_status_with_runtime_reload(&app, &state);
+    tracing::info!(ready = auth.ready, "initial auth status resolved");
 
     // Start the automations scheduler now that the agent channel is up.
     // Idempotent — safe if agent_init is somehow called twice.
@@ -1164,6 +1166,7 @@ pub async fn agent_init(
         }
     }
 
+    tracing::info!("agent initialization completed");
     Ok(init_result(&cwd, auth, &init_outcome))
 }
 

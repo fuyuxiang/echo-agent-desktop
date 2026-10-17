@@ -7,6 +7,15 @@ import { useKnowledgeStore } from "@/stores/knowledge-store";
 const STORAGE_KEY = "echoagent.knowledge-sources.v1";
 let hydrationPromise: Promise<KnowledgeSourceDescriptor[]> | null = null;
 let hydratedDescriptors: KnowledgeSourceDescriptor[] | null = null;
+// The native command replaces the complete catalog. Serialize read/modify/write
+// operations so independent controls cannot save snapshots that undo each other.
+let mutationTail: Promise<unknown> = Promise.resolve();
+
+function mutateSources<T>(action: () => Promise<T>): Promise<T> {
+  const result = mutationTail.then(action);
+  mutationTail = result.catch(() => undefined);
+  return result;
+}
 
 export interface KnowledgeSourceDescriptor {
   id: string;
@@ -144,7 +153,11 @@ export function resetKnowledgeSourceHydration(): void {
   hydratedDescriptors = null;
 }
 
-export async function addLocalKnowledgeSource(root: string): Promise<{ descriptor: KnowledgeSourceDescriptor; added: boolean }> {
+export function addLocalKnowledgeSource(root: string): Promise<{ descriptor: KnowledgeSourceDescriptor; added: boolean }> {
+  return mutateSources(() => addLocalSource(root));
+}
+
+async function addLocalSource(root: string): Promise<{ descriptor: KnowledgeSourceDescriptor; added: boolean }> {
   await hydrateKnowledgeSources();
   let descriptor = localKnowledgeSourceDescriptor(root);
   if (isTauriAvailable()) {
@@ -167,7 +180,11 @@ export async function addLocalKnowledgeSource(root: string): Promise<{ descripto
   return { descriptor, added: true };
 }
 
-export async function removeKnowledgeSource(id: string): Promise<boolean> {
+export function removeKnowledgeSource(id: string): Promise<boolean> {
+  return mutateSources(() => removeSource(id));
+}
+
+async function removeSource(id: string): Promise<boolean> {
   await hydrateKnowledgeSources();
   const items = loadKnowledgeSourceDescriptors();
   const next = items.filter((item) => item.id !== id);

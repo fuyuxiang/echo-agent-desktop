@@ -1,10 +1,12 @@
+import { DEFAULT_REVIEW_MODEL_ID, PRIVATE_REVIEW_MODEL_ID, seedReviewModel, redactReviewModelSecrets, captureReviewModelLogs } from './lib/native-review-model.mjs';
 import { nativeReviewOutput } from './lib/native-review-output.mjs';
+import { activateNativeReviewWindow, assertNativeReviewSessionUnlocked } from './lib/native-review-window.mjs';
 // Real macOS Native runner. Importing this module does not launch an app.
 import assert from 'node:assert/strict';
 import { spawn } from 'node:child_process';
 import { createHash, randomBytes } from 'node:crypto';
 import { chmodSync, existsSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, readdirSync,
-  realpathSync, unlinkSync, writeFileSync, copyFileSync } from 'node:fs';
+  realpathSync, unlinkSync, writeFileSync } from 'node:fs';
 import { homedir, tmpdir } from 'node:os';
 import { basename, isAbsolute, join, relative, resolve } from 'node:path';
 import { pathToFileURL } from 'node:url';
@@ -16,7 +18,7 @@ export const CORE_CHECKS = Object.freeze({
   'first-launch': ['core-native-isolation', 'core-qwen-ready', 'core-qwen-initial-response', 'core-queue-and-send-now',
     'core-stop-and-resend', 'core-rename-search-ui', 'core-fork-original-preserved', 'core-archive-restore-ui',
     'core-delete-owned-session-ui', 'core-project-move-switch-ui', 'core-office-xlsx-runtime-read',
-    'core-office-epub-runtime-read', 'core-office-ods-runtime-read', 'core-subagent-no-side-effects', 'core-custom-qwen-connection'],
+    'core-office-epub-runtime-read', 'core-office-ods-runtime-read', 'core-subagent-no-side-effects', 'core-custom-qwen-connection', 'core-automation-draft-navigation-exit'],
   restart: ['core-native-isolation', 'core-restart-owned-catalog', 'core-restart-project-ui', 'core-restart-fork-ui', 'core-restart-office-fixtures', 'core-restart-custom-model'],
 });
 const sha = (value) => createHash('sha256').update(value).digest('hex');
@@ -29,7 +31,7 @@ export function validateCoreManifest(manifest) {
   assert.equal(manifest?.schema, 1);
   assert(/^\/private\/(?:tmp|var\/folders\/[A-Za-z0-9_-]+\/[A-Za-z0-9_-]+\/T)\/echo-native-review-core-[A-Za-z0-9_-]+$/.test(manifest.home));
   assert.equal(manifest.cwd, `${manifest.home}/workspaces/default`); assert(/^[a-f0-9]{32}$/.test(manifest.nonce));
-  assert(Object.hasOwn(CORE_CHECKS, manifest.phase)); assert.equal(manifest.modelId, 'echoagent-ojlab/chat-qwen');
+  assert(Object.hasOwn(CORE_CHECKS, manifest.phase)); assert([DEFAULT_REVIEW_MODEL_ID, PRIVATE_REVIEW_MODEL_ID].includes(manifest.modelId));
   assert(manifest.phase === 'first-launch' ? manifest.expected === null
     : manifest.expected && typeof manifest.expected === 'object' && !Array.isArray(manifest.expected), 'Invalid phase expectation');
   assert(Array.isArray(manifest.officeFixtures) && manifest.officeFixtures.length === 3);
@@ -79,7 +81,7 @@ export function verifyNativeCoreReport({ report, manifest, pid, startedAt, exitC
   assert(e.child?.sessionId && !e.ownedSessionIds.includes(e.child.sessionId)); assert.equal(e.child.marker, `CORE-CHILD-${manifest.nonce}`);
   assert(/^[A-Za-z0-9-]{1,128}$/.test(e.child.sessionId));
   assert(e.customModel?.providerId && e.customModel.modelId && e.customModel.modelId !== manifest.modelId);
-  assert.equal(e.customModel.label, `隔离个人Qwen-${manifest.nonce}`); assert.equal(e.customModel.marker, `CORE-CUSTOM-${manifest.nonce}`);
+  assert.equal(e.customModel.label, `隔离个人${manifest.modelId === PRIVATE_REVIEW_MODEL_ID ? '模型' : 'Qwen'}-${manifest.nonce}`); assert.equal(e.customModel.marker, `CORE-CUSTOM-${manifest.nonce}`);
   assert(Array.isArray(report.permissions) && report.permissions.every((entry) => !entry.denied
     && entry.sessionId === e.sessionId && entry.via === 'production allow-once UI'
     && (entry.operation?.name === 'read_file' ? manifest.officeFixtures.some((f) => f.path === entry.operation.path)
@@ -97,13 +99,16 @@ export function verifyNativeCoreReport({ report, manifest, pid, startedAt, exitC
       && new Set(completed.map((item) => item.promptId)).size === completed.length, 'Real distinct queued/immediate completions are missing');
     assert(stop?.stopped?.sessionId === e.sessionId && stop.stopped.cancelTrigger === 'stop' && stop.stopped.stopReason === 'cancelled'
       && stop.lateWaitMs >= 1000 && stop.recovery?.marker === e.markers.recovery && stop.recovery.completion.stopReason === 'end_turn');
+    const draft = evidence('core-automation-draft-navigation-exit');
+    assert.equal(draft?.marker, `CORE-DRAFT-${manifest.nonce}`);
+    for (const key of ['restoredViaNavigation', 'quitConfirmationViaUi', 'exitCancelledAndRuntimeReady', 'noTasksCreated', 'discardedViaUi']) assert.equal(draft[key], true);
     const custom = evidence('core-custom-qwen-connection');
     const project = evidence('core-project-move-switch-ui');
     assert.equal(project?.projectForkedSessionId, e.projectForkedSessionId);
     assert.equal(project.forkPendingBeforeTurn, true); assert.equal(project.forkPendingAfterTurn, false); assert.equal(project.sourcePendingUnchanged, true);
     assert.equal(project.projectTurn?.sessionId, e.projectForkedSessionId); assert.equal(project.projectTurn.marker, e.markers.project);
     assert.equal(project.projectTurn.completion?.stopReason, 'end_turn');
-    assert.equal(custom?.testedAndSavedViaUi, true); assert.equal(custom.explicitHttpConsent, true); assert.equal(custom.noCredentials, true);
+    assert.equal(custom?.testedAndSavedViaUi, true); assert.equal(custom.explicitHttpConsent, manifest.modelId !== PRIVATE_REVIEW_MODEL_ID); assert.equal(custom.noCredentials, manifest.modelId !== PRIVATE_REVIEW_MODEL_ID);
     assert.equal(custom.actualSessionModelId, e.customModel.modelId); assert.equal(custom.response?.modelId, e.customModel.modelId);
     assert.equal(custom.response.marker, e.customModel.marker); assert.equal(custom.response.completion?.stopReason, 'end_turn');
     for (const item of manifest.officeFixtures) {
@@ -175,6 +180,8 @@ const sessionFiles = (home, sessionId) => {
 };
 export function physical(home, expected, fixtures, first) {
   const source = sessionFiles(home, expected.sessionId), fork = sessionFiles(home, expected.forkedSessionId);
+  const jobsPath = join(home, 'echoagent-automations.json');
+  if (existsSync(jobsPath)) assert.equal(JSON.parse(ordinary(jobsPath, home)).automations.length, 0, 'Draft editor unexpectedly created a persisted task');
   assert.equal(sessionDirectory(home, expected.deletedSessionId, true), null, 'Deleted session data remains');
   for (const entry of [source, fork]) {
     assert(entry.history.toString('utf8').includes(expected.markers.recovery), 'Actual source/fork history lost recovery prompt');
@@ -220,6 +227,7 @@ async function terminate(state) {
 }
 export async function runNativeCoreReview({ executable, resourceOnly = false } = {}) {
   assert.equal(process.platform, 'darwin', 'Actual review requires macOS Native WebView');
+  if (!resourceOnly) assertNativeReviewSessionUnlocked();
   if (!resourceOnly) { assert(executable, 'Pass the newly built fixed Core application'); executable = realpathSync(resolve(executable)); assert(lstatSync(executable).isFile()); }
   const outputRoot = nativeReviewOutput('native-core', 'NATIVE_CORE_REVIEW_OUTPUT');
   mkdirSync(outputRoot, { recursive: true }); const output = mkdtempSync(join(outputRoot, 'run-'));
@@ -228,6 +236,7 @@ export async function runNativeCoreReview({ executable, resourceOnly = false } =
   const fixtures = await createCoreFixtures(home, nonce), fixtureBefore = fixtures.map((f) => ({ path: f.path, sha256: sha(ordinary(f.path, home)) }));
   const revocations = readonlyCompatibilitySourceRevocations();
   writeFileSync(join(home, 'config.toml'), `[marketplace]\nofficial_marketplace_auto_installed = true\ndisabled_sources = [${revocations.map((value) => JSON.stringify(value)).join(', ')}]\n[claude_compat]\nimported = true\n`, { flag: 'wx', mode: 0o600 });
+  const modelId = seedReviewModel(home);
   const beforeForeign = foreignSnapshot(), result = { version: 1, kind: 'native-core-driver', home, cwd, nonce, output,
     executable: executable || null, binarySha256: executable ? sha(readFileSync(executable)) : null, nativeVerified: false, passed: false,
     phases: [], errors: [], osPickerVerified: false, homeEnvironmentChanged: false, syntheticFixtures: true,
@@ -243,28 +252,34 @@ export async function runNativeCoreReview({ executable, resourceOnly = false } =
     for (const phase of ['first-launch', 'restart']) {
       if (interrupted) throw new Error('Native Core interrupted');
       if (phase === 'restart' && !expected?.ownedSessionIds?.length) { result.errors.push('restart: first phase created no session; recovery not exercised'); break; }
-      const manifest = validateCoreManifest({ schema: 1, home, cwd, nonce, phase, modelId: 'echoagent-ojlab/chat-qwen', officeFixtures: fixtures, expected });
+      const manifest = validateCoreManifest({ schema: 1, home, cwd, nonce, phase, modelId, officeFixtures: fixtures, expected });
       writeFileSync(join(home, 'native-core-manifest.private.json'), JSON.stringify(manifest), { mode: 0o600 });
       const reportPath = join(home, 'native-review.json'); if (existsSync(reportPath)) unlinkSync(reportPath);
       const startedAt = Date.now(); active = managed(spawn(executable, ['--data-home', home], { env: { ...env, ECHO_DESKTOP_REVIEW_PHASE: phase }, stdio: ['ignore', 'pipe', 'pipe'] }));
-      let stdoutBytes = 0; const logPath = join(output, `${phase}-app.log`);
-      const log = (bytes) => { stdoutBytes += bytes.length; if (stdoutBytes > 8 * 1024 * 1024) { active.child.kill('SIGTERM'); return; }
-        // The app must not print credentials; the final RAM-only review scan
-        // additionally checks these real logs before final evidence publication.
-        writeFileSync(logPath, bytes, { flag: 'a', mode: 0o600 }); };
-      active.child.stdout.on('data', log); active.child.stderr.on('data', log);
+      const logs = captureReviewModelLogs(active.child, join(output, `${phase}-app.log`));
+      // This journey asserts actual visible UI. Keep only its own application
+      // in front while WebKit is running it, without AX, input, or screenshots.
+      // Activation never substitutes for a functional assertion or extends a bound.
+      let nextActivation = 0;
+      const activateOwnedWindow = () => {
+        if (Date.now() < nextActivation || active.ended) return;
+        nextActivation = Date.now() + 15000;
+        const activated = activateNativeReviewWindow(active.child.pid);
+        (result.windowActivation ??= []).push({ phase, pid: active.child.pid, activated, at: new Date().toISOString() });
+      };
       let beforeFork, handoffError, beforeHandled = false, afterHandled = false;
       const handoffs = (async () => {
-        while (!active.ended && phase === 'first-launch') {
+        while (!active.ended) {
+          activateOwnedWindow();
           try {
             const readyPath = join(cwd, 'core-fork-ready.json'), donePath = join(cwd, 'core-fork-done.json');
-            if (!beforeHandled && existsSync(readyPath)) {
+            if (phase === 'first-launch' && !beforeHandled && existsSync(readyPath)) {
               const data = JSON.parse(ordinary(readyPath, home)); assert.equal(data.nonce, nonce);
               beforeFork = sessionFiles(home, data.sessionId); beforeFork.sessionId = data.sessionId; beforeHandled = true;
               writeFileSync(join(cwd, 'core-fork-before.json'), JSON.stringify({ nonce, passed: true, sessionId: data.sessionId,
                 historySha256: beforeFork.historySha256, updatesSha256: beforeFork.updatesSha256 }), { flag: 'wx', mode: 0o600 });
             }
-            if (beforeHandled && !afterHandled && existsSync(donePath)) {
+            if (phase === 'first-launch' && beforeHandled && !afterHandled && existsSync(donePath)) {
               const data = JSON.parse(ordinary(donePath, home)); assert.equal(data.nonce, nonce); assert.equal(data.sessionId, beforeFork.sessionId);
               assert.equal(data.marker, `CORE-RECOVER-${nonce}`); assert.notEqual(data.forkedSessionId, data.sessionId);
               const after = sessionFiles(home, data.sessionId), fork = sessionFiles(home, data.forkedSessionId);
@@ -284,8 +299,8 @@ export async function runNativeCoreReview({ executable, resourceOnly = false } =
       try {
         const finished = await Promise.race([active.exit.then(() => true), delay(phase === 'first-launch' ? 820000 : 180000, false, { ref: false })]);
         assert(finished, 'Native Core exceeded process bound'); assert(!active.error, 'Native Core process failed to spawn');
-        assert(stdoutBytes <= 8 * 1024 * 1024, 'Native app log exceeded limit'); await handoffs;
-        const report = JSON.parse(ordinary(reportPath, home)); copyFileSync(reportPath, join(output, `${phase}.json`));
+        await logs.finished; assert(!logs.overflow, 'Native app log exceeded limit'); assert(!logs.incomplete, 'Native log pipes did not close after process exit'); await handoffs;
+        const report = JSON.parse(ordinary(reportPath, home)); writeFileSync(join(output, `${phase}.json`), redactReviewModelSecrets(readFileSync(reportPath)), { mode: 0o600 });
         // Preserve safe partial expectation even when the model phase is failed.
         if (phase === 'first-launch' && report.expected?.home === home && report.expected.nonce === nonce
           && Array.isArray(report.expected.ownedSessionIds)) expected = report.expected;
@@ -299,7 +314,7 @@ export async function runNativeCoreReview({ executable, resourceOnly = false } =
         result.phases.push({ phase, pid: active.child.pid, exitCode: active.child.exitCode, signal: active.child.signalCode, passed: true, checks: report.checks.length });
       } catch (error) { result.errors.push(`${phase}: ${String(error?.message || error).slice(0, 2000)}`);
         result.phases.push({ phase, pid: active.child.pid, exitCode: active.child.exitCode, signal: active.child.signalCode, passed: false });
-      } finally { await terminate(active); await handoffs; active = null; }
+      } finally { await terminate(active); await logs.finished; await handoffs; active = null; }
       assert.deepEqual(foreignSnapshot(), beforeForeign, 'Acceptance changed default Echo/Claude configuration');
     }
     result.passed = result.errors.length === 0 && result.phases.length === 2 && result.phases.every((phase) => phase.passed);
@@ -309,14 +324,14 @@ export async function runNativeCoreReview({ executable, resourceOnly = false } =
     await terminate(active); process.removeListener('SIGINT', stop); process.removeListener('SIGTERM', stop);
     result.foreignAfter = foreignSnapshot(); result.defaultHomeChanged = JSON.stringify(result.foreignAfter) !== JSON.stringify(beforeForeign);
     if (result.defaultHomeChanged) { result.passed = false; result.nativeVerified = false; result.errors.push('Default/foreign configuration changed'); }
-    result.finishedAt = new Date().toISOString(); writeFileSync(join(output, 'result.json'), JSON.stringify(result, null, 2), { mode: 0o600 });
+    result.finishedAt = new Date().toISOString(); writeFileSync(join(output, 'result.json'), redactReviewModelSecrets(JSON.stringify(result, null, 2)), { mode: 0o600 });
   }
   return result;
 }
 if (process.argv[1] && import.meta.url === pathToFileURL(resolve(process.argv[1])).href) {
   const resourceOnly = process.argv.includes('--resource-only');
   const result = await runNativeCoreReview({ executable: resourceOnly ? undefined : process.argv[2], resourceOnly });
-  console.log(JSON.stringify({ output: result.output, home: result.home, phases: result.phases, resourcesPrepared: result.resourcesPrepared || false,
-    passed: result.passed, nativeVerified: result.nativeVerified, errors: result.errors }));
+  console.log(redactReviewModelSecrets(JSON.stringify({ output: result.output, home: result.home, phases: result.phases, resourcesPrepared: result.resourcesPrepared || false,
+    passed: result.passed, nativeVerified: result.nativeVerified, errors: result.errors })));
   process.exitCode = resourceOnly ? (result.resourcesPrepared && result.errors.length === 0 ? 0 : 1) : result.passed ? 0 : 1;
 }

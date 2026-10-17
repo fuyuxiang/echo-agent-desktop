@@ -21,6 +21,8 @@ export async function saveRecordingBeforeExit(): Promise<void> {
 export function createExitPreparationController(callbacks: {
   preparing: (preparing: boolean) => void;
   failed: (message: string) => void;
+  beforePrepare?: () => Promise<void>;
+  cancelPrepare?: () => void;
 }) {
   let disposed = false;
   let active: string | null = null;
@@ -37,6 +39,7 @@ export function createExitPreparationController(callbacks: {
     }
     if (active) rememberClosed(active);
     active = null;
+    callbacks.cancelPrepare?.();
     meetingRecorder.resumeAfterExitFailure();
     callbacks.preparing(false);
     callbacks.failed(notice.message);
@@ -60,7 +63,11 @@ export function createExitPreparationController(callbacks: {
       return;
     }
     const id = notice.requestId;
-    void saveRecordingBeforeExit().then(
+    const isCurrent = () => !disposed && active === id && !closed.has(id);
+    const save = callbacks.beforePrepare
+      ? Promise.resolve().then(callbacks.beforePrepare).then(() => isCurrent() ? saveRecordingBeforeExit() : undefined)
+      : saveRecordingBeforeExit();
+    void save.then(
       () => acknowledge(id, null),
       (error) => acknowledge(id, String(error).replace(/^Error:\s*/, "").slice(0, 1024)),
     ).catch((error) => {

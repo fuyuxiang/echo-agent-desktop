@@ -122,7 +122,15 @@ export function useAppDialog(scopeKey?: string | number | null) {
     });
   }, []);
 
+  const dismiss = useCallback(() => {
+    setRequest((current) => {
+      if (current?.kind === "confirmation") current.resolveDecision?.(false);
+      return null;
+    });
+  }, []);
+
   return {
+    dismiss,
     requestConfirmation,
     confirm,
     requestInput,

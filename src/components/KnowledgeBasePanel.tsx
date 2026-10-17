@@ -49,6 +49,7 @@ export function KnowledgeBasePanel({ onOpen, onToast }: KnowledgeBasePanelProps)
   const [sourceChangeKey, setSourceChangeKey] = useState(0);
   const [rebuildError, setRebuildError] = useState<string | null>(null);
   const q = debouncedQuery.trim();
+  const currentQuery = query.trim();
   useEffect(() => {
     let cancelled = false;
     void hydrateKnowledgeSources()
@@ -176,11 +177,13 @@ export function KnowledgeBasePanel({ onOpen, onToast }: KnowledgeBasePanelProps)
   };
 
   useEffect(() => {
-    if (!q) {
+    // Cancel and hide old results on the keystroke, including the debounce
+    // interval; an older document must not remain actionable under new text.
+    if (!q || q !== currentQuery) {
       setResults([]);
       setSearchError(null);
       setSearchNotice(null);
-      setSearching(false);
+      setSearching(Boolean(currentQuery));
       return;
     }
     let cancelled = false;
@@ -244,7 +247,7 @@ export function KnowledgeBasePanel({ onOpen, onToast }: KnowledgeBasePanelProps)
         void cancelPersonalKnowledgeSearch(requestId).catch(() => {});
       }
     };
-  }, [q, searchRetryKey, sourceChangeKey]);
+  }, [q, currentQuery, searchRetryKey, sourceChangeKey]);
 
   const retrySources = () => {
     setSourcesError(null);
@@ -386,7 +389,7 @@ export function KnowledgeBasePanel({ onOpen, onToast }: KnowledgeBasePanelProps)
           aria-label="搜索知识库"
         />
       </div>}
-      {sources.length > 0 && q && (
+      {sources.length > 0 && currentQuery && (
         <>
           {searchError && !searching && (
             <div className="kb-panel__index-status" role="alert">

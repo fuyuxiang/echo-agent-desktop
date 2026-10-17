@@ -55,6 +55,7 @@
       "../vendor/tauri-plugin-updater/LICENSE_APACHE-2.0": "licenses/tauri-plugin-updater/LICENSE-APACHE-2.0",
       "resources/theia/browser": "theia/browser",
       "resources/theia/node": "theia/node",
+      "theia-parent-guard.cjs": "theia/parent-guard.cjs",
       "resources/office": "office"
     }
   },

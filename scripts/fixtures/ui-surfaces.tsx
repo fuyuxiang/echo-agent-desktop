@@ -14,7 +14,10 @@ import { ChatView } from "../../src/components/ChatView";
 import { SecondarySidebar } from "../../src/components/SecondarySidebar";
 import { Sidebar } from "../../src/components/Sidebar";
 import { AutomationEditPage } from "../../src/components/automation/AutomationEditPage";
-import { buildDraft } from "../../src/components/automation/schedule-utils";
+import { AutomationPanel } from "../../src/components/AutomationPanel";
+import type { Automation } from "../../src/lib/types";
+import { buildDraft, draftFromAutomation } from "../../src/components/automation/schedule-utils";
+import { useAutomationEditorStore } from "../../src/stores/automation-editor-store";
 import { createAutomationTemplates } from "../../src/components/automation/template-config";
 import { WorkspacePicker } from "../../src/components/WorkspacePicker";
 import { GlobalTooltip } from "../../src/components/GlobalTooltip";
@@ -30,6 +33,7 @@ import ExecutionReviewFixture, { executionReviewTeamSnapshot, executionReviewFin
 import { useSessionStore } from "../../src/stores/session-store";
 import { useSessionsStore } from "../../src/stores/sessions-store";
 import { useProjectsStore } from "../../src/stores/projects-store";
+import { useMessageQueueStore } from "../../src/stores/message-queue-store";
 import "../../src/styles/global.css";
 import "../../src/styles/app.css";
 import "../../src/styles/automation-echo.css";
@@ -45,6 +49,11 @@ let memory = { enabled: true, initialInjectionEnabled: true, saveOnEnd: true, wa
   retrievalSummary: "仅在本机进行全文检索；摘要和整理仍使用会话模型" };
 let providers: unknown[] = [];
 let channels: unknown[] = [];
+let automationFlowTask: Automation = { ...buildDraft(undefined, "/review/EchoAgent"), id: "review-automation", name: "保留草稿与通知导航验收任务", prompt: "整理交付报告", status: "PAUSED", createdAt: "2026-10-17T00:00:00Z" };
+let automationFlowRemoved = query.get("state") === "removed";
+if (query.get("surface") === "automation-flow" && automationFlowRemoved) {
+  useAutomationEditorStore.getState().begin(draftFromAutomation(automationFlowTask), automationFlowTask);
+}
 let agents: unknown[] = [];
 let rules: unknown[] = [];
 const orgUser = { id: "review-user", username: "review", displayName: "界面检查", role: "member", clearance: 1 };
@@ -57,9 +66,15 @@ const orgDocuments = [
   { id: "review-xlsx", title: "指标体系模型设计模板.xlsx", sourceType: "xlsx", status: "ready", byteSize: 379494, scopeId: "team", scopeKind: "team", scopeName: "产品研发团队", ownerId: "another-user", chunkCount: 1899, tags: [], updatedAt: 1 },
   { id: "review-pptx", title: "指标体系构建方法论.pptx", sourceType: "pptx", status: "ready", byteSize: 1572864, scopeId: "team", scopeKind: "team", scopeName: "产品研发团队", ownerId: "another-user", chunkCount: 2, tags: [], updatedAt: 1 },
 ];
-if (["conversation", "conversation-layout"].includes(query.get("surface") ?? "")) {
+if (["conversation", "conversation-layout", "queue"].includes(query.get("surface") ?? "")) {
   const chat = useSessionStore.getState();
   chat.setSession("review-conversation");
+  if (query.get("surface") === "queue") {
+    useMessageQueueStore.setState({ queues: { "review-conversation": Array.from({ length: 20 }, (_, index) => ({
+      id: `queue-review-${index}`, text: `待发送消息 ${index + 1}：核对中文文件与任务交付结果。`,
+      attachments: index === 19 ? ["/review/中文附件.docx"] : [], status: "queued", createdAt: Date.now(),
+    })) } });
+  }
   for (const prompt of [
     "评审投影仪性能与内存泄漏，先看一下实现结构。",
     "这个服务端的启动方式是什么？",
@@ -161,7 +176,14 @@ Object.assign(window, {
         case "connectors_load": return { categories: [], connectors: [] };
         case "experts_load": return { categories: [], experts: [] };
         case "skills_catalog_load": return { categories: [], skills: [] };
-        case "automations_snapshot": return { automations: [], records: [] };
+        case "automations_snapshot": return { automations: query.get("surface") === "automation-flow" && !automationFlowRemoved ? [automationFlowTask] : [], records: [] };
+        case "automations_save": {
+          if (query.get("surface") !== "automation-flow") throw new Error("This fixture does not save automations");
+          if (args.automation.id && automationFlowRemoved) throw new Error("原自动化任务已被移除");
+          automationFlowTask = { ...args.automation, id: args.automation.id || "review-new-automation", createdAt: "2026-10-17T00:00:00Z" };
+          automationFlowRemoved = false;
+          return automationFlowTask;
+        }
         case "connectors_read_mcp_config": return "";
         case "memory_config_get": return memory;
         case "memory_list": return [
@@ -255,9 +277,14 @@ function Fixture() {
   const [createExpertRequested, setCreateExpertRequested] = useState(false);
   const [expertPageOpen, setExpertPageOpen] = useState(false);
   const [cwd, setCwd] = useState("/review/EchoAgent");
+  const [automationNotificationSequence, setAutomationNotificationSequence] = useState(0);
   const [automationDraft, setAutomationDraft] = useState(() => buildDraft(
     createAutomationTemplates()[0], "/Users/review/Documents/EchoAgent",
   ));
+  if (surface === "automation-flow") return <div style={{ display: "flex", flexDirection: "column", height: "100%", minHeight: 0 }}>
+    <div style={{ padding: 8 }}><button type="button" onClick={() => setAutomationNotificationSequence(sequence => sequence + 1)}>模拟任务通知</button></div>
+    <AutomationPanel cwd="/review/EchoAgent" notificationAutomationId={automationNotificationSequence ? "review-notified-task" : undefined} notificationAutomationSequence={automationNotificationSequence} />
+  </div>;
   if (surface === "collapsed-project" || surface === "collapsed-capabilities") {
     const project = {
       id: "review-project", name: "SKILL安装", createdAt: new Date().toISOString(),
@@ -326,7 +353,7 @@ function Fixture() {
     ) : <div style={{ padding: 48, fontSize: 32, fontWeight: 700 }}>今天想完成什么？</div>}
     <SecondarySidebar onCreateExpert={() => { setLabel("专家·技能·连接器"); setCreateExpertRequested(true); setExpertPageOpen(true); }} />
   </>;
-  if (surface === "conversation") return <div style={{ display: "flex", height: "100%" }}>
+  if (surface === "conversation" || surface === "queue") return <div style={{ display: "flex", height: "100%" }}>
     <aside style={{ width: "min(250px, 22vw)", flex: "none", borderRight: "1px solid var(--echo-border-default)", background: "var(--echo-bg-secondary)", padding: "24px 16px", boxSizing: "border-box" }}>EchoAgent</aside>
     <ChatView onSend={() => {}} onCancel={() => {}} title="评审投影仪性能与内存泄漏" />
   </div>;

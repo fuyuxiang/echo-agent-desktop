@@ -47,6 +47,12 @@ export function QueuePanel({
   const { requestConfirmation, dialog } = useAppDialog(sessionId);
   const [sendingBySession, setSendingBySession] = useState<Record<string, string>>({});
   const sendingId = sendingBySession[sessionId] ?? null;
+  const [saveError, setSaveError] = useState<{ sessionId: string; message: string } | null>(null);
+  const mutate = (action: () => boolean) => {
+    const saved = action();
+    setSaveError(saved ? null : { sessionId, message: "队列修改未能保存，已保留原有消息和当前输入。请检查本机存储空间后重试。" });
+    return saved;
+  };
 
   if (queue.length === 0) return null;
 
@@ -57,6 +63,7 @@ export function QueuePanel({
         <span className="queue-panel__hint">当前一轮正常结束后，自动发送下一条未暂停的消息</span>
       </div>
       {dialog}
+      {saveError?.sessionId === sessionId && <p role="alert" className="queue-panel__error">{saveError.message}</p>}
       {queue.some((item) => item.recovery) && <p role="status" className="queue-panel__hint">已恢复上次保留的消息，暂未发送。请检查会话记录后逐条恢复。</p>}
       {queue.map((item, idx) => (
         <QueueRow
@@ -65,15 +72,15 @@ export function QueuePanel({
           item={item}
           index={idx}
           total={queue.length}
-          onRemove={() => remove(sessionId, item.id)}
-          onUp={() => reorder(sessionId, idx, idx - 1)}
-          onDown={() => reorder(sessionId, idx, idx + 1)}
+          onRemove={() => mutate(() => remove(sessionId, item.id))}
+          onUp={() => mutate(() => reorder(sessionId, idx, idx - 1))}
+          onDown={() => mutate(() => reorder(sessionId, idx, idx + 1))}
           onTogglePause={() => {
             if (item.recovery === "uncertain") {
-              requestConfirmation({ title: "确认再次发送这条消息？", description: "上次退出时未收到发送结果。这条消息可能已经执行，请先查看会话记录。继续会再次发送，可能重复修改文件或其他操作。", confirmLabel: "已检查，允许再次发送", action: async () => { setStatus(sessionId, item.id, "queued"); } });
-            } else { setStatus(sessionId, item.id, item.status === "paused" ? "queued" : "paused"); }
+              requestConfirmation({ title: "确认再次发送这条消息？", description: "上次退出时未收到发送结果。这条消息可能已经执行，请先查看会话记录。继续会再次发送，可能重复修改文件或其他操作。", confirmLabel: "已检查，允许再次发送", action: async () => { mutate(() => setStatus(sessionId, item.id, "queued")); } });
+            } else { mutate(() => setStatus(sessionId, item.id, item.status === "paused" ? "queued" : "paused")); }
           }}
-          onCommitEdit={(text) => update(sessionId, item.id, text)}
+          onCommitEdit={(text) => mutate(() => update(sessionId, item.id, text))}
           sendLabel={
             sendingId === item.id || (streaming && sendNowPending)
               ? "发送中"
@@ -120,11 +127,11 @@ interface QueueRowProps {
   item: QueueItem;
   index: number;
   total: number;
-  onRemove: () => void;
+  onRemove: () => boolean;
   onUp: () => void;
   onDown: () => void;
   onTogglePause: () => void;
-  onCommitEdit: (text: string) => void;
+  onCommitEdit: (text: string) => boolean;
   onSendNow: () => void | Promise<void>;
   sendLabel: string;
   sendTitle: string;
@@ -152,9 +159,8 @@ function QueueRow({
 
   const commit = () => {
     const t = draft.trim();
-    if (t) onCommitEdit(t);
-    else onRemove();
-    setEditing(false);
+    const saved = t || item.attachments?.length ? onCommitEdit(t) : onRemove();
+    if (saved) setEditing(false);
   };
 
   return (
@@ -187,17 +193,20 @@ function QueueRow({
         />
       ) : (
         <span className="queue-row__content">
-          <span
+          <button
+            type="button"
             className="queue-row__text"
             title={sending ? "发送中" : "点击编辑"}
+            aria-label={`编辑消息：${item.text || "仅附件消息"}`}
+            disabled={sending}
             onClick={() => {
               if (sending) return;
               setDraft(item.text);
               setEditing(true);
             }}
           >
-            {item.text}
-          </span>
+            {item.text || "仅附件消息"}
+          </button>
           {item.recovery === "uncertain" && <span className="queue-panel__hint">发送结果待确认</span>}
           {(item.attachments?.length ?? 0) > 0 && (
             <span className="queue-row__attachments" aria-label="队列附件">
@@ -246,7 +255,7 @@ function QueueRow({
           type="button"
           className="queue-row__btn queue-row__btn--send"
           onClick={onSendNow}
-          disabled={sending || sendDisabled}
+          disabled={sending || sendDisabled || editing}
           title={sendTitle}
           aria-label={sendTitle}
         >

@@ -96,6 +96,31 @@ describe("beginAgentTurn", () => {
     expect(useSessionsStore.getState().independent[0].status).toBe("failed");
   });
 
+  it.each(["browser_use", "computer_use", "plan"] as const)("%s 新会话模式先返回时仍显示首轮工具和真实回复", (mode) => {
+    const store = useSessionStore.getState();
+    // Browser/Computer mode is acknowledged before handleSendNew focuses the
+    // new conversation. That creates metadata, but no cached history.
+    store.setAgentMode(mode, "browser-session");
+    store.setSession("browser-session");
+    const send = vi.fn(() => new Promise<void>(() => {})) as AgentTurnSender;
+    expect(beginAgentTurn({ sessionId: "browser-session", promptText: "读取网页", displayText: "读取网页", promptId: "first-browser" }, send)).toBe(true);
+    // ACP uses sessionUpdate and a single content block; the legacy TS union
+    // still describes type and an array, as in the store's other wire tests.
+    const wire = (update: Record<string, unknown>) => store.applyUpdate(update as unknown as Parameters<typeof store.applyUpdate>[0]);
+    wire({ __sessionId: "browser-session", sessionUpdate: "tool_call", toolCallId: "browser-read", title: "browser_snapshot", kind: "read", status: "in_progress" });
+    wire({ __sessionId: "browser-session", sessionUpdate: "agent_message_chunk", content: { type: "text", text: "网页读取完成" } });
+    store.markComplete({ sessionId: "browser-session", promptId: "first-browser", stopReason: "end_turn" });
+    const result = useSessionStore.getState();
+    expect(result.agentMode).toBe(mode);
+    expect(result.streaming).toBe(false);
+    const assistant = result.messages[result.messages.length - 1];
+    expect(assistant).toMatchObject({ role: "assistant", complete: true });
+    expect(assistant?.parts).toEqual(expect.arrayContaining([
+      expect.objectContaining({ kind: "tool_call", toolCall: expect.objectContaining({ toolCallId: "browser-read" }) }),
+      expect.objectContaining({ kind: "text", text: "网页读取完成" }),
+    ]));
+  });
+
   it("暂停会话的新轮次被原生层拒绝时恢复控制状态", async () => {
     useSessionsStore.getState().upsert({ sessionId: "s1", cwd: "/tmp", title: "test" });
     const store = useSessionStore.getState();

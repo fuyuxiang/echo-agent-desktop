@@ -408,7 +408,20 @@ pub async fn coding_theia_start(
             .stdin(Stdio::null())
             .stdout(Stdio::from(log))
             .stderr(Stdio::from(err_log));
-        let mut child = crate::process_supervisor::spawn_sync(command)
+        let guard_script = {
+            #[cfg(debug_assertions)]
+            {
+                PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("theia-parent-guard.cjs")
+            }
+            #[cfg(not(debug_assertions))]
+            {
+                app.path()
+                    .resource_dir()
+                    .map_err(|error| error.to_string())?
+                    .join("theia/parent-guard.cjs")
+            }
+        };
+        let mut child = crate::process_supervisor::spawn_owned_node(command, &guard_script)
             .map_err(|error| format!("Theia 启动失败：{error}"))?;
 
         let deadline = Instant::now() + Duration::from_secs(30);

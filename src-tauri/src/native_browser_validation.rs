@@ -30,10 +30,7 @@ fn validate_manifest(value: &Manifest, home: &Path, phase: &str) -> Result<(), S
             .nonce
             .bytes()
             .all(|byte| byte.is_ascii_hexdigit() && !byte.is_ascii_uppercase())
-        || !matches!(
-            value.model_id.as_str(),
-            "echoagent-ojlab/chat-qwen" | "echoagent-ojlab/chat-xc"
-        )
+        || !crate::native_review_model::allowed_model(&value.model_id)
         || (phase == "restart")
             != value
                 .expected
@@ -108,6 +105,7 @@ fn read_manifest() -> Result<Manifest, String> {
         serde_json::from_slice(&bytes).map_err(|_| "Invalid browser review manifest")?;
     let phase = std::env::var("ECHO_DESKTOP_REVIEW_PHASE").map_err(|_| "Missing browser phase")?;
     validate_manifest(&value, &home, &phase)?;
+    crate::native_review_model::validate_config(&home, &value.model_id)?;
     for directory in [home.join("workspaces"), value.cwd.clone()] {
         ordinary_private(&directory, true)?;
     }

@@ -531,6 +531,15 @@
   font-size: 0.75rem;
   line-height: 20px;
 }
+.atm-draft-notice {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 6px 12px;
+}
+.atm-draft-notice > span { min-width: 0; overflow-wrap: anywhere; }
+.atm-draft-notice__actions { display: flex; flex-wrap: wrap; gap: 6px; }
 .atm-task-group-label {
   flex-shrink: 0;
   height: 26px;

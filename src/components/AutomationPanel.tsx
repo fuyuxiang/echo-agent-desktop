@@ -9,7 +9,7 @@
  *
  * 数据：automations_snapshot（本地 JSON 存储 + 桌面端后台调度器）。
  */
-import { useCallback, useEffect, useId, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useId, useLayoutEffect, useMemo, useRef, useState } from "react";
 import {
   AddIcon,
   AlarmClockIcon,
@@ -77,6 +77,9 @@ import { AutomationPermissionConfirmDialog } from "./automation/AutomationPermis
 import { usePermissionConfirm } from "./automation/usePermissionConfirm";
 import type { ConnectorOption } from "./automation/ConnectorSelector";
 import { useModalFocus } from "@/lib/use-modal-focus";
+import { useUnsavedClose } from "@/lib/use-unsaved-close";
+import { useAppDialog } from "./AppDialog";
+import { useAutomationEditorStore, automationEditorDirty } from "@/stores/automation-editor-store";
 
 interface AutomationPanelProps {
   onToast?: (msg: string) => void;
@@ -234,8 +237,13 @@ export function AutomationPanel({
   const [archivedGroupOpen, setArchivedGroupOpen] = useState(true);
   const [showTemplatePage, setShowTemplatePage] = useState(false);
 
-  useEffect(() => {
+  useLayoutEffect(() => {
     if (!notificationAutomationId) return;
+    useAutomationEditorStore.getState().suspend();
+    setShowTemplatePage(false);
+    setIsBatchMode(false);
+    setSelectedIds(new Set());
+    setConfirmState(null);
     setFocusedAutomationId(notificationAutomationId);
     setActiveTab("records");
     setFilterStatus("all");
@@ -243,10 +251,11 @@ export function AutomationPanel({
   }, [notificationAutomationId, notificationAutomationSequence]);
 
   // ---------- 编辑态 ----------
-  const [isCreating, setIsCreating] = useState(false);
-  const [editingAutomation, setEditingAutomation] = useState<Automation | null>(null);
-  const [draft, setDraft] = useState<AutomationDraft | null>(null);
-  const [saving, setSaving] = useState(false);
+  const editor = useAutomationEditorStore();
+  const { isCreating, editingAutomation, draft, visible, operation, setDraft } = editor;
+  const saving = operation !== null;
+  const dialogScope = `${editor.generation}:${visible}`;
+  const { confirm: confirmReplaceDraft, dialog: replaceDraftDialog } = useAppDialog(dialogScope);
 
   // ---------- 引用数据（工作空间/模型/技能/专家/连接器） ----------
   const [workspaces, setWorkspaces] = useState<WorkspaceInfo[]>([]);
@@ -283,7 +292,9 @@ export function AutomationPanel({
         setSnapshotError(message);
         if (notify) onToast?.(`加载自动化数据失败：${message}`);
       } finally {
-        if (snapshotGenerationRef.current === generation && !silent) setLoading(false);
+        // The latest request owns loading even when a scheduler/focus refresh
+        // superseded the initial foreground load.
+        if (snapshotGenerationRef.current === generation) setLoading(false);
       }
     },
     [onToast],
@@ -388,27 +399,57 @@ export function AutomationPanel({
   }, [filterOpen]);
 
   // ---------- 创建 / 编辑 ----------
-  const handleCreate = useCallback((template?: AutomationTemplate) => {
-    setIsCreating(true);
-    setEditingAutomation(null);
-    setDraft(buildDraft(template, cwd ?? ""));
+  const requestBegin = useCallback(async (nextDraft: AutomationDraft, automation?: Automation) => {
+    const current = useAutomationEditorStore.getState();
+    if (current.operation) {
+      onToast?.("自动化任务正在保存或删除，请稍候再开始其他编辑。");
+      return;
+    }
+    if (automation && current.editingAutomation?.id === automation.id) {
+      current.resume();
+      return;
+    }
+    if (automationEditorDirty(current)) {
+      const replace = await confirmReplaceDraft({
+        title: "替换当前自动化草稿？",
+        description: "已有未保存的自动化输入。你可以保留草稿继续查看，或舍弃后打开另一个编辑页面。",
+        cancelLabel: "保留草稿", confirmLabel: "舍弃并继续", danger: true,
+      });
+      if (!replace) return;
+      const latest = useAutomationEditorStore.getState();
+      if (latest.generation !== current.generation || latest.draft !== current.draft || latest.operation) return;
+    }
+    useAutomationEditorStore.getState().begin(nextDraft, automation);
     setShowTemplatePage(false);
-  }, [cwd]);
+  }, [confirmReplaceDraft, onToast]);
+
+  const handleCreate = useCallback((template?: AutomationTemplate) => {
+    void requestBegin(buildDraft(template, cwd ?? ""));
+  }, [cwd, requestBegin]);
 
   const handleEdit = useCallback((automation: Automation) => {
-    setIsCreating(false);
-    setEditingAutomation(automation);
-    setDraft(draftFromAutomation(automation));
-  }, []);
+    void requestBegin(draftFromAutomation(automation), automation);
+  }, [requestBegin]);
 
   const handleCloseModal = useCallback(() => {
-    setIsCreating(false);
-    setEditingAutomation(null);
-    setDraft(null);
-  }, []);
+    useAutomationEditorStore.getState().close(editor.generation);
+  }, [editor.generation]);
 
-  const handleSave = useCallback(async () => {
-    if (!draft) return;
+  const { requestClose: requestEditorClose, closeDialog: unsavedDialog } = useUnsavedClose({
+    dirty: automationEditorDirty(editor),
+    busy: saving,
+    onClose: handleCloseModal,
+    scopeKey: dialogScope,
+  });
+
+  const persistDraft = useCallback(async (generation: number, runTest: boolean) => {
+    const current = useAutomationEditorStore.getState();
+    if (current.generation !== generation || !current.draft || current.operation) return;
+    const { draft, editingAutomation, isCreating } = current;
+    if (editingAutomation && (!snapshot || !snapshot.automations.some((item) => item.id === editingAutomation.id))) {
+      onToast?.(snapshot ? "原自动化任务已被移除，草稿仍保留；请复制所需内容后取消并新建任务。" : "任务列表尚未加载，请稍候重试保存。");
+      return;
+    }
     const message = validateDraft(draft, {
       isCreating,
       existingScheduledAt: editingAutomation
@@ -422,23 +463,39 @@ export function AutomationPanel({
       onToast?.(message);
       return;
     }
-    const modelMessage = automationModelError(draft, models, autoModelId, modelRuntimeError);
+    const modelMessage = automationModelError(draft, models, autoModelId, modelRuntimeError, runTest || draft.status === "ACTIVE");
     if (modelMessage) {
       onToast?.(modelMessage);
       return;
     }
-    setSaving(true);
+    if (!current.startOperation("saving", generation)) return;
     try {
-      await automationsSave(automationFromDraft(draft, editingAutomation ?? undefined));
-      handleCloseModal();
+      const saved = await automationsSave(automationFromDraft(draft, editingAutomation ?? undefined));
+      const latest = useAutomationEditorStore.getState();
+      if (latest.generation !== generation) return;
+      latest.markSaved(saved, draft, generation);
+      if (runTest) {
+        try {
+          await automationsRun(saved.id);
+          onToast?.("修改已保存，已加入测试运行队列。测试运行不会影响正式调度时间。");
+        } catch (error) {
+          onToast?.(`修改已保存，但触发测试运行失败：${String(error).replace(/^Error:\s*/, "")}`);
+        }
+      } else {
+        latest.close(generation);
+        onToast?.("自动化任务已保存");
+      }
       await refresh(true);
-      onToast?.("自动化任务已保存");
     } catch (e) {
       onToast?.(`保存自动化任务失败：${String(e).replace(/^Error:\s*/, "")}`);
     } finally {
-      setSaving(false);
+      useAutomationEditorStore.getState().finishOperation(generation);
     }
-  }, [draft, isCreating, editingAutomation, models, autoModelId, modelRuntimeError, handleCloseModal, onToast, refresh]);
+  }, [snapshot, models, autoModelId, modelRuntimeError, onToast, refresh]);
+
+  const handleSave = useCallback(() => {
+    void persistDraft(editor.generation, false);
+  }, [editor.generation, persistDraft]);
 
   const handleFallbackToDefault = useCallback(() => {
     setDraft((current) => (current ? { ...current, permissionMode: "default" } : current));
@@ -458,29 +515,38 @@ export function AutomationPanel({
     onFallbackToDefault: handleFallbackToDefault,
   });
 
+  useEffect(() => {
+    if (!visible) handlePermissionCancel();
+  }, [visible, editor.generation, handlePermissionCancel]);
+
   const handleDelete = useCallback(() => {
-    if (!editingAutomation) return;
+    if (!editingAutomation || saving) return;
     const name = editingAutomation.name;
     const id = editingAutomation.id;
+    const generation = editor.generation;
     setConfirmState({
       title: `删除 ${name}？`,
-      content: "此操作将永久删除该自动化任务并停止所有后续运行。",
+      content: "此操作将永久删除该自动化任务、舍弃其编辑草稿，并停止所有后续运行。",
       okText: "删除自动化任务",
       action: async () => {
+        if (!useAutomationEditorStore.getState().startOperation("deleting", generation)) return;
         try {
           await automationsDelete(id);
-          handleCloseModal();
+          useAutomationEditorStore.getState().close(generation);
           await refresh(true);
           onToast?.("自动化任务已删除");
         } catch (e) {
           onToast?.(`删除自动化任务失败：${String(e).replace(/^Error:\s*/, "")}`);
+        } finally {
+          useAutomationEditorStore.getState().finishOperation(generation);
         }
       },
     });
-  }, [editingAutomation, handleCloseModal, onToast, refresh]);
+  }, [editingAutomation, editor.generation, saving, onToast, refresh]);
 
   const handleRowDelete = useCallback(
     (automationId: string) => {
+      if (editingAutomation?.id === automationId) { handleDelete(); return; }
       const name = snapshot?.automations.find((a) => a.id === automationId)?.name || "";
       setConfirmState({
         title: `删除 ${name}？`,
@@ -497,17 +563,23 @@ export function AutomationPanel({
         },
       });
     },
-    [snapshot, onToast, refresh],
+    [snapshot, editingAutomation, handleDelete, onToast, refresh],
   );
 
   const handleTogglePause = useCallback(
     async (automationId: string, currentStatus: AutomationStatus) => {
+      const current = useAutomationEditorStore.getState();
+      const owner = current.editingAutomation?.id === automationId ? current : null;
+      if (owner && !owner.startOperation("saving", owner.generation)) return;
       const next: AutomationStatus = currentStatus === "ACTIVE" ? "PAUSED" : "ACTIVE";
       try {
         await automationsSetStatus(automationId, next);
+        if (owner) useAutomationEditorStore.getState().syncStatus(next, owner.generation);
         await refresh(true);
       } catch (e) {
         onToast?.(`保存自动化任务失败：${String(e).replace(/^Error:\s*/, "")}`);
+      } finally {
+        if (owner) useAutomationEditorStore.getState().finishOperation(owner.generation);
       }
     },
     [onToast, refresh],
@@ -515,6 +587,8 @@ export function AutomationPanel({
 
   const handleRunTest = useCallback(
     async (automationId: string) => {
+      const current = useAutomationEditorStore.getState();
+      if (current.editingAutomation?.id === automationId && current.operation) return;
       setRunStartingIds((current) => new Set(current).add(automationId));
       try {
         await automationsRun(automationId);
@@ -535,30 +609,10 @@ export function AutomationPanel({
 
   const handleTest = useCallback(() => {
     if (!editingAutomation || !draft || saving) return;
-    const message = validateDraft(draft, { isCreating: false });
-    if (message) {
-      onToast?.(message);
-      return;
-    }
-    const modelMessage = automationModelError(draft, models, autoModelId, modelRuntimeError, true);
-    if (modelMessage) {
-      onToast?.(modelMessage);
-      return;
-    }
     requestActionWithPermissionCheck(() => {
-      void (async () => {
-        setSaving(true);
-        try {
-          await automationsSave(automationFromDraft(draft, editingAutomation));
-          await handleRunTest(editingAutomation.id);
-        } catch (e) {
-          onToast?.(`保存自动化任务失败：${String(e).replace(/^Error:\s*/, "")}`);
-        } finally {
-          setSaving(false);
-        }
-      })();
+      void persistDraft(editor.generation, true);
     });
-  }, [editingAutomation, draft, saving, models, autoModelId, modelRuntimeError, onToast, requestActionWithPermissionCheck, handleRunTest]);
+  }, [editingAutomation, draft, saving, editor.generation, requestActionWithPermissionCheck, persistDraft]);
 
   // ---------- 运行记录 ----------
   const handleArchiveRecord = useCallback(
@@ -602,19 +656,25 @@ export function AutomationPanel({
   const handleBatchDelete = useCallback(() => {
     if (selectedIds.size === 0) return;
     const ids = new Set(selectedIds);
+    const current = useAutomationEditorStore.getState();
+    const owner = current.editingAutomation && ids.has(current.editingAutomation.id) ? current : null;
+    if (owner?.operation) return;
     setConfirmState({
       title: `删除选中的 ${ids.size} 个任务？`,
-      content: "此操作将永久删除选中的自动化任务并停止其所有后续运行。",
+      content: `此操作将永久删除选中的自动化任务并停止其所有后续运行。${owner ? "其中正在编辑的任务草稿也会被舍弃。" : ""}`,
       okText: "删除",
       action: async () => {
+        if (owner && !useAutomationEditorStore.getState().startOperation("deleting", owner.generation)) return;
         let failed = 0;
         for (const id of ids) {
           try {
             await automationsDelete(id);
+            if (id === owner?.editingAutomation?.id) useAutomationEditorStore.getState().close(owner.generation);
           } catch {
             failed += 1;
           }
         }
+        if (owner) useAutomationEditorStore.getState().finishOperation(owner.generation);
         setSelectedIds(new Set());
         setIsBatchMode(false);
         if (failed === 0) onToast?.("自动化任务已删除");
@@ -725,10 +785,17 @@ export function AutomationPanel({
   // ============================================================
   // 编辑态渲染（截图 2）
   // ============================================================
-  if ((editingAutomation || isCreating) && draft) {
+  if (visible && (editingAutomation || isCreating) && draft) {
     const referenceErrorEntries = Object.entries(referenceErrors) as Array<[ReferenceCatalog, string]>;
     return (
       <div className="automation-panel echo-agent-automation">
+        {operation && <div className="atm-background-notice" role="status">{operation === "deleting" ? "正在删除自动化任务…" : "正在保存自动化任务…"}</div>}
+        {editingAutomation && snapshot && !snapshot.automations.some(item => item.id === editingAutomation.id) && (
+          <div className="atm-background-notice atm-draft-notice" role="alert">
+            <span>原自动化任务已被移除，编辑内容仍保留。可转为新任务草稿，检查后再保存。</span>
+            <button type="button" className="atm-toolbar-btn" disabled={saving} onClick={() => useAutomationEditorStore.getState().convertToNew()}>转为新任务草稿</button>
+          </div>
+        )}
         {(referencesLoading || referenceErrorEntries.length > 0) && (
           <div className="atm-background-notice" role={referenceErrorEntries.length > 0 ? "alert" : "status"}>
             <span>
@@ -765,7 +832,8 @@ export function AutomationPanel({
           }
           createdAt={editingAutomation?.createdAt}
           onSave={requestSaveWithPermissionCheck}
-          onClose={handleCloseModal}
+          onClose={requestEditorClose}
+          onBack={() => useAutomationEditorStore.getState().suspend()}
           onTest={isCreating ? undefined : handleTest}
           onDelete={isCreating ? undefined : handleDelete}
           onOpenConnectorSettings={() => onNavigate?.("专家·技能·连接器")}
@@ -774,6 +842,8 @@ export function AutomationPanel({
           onDeleteRecord={handleDeleteRecord}
           onOpenSession={onOpenSession}
         />
+        {unsavedDialog}
+        {replaceDraftDialog}
         <AutomationPermissionConfirmDialog
           open={showPermissionConfirm}
           onConfirm={handlePermissionConfirm}
@@ -940,6 +1010,15 @@ export function AutomationPanel({
           <button type="button" className="atm-toolbar-btn" onClick={() => void refresh()} disabled={loading}>
             {loading ? "重试中…" : "重试"}
           </button>
+        </div>
+      )}
+      {draft && (
+        <div className="atm-background-notice atm-draft-notice" role="status" aria-label="保留的自动化草稿">
+          <span>{operation ? (operation === "deleting" ? "正在删除自动化任务…" : "正在保存自动化任务…") : `已保留“${draft.name || "未命名自动化"}”的${automationEditorDirty(editor) ? "未保存草稿" : "编辑页面"}。`}</span>
+          <div className="atm-draft-notice__actions">
+            <button type="button" className="atm-toolbar-btn" onClick={() => useAutomationEditorStore.getState().resume()}>继续编辑</button>
+            <button type="button" className="atm-toolbar-btn" onClick={requestEditorClose} disabled={saving}>{automationEditorDirty(editor) ? "舍弃草稿" : "关闭编辑"}</button>
+          </div>
         </div>
       )}
       {focusedAutomationId && activeTab === "records" && (
@@ -1130,6 +1209,8 @@ export function AutomationPanel({
         </div>
       )}
 
+      {unsavedDialog}
+      {replaceDraftDialog}
       {confirmState && (
         <ConfirmDialog
           title={confirmState.title}

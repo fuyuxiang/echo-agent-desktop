@@ -1,9 +1,10 @@
+import { isReviewModelId, reviewModelId, seedReviewModel, redactReviewModelSecrets, captureReviewModelLogs } from './lib/native-review-model.mjs';
 import { nativeReviewOutput } from './lib/native-review-output.mjs';
 // Parent accepts only real native reports, Chrome requests and physical bytes.
 import assert from 'node:assert/strict';
 import { spawn } from 'node:child_process';
 import { createHash, randomBytes } from 'node:crypto';
-import { chmodSync, copyFileSync, existsSync, lstatSync, mkdirSync, mkdtempSync,
+import { chmodSync, existsSync, lstatSync, mkdirSync, mkdtempSync,
   readFileSync, realpathSync, unlinkSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, relative, resolve, isAbsolute } from 'node:path';
@@ -47,7 +48,8 @@ export function verifyBrowserReport(report, manifest, pid, startedAt) {
 }
 
 export async function runNativeBrowserReview(executable, modelId = 'echoagent-ojlab/chat-qwen') {
-  assert(['echoagent-ojlab/chat-qwen', 'echoagent-ojlab/chat-xc'].includes(modelId), 'Only the two already configured authorized model resources are permitted');
+  modelId = reviewModelId(modelId);
+  assert(isReviewModelId(modelId), 'Only explicitly authorized model resources are permitted');
   assert.equal(process.platform, 'darwin'); executable = realpathSync(resolve(executable));
   assert(lstatSync(executable).isFile());
   const output = nativeReviewOutput('native-browser', 'NATIVE_BROWSER_REVIEW_OUTPUT');
@@ -56,10 +58,11 @@ export async function runNativeBrowserReview(executable, modelId = 'echoagent-oj
   mkdirSync(cwd, { recursive: true, mode: 0o700 }); mkdirSync(legacy, { mode: 0o700 });
   const nonce = randomBytes(16).toString('hex'), revocations = readonlyCompatibilitySourceRevocations();
   writeFileSync(join(home, 'config.toml'), `[marketplace]\nofficial_marketplace_auto_installed = true\ndisabled_sources = [${revocations.map(JSON.stringify).join(', ')}]\n[claude_compat]\nimported = true\n`, { mode: 0o600 });
+  seedReviewModel(home);
   const result = { version: 1, kind: 'real-native-browser-driver', nativeVerified: false, passed: false,
     home, cwd, output, binarySha256: digest(readFileSync(executable)), phases: [], errors: [], defaultHomeChanged: false,
     resourceRequestsMadeByParent: false, modelOutputInjected: false, modelId };
-  let resource, active, expected, downloadObserved = false, interrupted = false;
+  let resource, active, activeLogs, expected, downloadObserved = false, interrupted = false;
   const physical = path => {
     const rel = relative(home, path); assert(rel && !isAbsolute(rel) && rel !== '..' && !rel.startsWith('../'));
     const stat = lstatSync(path); assert(stat.isFile() && !stat.isSymbolicLink() && stat.size <= 128 * 1024);
@@ -89,12 +92,10 @@ export async function runNativeBrowserReview(executable, modelId = 'echoagent-oj
           'ECHO_AGENT_HOME', 'ECHO_DESKTOP_VALIDATION', 'ECHO_THEIA_NODE', 'NODE_OPTIONS', 'NODE_PATH'].includes(key)) delete env[key];
       assert.equal(env.HOME, process.env.HOME);
       const start = Date.now(); const child = spawn(executable, ['--data-home', home], { cwd, env, stdio: ['ignore', 'pipe', 'pipe'] });
-      active = child; let ended = false, code, signal, bytes = 0, childError;
+      active = child; let ended = false, code, signal, childError;
       const exited = new Promise(accept => { child.once('error', error => { childError = error; ended = true; accept(); });
         child.once('close', (value, sig) => { ended = true; code = value; signal = sig; accept(); }); });
-      const log = chunk => { bytes += chunk.length; if (bytes > 8 * 1024 * 1024) { child.kill('SIGTERM'); return; }
-        writeFileSync(join(output, `${phase}-app.log`), chunk, { flag: 'a', mode: 0o600 }); };
-      child.stdout.on('data', log); child.stderr.on('data', log);
+      const logs = captureReviewModelLogs(child, join(output, `${phase}-app.log`)); activeLogs = logs;
       while (!ended && Date.now() - start < (phase === 'first-launch' ? 960000 : 180000)) {
         const ready = join(cwd, 'browser-download-ready.json');
         if (phase === 'first-launch' && !downloadObserved && existsSync(ready)) {
@@ -117,8 +118,9 @@ export async function runNativeBrowserReview(executable, modelId = 'echoagent-oj
         }
         await Promise.race([exited, delay(200)]);
       }
-      assert(ended, 'Actual browser process exceeded its bound'); await exited; if (childError) throw childError;
-      if (existsSync(reportPath)) copyFileSync(reportPath, join(output, `${phase}.json`));
+      assert(ended, 'Actual browser process exceeded its bound'); await exited; await logs.finished;
+      assert(!logs.overflow, 'Native browser log exceeded limit'); assert(!logs.incomplete, 'Native log pipes did not close after process exit'); if (childError) throw childError;
+      if (existsSync(reportPath)) writeFileSync(join(output, `${phase}.json`), redactReviewModelSecrets(readFileSync(reportPath)), { mode: 0o600 });
       result.phases.push({ phase, pid: child.pid, exitCode: code, signal, elapsedSeconds: (Date.now() - start) / 1000 });
       assert.equal(code, 0); assert.equal(signal, null);
       expected = verifyBrowserReport(JSON.parse(physical(reportPath)), manifest, child.pid, start);
@@ -132,11 +134,11 @@ export async function runNativeBrowserReview(executable, modelId = 'echoagent-oj
     result.nativeVerified = true; result.passed = result.phases.length === 2; result.expected = expected;
   } catch (error) { result.errors.push(String(error?.message || error).slice(0, 2500)); }
   finally {
-    await terminate(); process.removeListener('SIGINT', interrupt); process.removeListener('SIGTERM', interrupt);
+    await terminate(); await activeLogs?.finished; process.removeListener('SIGINT', interrupt); process.removeListener('SIGTERM', interrupt);
     if (resource) { await resource.close(); result.resourceSnapshot = resource.snapshot(); }
-    result.finishedAt = new Date().toISOString(); writeFileSync(join(output, 'result.json'), JSON.stringify(result, null, 2), { mode: 0o600 });
+    result.finishedAt = new Date().toISOString(); writeFileSync(join(output, 'result.json'), redactReviewModelSecrets(JSON.stringify(result, null, 2)), { mode: 0o600 });
   }
-  console.log(JSON.stringify({ passed: result.passed, nativeVerified: result.nativeVerified, output, errors: result.errors }));
+  console.log(redactReviewModelSecrets(JSON.stringify({ passed: result.passed, nativeVerified: result.nativeVerified, output, errors: result.errors })));
   return result;
 }
 if (process.argv[1] && import.meta.url === pathToFileURL(resolve(process.argv[1])).href) {

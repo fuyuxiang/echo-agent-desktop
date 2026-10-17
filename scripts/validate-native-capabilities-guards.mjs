@@ -35,6 +35,12 @@ valid.checks.find(item => item.id === 'cap-git-refresh-recovery').evidence = {
   syntheticGuard: true, sourceUrl: manifest.sourceUrl, recovered: true, retainedInstalledVersion: '1.0.0',
   failedFeedback: '刷新失败：synthetic HTTP 503',
 };
+for (const [id, version] of [['cap-git-install', '1.0.0'], ['cap-git-update', '2.0.0']]) {
+  valid.checks.find(item => item.id === id).evidence.runtimeUse = {
+    version, name: `${manifest.pluginName}:fixture-notes`, qualifiedName: `${manifest.pluginName}:fixture-notes`, source: `plugin:${manifest.pluginName}`, noTools: true, answer: version, prompt: '/synthetic-command read installed version',
+  };
+}
+valid.checks.find(item => item.id === 'cap-git-install').evidence.toggle = { disabled: { commandPresent: false }, enabled: { commandPresent: true } };
 const verify = (report) => verifyCapabilitiesNativeReport({ report, manifest, phase: 'first-launch', pid: 123, startedAt });
 assert.deepEqual(verify(valid), expected); checks.push({ id: 'strict-report-positive-synthetic', result: 'passed' });
 const finalized = structuredClone(valid);
@@ -42,6 +48,7 @@ for (const record of finalized.expected.records) record.automationSnapshot = nul
 assert.deepEqual(verify(finalized), finalized.expected);
 checks.push({ id: 'terminal-cleared-queue-context-positive-synthetic', result: 'passed' });
 for (const [id, mutate] of [
+  ['foreign-plugin-command', r => { r.checks.find(item => item.id === 'cap-git-install').evidence.runtimeUse.source = 'plugin:foreign'; }],
   ['missing-gate', (r) => r.checks.pop()], ['duplicate-gate', (r) => { r.checks.at(-1).id = r.checks[0].id; }],
   ['blocked-gate', (r) => { r.checks[0].result = 'blocked'; }], ['native-errors', (r) => { r.errors.push('real failure'); }],
   ['wrong-kind', (r) => { r.kind = 'fixture'; }], ['stale-finish', (r) => { r.finishedAt = new Date(0).toISOString(); }],

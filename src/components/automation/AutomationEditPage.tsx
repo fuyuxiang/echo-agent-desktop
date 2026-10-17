@@ -7,7 +7,7 @@
  *  - 连接器、执行频率（周期/按间隔/单次）、生效日期区间、完成通知
  *  - 编辑态：创建时间 + 运行历史
  */
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useId, useMemo, useRef, useState } from "react";
 import {
   AlarmClockIcon,
   ArchiveIcon,
@@ -83,21 +83,40 @@ function ToolbarDropdown({
 }) {
   const [isOpen, setIsOpen] = useState(false);
   const containerRef = useRef<HTMLDivElement>(null);
+  const triggerRef = useRef<HTMLButtonElement>(null);
+  const menuId = useId();
 
   useEffect(() => {
     if (!isOpen) return;
+    if (disabled) { setIsOpen(false); return; }
     const handler = (e: MouseEvent) => {
       if (containerRef.current && !containerRef.current.contains(e.target as Node)) setIsOpen(false);
     };
+    const keyHandler = (event: KeyboardEvent) => {
+      if (event.key !== "Escape") return;
+      event.preventDefault();
+      event.stopPropagation();
+      setIsOpen(false);
+      triggerRef.current?.focus();
+    };
+    containerRef.current?.querySelector<HTMLButtonElement>(".atm-chip-dropdown__menu button:not(:disabled)")?.focus();
     document.addEventListener("mousedown", handler);
-    return () => document.removeEventListener("mousedown", handler);
-  }, [isOpen]);
+    document.addEventListener("keydown", keyHandler);
+    return () => {
+      document.removeEventListener("mousedown", handler);
+      document.removeEventListener("keydown", keyHandler);
+    };
+  }, [isOpen, disabled]);
 
   return (
-    <div className={`atm-chip-dropdown${isOpen ? " atm-chip-dropdown--open" : ""}`} ref={containerRef}>
+    <div className={`atm-chip-dropdown${isOpen ? " atm-chip-dropdown--open" : ""}`} ref={containerRef}
+      onBlur={(event) => { if (!event.currentTarget.contains(event.relatedTarget as Node | null)) setIsOpen(false); }}>
       <button
         type="button"
+        ref={triggerRef}
         className="atm-prompt-chip"
+        aria-expanded={isOpen}
+        aria-controls={isOpen ? menuId : undefined}
         disabled={disabled}
         onClick={() => setIsOpen((v) => !v)}
       >
@@ -105,9 +124,13 @@ function ToolbarDropdown({
       </button>
       {isOpen && (
         <div
+          id={menuId}
           className="atm-chip-dropdown__menu"
           onClick={(event) => {
-            if (closeOnSelect && (event.target as HTMLElement).closest("button")) setIsOpen(false);
+            if (closeOnSelect && (event.target as HTMLElement).closest("button")) {
+              setIsOpen(false);
+              triggerRef.current?.focus();
+            }
           }}
         >
           {children}
@@ -576,6 +599,7 @@ export function AutomationEditPage({
   createdAt,
   onSave,
   onClose,
+  onBack,
   onTest,
   onDelete,
   onOpenConnectorSettings,
@@ -599,6 +623,7 @@ export function AutomationEditPage({
   createdAt?: string;
   onSave: () => void;
   onClose: () => void;
+  onBack?: () => void;
   onTest?: () => void;
   onDelete?: () => void;
   onOpenConnectorSettings?: () => void;
@@ -607,6 +632,8 @@ export function AutomationEditPage({
   onDeleteRecord: (id: string) => void;
   onOpenSession?: (sessionId: string) => void;
 }) {
+  const nameId = useId();
+  const promptId = useId();
   const isEditMode = mode === "edit";
   const set = (patch: Partial<AutomationDraft>) =>
     setDraft((current) => ({ ...current, ...patch }));
@@ -707,7 +734,7 @@ export function AutomationEditPage({
             <span className="atm-detail-status-icon">
               <AlarmClockIcon className="atm-task-status-icon atm-task-status-icon--scheduled" />
             </span>
-            <button type="button" className="atm-detail-breadcrumb-link" onClick={onClose}>
+            <button type="button" className="atm-detail-breadcrumb-link" onClick={onBack ?? onClose} title="返回列表并保留草稿">
               自动化
             </button>
             <span className="atm-detail-breadcrumb-sep">/</span>
@@ -722,7 +749,8 @@ export function AutomationEditPage({
               <button
                 type="button"
                 className="atm-detail-icon-btn"
-                title="测试运行"
+                title="保存修改并测试运行"
+                aria-label="测试运行"
                 disabled={saving}
                 onClick={onTest}
               >
@@ -766,8 +794,9 @@ export function AutomationEditPage({
       <div className="atm-detail-content">
         <div className="atm-modal-body">
           {/* 名称 */}
-          <label className="atm-modal-label">名称</label>
+          <label className="atm-modal-label" htmlFor={nameId}>名称</label>
           <input
+            id={nameId}
             type="text"
             className="atm-modal-input"
             value={draft.name}
@@ -788,9 +817,10 @@ export function AutomationEditPage({
           />
 
           {/* 提示词 */}
-          <label className="atm-modal-label">任务要求</label>
+          <label className="atm-modal-label" htmlFor={promptId}>任务要求</label>
           <div className="atm-modal-chat-input">
             <textarea
+              id={promptId}
               className="atm-prompt-textarea"
               value={draft.prompt}
               disabled={saving}

@@ -28,6 +28,8 @@ impl AsyncChild {
 
 pub struct SyncChild {
     inner: Box<dyn process_wrap::std::ChildWrapper>,
+    #[cfg(unix)]
+    _node_owner: Option<std::os::unix::net::UnixStream>,
     #[cfg(windows)]
     job: windows_job::Job,
 }
@@ -405,7 +407,57 @@ pub fn spawn_sync(command: std::process::Command) -> io::Result<SyncChild> {
         let mut wrapped = CommandWrap::from(command);
         wrapped.wrap(ProcessGroup::leader());
         let inner = wrapped.spawn()?;
-        Ok(SyncChild { inner })
+        Ok(SyncChild {
+            inner,
+            _node_owner: None,
+        })
+    }
+}
+
+/// Node backends can observe owner death through an inherited private socket.
+/// Windows already provides this lifetime guarantee through its kernel Job.
+pub fn spawn_owned_node(
+    command: std::process::Command,
+    guard_script: &std::path::Path,
+) -> io::Result<SyncChild> {
+    #[cfg(unix)]
+    {
+        use std::os::{fd::AsRawFd, unix::process::CommandExt};
+        let mut command = command;
+        let (reader, owner) = std::os::unix::net::UnixStream::pair()?;
+        let fd = reader.as_raw_fd();
+        let script = guard_script.to_str().ok_or_else(|| {
+            io::Error::new(
+                io::ErrorKind::InvalidInput,
+                "Node owner guard path is not UTF-8",
+            )
+        })?;
+        let mut options = std::env::var("NODE_OPTIONS").unwrap_or_default();
+        options.push_str(" --require ");
+        options.push_str(&serde_json::to_string(script).map_err(io::Error::other)?);
+        command
+            .env("NODE_OPTIONS", options)
+            .env("ECHO_THEIA_PARENT_FD", fd.to_string());
+        // Only async-signal-safe fcntl runs between fork and exec. Both socket
+        // ends remain CLOEXEC in the owner and every unrelated spawned child.
+        unsafe {
+            command.pre_exec(move || {
+                let flags = libc::fcntl(fd, libc::F_GETFD);
+                if flags < 0 || libc::fcntl(fd, libc::F_SETFD, flags & !libc::FD_CLOEXEC) < 0 {
+                    return Err(io::Error::last_os_error());
+                }
+                Ok(())
+            });
+        }
+        let mut child = spawn_sync(command)?;
+        drop(reader);
+        child._node_owner = Some(owner);
+        Ok(child)
+    }
+    #[cfg(not(unix))]
+    {
+        let _ = guard_script;
+        spawn_sync(command)
     }
 }
 

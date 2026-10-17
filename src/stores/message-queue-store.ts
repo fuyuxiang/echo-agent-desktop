@@ -46,13 +46,13 @@ interface QueueState {
   /** 入队一条(追加到末尾,默认 queued)。返回新 item 的 id。 */
   enqueue: (sessionId: string, text: string, attachments?: string[]) => string;
   /** 编辑某条文本。 */
-  update: (sessionId: string, id: string, text: string) => void;
+  update: (sessionId: string, id: string, text: string) => boolean;
   /** 删除某条。 */
-  remove: (sessionId: string, id: string) => void;
+  remove: (sessionId: string, id: string) => boolean;
   /** 移动某条到新位置(0-based)。越界则 clamp。 */
-  reorder: (sessionId: string, from: number, to: number) => void;
+  reorder: (sessionId: string, from: number, to: number) => boolean;
   /** 暂停 / 恢复。 */
-  setStatus: (sessionId: string, id: string, status: EditableQueueItemStatus) => void;
+  setStatus: (sessionId: string, id: string, status: EditableQueueItemStatus) => boolean;
   /** Atomically reserve the first queued item so completion events cannot
    *  dispatch the same long-running request twice. */
   claimNext: (sessionId: string, promptId?: string) => QueueItem | null;
@@ -100,6 +100,13 @@ function restoredQueues(): QueueMap {
   }))]));
 }
 
+/** User edits are acknowledged only once the restart snapshot is saved. */
+function commitQueues(queues: QueueMap, set: (state: { queues: QueueMap }) => void): boolean {
+  if (!writeDurable(OUTBOX_KEY, queues)) return false;
+  set({ queues });
+  return true;
+}
+
 export const useMessageQueueStore = create<QueueState>((set, get) => ({
   queues: restoredQueues(),
   enqueue: (sessionId, text, attachments = []) => {
@@ -116,51 +123,39 @@ export const useMessageQueueStore = create<QueueState>((set, get) => ({
     set({ queues });
     return id;
   },
-  update: (sessionId, id, text) =>
-    set((s) => {
-      const q = queueOf(s.queues, sessionId);
-      if (!q.some((it) => it.id === id)) return s;
-      return {
-        queues: {
-          ...s.queues,
-          [sessionId]: q.map((it) => (it.id === id ? { ...it, text } : it)),
-        },
-      };
-    }),
-  remove: (sessionId, id) =>
-    set((s) => {
-      const q = queueOf(s.queues, sessionId);
-      if (!q.some((it) => it.id === id)) return s;
-      const next = q.filter((it) => it.id !== id);
-      const queues = { ...s.queues };
-      if (next.length === 0) delete queues[sessionId];
-      else queues[sessionId] = next;
-      return { queues };
-    }),
-  reorder: (sessionId, from, to) =>
-    set((s) => {
-      const q = queueOf(s.queues, sessionId);
-      if (from < 0 || from >= q.length || q.length === 0) return s;
-      const clampedTo = Math.max(0, Math.min(to, q.length - 1));
-      if (from === clampedTo) return s;
-      const next = [...q];
-      const [moved] = next.splice(from, 1);
-      next.splice(clampedTo, 0, moved);
-      return { queues: { ...s.queues, [sessionId]: next } };
-    }),
-  setStatus: (sessionId, id, status) =>
-    set((s) => {
-      const q = queueOf(s.queues, sessionId);
-      if (!q.some((it) => it.id === id)) return s;
-      return {
-        queues: {
-          ...s.queues,
-          [sessionId]: q.map((it) => (
-            it.id === id ? { ...it, status, promptId: undefined, recovery: undefined } : it
-          )),
-        },
-      };
-    }),
+  update: (sessionId, id, text) => {
+    const { queues } = get();
+    const q = queueOf(queues, sessionId);
+    if (!q.some((it) => it.id === id)) return true;
+    return commitQueues({ ...queues, [sessionId]: q.map((it) => it.id === id ? { ...it, text } : it) }, set);
+  },
+  remove: (sessionId, id) => {
+    const q = queueOf(get().queues, sessionId);
+    if (!q.some((it) => it.id === id)) return true;
+    const next = q.filter((it) => it.id !== id);
+    const queues = { ...get().queues };
+    if (next.length === 0) delete queues[sessionId];
+    else queues[sessionId] = next;
+    return commitQueues(queues, set);
+  },
+  reorder: (sessionId, from, to) => {
+    const { queues } = get();
+    const q = queueOf(queues, sessionId);
+    if (from < 0 || from >= q.length || q.length === 0) return true;
+    const clampedTo = Math.max(0, Math.min(to, q.length - 1));
+    if (from === clampedTo) return true;
+    const next = [...q];
+    const [moved] = next.splice(from, 1);
+    next.splice(clampedTo, 0, moved);
+    return commitQueues({ ...queues, [sessionId]: next }, set);
+  },
+  setStatus: (sessionId, id, status) => {
+    const { queues } = get();
+    const q = queueOf(queues, sessionId);
+    if (!q.some((it) => it.id === id)) return true;
+    return commitQueues({ ...queues, [sessionId]: q.map((it) => it.id === id
+      ? { ...it, status, promptId: undefined, recovery: undefined } : it) }, set);
+  },
   claimNext: (sessionId, promptId) => {
     let claimed: QueueItem | null = null;
     set((s) => {

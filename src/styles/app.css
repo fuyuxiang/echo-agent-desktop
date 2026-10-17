@@ -2088,6 +2088,10 @@
   border: 1px solid var(--echo-border-default);
   border-radius: 10px;
   font-size: 0.75rem;
+  max-height: min(240px, 28vh);
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  scrollbar-gutter: stable;
 }
 .queue-panel__head {
   display: flex;
@@ -2101,6 +2105,10 @@
   font-weight: 400;
   color: var(--echo-text-light);
   font-size: 0.6875rem;
+}
+.queue-panel__error {
+  margin: 4px 2px;
+  color: var(--echo-danger, #b42318);
 }
 .queue-row {
   display: flex;
@@ -2130,12 +2138,22 @@
   gap: 3px;
 }
 .queue-row__text {
+  border: 0;
+  padding: 0;
+  background: transparent;
+  font: inherit;
+  text-align: left;
   flex: 1;
   min-width: 0;
   color: var(--echo-text-strong);
   white-space: pre-wrap;
   word-break: break-word;
   cursor: text;
+}
+.queue-row__text:focus-visible {
+  outline: 2px solid var(--echo-brand);
+  outline-offset: 2px;
+  border-radius: 3px;
 }
 .queue-row__attachments {
   display: flex;

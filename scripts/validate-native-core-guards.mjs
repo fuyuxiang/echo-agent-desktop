@@ -35,6 +35,8 @@ const report = (phase) => {
       completions: [turn('slow-1', 'cancelled', 'send_now'), turn('immediate-1'), turn('queued-1')] });
     put('core-stop-and-resend', { stopped: turn('slow-2', 'cancelled', 'stop'), lateWaitMs: 1000,
       recovery: { marker: expected.markers.recovery, completion: turn('recovery-1') } });
+    put('core-automation-draft-navigation-exit', { marker: `CORE-DRAFT-${nonce}`, restoredViaNavigation: true,
+      quitConfirmationViaUi: true, exitCancelledAndRuntimeReady: true, noTasksCreated: true, discardedViaUi: true });
     put('core-custom-qwen-connection', { testedAndSavedViaUi: true, explicitHttpConsent: true, noCredentials: true,
       actualSessionModelId: expected.customModel.modelId, response: { modelId: expected.customModel.modelId,
         marker: expected.customModel.marker, completion: turn('custom-1') } });
@@ -63,6 +65,7 @@ rejects('failed stop recovery is not completed', (v) => { v.report.checks.find((
 rejects('unknown permission scope is rejected', (v) => { v.report.permissions.push({ sessionId: expected.sessionId, via: 'production allow-once UI', operation: { name: 'bash', command: 'echo' } }); });
 rejects('Office reply alone is not real tool output', (v) => { v.report.checks.find((c) => c.id === 'core-office-epub-runtime-read').evidence.toolOutputFingerprint = false; });
 rejects('custom model HTTP consent cannot be fabricated as omitted', (v) => { v.report.checks.find((c) => c.id === 'core-custom-qwen-connection').evidence.explicitHttpConsent = false; });
+rejects('draft quit must preserve real Runtime after cancellation', v => { v.report.checks.find(c => c.id === 'core-automation-draft-navigation-exit').evidence.exitCancelledAndRuntimeReady = false; });
 rejects('builtin selector alone does not prove custom switch', (v) => { v.report.expected.customModel.modelId = expected.modelId; });
 for (const phase of ['first-launch', 'restart']) { verifyNativeCoreReport(args(phase)); cases.push({ name: `valid synthetic ${phase} admission only`, passed: true, actualNative: false }); }
 {

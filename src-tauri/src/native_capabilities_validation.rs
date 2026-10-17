@@ -28,6 +28,8 @@ pub(crate) fn require_main_internal(window: &tauri::WebviewWindow) -> Result<(),
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 struct Manifest {
     schema: u8,
+    #[serde(default = "crate::native_review_model::default_model")]
+    model_id: String,
     home: PathBuf,
     cwd: PathBuf,
     token: String,
@@ -114,6 +116,7 @@ fn validate_manifest(manifest: &Manifest, home: &Path) -> Result<(), String> {
     let restored = format!("# 隔离全局记忆恢复\n\n由真实追加记忆入口重建 {suffix}。\n");
     let url = url::Url::parse(&manifest.source_url).map_err(|_| "Invalid capabilities Git URL")?;
     if manifest.schema != 1
+        || !crate::native_review_model::allowed_model(&manifest.model_id)
         || manifest.home != home
         || manifest.cwd != home.join("workspaces/default")
         || manifest.ca_path != home.join("capabilities-git-resource/ca.crt")
@@ -162,6 +165,7 @@ fn read_manifest(home: &Path) -> Result<Manifest, String> {
     let manifest: Manifest =
         serde_json::from_slice(&bytes).map_err(|_| "Invalid capabilities manifest")?;
     validate_manifest(&manifest, home)?;
+    crate::native_review_model::validate_config(home, &manifest.model_id)?;
     ordinary_private(&manifest.ca_path, false)?;
     Ok(manifest)
 }
@@ -232,6 +236,7 @@ mod tests {
         let seed = format!("# 隔离全局记忆\n\n仅供本机验收删除的种子 {suffix}。\n");
         Manifest {
             schema: 1,
+            model_id: crate::native_review_model::default_model(),
             cwd: home.join("workspaces/default"),
             ca_path: home.join("capabilities-git-resource/ca.crt"),
             home,

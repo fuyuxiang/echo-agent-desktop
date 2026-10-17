@@ -6,12 +6,14 @@ export function useUnsavedClose({
   dirty,
   busy = false,
   onClose,
+  scopeKey,
 }: {
   dirty: boolean;
   busy?: boolean;
   onClose: () => void;
+  scopeKey?: string | number;
 }) {
-  const { requestConfirmation, dialog } = useAppDialog();
+  const { requestConfirmation, dialog } = useAppDialog(scopeKey);
   const current = useRef({ dirty, busy, onClose });
   current.current = { dirty, busy, onClose };
 

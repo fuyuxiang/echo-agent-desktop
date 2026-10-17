@@ -37,6 +37,7 @@ mod native_coding_validation;
 mod native_core_validation;
 mod native_exit_validation;
 mod native_ide_validation;
+mod native_review_model;
 mod notifications;
 mod office_mcp;
 mod org;
@@ -822,6 +823,7 @@ pub fn run() {
             native_browser_validation::desktop_review_browser_manifest,
             native_capabilities_validation::desktop_review_capabilities_manifest,
             native_core_validation::desktop_review_core_manifest,
+            native_core_validation::desktop_review_model_connection,
             native_exit_validation::native_exit_review_context,
             native_ide_validation::desktop_review_ide_manifest,
             desktop_exit_prepared,

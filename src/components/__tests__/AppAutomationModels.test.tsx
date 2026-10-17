@@ -1,4 +1,6 @@
-import { act, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { useAutomationEditorStore } from "@/stores/automation-editor-store";
+import { buildDraft } from "../automation/schedule-utils";
+import { act, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { ComponentProps, ReactNode } from "react";
 import { invoke } from "@tauri-apps/api/core";
@@ -90,6 +92,7 @@ async function start() {
   await act(async () => {});
 }
 beforeEach(() => {
+  useAutomationEditorStore.getState().close();
   vi.clearAllMocks();
   localStorage.clear();
   useSessionsStore.setState(useSessionsStore.getInitialState());
@@ -112,6 +115,65 @@ beforeEach(() => {
 });
 
 describe("自动化会话模型同步", () => {
+  it("原生验收就绪通知不依赖可被后台窗口暂停的动画帧", async () => {
+    vi.stubGlobal("__TAURI_INTERNALS__", {});
+    vi.stubGlobal("requestAnimationFrame", vi.fn(() => 1));
+    vi.stubGlobal("cancelAnimationFrame", vi.fn());
+    try {
+      await start();
+      await waitFor(() => expect(invoke).toHaveBeenCalledWith("desktop_validation_ready"));
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  });
+
+  it("正常退出先确认未保存的自动化草稿，取消或退出失败都保留输入", async () => {
+    const desktop = new Map<string, (payload: unknown) => void>();
+    vi.mocked(listen).mockImplementation(async (event, handler) => {
+      desktop.set(event, payload => handler({ payload } as never)); return () => {};
+    });
+    vi.mocked(invoke).mockImplementation(async command => command === "desktop_exit_prepared" ? true
+      : command === "notification_take_pending_opens" ? [] : null);
+    const editor = useAutomationEditorStore.getState();
+    editor.begin(buildDraft(undefined, "/workspace"));
+    editor.setDraft(draft => draft && ({ ...draft, name: "退出前保留" }));
+    await start();
+    await waitFor(() => expect(invoke).toHaveBeenCalledWith("desktop_exit_listener_ready"));
+    act(() => desktop.get("desktop://prepare-exit")?.({ requestId: "draft-cancel" }));
+    let dialog = await screen.findByRole("alertdialog", { name: "退出前舍弃自动化草稿？" });
+    expect(screen.queryByText("正在保存录音与任务数据并准备退出…")).toBeNull();
+    expect(invoke).not.toHaveBeenCalledWith("desktop_exit_prepared", { requestId: "draft-cancel", error: null });
+    fireEvent.click(within(dialog).getByRole("button", { name: "继续编辑" }));
+    await waitFor(() => expect(invoke).toHaveBeenCalledWith("desktop_exit_prepared", { requestId: "draft-cancel", error: "退出已取消，自动化草稿已保留。" }));
+    act(() => desktop.get("desktop://exit-failed")?.({ requestId: "draft-cancel", message: "退出已取消" }));
+    expect(useAutomationEditorStore.getState().draft?.name).toBe("退出前保留");
+    act(() => desktop.get("desktop://prepare-exit")?.({ requestId: "draft-confirm" }));
+    dialog = await screen.findByRole("alertdialog", { name: "退出前舍弃自动化草稿？" });
+    fireEvent.click(within(dialog).getByRole("button", { name: "舍弃修改并退出" }));
+    await waitFor(() => expect(invoke).toHaveBeenCalledWith("desktop_exit_prepared", { requestId: "draft-confirm", error: null }));
+    act(() => desktop.get("desktop://exit-failed")?.({ requestId: "draft-confirm", message: "保存其他任务失败" }));
+    expect(useAutomationEditorStore.getState().draft?.name).toBe("退出前保留");
+    expect(screen.queryByRole("alertdialog")).toBeNull();
+  });
+
+  it("退出请求超时会关闭草稿确认，迟到确认不能停止录音或确认旧退出", async () => {
+    const desktop = new Map<string, (payload: unknown) => void>();
+    vi.mocked(listen).mockImplementation(async (event, handler) => {
+      desktop.set(event, payload => handler({ payload } as never)); return () => {};
+    });
+    const editor = useAutomationEditorStore.getState();
+    editor.begin(buildDraft()); editor.setDraft(draft => draft && ({ ...draft, name: "超时仍保留" }));
+    await start();
+    await waitFor(() => expect(invoke).toHaveBeenCalledWith("desktop_exit_listener_ready"));
+    act(() => desktop.get("desktop://prepare-exit")?.({ requestId: "draft-timeout" }));
+    await screen.findByRole("alertdialog", { name: "退出前舍弃自动化草稿？" });
+    act(() => desktop.get("desktop://exit-failed")?.({ requestId: "draft-timeout", message: "退出准备超时" }));
+    await waitFor(() => expect(screen.queryByRole("alertdialog")).toBeNull());
+    expect(useAutomationEditorStore.getState().draft?.name).toBe("超时仍保留");
+    expect(recorder.stop).not.toHaveBeenCalled();
+    expect(vi.mocked(invoke).mock.calls.some(([name, args]) => name === "desktop_exit_prepared" && (args as { requestId?: string })?.requestId === "draft-timeout")).toBe(false);
+  });
+
   it("已删除会话的迟到事件不能重建消息、审批或问题", async () => {
     await start();
     created("model-a");

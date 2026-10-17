@@ -69,6 +69,24 @@ describe("KnowledgeBasePanel", () => {
     expect(screen.getByText("docs")).toBeInTheDocument();
   });
 
+  it("修改搜索词后立即移除旧结果，防抖期间不能打开上一次的文档", async () => {
+    registerKbProvider({ id: "docs", label: "文档库", isEnabled: () => true,
+      list: (q) => [{ id: q || "idle", title: `文档 ${q || "idle"}` }],
+    });
+    render(<KnowledgeBasePanel />);
+    const input = await screen.findByRole("textbox", { name: "搜索知识库" });
+    fireEvent.change(input, { target: { value: "first" } });
+    expect(await screen.findByRole("button", { name: "打开知识条目：文档 first" })).toBeInTheDocument();
+    fireEvent.change(input, { target: { value: "second" } });
+    expect(screen.queryByRole("button", { name: "打开知识条目：文档 first" })).toBeNull();
+    expect(screen.queryByText("未找到相关内容，请尝试其他关键词")).toBeNull();
+    expect(screen.getByText("搜索中…")).toBeInTheDocument();
+    expect(await screen.findByRole("button", { name: "打开知识条目：文档 second" })).toBeInTheDocument();
+    fireEvent.change(input, { target: { value: "" } });
+    expect(screen.queryByRole("button", { name: "打开知识条目：文档 second" })).toBeNull();
+    expect(screen.queryByRole("list", { name: "知识库搜索结果" })).toBeNull();
+  });
+
   it("桌面端展示后台排序的搜索结果，不展示后台模型细节", async () => {
     registerKbProvider({
       id: "notes",

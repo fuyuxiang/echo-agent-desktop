@@ -1274,6 +1274,16 @@ async fn notify_lifecycle(binding: &Binding, credential: &str, start: bool) -> R
     .map(|_| ())
 }
 
+fn shutdown_identity(
+    binding: Result<Option<Binding>, String>,
+    read_credential: impl FnOnce() -> Result<String, String>,
+) -> Option<(Binding, String)> {
+    // An unbound profile has no lifecycle notification to send. In particular,
+    // never open a system credential prompt just because the app is quitting.
+    let binding = binding.ok().flatten()?;
+    Some((binding, read_credential().ok()?))
+}
+
 pub(crate) async fn shutdown(app: &AppHandle) {
     let state = app.state::<WeixinState>();
     state.worker_generation.fetch_add(1, Ordering::SeqCst);
@@ -1285,7 +1295,7 @@ pub(crate) async fn shutdown(app: &AppHandle) {
     if let Some(worker) = state.outbox_worker.lock().unwrap().take() {
         worker.abort();
     }
-    if let (Ok(Some(binding)), Ok(credential)) = (load_binding(), token()) {
+    if let Some((binding, credential)) = shutdown_identity(load_binding(), token) {
         if let Err(error) = notify_lifecycle(&binding, &credential, false).await {
             tracing::warn!(%error, "failed to notify Weixin channel stop");
         }
@@ -2798,6 +2808,29 @@ async fn send_interaction_text(
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn unbound_shutdown_never_reads_system_credentials() {
+        for binding in [Ok(None), Err("invalid binding".to_string())] {
+            assert!(
+                super::shutdown_identity(binding, || panic!("unexpected credential access"))
+                    .is_none()
+            );
+        }
+        let binding = super::Binding {
+            bot_id: "owned-bot".into(),
+            ..Default::default()
+        };
+        let identity =
+            super::shutdown_identity(Ok(Some(binding)), || Ok("synthetic-credential".into()))
+                .unwrap();
+        assert_eq!(identity.0.bot_id, "owned-bot");
+        assert_eq!(identity.1, "synthetic-credential");
+        assert!(
+            super::shutdown_identity(Ok(Some(super::Binding::default())), || Err("locked".into()))
+                .is_none()
+        );
+    }
+
     use super::{
         cdn_url, decrypt_media, default_workspace, encrypt_media, format_task_page, message_id,
         outbound_segments, quoted_session_marker, reconcile_bot_echo, reply_context,

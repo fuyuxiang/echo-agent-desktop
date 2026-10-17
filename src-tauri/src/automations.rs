@@ -1469,6 +1469,28 @@ fn blank_to_none(value: &mut Option<String>) {
     }
 }
 
+/// Called under store_access: an edit must never recreate a deleted task.
+fn save_automation_in_store(
+    store: &mut AutomationStore,
+    mut automation: Automation,
+    creating: bool,
+) -> Result<Automation, String> {
+    if creating {
+        store.automations.push(automation.clone());
+    } else {
+        let existing = store
+            .automations
+            .iter_mut()
+            .find(|item| item.id == automation.id)
+            .ok_or("原自动化任务已被移除，请保留草稿并新建任务。")?;
+        // Scheduler metadata can advance while an editor is suspended.
+        automation.created_at = existing.created_at.clone();
+        automation.last_run_at = existing.last_run_at.clone();
+        *existing = automation.clone();
+    }
+    Ok(automation)
+}
+
 #[tauri::command]
 pub fn automations_save(
     app: AppHandle,
@@ -1495,7 +1517,8 @@ pub fn automations_save(
     }
     let _guard = store_access().lock().unwrap();
     let mut store = read_store()?;
-    let id = if automation.id.is_empty() {
+    let creating = automation.id.is_empty();
+    let id = if creating {
         uuid::Uuid::now_v7().to_string()
     } else {
         automation.id.clone()
@@ -1527,11 +1550,7 @@ pub fn automations_save(
     validate_automation_at(&final_automation, now_local())?;
     final_automation.next_run_at = compute_next_run(&final_automation, now_local());
 
-    if let Some(existing) = store.automations.iter_mut().find(|a| a.id == id) {
-        *existing = final_automation.clone();
-    } else {
-        store.automations.push(final_automation.clone());
-    }
+    let final_automation = save_automation_in_store(&mut store, final_automation, creating)?;
     write_store(&store)?;
     let has_active = store
         .automations
@@ -2582,6 +2601,32 @@ pub fn start_scheduler(
 mod tests {
     use super::*;
     use chrono::TimeZone;
+
+    #[test]
+    fn edits_cannot_recreate_deleted_tasks_or_rewind_scheduler_metadata() {
+        let mut store = AutomationStore::default();
+        let mut created = test_automation();
+        created.id = "owned-task".into();
+        created.created_at = "2026-10-17T08:00:00+08:00".into();
+        save_automation_in_store(&mut store, created.clone(), true).unwrap();
+        let mut draft = created;
+        store.automations[0].last_run_at = Some("2026-10-17T09:00:00+08:00".into());
+        draft.name = "edited name".into();
+        draft.created_at.clear();
+        let saved = save_automation_in_store(&mut store, draft.clone(), false).unwrap();
+        assert_eq!(saved.name, "edited name");
+        assert_eq!(saved.created_at, "2026-10-17T08:00:00+08:00");
+        assert_eq!(
+            saved.last_run_at.as_deref(),
+            Some("2026-10-17T09:00:00+08:00")
+        );
+        // A delete after the frontend snapshot was read is still authoritative.
+        store.automations.clear();
+        assert!(save_automation_in_store(&mut store, draft, false)
+            .unwrap_err()
+            .contains("已被移除"));
+        assert!(store.automations.is_empty());
+    }
 
     #[test]
     fn explicit_validation_modes_never_write_the_system_login_item() {

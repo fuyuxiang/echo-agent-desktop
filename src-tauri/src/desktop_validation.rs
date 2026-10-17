@@ -424,6 +424,7 @@ pub async fn desktop_validation_ready(
     window: tauri::WebviewWindow,
 ) -> Result<(), String> {
     if std::env::var("ECHO_DESKTOP_REVIEW").as_deref() == Ok("1") {
+        tracing::info!("Native review renderer requested dispatch");
         require_review_launch(&window)?;
         if std::env::var("ECHO_DESKTOP_REVIEW_EXIT").as_deref() == Ok("1") {
             return Ok(());
@@ -436,10 +437,13 @@ pub async fn desktop_validation_ready(
             return crate::native_ide_validation::launch(window).await;
         }
         if std::env::var("ECHO_DESKTOP_REVIEW_CORE").as_deref() == Ok("1") {
-            return crate::native_core_validation::launch(&window);
+            return crate::native_core_validation::launch(&window)
+                .inspect_err(|error| tracing::warn!(%error, "Core review launch rejected"));
         }
         if std::env::var("ECHO_DESKTOP_REVIEW_CAPABILITIES").as_deref() == Ok("1") {
-            return crate::native_capabilities_validation::launch(&window);
+            return crate::native_capabilities_validation::launch(&window).inspect_err(
+                |error| tracing::warn!(%error, "Capabilities review launch rejected"),
+            );
         }
         if std::env::var("ECHO_DESKTOP_REVIEW_LOCAL").as_deref() == Ok("1") {
             #[cfg(target_os = "macos")]

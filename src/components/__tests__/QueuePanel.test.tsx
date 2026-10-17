@@ -42,6 +42,40 @@ describe("QueuePanel", () => {
     expect(useMessageQueueStore.getState().getQueue("s1")[0].text).toBe("改后");
   });
 
+  it("清空说明仍保留附件，只有附件的消息也可以通过键盘编辑", () => {
+    useMessageQueueStore.getState().enqueue("s1", "原说明", ["/tmp/方案.docx"]);
+    render(<QueuePanel sessionId="s1" />);
+    fireEvent.click(screen.getByText("原说明"));
+    fireEvent.change(screen.getByRole("textbox"), { target: { value: "   " } });
+    fireEvent.keyDown(screen.getByRole("textbox"), { key: "Enter" });
+    expect(useMessageQueueStore.getState().getQueue("s1")).toMatchObject([{ text: "", attachments: ["/tmp/方案.docx"] }]);
+    const edit = screen.getByRole("button", { name: "编辑消息：仅附件消息" });
+    edit.focus();
+    expect(edit).toHaveFocus();
+    fireEvent.click(edit);
+    fireEvent.change(screen.getByRole("textbox"), { target: { value: "补充说明" } });
+    fireEvent.keyDown(screen.getByRole("textbox"), { key: "Enter" });
+    expect(useMessageQueueStore.getState().getQueue("s1")[0].text).toBe("补充说明");
+  });
+
+  it("队列编辑保存失败时保留输入并显示错误，存储恢复后可以重试", () => {
+    useMessageQueueStore.getState().enqueue("s1", "原文");
+    render(<QueuePanel sessionId="s1" onSendNow={vi.fn()} />);
+    fireEvent.click(screen.getByText("原文"));
+    fireEvent.change(screen.getByRole("textbox"), { target: { value: "不能丢的修改" } });
+    const write = vi.spyOn(Storage.prototype, "setItem").mockImplementation(() => { throw new Error("disk full"); });
+    try {
+      fireEvent.keyDown(screen.getByRole("textbox"), { key: "Enter" });
+      expect(screen.getByRole("alert")).toHaveTextContent("未能保存");
+      expect(screen.getByRole("textbox")).toHaveValue("不能丢的修改");
+      expect(screen.getByRole("button", { name: "立即发送" })).toBeDisabled();
+      expect(useMessageQueueStore.getState().getQueue("s1")[0].text).toBe("原文");
+    } finally { write.mockRestore(); }
+    fireEvent.keyDown(screen.getByRole("textbox"), { key: "Enter" });
+    expect(screen.queryByRole("alert")).toBeNull();
+    expect(useMessageQueueStore.getState().getQueue("s1")[0].text).toBe("不能丢的修改");
+  });
+
   it("暂停/恢复切换状态", () => {
     const s = useMessageQueueStore.getState();
     s.enqueue("s1", "条目");

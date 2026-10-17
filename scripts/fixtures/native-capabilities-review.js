@@ -5,7 +5,7 @@
   if (window.__echoNativeCapabilitiesStarted) return;
   window.__echoNativeCapabilitiesStarted = true;
   let invoke;
-  const modelId = 'echoagent-ojlab/chat-qwen';
+  let modelId = 'echoagent-ojlab/chat-qwen';
   const markerKey = 'echoagent.native-capabilities-review.v1';
   const required = {
     'first-launch': ['cap-isolation', 'cap-model-session', 'cap-memory-seed', 'cap-memory-delete', 'cap-memory-recreate',
@@ -26,7 +26,7 @@
     && !/[\x00-\x1f]/.test(value) && !value.split('/').some((part) => part === '.' || part === '..') ? value : null;
   const allowed = new Set(['desktop_review_context', 'desktop_review_capabilities_manifest', 'path_stat', 'read_text_file',
     'write_text_file', 'memory_list', 'memory_get', 'agent_auth_status', 'agent_list_all_sessions',
-    'agent_list_pending_interactions', 'agent_session_info', 'marketplace_list', 'plugins_list',
+    'agent_list_pending_interactions', 'agent_session_info', 'marketplace_list', 'plugins_list', 'skills_list', 'commands_list',
     'automations_snapshot', 'automations_save', 'automations_set_status', 'permission_mode_get']);
   const bounded = async (operation, label, timeout = 25000) => {
     report.activeStep = label;
@@ -158,6 +158,62 @@
       && plugin.agentCount === 0, 'Actual plugin components/version/install root differ');
     return { id: plugin.id, root: plugin.root, version: plugin.version, enabled: plugin.enabled, skillCount: plugin.skillCount };
   };
+  const ownCommand = async (enabled) => {
+    const e = report.expected, skills = await call('skills_list', { cwd: e.cwd });
+    const skill = skills.find(item => item.path?.startsWith(`${e.home}/installed-plugins/`) && item.path.includes('/fixture-notes/'));
+    const commands = await call('commands_list', { sessionId: e.sessionId, cwd: e.cwd });
+    const qualifiedName = `${e.pluginName}:fixture-notes`, source = `plugin:${e.pluginName}`;
+    const matches = commands.filter(item => item.source === source && ['fixture-notes', qualifiedName].includes(item.name));
+    assert(matches.length <= 1, 'Owned skill command is ambiguous');
+    const command = matches[0], name = command?.name ?? qualifiedName;
+    assert(enabled ? skill?.enabled && command : !command, `Live installed skill/command availability differs: ${JSON.stringify({
+      expected: { name, enabled }, skills: skills.filter(item => item.path?.includes('/fixture-notes'))
+        .map(item => ({ name: item.name, path: item.path, enabled: item.enabled, scope: item.scope })),
+      commands: commands.filter(item => item.name.includes('fixture-notes')),
+    })}`);
+    return { name, qualifiedName, source, enabled, skillPath: skill?.path, commandPresent: Boolean(command) };
+  };
+  const useOwnSkill = async version => {
+    const e = report.expected, command = await ownCommand(true);
+    await ensureSidebar();
+    const selector = `[data-session-id="${CSS.escape(e.sessionId)}"] .sidebar__conv-select`;
+    (await waitFor(() => document.querySelector(selector), 'UI: extension source session')).click();
+    await waitFor(() => document.querySelector(`${selector}[aria-current="page"]`), 'UI: extension session selected');
+    const prompt = `/${command.name} 请只根据本次注入的技能正文回复其中的版本号。不要调用工具、访问网络或修改文件。`;
+    const input = await waitFor(() => { const node = document.querySelector('.echo-composer textarea'); return visible(node) && !node.disabled ? node : null; }, 'UI: extension skill composer');
+    value(input, prompt);
+    (await waitFor(() => { const node = document.querySelector('.echo-composer button[aria-label="发送"]'); return visible(node) && !node.disabled ? node : null; }, 'UI: send installed skill command')).click();
+    const answer = await waitFor(async () => {
+      const pending = await call('agent_list_pending_interactions', { sessionId: e.sessionId });
+      assert(!pending.permissions?.length && !pending.questions?.length && !pending.planApprovals?.length, 'Static skill requested unexpected tool/approval');
+      const session = (await call('agent_list_all_sessions', { includeArchived: true })).find(item => item.sessionId === e.sessionId);
+      assert(session && !['failed', 'stopped'].includes(session.status), 'Actual installed skill model failed');
+      const user = [...document.querySelectorAll('.msg--user')].filter(visible).findLast(node => node.textContent.includes(prompt));
+      if (!user || session.status !== 'completed') return null;
+      const text = [...document.querySelectorAll('.msg--assistant .msg__body > .markdown-body[data-md-theme="loose"]')]
+        .filter(node => visible(node) && (user.compareDocumentPosition(node) & Node.DOCUMENT_POSITION_FOLLOWING))
+        .map(node => node.innerText).join('\n');
+      return text.includes(version) ? text : null;
+    }, 'UI/Runtime: installed skill actual version reply', 180000);
+    assert([...document.querySelectorAll('.toolcall')].filter(visible).length === 0, 'Static skill used tools');
+    await nav('扩展'); await click(() => document.querySelector('[aria-label="扩展管理"]'), '浏览市场');
+    await waitFor(() => visible(pluginCard()), 'UI: return to owned marketplace plugin');
+    return { ...command, sessionId: e.sessionId, prompt, version, answer: answer.slice(0, 1500), noTools: true };
+  };
+  const toggleOwnPlugin = async () => {
+    await click(() => document.querySelector('[aria-label="扩展管理"]'), '插件');
+    const row = () => [...document.querySelectorAll('.plugins-panel__item')].find(node => node.querySelector('.plugins-panel__item-name')?.textContent.includes(report.expected.pluginName));
+    const buttonFor = title => row()?.querySelector(`button[title="${title}"]`);
+    (await waitFor(() => { const node = buttonFor('禁用'); return visible(node) && !node.disabled ? node : null; }, 'UI: disable owned plugin')).click();
+    await waitFor(async () => { const list = await call('plugins_list', { sessionId: report.expected.sessionId }); return list.plugins.find(item => item.name === report.expected.pluginName)?.enabled === false; }, 'Runtime: plugin disabled');
+    const disabled = await ownCommand(false);
+    (await waitFor(() => { const node = buttonFor('启用'); return visible(node) && !node.disabled ? node : null; }, 'UI: re-enable owned plugin')).click();
+    await waitFor(async () => { const list = await call('plugins_list', { sessionId: report.expected.sessionId }); return list.plugins.find(item => item.name === report.expected.pluginName)?.enabled === true; }, 'Runtime: plugin re-enabled');
+    const enabled = await ownCommand(true);
+    await click(() => document.querySelector('[aria-label="扩展管理"]'), '浏览市场');
+    await waitFor(() => visible(pluginCard()), 'UI: return after plugin toggle');
+    return { disabled, enabled, ui: true };
+  };
   const selectSession = async (run, prompt, reply) => {
     await ensureSidebar();
     const expand = document.querySelector('[aria-controls="sidebar-task-list"][aria-expanded="false"]');
@@ -212,6 +268,8 @@
       assert(context.home === scope.home && context.capabilitiesRequested === true && context.evaluations === 1
         && Object.hasOwn(required, report.phase), 'Dedicated single-evaluation capabilities context required');
       const restart = report.phase === 'restart', proof = await fixedProof(), manifest = proof.manifest;
+      modelId = manifest.modelId ?? modelId;
+      assert(['echoagent-ojlab/chat-qwen', 'echoagent-review/claude-opus-5-5'].includes(modelId), 'Unexpected review model');
       assert(/^[a-f0-9]{64}$/.test(manifest.token) && manifest.pluginName === `echo-capabilities-review-${manifest.token.slice(0, 12)}`
         && manifest.marketplaceName === `echo-capabilities-market-${manifest.token.slice(0, 12)}`
         && manifest.pluginRelativePath === `plugins/${manifest.pluginName}`
@@ -319,7 +377,9 @@
         record(active, { sourceUrl: manifest.sourceUrl, sourceName: manifest.marketplaceName, version: '1.0.0', ui: true, tlsVerified: true });
         active = 'cap-git-install'; await click(pluginCard, '安装');
         await waitFor(() => pluginCard()?.classList.contains('mp-plugin--installed') && !pluginCard()?.querySelector('.mp-plugin__busy'), 'UI: actual plugin installed', 60000);
-        const v1 = await ownPlugin('1.0.0', true); report.expected.plugins.push(v1); record(active, { ...v1, ui: true });
+        const v1 = await ownPlugin('1.0.0', true); report.expected.plugins.push(v1);
+        const toggle = await toggleOwnPlugin(), runtimeUse = await useOwnSkill('1.0.0');
+        record(active, { ...v1, toggle, runtimeUse, ui: true });
         active = 'cap-git-refresh-recovery';
         const resourceAvailability = async mode => {
           const request = { schema: 1, token: manifest.token, sourceUrl: manifest.sourceUrl, mode };
@@ -364,7 +424,7 @@
         await waitFor(() => pluginCard()?.classList.contains('mp-plugin--installed') && !button(pluginCard(), '更新') && !pluginCard()?.querySelector('.mp-plugin__busy'), 'UI: plugin update complete', 60000);
         const v2 = await ownPlugin('2.0.0', true), updated = await ownCatalog();
         assert(updated.plugin.installedVersion === '2.0.0' && updated.plugin.version === '2.0.0', 'Runtime/catalog update did not actually synchronize');
-        report.expected.plugins.push(v2); report.expected.version2Commit = ack.commit; record(active, { ...v2, commit: ack.commit, ui: true });
+        report.expected.plugins.push(v2); report.expected.version2Commit = ack.commit; record(active, { ...v2, commit: ack.commit, runtimeUse: await useOwnSkill('2.0.0'), ui: true });
         await call('write_text_file', { path: `${manifest.cwd}/.capabilities-git-v2.json`, workspaceRoot: manifest.cwd,
           content: JSON.stringify({ schema: 1, token: manifest.token, sourceUrl: manifest.sourceUrl, installedRoot: v2.root, commit: ack.commit }) });
         await waitFor(async () => {

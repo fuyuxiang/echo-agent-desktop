@@ -1,6 +1,8 @@
+import { buildDraft } from "../automation/schedule-utils";
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import { act, render, screen, fireEvent, waitFor, within } from "@testing-library/react";
 import { AutomationPanel } from "../AutomationPanel";
+import { automationEditorDirty, useAutomationEditorStore } from "@/stores/automation-editor-store";
 import { AutomationPermissionConfirmDialog } from "../automation/AutomationPermissionConfirmDialog";
 import type { AutomationSnapshot } from "@/lib/types";
 
@@ -38,6 +40,7 @@ import {
   filesystemPickDirectory,
   agentAuthStatus,
   agentsList,
+  automationsDelete,
   automationsRun,
   automationsSave,
   automationsSnapshot,
@@ -47,6 +50,7 @@ import {
 } from "@/lib/agent-client";
 
 beforeEach(() => {
+  useAutomationEditorStore.getState().close();
   snapshot = emptySnapshot;
   vi.mocked(automationsSnapshot).mockReset().mockImplementation(async () => snapshot);
   vi.mocked(agentListWorkspaces).mockReset().mockResolvedValue([]);
@@ -58,15 +62,249 @@ beforeEach(() => {
     synchronized: true,
     runtimeModels: [],
   });
-  vi.mocked(automationsSave).mockClear();
-  vi.mocked(automationsRun).mockClear();
+  vi.mocked(automationsSave).mockReset().mockImplementation(async (automation) => automation);
+  vi.mocked(automationsDelete).mockReset().mockResolvedValue(undefined);
+  vi.mocked(automationsRun).mockReset().mockResolvedValue("record-id");
   vi.mocked(providersList).mockReset().mockResolvedValue({ providers: [], models: [] });
   vi.mocked(skillsList).mockReset().mockResolvedValue([]);
   vi.mocked(agentsList).mockReset().mockResolvedValue([]);
   vi.mocked(mcpList).mockReset().mockResolvedValue([]);
 });
 
+function beginRunnableEditor() {
+  const draft = { ...buildDraft(undefined, "/tmp"), id: "job-a", name: "原任务", prompt: "读取报告", modelId: "ready-model" };
+  const automation = { ...draft, createdAt: "2026-10-17T00:00:00Z" };
+  snapshot = { automations: [automation], records: [] };
+  vi.mocked(providersList).mockResolvedValue({ providers: [], models: [{ id: "ready-model", label: "可用模型" }] } as never);
+  vi.mocked(agentAuthStatus).mockResolvedValue({ ready: true, providers: [], runtimeReady: true, synchronized: true, runtimeModels: ["ready-model"], defaultModelId: "ready-model" });
+  useAutomationEditorStore.getState().begin(draft, automation);
+  return automation;
+}
+
+describe("自动化编辑流程与通知导航", () => {
+  const ready = () => waitFor(() => expect(screen.queryByText("正在加载工作空间、模型与运行时能力…")).toBeNull());
+
+  it.each(["保存", "测试运行"])("%s 不会重新创建已删除的任务", async (action) => {
+    beginRunnableEditor(); snapshot = emptySnapshot;
+    const toast = vi.fn(); render(<AutomationPanel onToast={toast} />); await ready();
+    fireEvent.click(screen.getByRole("button", { name: action }));
+    expect(toast).toHaveBeenCalledWith(expect.stringContaining("已被移除"));
+    expect(automationsSave).not.toHaveBeenCalled(); expect(automationsRun).not.toHaveBeenCalled();
+    expect(screen.getByDisplayValue("原任务")).toBeInTheDocument();
+  });
+
+  it("删除中阻止重复写操作，跨页返回后仍可看见删除进度", async () => {
+    beginRunnableEditor(); let resolveDelete!: () => void;
+    vi.mocked(automationsDelete).mockReturnValueOnce(new Promise(resolve => { resolveDelete = resolve; }));
+    const first = render(<AutomationPanel />); await ready();
+    fireEvent.click(screen.getByRole("button", { name: "删除" }));
+    fireEvent.click(screen.getByRole("button", { name: "删除自动化任务" }));
+    expect(screen.getByRole("button", { name: "保存" })).toBeDisabled();
+    expect(screen.getByRole("button", { name: "测试运行" })).toBeDisabled();
+    first.unmount(); render(<AutomationPanel />);
+    expect(screen.getByText("正在删除自动化任务…")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "取消" })).toBeDisabled();
+    await act(async () => resolveDelete());
+    expect(useAutomationEditorStore.getState().draft).toBeNull();
+    expect(automationsDelete).toHaveBeenCalledTimes(1);
+  });
+
+  it("旧页面迟到的删除响应不能清空另一个编辑流程", async () => {
+    beginRunnableEditor(); let resolveDelete!: () => void;
+    vi.mocked(automationsDelete).mockReturnValueOnce(new Promise(resolve => { resolveDelete = resolve; }));
+    const first = render(<AutomationPanel />);
+    fireEvent.click(screen.getByRole("button", { name: "删除" }));
+    fireEvent.click(screen.getByRole("button", { name: "删除自动化任务" }));
+    first.unmount();
+    useAutomationEditorStore.getState().close();
+    useAutomationEditorStore.getState().begin({ ...buildDraft(), name: "新的草稿" });
+    render(<AutomationPanel />);
+    await act(async () => resolveDelete());
+    expect(screen.getByDisplayValue("新的草稿")).toBeInTheDocument();
+  });
+
+  it("删除失败保留草稿、恢复按钮，并允许重试", async () => {
+    beginRunnableEditor(); vi.mocked(automationsDelete).mockRejectedValueOnce(new Error("磁盘忙"));
+    const toast = vi.fn(); render(<AutomationPanel onToast={toast} />);
+    fireEvent.change(screen.getByDisplayValue("原任务"), { target: { value: "删除失败仍保留" } });
+    fireEvent.click(screen.getByRole("button", { name: "删除" }));
+    fireEvent.click(screen.getByRole("button", { name: "删除自动化任务" }));
+    await waitFor(() => expect(toast).toHaveBeenCalledWith(expect.stringContaining("磁盘忙")));
+    expect(screen.getByDisplayValue("删除失败仍保留")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "删除" })).toBeEnabled();
+    expect(automationEditorDirty()).toBe(true);
+  });
+
+  it.each([false, true])("批量删除正在编辑的任务时，失败=%s 的草稿处理与结果一致", async (fails) => {
+    beginRunnableEditor();
+    vi.mocked(automationsDelete).mockImplementationOnce(async () => {
+      if (fails) throw new Error("磁盘忙");
+      snapshot = emptySnapshot;
+    });
+    const toast = vi.fn(); render(<AutomationPanel onToast={toast} />); await ready();
+    expect(screen.getByRole("textbox", { name: "任务要求" })).toBeInTheDocument();
+    fireEvent.change(screen.getByRole("textbox", { name: "名称" }), { target: { value: "批量操作期间保留" } });
+    fireEvent.click(screen.getByRole("button", { name: "自动化" }));
+    fireEvent.click(screen.getByRole("button", { name: "批量管理" }));
+    fireEvent.click(screen.getByRole("button", { name: "全选" }));
+    fireEvent.click(screen.getByRole("button", { name: "删除" }));
+    const dialog = await screen.findByRole("dialog");
+    expect(dialog).toHaveTextContent("任务草稿也会被舍弃");
+    fireEvent.click(within(dialog).getByRole("button", { name: "删除" }));
+    await waitFor(() => expect(toast).toHaveBeenCalledWith(fails ? "删除自动化任务失败" : "自动化任务已删除"));
+    expect(useAutomationEditorStore.getState().operation).toBeNull();
+    if (fails) {
+      fireEvent.click(screen.getByRole("button", { name: "继续编辑" }));
+      expect(screen.getByDisplayValue("批量操作期间保留")).toBeInTheDocument();
+    } else expect(useAutomationEditorStore.getState().draft).toBeNull();
+  });
+
+  it.each([false, true])("测试保存成功后同步基线，即使运行失败=%s 也不会谎称修改未保存", async (runFails) => {
+    beginRunnableEditor();
+    if (runFails) vi.mocked(automationsRun).mockRejectedValueOnce(new Error("运行时断线"));
+    vi.mocked(automationsSave).mockImplementationOnce(async a => ({ ...a, name: a.name.trim() }));
+    const toast = vi.fn(); render(<AutomationPanel onToast={toast} />); await ready();
+    fireEvent.change(screen.getByDisplayValue("原任务"), { target: { value: " 已保存的新名称 " } });
+    fireEvent.click(screen.getByRole("button", { name: "测试运行" }));
+    await waitFor(() => expect(useAutomationEditorStore.getState().operation).toBeNull());
+    expect(automationsRun).toHaveBeenCalledWith("job-a");
+    expect(screen.getByDisplayValue("已保存的新名称")).toBeInTheDocument();
+    expect(automationEditorDirty()).toBe(false);
+    if (runFails) expect(toast).toHaveBeenCalledWith(expect.stringContaining("修改已保存，但触发测试运行失败"));
+    fireEvent.click(screen.getByRole("button", { name: "取消" }));
+    expect(screen.queryByRole("alertdialog")).toBeNull();
+    expect(useAutomationEditorStore.getState().draft).toBeNull();
+  });
+
+  it("测试保存被后端拒绝时保留输入，不能触发运行", async () => {
+    beginRunnableEditor(); vi.mocked(automationsSave).mockRejectedValueOnce(new Error("原自动化任务已被移除"));
+    const toast = vi.fn(); render(<AutomationPanel onToast={toast} />); await ready();
+    fireEvent.change(screen.getByDisplayValue("原任务"), { target: { value: "保留新输入" } });
+    fireEvent.click(screen.getByRole("button", { name: "测试运行" }));
+    await waitFor(() => expect(toast).toHaveBeenCalledWith(expect.stringContaining("已被移除")));
+    expect(automationsRun).not.toHaveBeenCalled(); expect(automationEditorDirty()).toBe(true);
+    expect(screen.getByDisplayValue("保留新输入")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "保存" })).toBeEnabled();
+  });
+
+  it("重复测试点击只保存一次，旧页面保存响应不会改写新的编辑流程或继续运行", async () => {
+    beginRunnableEditor(); let resolveSave!: (a: Awaited<ReturnType<typeof automationsSave>>) => void;
+    vi.mocked(automationsSave).mockReturnValueOnce(new Promise(resolve => { resolveSave = resolve; }));
+    const first = render(<AutomationPanel />); await ready();
+    const test = screen.getByRole("button", { name: "测试运行" });
+    act(() => { fireEvent.click(test); fireEvent.click(test); });
+    expect(automationsSave).toHaveBeenCalledTimes(1);
+    const submitted = vi.mocked(automationsSave).mock.calls[0][0]; first.unmount();
+    useAutomationEditorStore.getState().close();
+    useAutomationEditorStore.getState().begin({ ...buildDraft(), name: "新的编辑流程" });
+    render(<AutomationPanel />);
+    await act(async () => resolveSave(submitted));
+    expect(screen.getByDisplayValue("新的编辑流程")).toBeInTheDocument();
+    expect(automationsRun).not.toHaveBeenCalled();
+    expect(useAutomationEditorStore.getState().isCreating).toBe(true);
+  });
+
+  it("已删除任务可显式转为新任务草稿，保留全部输入且仅在保存后创建", async () => {
+    beginRunnableEditor(); snapshot = emptySnapshot;
+    render(<AutomationPanel />); await ready();
+    fireEvent.change(screen.getByDisplayValue("原任务"), { target: { value: "恢复的重要内容" } });
+    fireEvent.click(await screen.findByRole("button", { name: "转为新任务草稿" }));
+    expect(screen.getByDisplayValue("恢复的重要内容")).toBeInTheDocument();
+    expect(useAutomationEditorStore.getState().draft?.prompt).toBe("读取报告");
+    expect(automationEditorDirty()).toBe(true);
+    expect(automationsSave).not.toHaveBeenCalled();
+    fireEvent.click(screen.getByRole("button", { name: "保存" }));
+    await waitFor(() => expect(automationsSave).toHaveBeenCalledWith(expect.objectContaining({ id: "", name: "恢复的重要内容" })));
+  });
+
+  it("保留草稿期间暂停原任务，继续保存不会意外重新启用任务", async () => {
+    beginRunnableEditor(); render(<AutomationPanel />); await ready();
+    fireEvent.change(screen.getByDisplayValue("原任务"), { target: { value: "保留修改" } });
+    fireEvent.click(screen.getByRole("button", { name: "自动化" }));
+    fireEvent.click(screen.getByRole("button", { name: "打开「原任务」更多操作" }));
+    fireEvent.click(screen.getByRole("button", { name: "暂停" }));
+    await waitFor(() => expect(useAutomationEditorStore.getState().operation).toBeNull());
+    fireEvent.click(screen.getByRole("button", { name: "继续编辑" }));
+    expect(automationEditorDirty()).toBe(true);
+    fireEvent.click(screen.getByRole("button", { name: "保存" }));
+    await waitFor(() => expect(automationsSave).toHaveBeenCalledWith(expect.objectContaining({ status: "PAUSED", name: "保留修改" })));
+  });
+
+  it("通知打开目标记录且保留草稿，用户可恢复编辑，重复通知仍可重新导航", async () => {
+    beginRunnableEditor(); useAutomationEditorStore.getState().setDraft(d => d && ({ ...d, name: "保留的输入" }));
+    const { rerender } = render(<AutomationPanel notificationAutomationId="job-b" notificationAutomationSequence={1} />);
+    expect(await screen.findByRole("tab", { name: "运行记录" })).toHaveAttribute("aria-selected", "true");
+    expect(screen.getByRole("status", { name: "保留的自动化草稿" })).toHaveTextContent("保留的输入");
+    expect(screen.getByText(/正在查看“关联自动化”/)).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "继续编辑" }));
+    expect(screen.getByDisplayValue("保留的输入")).toBeInTheDocument();
+    rerender(<AutomationPanel notificationAutomationId="job-b" notificationAutomationSequence={2} />);
+    expect(screen.getByRole("tab", { name: "运行记录" })).toHaveAttribute("aria-selected", "true");
+    expect(automationsSave).not.toHaveBeenCalled();
+  });
+
+  it("返回列表保留草稿，创建另一任务前明确确认，取消不会丢失输入", async () => {
+    beginRunnableEditor(); render(<AutomationPanel />); await ready();
+    fireEvent.change(screen.getByDisplayValue("原任务"), { target: { value: "尚未保存" } });
+    fireEvent.click(screen.getByRole("button", { name: "自动化" }));
+    expect(screen.getByRole("status", { name: "保留的自动化草稿" })).toHaveTextContent("尚未保存");
+    fireEvent.click(screen.getByRole("button", { name: "添加自动化" }));
+    fireEvent.click(within(await screen.findByRole("alertdialog")).getByRole("button", { name: "保留草稿" }));
+    expect(useAutomationEditorStore.getState().draft?.name).toBe("尚未保存");
+    fireEvent.click(screen.getByRole("button", { name: "添加自动化" }));
+    fireEvent.click(within(await screen.findByRole("alertdialog")).getByRole("button", { name: "舍弃并继续" }));
+    await waitFor(() => expect(useAutomationEditorStore.getState().isCreating).toBe(true));
+    expect(useAutomationEditorStore.getState().draft?.name).toBe("");
+  });
+});
+
 describe("AutomationPanel（截图 1/3 空态）", () => {
+  it("恢复编辑时原任务已移除则保留草稿并拒绝重新创建旧任务", async () => {
+    const draft = { ...buildDraft(), id: "removed-job", name: "保留内容" };
+    useAutomationEditorStore.getState().begin(draft, { ...draft, createdAt: "2026-10-17T00:00:00Z" });
+    const toast = vi.fn(); render(<AutomationPanel onToast={toast} />);
+    await waitFor(() => expect(automationsSnapshot).toHaveBeenCalled());
+    fireEvent.click(await screen.findByRole("button", { name: "保存" }));
+    expect(toast).toHaveBeenCalledWith(expect.stringContaining("已被移除"));
+    expect(screen.getByDisplayValue("保留内容")).toBeInTheDocument();
+    expect(automationsSave).not.toHaveBeenCalled();
+  });
+
+  it("离开页面再返回时保留尚未提交的自动化输入，不创建实际任务", async () => {
+    const first = render(<AutomationPanel />);
+    fireEvent.click(await screen.findByText("+ 添加自动化"));
+    fireEvent.change(document.querySelector(".atm-modal-input")!, { target: { value: "跨页保留的草稿" } });
+    first.unmount();
+    render(<AutomationPanel />);
+    expect(await screen.findByDisplayValue("跨页保留的草稿")).toBeInTheDocument();
+    expect(automationsSave).not.toHaveBeenCalled();
+  });
+
+  it("首次加载被后台快照刷新取代时结束加载，迟到的响应不能覆盖新快照", async () => {
+    let resolveInitial!: (value: AutomationSnapshot) => void;
+    vi.mocked(automationsSnapshot)
+      .mockReturnValueOnce(new Promise((resolve) => { resolveInitial = resolve; }))
+      .mockResolvedValueOnce(emptySnapshot);
+    const { rerender } = render(<AutomationPanel refreshSignal={0} />);
+    rerender(<AutomationPanel refreshSignal={1} />);
+    expect(await screen.findByText("开启你的第一个自动化任务吧")).toBeInTheDocument();
+    await act(async () => resolveInitial({ automations: [], records: [] }));
+    expect(screen.getByText("开启你的第一个自动化任务吧")).toBeInTheDocument();
+  });
+
+  it("首次加载被失败的后台刷新取代时显示可重试错误，不能一直加载", async () => {
+    let resolveInitial!: (value: AutomationSnapshot) => void;
+    vi.mocked(automationsSnapshot)
+      .mockReturnValueOnce(new Promise((resolve) => { resolveInitial = resolve; }))
+      .mockRejectedValueOnce(new Error("后台刷新断线"));
+    const { rerender } = render(<AutomationPanel refreshSignal={0} />);
+    rerender(<AutomationPanel refreshSignal={1} />);
+    expect(await screen.findByRole("alert")).toHaveTextContent("后台刷新断线");
+    fireEvent.click(screen.getByRole("button", { name: "重试" }));
+    expect(await screen.findByText("开启你的第一个自动化任务吧")).toBeInTheDocument();
+    await act(async () => resolveInitial(emptySnapshot));
+  });
+
   it("渲染 定时任务/运行记录 页签", async () => {
     render(<AutomationPanel />);
     expect(screen.getByText("定时任务")).toBeInTheDocument();
@@ -87,6 +325,30 @@ describe("AutomationPanel（截图 1/3 空态）", () => {
     render(<AutomationPanel />);
     fireEvent.click(screen.getByText("运行记录"));
     await waitFor(() => expect(screen.getByText("暂无运行记录")).toBeInTheDocument());
+  });
+
+  it("取消自动化编辑前保护未保存的输入，继续编辑保留内容，确认后退出", async () => {
+    render(<AutomationPanel />);
+    fireEvent.click(await screen.findByText("+ 添加自动化"));
+    fireEvent.change(document.querySelector(".atm-modal-input")!, { target: { value: "不能丢失的定时任务" } });
+    fireEvent.click(screen.getByRole("button", { name: "取消" }));
+    const dialog = await screen.findByRole("alertdialog", { name: "舍弃未保存的修改？" });
+    fireEvent.click(within(dialog).getByRole("button", { name: "继续编辑" }));
+    expect(screen.getByDisplayValue("不能丢失的定时任务")).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "取消" }));
+    fireEvent.click(within(await screen.findByRole("alertdialog")).getByRole("button", { name: "舍弃修改" }));
+    expect(await screen.findByText("开启你的第一个自动化任务吧")).toBeInTheDocument();
+  });
+
+  it("自动化工具条下拉支持 Escape 关闭并把焦点还给触发按钮", async () => {
+    render(<AutomationPanel />);
+    fireEvent.click(await screen.findByText("+ 添加自动化"));
+    const trigger = screen.getByRole("button", { name: /^技能/ });
+    fireEvent.click(trigger);
+    expect(screen.getByText("暂无可用技能")).toBeInTheDocument();
+    fireEvent.keyDown(document, { key: "Escape" });
+    expect(screen.queryByText("暂无可用技能")).toBeNull();
+    expect(trigger).toHaveFocus();
   });
 
   it("首次加载失败显示持久错误和重试，不伪装成空列表", async () => {

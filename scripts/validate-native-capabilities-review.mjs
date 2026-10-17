@@ -1,10 +1,12 @@
+import { DEFAULT_REVIEW_MODEL_ID, seedReviewModel, redactReviewModelSecrets, captureReviewModelLogs } from './lib/native-review-model.mjs';
 import { nativeReviewOutput } from './lib/native-review-output.mjs';
+import { assertNativeReviewSessionUnlocked } from './lib/native-review-window.mjs';
 // Genuine native extension/memory/wall-clock acceptance. Own test resources are
 // prepared here; only the production application can create task/run records.
 import assert from 'node:assert/strict';
 import { spawn } from 'node:child_process';
 import { createHash, randomBytes } from 'node:crypto';
-import { chmodSync, copyFileSync, existsSync, lstatSync, mkdirSync, mkdtempSync, readFileSync,
+import { chmodSync, existsSync, lstatSync, mkdirSync, mkdtempSync, readFileSync,
   readdirSync, realpathSync, unlinkSync, writeFileSync } from 'node:fs';
 import { homedir, tmpdir } from 'node:os';
 import { basename, isAbsolute, join, relative, resolve } from 'node:path';
@@ -28,7 +30,7 @@ const ordinary = (path, root) => {
 };
 const json = (path, root) => JSON.parse(ordinary(path, root));
 const jsonl = (path, root) => ordinary(path, root).toString('utf8').trim().split('\n').filter(Boolean).map(JSON.parse);
-const foreignReadonlySnapshot = () => {
+export const foreignReadonlySnapshot = () => {
   const root = homedir();
   return ['.claude/settings.json', '.claude/settings.local.json', '.claude/plugins/known_marketplaces.json', '.echo-agent/config.toml']
     .map((name) => {
@@ -102,6 +104,18 @@ export function verifyCapabilitiesNativeReport({ report, manifest, phase, pid, s
     assert.equal(refresh.sourceUrl, manifest.sourceUrl);
     assert.equal(refresh.recovered, true); assert.equal(refresh.retainedInstalledVersion, '1.0.0');
     assert(refresh.failedFeedback.includes('刷新失败：') && refresh.failedFeedback.includes('503'));
+    const install = report.checks.find(item => item.id === 'cap-git-install').evidence;
+    assert.equal(install.toggle?.disabled?.commandPresent, false);
+    assert.equal(install.toggle?.enabled?.commandPresent, true);
+    for (const [id, version] of [['cap-git-install', '1.0.0'], ['cap-git-update', '2.0.0']]) {
+      const use = report.checks.find(item => item.id === id).evidence.runtimeUse;
+      assert.equal(use?.version, version); assert.equal(use.noTools, true);
+      assert.equal(use.qualifiedName, `${manifest.pluginName}:fixture-notes`);
+      assert.equal(use.source, `plugin:${manifest.pluginName}`);
+      assert(['fixture-notes', use.qualifiedName].includes(use.name));
+      assert(use.answer.includes(version) && !use.prompt.includes(version));
+    }
+
   }
   const expected = report.expected;
   assert.equal(expected?.version, 1);
@@ -112,7 +126,7 @@ export function verifyCapabilitiesNativeReport({ report, manifest, phase, pid, s
   const once = expected.automations.find((item) => item.scheduleType === 'once');
   const recurring = expected.automations.find((item) => item.scheduleType === 'recurring');
   assert(once && recurring && once.id !== recurring.id);
-  for (const task of expected.automations) assert(task.cwds === manifest.cwd && task.modelId === 'echoagent-ojlab/chat-qwen'
+  for (const task of expected.automations) assert(task.cwds === manifest.cwd && task.modelId === (manifest.modelId ?? DEFAULT_REVIEW_MODEL_ID)
     && task.skills.length === 0 && task.connectorIds.length === 0 && !task.pushToWeChat && task.permissionMode === 'default');
   const onceRuns = expected.records.filter((item) => item.automationId === once.id);
   const recurringRuns = expected.records.filter((item) => item.automationId === recurring.id).sort((a, b) => Date.parse(a.scheduledFor) - Date.parse(b.scheduledFor));
@@ -124,7 +138,7 @@ export function verifyCapabilitiesNativeReport({ report, manifest, phase, pid, s
   assert.equal(new Set(expected.records.map((item) => item.sessionId)).size, 3);
   for (const run of expected.records) {
     assert.equal(run.status, 'success'); assert(!run.error && run.sessionId && run.scheduledFor && run.finishedAt);
-    assert.equal(run.cwd, manifest.cwd); assert.equal(run.modelId, 'echoagent-ojlab/chat-qwen');
+    assert.equal(run.cwd, manifest.cwd); assert.equal(run.modelId, manifest.modelId ?? DEFAULT_REVIEW_MODEL_ID);
     assert(Date.parse(run.startedAt) >= Date.parse(run.scheduledFor), 'Automatic occurrence started before its real due time');
     const task = expected.automations.find((item) => item.id === run.automationId);
     assert.equal(run.automationName, task.name);
@@ -175,12 +189,22 @@ export function physicalFinal({ home, manifest, expected, first }) {
   const normalized = manifest.sourceUrl.replace(/\.git$/, '');
   assert(/disabled_sources\s*=/.test(config) && config.includes(JSON.stringify(normalized)), 'Source revocation tombstone did not persist');
   assert(!new RegExp(`git\\s*=\\s*${JSON.stringify(manifest.sourceUrl).replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}`).test(config), 'Owned native source entry remains configured');
+  const extensionRoots = readdirSync(join(home, 'sessions'), { withFileTypes: true }).filter(entry => entry.isDirectory())
+    .map(entry => join(home, 'sessions', entry.name, expected.sessionId)).filter(path => existsSync(join(path, 'updates.jsonl')));
+  assert.equal(extensionRoots.length, 1, 'Installed skill source session is missing/ambiguous');
+  const extensionJournal = ordinary(join(extensionRoots[0], 'updates.jsonl'), home);
+  const extensionUpdates = extensionJournal.toString('utf8').trim().split('\n').filter(Boolean).map(JSON.parse)
+    .map(envelope => envelope.params?.update ?? envelope.params);
+  const extensionAnswers = extensionUpdates.filter(update => update?.sessionUpdate === 'agent_message_chunk')
+    .map(update => update.content?.text ?? '').join('');
+  for (const version of ['1.0.0', '2.0.0']) assert(extensionAnswers.includes(version), 'Actual installed skill response/version missing on disk');
+  assert(!extensionUpdates.some(update => ['tool_call', 'tool_call_update'].includes(update?.sessionUpdate)), 'Static extension session called a tool');
   const sessions = expected.records.map((run) => {
     const roots = readdirSync(join(home, 'sessions'), { withFileTypes: true }).filter((entry) => entry.isDirectory())
       .map((entry) => join(home, 'sessions', entry.name, run.sessionId)).filter((path) => existsSync(join(path, 'summary.json')));
     assert.equal(roots.length, 1, 'Actual scheduled session directory is ambiguous/missing');
     const root = roots[0], summary = json(join(root, 'summary.json'), home), updates = jsonl(join(root, 'updates.jsonl'), home);
-    assert(['echoagent-ojlab/chat-qwen', 'chat-qwen'].includes(summary.current_model_id));
+    assert([expected.modelId ?? DEFAULT_REVIEW_MODEL_ID, (expected.modelId ?? DEFAULT_REVIEW_MODEL_ID).split('/').at(-1)].includes(summary.current_model_id));
     const tools = updates.filter((envelope) => ['tool_call', 'tool_call_update'].includes((envelope.params?.update ?? envelope.params)?.sessionUpdate));
     assert.equal(tools.length, 0, 'Actual no-tool scheduled journal contains a tool invocation');
     const journalText = JSON.stringify(updates), task = expected.automations.find((item) => item.id === run.automationId);
@@ -196,6 +220,7 @@ export function physicalFinal({ home, manifest, expected, first }) {
   const result = { memoryPath, memorySha256: sha(memoryBytes), memorySize: memoryBytes.length,
     tasksSha256: sha(ordinary(tasksPath, home)), recordsSha256: sha(ordinary(recordsPath, home)),
     registrySha256: sha(ordinary(registryPath, home)), configSha256: sha(Buffer.from(config)),
+    extensionJournalSha256: sha(extensionJournal), installedSkillVersionsReplied: ['1.0.0', '2.0.0'],
     configSemanticSha256: managedMcpConfigSha256(configPath), taskCount: tasks.length, recordCount: records.length, sessions };
   if (first) {
     // Production load legitimately persists CurrentModel and updates this one
@@ -225,6 +250,7 @@ async function terminate(state) {
 }
 
 export async function runNativeCapabilitiesReview({ executable } = {}) {
+  assertNativeReviewSessionUnlocked();
   assert.equal(process.platform, 'darwin', 'This review requires an actual macOS native WebView');
   assert(executable, 'Pass the newly built application containing the fixed capabilities factory');
   executable = realpathSync(resolve(executable)); assert(lstatSync(executable).isFile());
@@ -244,6 +270,7 @@ export async function runNativeCapabilitiesReview({ executable } = {}) {
   // no automatic official network install; legacy credential/hook imports off.
   const revokedCompatSources = privateCompatibilitySourceRevocations();
   writeFileSync(configPath, `[marketplace]\nofficial_marketplace_auto_installed = true\ndisabled_sources = [${revokedCompatSources.map((value) => JSON.stringify(value)).join(', ')}]\n[claude_compat]\nimported = true\n`, { flag: 'wx', mode: 0o600 });
+  const modelId = seedReviewModel(home);
   const beforeForeign = foreignReadonlySnapshot();
   const result = { version: 1, kind: 'native-capabilities-driver', passed: false, nativeVerified: false, executable,
     binarySha256: sha(readFileSync(executable)), home, cwd, output, phases: [], errors: [], gitHandoff: null,
@@ -257,7 +284,7 @@ export async function runNativeCapabilitiesReview({ executable } = {}) {
     resource = await createCapabilitiesGitResource(home, token);
     const initialMetadata = resource.readFixtureMetadata();
     assert.equal(initialMetadata.version, '1.0.0');
-    const manifest = { schema: 1, home, cwd, token, sourceUrl: resource.sourceUrl, caPath: resource.caPath,
+    const manifest = { schema: 1, modelId, home, cwd, token, sourceUrl: resource.sourceUrl, caPath: resource.caPath,
       pluginName: resource.pluginName, marketplaceName: resource.marketplaceName, pluginRelativePath: resource.pluginRelativePath,
       initialCommit: resource.initialCommit, memorySeed, memorySeedSHA256: sha(Buffer.from(memorySeed)), memoryRestoredSeed };
     const manifestPath = join(cwd, 'capabilities-fixture.json'); writeFileSync(manifestPath, JSON.stringify(manifest), { flag: 'wx', mode: 0o600 });
@@ -278,7 +305,7 @@ export async function runNativeCapabilitiesReview({ executable } = {}) {
       if (existsSync(reportPath)) unlinkSync(reportPath);
       const oldHistory = existsSync(historyPath) ? jsonl(historyPath, home) : [], startedAt = Date.now();
       active = managed(spawn(executable, ['--data-home', home], { env: { ...launchEnv, ECHO_DESKTOP_REVIEW_PHASE: phase }, stdio: ['ignore', 'pipe', 'pipe'] }));
-      const logs = []; active.child.stdout?.on('data', (bytes) => logs.push(bytes.toString())); active.child.stderr?.on('data', (bytes) => logs.push(bytes.toString()));
+      const logs = captureReviewModelLogs(active.child, join(output, `${phase}.log`));
       let lastProgress = 0, handoffHandled = phase === 'restart', v2Observed = phase === 'restart';
       const availabilityHandled = new Set();
       try {
@@ -338,9 +365,10 @@ export async function runNativeCapabilitiesReview({ executable } = {}) {
         }
         assert(active.ended, 'Native capabilities phase exceeded its genuine wall-clock acceptance deadline');
         if (active.error) throw active.error;
+        await logs.finished; assert(!logs.overflow, 'Native capabilities log exceeded limit'); assert(!logs.incomplete, 'Native log pipes did not close after process exit');
         assert.equal(active.child.exitCode, 0, 'Native application did not exit normally');
         assert.equal(active.child.signalCode, null);
-        const report = json(reportPath, home); copyFileSync(reportPath, join(output, `${phase}.json`));
+        const report = json(reportPath, home); writeFileSync(join(output, `${phase}.json`), redactReviewModelSecrets(readFileSync(reportPath)), { mode: 0o600 });
         result.phases.push({ phase, pid: active.child.pid, exitCode: active.child.exitCode, report });
         const current = verifyCapabilitiesNativeReport({ report, manifest, phase, pid: active.child.pid, startedAt, previousExpected: expected });
         const history = jsonl(historyPath, home); assert.equal(history.length, oldHistory.length + 1); assert.deepEqual(history.slice(0, -1), oldHistory); assert.deepEqual(history.at(-1), report);
@@ -352,7 +380,7 @@ export async function runNativeCapabilitiesReview({ executable } = {}) {
           'Actual Git refresh failure/recovery was not observed by the independent resource');
         assert.deepEqual(foreignReadonlySnapshot(), beforeForeign, 'Native acceptance changed external Claude/default Echo data');
         if (phase === 'first-launch') { expected = current; firstFilesystem = physical; }
-      } finally { await terminate(active); writeFileSync(join(output, `${phase}.log`), logs.join('')); active = undefined; }
+      } finally { await terminate(active); await logs.finished; active = undefined; }
     }
     result.nativeVerified = true; result.passed = result.phases.length === 2;
   } catch (error) { result.errors.push(String(error?.message || error).slice(0, 2000)); result.passed = false; }
@@ -361,10 +389,10 @@ export async function runNativeCapabilitiesReview({ executable } = {}) {
     if (resource) { await resource.close(); result.requests = resource.requestsSummary(); }
     result.foreignAfter = foreignReadonlySnapshot(); result.defaultHomeChanged = JSON.stringify(result.foreignAfter) !== JSON.stringify(beforeForeign);
     if (result.defaultHomeChanged) { result.errors.push('External application/default Echo files changed'); result.passed = false; }
-    writeFileSync(join(output, 'native-capabilities-result.json'), JSON.stringify(result, null, 2));
+    writeFileSync(join(output, 'native-capabilities-result.json'), redactReviewModelSecrets(JSON.stringify(result, null, 2)));
   }
-  console.log(JSON.stringify({ passed: result.passed, nativeVerified: result.nativeVerified, phases: result.phases.length,
-    errors: result.errors, output, home, automaticDueVerified: result.passed, simulatedTime: false, manualRuns: 0 }));
+  console.log(redactReviewModelSecrets(JSON.stringify({ passed: result.passed, nativeVerified: result.nativeVerified, phases: result.phases.length,
+    errors: result.errors, output, home, automaticDueVerified: result.passed, simulatedTime: false, manualRuns: 0 })));
   return result;
 }
 if (process.argv[1] && import.meta.url === pathToFileURL(resolve(process.argv[1])).href) {

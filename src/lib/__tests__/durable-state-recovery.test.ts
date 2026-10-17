@@ -45,6 +45,25 @@ describe("draft and outbox recovery", () => {
     expect(localStorage.getItem("echoagent.outbox.v1")).toBe(raw);
   });
 
+  it("does not acknowledge queue edits, deletion, reordering or resume that failed to persist", async () => {
+    const queue = (await import("@/stores/message-queue-store")).useMessageQueueStore;
+    const first = queue.getState().enqueue("s1", "first");
+    queue.getState().enqueue("s1", "second");
+    queue.getState().setStatus("s1", first, "paused");
+    const saved = queue.getState().getQueue("s1");
+    const write = vi.spyOn(Storage.prototype, "setItem").mockImplementation(() => { throw new Error("disk full"); });
+    expect(queue.getState().update("s1", first, "edited")).toBe(false);
+    expect(queue.getState().remove("s1", first)).toBe(false);
+    expect(queue.getState().reorder("s1", 0, 1)).toBe(false);
+    expect(queue.getState().setStatus("s1", first, "queued")).toBe(false);
+    expect(queue.getState().getQueue("s1")).toEqual(saved);
+    write.mockRestore();
+    expect(queue.getState().update("s1", first, "edited")).toBe(true);
+    vi.resetModules();
+    const recovered = (await import("@/stores/message-queue-store")).useMessageQueueStore;
+    expect(recovered.getState().getQueue("s1").map((item) => item.text)).toEqual(["edited", "second"]);
+  });
+
   it("keeps attachment edits available when disk persistence fails and retries later", async () => {
     const { draftAttachments, saveDraftAttachments } = await import("../draft-attachments");
     saveDraftAttachments("s1", ["/work/old.png"]);

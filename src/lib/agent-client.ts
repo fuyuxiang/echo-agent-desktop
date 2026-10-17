@@ -1566,7 +1566,7 @@ export async function automationsSnapshot(): Promise<AutomationSnapshot> {
   return invoke<AutomationSnapshot>("automations_snapshot");
 }
 
-/** Create or update an automation. */
+/** Empty id creates a task; a nonempty id updates an existing task only. */
 export async function automationsSave(automation: Automation): Promise<Automation> {
   return invoke<Automation>("automations_save", { automation });
 }
