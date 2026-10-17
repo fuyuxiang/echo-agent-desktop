@@ -80,6 +80,7 @@ export function ChatView({
   commandRefreshKey,
   onClientSlashCommand,
   title,
+  onOpenTeamGroup,
 }: {
   onSend: (
     text: string,
@@ -132,6 +133,7 @@ export function ChatView({
   ) => boolean | void | Promise<boolean | void>;
   /** Current persisted session title, used by export/share filenames. */
   title?: string;
+  onOpenTeamGroup?: (team: import("@/lib/agent-client").RuntimeTeamInfo) => void;
 }) {
   const messages = useSessionStore((s) => s.messages);
   const streaming = useSessionStore((s) => s.streaming);
@@ -906,6 +908,7 @@ export function ChatView({
               )}
               {teamsOpen && (
                 <><div data-runtime-panel-anchor="teams" /><TeamStatusView key={sessionId} sessionId={sessionId} messages={messages}
+                  onOpenGroup={onOpenTeamGroup}
                   onUseTeam={(teamId) => {
                     if (!sessionId) return;
                     const next = draft.trim()

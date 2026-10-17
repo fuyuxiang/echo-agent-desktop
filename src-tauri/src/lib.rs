@@ -55,6 +55,7 @@ mod skill_installer;
 mod skills;
 mod storage;
 mod team_mcp;
+mod groups;
 mod team_orchestration;
 mod theia;
 mod weixin;
@@ -751,6 +752,7 @@ pub fn run() {
             // 必须在任何 new_session 之前 —— 端口即刻写入 BOUND_PORT 供传参。
             team_mcp::serve();
             team_mcp::set_app_handle(app.handle().clone());
+            if let Err(error)=groups::initialize(app.handle().clone()) {tracing::error!(%error,"group service initialization failed; existing data retained");}
             if let Err(error) = org_mcp::clear_persisted_registration() {
                 tracing::warn!(%error, "failed to remove legacy organization MCP registration");
             }
@@ -1037,6 +1039,18 @@ pub fn run() {
             team_mcp::team_snapshot,
             team_mcp::team_create,
             team_mcp::team_disband,
+            groups::group_create,
+            groups::group_list,
+            groups::group_snapshot,
+            groups::group_owner,
+            groups::group_send,
+            groups::group_control,
+            groups::group_settings,
+            groups::management::group_member_change,
+            groups::management::group_team_templates,
+            groups::management::group_team_save,
+            groups::management::group_team_delete,
+            groups::management::group_decision,
             // notification center
             notifications::notification_append,
             notifications::notification_list,

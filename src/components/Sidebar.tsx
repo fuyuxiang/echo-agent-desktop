@@ -37,10 +37,12 @@ import { SessionContextMenu } from "./SessionContextMenu";
 import { weixinHandoff } from "@/lib/weixin-client";
 import { MoveToProjectDialog } from "./MoveToProjectDialog";
 import { useAppDialog } from "./AppDialog";
+import { GroupSidebar } from "@/features/groups/GroupSidebar";
 const logoMarkUrl = "/app-icon.png";
 
 const NAV = [
   { label: "项目", icon: EchoProjectNavIcon },
+  { label: "团队群聊", icon: EchoExpertNavIcon },
   { label: "组织", icon: BuildingIcon },
   { label: "专家·技能·连接器", display: "扩展", icon: EchoExpertNavIcon },
   { label: "代码开发", icon: Code2Icon },
@@ -990,6 +992,7 @@ export function Sidebar({
       </nav>
 
       <div className="sidebar__content">
+        <GroupSidebar active={activeNav === "团队群聊"} onOpen={() => onNavigate("团队群聊")} />
         {sessionsError && (
           <div className="sidebar__empty" role="alert">
             <span>会话目录加载失败：{sessionsError}</span>

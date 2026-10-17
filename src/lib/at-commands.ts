@@ -36,7 +36,7 @@ export function atTokenAtCursor(text: string, cursor: number): AtToken | null {
   if (at > 0 && !/\s/.test(before[at - 1])) return null;
   const head = before.slice(at + 1);
   if (/[\s\n]/.test(head)) return null;
-  if (!/^[a-zA-Z0-9._/\-:#]*$/.test(head)) return null;
+  if (!/^[\p{L}\p{N}._/\-:#]*$/u.test(head)) return null;
   return {
     start: at,
     end: safe,

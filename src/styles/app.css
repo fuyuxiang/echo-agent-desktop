@@ -8079,7 +8079,7 @@ button.diff__path {
 /* Keep short sections at their natural height; divide the rest between long lists. */
 .sidebar__list-section--long {
   flex: 1 1 0;
-  min-height: min(148px, calc(50% - 15px));
+  min-height: 0;
 }
 .sidebar__list-section--projects {
   margin-top: 4px;

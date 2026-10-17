@@ -309,7 +309,7 @@ fn to_session_summary(
         .or_else(|| summary.last_active_at.clone())
         .map(|value| bounded_text(value, MAX_UPDATED_AT_CHARS));
     let is_git_repo = summary.git_root_dir.as_ref().map(|path| !path.is_empty());
-    let hidden = summary_is_hidden(&summary);
+    let hidden = session_is_hidden(&summary, &session_id);
     Some(SessionSummary {
         session_id,
         title,
@@ -340,6 +340,10 @@ fn summary_is_hidden(summary: &SummaryFile) -> bool {
             .as_deref()
             .is_some_and(|kind| kind.starts_with("subagent"))
     })
+}
+
+fn session_is_hidden(summary: &SummaryFile, session_id: &str) -> bool {
+    summary_is_hidden(summary) || crate::groups::is_member_session(session_id)
 }
 
 fn later_timestamp(current: Option<&str>, candidate: &str) -> bool {
@@ -652,10 +656,10 @@ fn list_workspaces_from_root(sessions_root: &Path) -> Vec<WorkspaceInfo> {
             let Some(s) = read_summary_file(&summary_path) else {
                 continue;
             };
-            if summary_is_hidden(&s) {
+            let Some(session_id) = authoritative_session_id(&session_path, &s) else {
                 continue;
-            }
-            if authoritative_session_id(&session_path, &s).is_none() {
+            };
+            if session_is_hidden(&s, &session_id) {
                 continue;
             }
             let title = display_title(&s).or_else(|| recover_title_from_updates(&session_path));

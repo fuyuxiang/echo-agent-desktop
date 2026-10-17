@@ -74,6 +74,29 @@ export async function validateSidebarScroll(page, output) {
   assert.ok(compact.projectHeader.bottom <= compact.content.bottom + 1, "project heading should remain visible at compact window height");
   assert.ok(compact.tasks.clientHeight > 20 && compact.projects.clientHeight > 20, "both lists should remain usable at compact window height");
 
+  for (const height of [600, 720]) {
+    await page.setViewportSize({width:1024,height});
+    await page.goto("http://127.0.0.1:1439/__ui-review?surface=sidebar-scroll&variant=both&groups=12");
+    const groupList = page.getByRole("region",{name:"最近群聊"});
+    await groupList.waitFor();
+    const before = await snapshot();
+    assert.ok(before.tasks.clientHeight >= 36 && before.projects.clientHeight >= 36, `12 groups must leave a full ordinary row visible at height ${height}: ${JSON.stringify(before)}`);
+    assert.ok(before.projectHeader.bottom <= before.content.bottom + 1, "groups must not push projects outside the sidebar");
+    const groupSizes = await groupList.evaluate(element => ({height:element.clientHeight,scrollHeight:element.scrollHeight}));
+    assert.ok(groupSizes.height >= 30 && groupSizes.scrollHeight > groupSizes.height, `groups must show a full compact row and scroll at height ${height}: ${JSON.stringify(groupSizes)}`);
+    await groupList.evaluate(element => {element.scrollTop=element.scrollHeight;});
+    const after = await snapshot();
+    assert.equal(after.tasks.top,before.tasks.top,"scrolling groups must not move tasks");
+    assert.equal(after.projects.top,before.projects.top,"scrolling groups must not move projects");
+    await page.screenshot({path:join(output,`sidebar-three-lists-${height}.png`)});
+    await page.getByRole("button",{name:/^团队群聊 \(/}).click();
+    assert.equal(await groupList.count(),0);
+    const collapsed = await snapshot();
+    assert.ok(collapsed.tasks.clientHeight > before.tasks.clientHeight,"collapsing groups must free room for tasks");
+    await page.getByRole("button",{name:"查看全部群聊"}).waitFor();
+    layouts++;
+  }
+
   await page.setViewportSize({ width: 1024, height: 720 });
   await page.goto("http://127.0.0.1:1439/__ui-review?surface=sidebar-scroll&variant=short");
   await page.getByRole("button", { name: "筛选任务" }).click();

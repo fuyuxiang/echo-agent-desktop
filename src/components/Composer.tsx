@@ -121,6 +121,7 @@ export function Composer({
   permissionInline = false,
   // Model picker
   modelId,
+  modelSummary,
   modelLoading = false,
   models,
   onModelChange,
@@ -152,6 +153,7 @@ export function Composer({
   onAutomationModeChange,
   // Slash-command context and desktop-owned command execution.
   commandSessionId,
+  slashCommandsEnabled = true,
   commandRefreshKey,
   onClientSlashCommand,
   /** 流式时额外提供「加入待发送队列」，不会替代立即发送。 */
@@ -166,9 +168,12 @@ export function Composer({
   usageSessionId,
   usageMsgCount,
   knowledgeSessionId,
+  knowledgeDeferred = false,
   onOpenKnowledgeBase,
   onOpenMeetingMinutes,
   onOpenOrganization,
+  mentionMembers,
+  onMentionMember,
 }: {
   streaming: boolean;
   /** A cancellation request is in flight; keep the stop action single-shot. */
@@ -182,6 +187,8 @@ export function Composer({
   filePaths?: string[];
   /** SP4: workspace symbols (mirrors `SymbolIndexClient.symbols()`). */
   workspaceSymbols?: AtMentionSymbol[];
+  mentionMembers?: { id: string; name: string; role?: string }[];
+  onMentionMember?: (memberId: string) => void;
   onSend: (text: string, attachments?: string[]) => boolean | void | Promise<boolean | void>;
   onSendNow?: (text: string, attachments?: string[]) => boolean | void | Promise<boolean | void>;
   onCancel: () => boolean | void | Promise<boolean | void>;
@@ -204,6 +211,8 @@ export function Composer({
   permissionInline?: boolean;
   /** Currently selected model id (shown on the model trigger). */
   modelId?: string;
+  /** Label when a container manages several member models outside this input. */
+  modelSummary?: string;
   modelLoading?: boolean;
   /** Available models for the picker. */
   models?: ModelOption[];
@@ -252,6 +261,8 @@ export function Composer({
   onAutomationModeChange?: (mode: AutomationMode) => void | Promise<void>;
   /** Current session used to request the runtime's context-aware command catalog. */
   commandSessionId?: string;
+  /** Containers with several Runtime sessions expose their own controls. */
+  slashCommandsEnabled?: boolean;
   /** Incremented when the runtime publishes available_commands_update. */
   commandRefreshKey?: number;
   /** Execute commands owned by the desktop shell (/new, /settings, /plan, ...). */
@@ -272,6 +283,7 @@ export function Composer({
   usageMsgCount?: number;
   /** Existing session scope for per-task knowledge preferences. Omit on Home. */
   knowledgeSessionId?: string;
+  knowledgeDeferred?: boolean;
   /** Opens the personal knowledge management page. */
   onOpenKnowledgeBase?: () => void;
   /** Opens meeting history and the recording/transcription workbench. */
@@ -1086,7 +1098,7 @@ export function Composer({
   // Slash completion is limited to the first token, matching runtime command
   // resolution. The shared parser supports qualified names such as
   // `/plugin-name:skill-name`.
-  const slashVisible = !!slashTokenAtCursor(text, cursorPos) && apiReady && !streaming;
+  const slashVisible = slashCommandsEnabled && !!slashTokenAtCursor(text, cursorPos) && apiReady && !streaming;
 
   const handleSlashPick = (command: string) => {
     const replacement = replaceSlashToken(text, cursorPos, command);
@@ -1351,7 +1363,7 @@ export function Composer({
           }}
         />
         {/* Slash-command autocomplete */}
-        {apiReady && !streaming && (
+        {slashCommandsEnabled && apiReady && !streaming && (
           <SlashCommands
             ref={slashCommandsRef}
             text={text}
@@ -1369,7 +1381,9 @@ export function Composer({
           cursor={cursorPos}
           filePaths={filePaths}
           workspaceSymbols={workspaceSymbols}
-          onPick={(mention) => {
+          members={mentionMembers}
+          onPick={(mention, _replacement, memberId) => {
+            if (memberId) onMentionMember?.(memberId);
             const result = replaceAtToken(text, cursorPos, mention);
             if (result) {
               updateText(result.text);
@@ -1454,6 +1468,7 @@ export function Composer({
           )}
           <KnowledgePicker
             sessionId={knowledgeSessionId}
+            deferRuntimeSync={knowledgeDeferred}
             disabled={!apiReady || awaitingQuestion || disabled || streaming}
             onManage={onOpenKnowledgeBase}
             onOpenOrganization={onOpenOrganization}
@@ -1488,7 +1503,7 @@ export function Composer({
                 onOpenSettings?.();
               }}
             >
-              Auto <ChevronDownIcon size="sm" />
+              {modelSummary ?? "Auto"} <ChevronDownIcon size="sm" />
             </button>
           )}
           <button

@@ -6,7 +6,7 @@ import {
   useState,
   type ReactNode,
 } from "react";
-import { FileText, FunctionSquare } from "lucide-react";
+import { FileText, FunctionSquare, Users } from "lucide-react";
 
 import { atTokenAtCursor } from "@/lib/at-commands";
 
@@ -30,8 +30,9 @@ interface AtMentionMenuProps {
   filePaths: string[];
   /** Already-loaded symbols (from `SymbolIndexClient`). */
   workspaceSymbols: AtMentionSymbol[];
+  members?: { id: string; name: string; role?: string }[];
   /** Called with the chosen mention string and a replacement-friendly form. */
-  onPick: (mention: string, replacement: string) => void;
+  onPick: (mention: string, replacement: string, memberId?: string) => void;
 }
 
 export interface AtMentionHandle {
@@ -40,7 +41,8 @@ export interface AtMentionHandle {
 }
 
 interface Match {
-  kind: "file" | "symbol";
+  kind: "file" | "symbol" | "member";
+  memberId?: string;
   label: string;
   hint?: string;
   mention: string;
@@ -106,7 +108,7 @@ function atMenuKeyHandler(
  */
 export const AtMentionMenu = forwardRef<AtMentionHandle, AtMentionMenuProps>(
   function AtMentionMenu(
-    { text, cursor, filePaths, workspaceSymbols, onPick },
+    { text, cursor, filePaths, workspaceSymbols, members, onPick },
     ref,
   ) {
     const [activeIdx, setActiveIdx] = useState(0);
@@ -134,8 +136,9 @@ export const AtMentionMenu = forwardRef<AtMentionHandle, AtMentionMenuProps>(
           mention: "@" + s.file + "#" + s.name,
           replacement: `${s.file}#${s.name}`,
         }));
-      return [...fileHits, ...symHits].slice(0, TOTAL_LIMIT);
-    }, [text, cursor, filePaths, workspaceSymbols]);
+      const memberHits: Match[] = (members ?? []).filter(m => !q || m.name.toLowerCase().includes(q)).slice(0, 8).map(m => ({ kind: "member", memberId: m.id, label: m.name, hint: m.role, mention: `@${m.name}`, replacement: m.id }));
+      return [...memberHits, ...fileHits, ...symHits].slice(0, TOTAL_LIMIT);
+    }, [text, cursor, filePaths, workspaceSymbols, members]);
 
     const activeIdxRef = useRef(activeIdx);
     activeIdxRef.current = activeIdx;
@@ -151,7 +154,10 @@ export const AtMentionMenu = forwardRef<AtMentionHandle, AtMentionMenuProps>(
             setActiveIdx,
             () => {
               const m = matches[activeIdxRef.current];
-              if (m) onPick(m.mention, m.replacement);
+              if (m) {
+                if (m.memberId) onPick(m.mention, m.replacement, m.memberId);
+                else onPick(m.mention, m.replacement);
+              }
             },
             () => setActiveIdx(0),
           ),
@@ -165,10 +171,10 @@ export const AtMentionMenu = forwardRef<AtMentionHandle, AtMentionMenuProps>(
       <div
         className="at-menu"
         role="listbox"
-        aria-label="引用工作区文件或符号"
+        aria-label={members?.length ? "选择成员或引用资料" : "引用工作区文件或符号"}
         data-testid="at-menu"
       >
-        <div className="at-menu__header">引用工作区文件或符号</div>
+        <div className="at-menu__header">{members?.length ? "成员 · 文件 · 代码符号" : "引用工作区文件或符号"}</div>
         <ul className="at-menu__list">
           {matches.map((m, idx) => {
             const active = idx === activeIdx;
@@ -181,10 +187,10 @@ export const AtMentionMenu = forwardRef<AtMentionHandle, AtMentionMenuProps>(
                   aria-selected={active}
                   data-testid="at-menu-item"
                   data-kind={m.kind}
-                  onClick={() => onPick(m.mention, m.replacement)}
+                  onClick={() => { if (m.memberId) onPick(m.mention, m.replacement, m.memberId); else onPick(m.mention, m.replacement); }}
                   onMouseEnter={() => setActiveIdx(idx)}
                 >
-                  {m.kind === "file" ? (
+                  {m.kind === "member" ? <Users size={12} aria-hidden /> : m.kind === "file" ? (
                     <FileText size={12} aria-hidden />
                   ) : (
                     <FunctionSquare size={12} aria-hidden />
@@ -192,7 +198,7 @@ export const AtMentionMenu = forwardRef<AtMentionHandle, AtMentionMenuProps>(
                   <span className="at-menu__label">{m.label}</span>
                   {m.hint ? <span className="at-menu__hint">{m.hint}</span> : null}
                   <span className="at-menu__kind">
-                    {m.kind === "file" ? "文件" : "符号"}
+                    {m.kind === "member" ? "成员" : m.kind === "file" ? "文件" : "符号"}
                   </span>
                 </button>
               </li>

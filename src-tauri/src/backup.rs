@@ -23,11 +23,14 @@ const FILES: &[&str] = &[
     "echoagent-automations.json",
     "echoagent-automation-records.json",
     "echoagent-notifications.json",
+    "echoagent-teams.json",
+    "collaboration.sqlite",
     "desktop/desktop-preferences.json",
 ];
 const DIRS: &[&str] = &[
     "sessions",
     "memory",
+    "group-memory",
     "projects",
     "meetings",
     "coding",
@@ -36,6 +39,9 @@ const DIRS: &[&str] = &[
 pub const UI_KEYS: &[&str] = &[
     "echoagent.projects",
     "echoagent.drafts.v1",
+    "echoagent.group-drafts.v1",
+    "echoagent.group-read.v1",
+    "echoagent.group-outbox.v1",
     "echoagent.outbox.v1",
     "echoagent.draft-attachments.v1",
     "echoagent.task-artifacts.v1",
@@ -275,8 +281,31 @@ fn export(
                 return Err("备份路径超出数据范围".into());
             }
             zip.start_file(&name, options).map_err(|e| e.to_string())?;
+            // Read a consistent SQLite snapshot, including committed WAL data.
+            // Copying the live main file alone can lose the latest messages.
+            let sqlite_snapshot = if name == "collaboration.sqlite" {
+                let dir = tempfile::tempdir().map_err(|e| e.to_string())?;
+                let destination = dir.path().join("snapshot.sqlite");
+                let connection = rusqlite::Connection::open_with_flags(
+                    file.path(),
+                    rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY,
+                )
+                .map_err(|e| e.to_string())?;
+                connection
+                    .execute("VACUUM INTO ?1", [destination.to_string_lossy().as_ref()])
+                    .map_err(|e| e.to_string())?;
+                Some((dir, destination))
+            } else {
+                None
+            };
             let (bytes, sha256) = copy_hash(
-                File::open(file.path()).map_err(|e| e.to_string())?,
+                File::open(
+                    sqlite_snapshot
+                        .as_ref()
+                        .map(|(_, p)| p.as_path())
+                        .unwrap_or(file.path()),
+                )
+                .map_err(|e| e.to_string())?,
                 &mut zip,
                 MAX_TOTAL - total,
             )?;
@@ -347,7 +376,14 @@ fn unpack(archive: &Path, staging: &Path) -> Result<Manifest, String> {
     Ok(manifest)
 }
 fn destination(home: &Path, app_data: &Path, name: &str) -> Result<PathBuf, String> {
-    if !allowed(name) {
+    // Sidecars are journal-only entries. `validate` never accepts them from an
+    // archive: the exported database is already a consistent single-file copy.
+    if !allowed(name)
+        && !matches!(
+            name,
+            "collaboration.sqlite-wal" | "collaboration.sqlite-shm"
+        )
+    {
         return Err("恢复路径无效".into());
     }
     let target = source_path(home, app_data, name);
@@ -462,6 +498,9 @@ fn prepare_file(
     home: &Path,
     app_data: &Path,
 ) -> Result<(), String> {
+    if name == "collaboration.sqlite" {
+        return prepare_group_database(path, manifest, home, app_data);
+    }
     if name.starts_with("sessions/") && name.ends_with(".jsonl") {
         use std::io::{BufRead, BufReader};
         let input = BufReader::new(File::open(path).map_err(|e| e.to_string())?);
@@ -557,6 +596,57 @@ fn prepare_file(
         &serde_json::to_vec(&value).map_err(|e| e.to_string())?,
     )
 }
+
+/// The database is restored before services open it. Rebase structured paths
+/// in the same transaction and reject malformed archives before replacing data.
+fn prepare_group_database(
+    path: &Path,
+    manifest: &Manifest,
+    home: &Path,
+    app_data: &Path,
+) -> Result<(), String> {
+    let mut connection =
+        rusqlite::Connection::open_with_flags(path, rusqlite::OpenFlags::SQLITE_OPEN_READ_WRITE)
+            .map_err(|e| format!("群聊备份数据库无效：{e}"))?;
+    let integrity: String = connection
+        .query_row("PRAGMA integrity_check", [], |row| row.get(0))
+        .map_err(|e| format!("无法验证群聊数据库：{e}"))?;
+    if integrity != "ok" {
+        return Err("群聊数据库完整性验证失败".into());
+    }
+    let transaction = connection.transaction().map_err(|e| e.to_string())?;
+    for table in ["groups", "messages", "work_items", "team_templates"] {
+        let rows = {
+            let mut statement = transaction
+                .prepare(&format!("SELECT id,data FROM {table}"))
+                .map_err(|e| format!("群聊备份表不完整：{e}"))?;
+            let result = statement
+                .query_map([], |row| {
+                    Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
+                })
+                .map_err(|e| e.to_string())?
+                .collect::<Result<Vec<_>, _>>()
+                .map_err(|e| e.to_string())?;
+            result
+        };
+        for (id, data) in rows {
+            let mut value: serde_json::Value =
+                serde_json::from_str(&data).map_err(|e| format!("群聊备份记录损坏：{e}"))?;
+            rebase_value(&mut value, manifest, home, app_data);
+            transaction
+                .execute(
+                    &format!("UPDATE {table} SET data=?1 WHERE id=?2"),
+                    rusqlite::params![value.to_string(), id],
+                )
+                .map_err(|e| e.to_string())?;
+        }
+    }
+    transaction.commit().map_err(|e| e.to_string())?;
+    connection
+        .execute_batch("PRAGMA wal_checkpoint(TRUNCATE); PRAGMA journal_mode=DELETE;")
+        .map_err(|e| e.to_string())?;
+    Ok(())
+}
 fn apply_pending_at(home: &Path, app_data: &Path) -> Result<(), String> {
     rollback(home, app_data)?;
     let pending = home.join("restore-pending.zip");
@@ -593,12 +683,34 @@ fn apply_pending_at(home: &Path, app_data: &Path) -> Result<(), String> {
         )?;
         journal.files.push((entry.name.clone(), existed));
     }
+    let restoring_groups = manifest
+        .files
+        .iter()
+        .any(|e| e.name == "collaboration.sqlite");
+    if restoring_groups {
+        for name in ["collaboration.sqlite-wal", "collaboration.sqlite-shm"] {
+            let target = destination(home, app_data, name)?;
+            let existed = target.exists();
+            if existed {
+                atomic_copy(&target, &previous.join(name))?;
+            }
+            journal.files.push((name.into(), existed));
+        }
+    }
     let journal_path = home.join("restore-journal.json");
     crate::paths::write_private_file(
         &journal_path,
         &serde_json::to_vec(&journal).map_err(|e| e.to_string())?,
     )?;
     let result = (|| {
+        if restoring_groups {
+            for name in ["collaboration.sqlite-wal", "collaboration.sqlite-shm"] {
+                let target = destination(home, app_data, name)?;
+                if target.exists() {
+                    fs::remove_file(target).map_err(|e| e.to_string())?;
+                }
+            }
+        }
         for entry in &manifest.files {
             atomic_copy(
                 &staging.path().join(&entry.name),
@@ -823,6 +935,53 @@ pub fn backup_acknowledge_ui() -> Result<(), String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn group_database_backup_includes_wal_and_restore_rebases_paths_and_removes_old_sidecars() {
+        let source = tempfile::tempdir().unwrap();
+        let target = tempfile::tempdir().unwrap();
+        let connection =
+            rusqlite::Connection::open(source.path().join("collaboration.sqlite")).unwrap();
+        connection.execute_batch("PRAGMA journal_mode=WAL; PRAGMA wal_autocheckpoint=0; CREATE TABLE groups(id TEXT PRIMARY KEY,data TEXT); CREATE TABLE messages(id TEXT PRIMARY KEY,data TEXT); CREATE TABLE work_items(id TEXT PRIMARY KEY,data TEXT); CREATE TABLE team_templates(id TEXT PRIMARY KEY,data TEXT);").unwrap();
+        let path = source.path().join("projects/shared/file.md");
+        connection
+            .execute(
+                "INSERT INTO messages VALUES('latest',?1)",
+                [serde_json::json!({"attachments":[path]}).to_string()],
+            )
+            .unwrap();
+        let archive = target.path().join("restore-pending.zip");
+        export(source.path(), source.path(), &archive, BTreeMap::new()).unwrap();
+        fs::write(
+            target.path().join("collaboration.sqlite-wal"),
+            "unrelated old WAL",
+        )
+        .unwrap();
+        fs::write(
+            target.path().join("collaboration.sqlite-shm"),
+            "unrelated old SHM",
+        )
+        .unwrap();
+        apply_pending_at(target.path(), target.path()).unwrap();
+        assert!(!target.path().join("collaboration.sqlite-wal").exists());
+        assert!(!target.path().join("collaboration.sqlite-shm").exists());
+        let restored =
+            rusqlite::Connection::open(target.path().join("collaboration.sqlite")).unwrap();
+        let data: String = restored
+            .query_row("SELECT data FROM messages WHERE id='latest'", [], |r| {
+                r.get(0)
+            })
+            .unwrap();
+        let data: serde_json::Value = serde_json::from_str(&data).unwrap();
+        assert_eq!(
+            data["attachments"][0],
+            target
+                .path()
+                .join("projects/shared/file.md")
+                .to_string_lossy()
+                .as_ref()
+        );
+    }
 
     #[test]
     fn restoration_is_exclusive_and_failures_release_the_lease() {

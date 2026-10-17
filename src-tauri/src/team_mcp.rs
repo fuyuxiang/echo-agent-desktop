@@ -446,6 +446,7 @@ fn read_teams_from_disk() -> Result<HashMap<String, TeamInfo>, String> {
     let path = teams_file();
     with_team_store_access_at(&path, || load_teams_from_disk_at(&path))
 }
+pub(crate) fn team_catalog()->Result<Vec<TeamInfo>,String>{Ok(read_teams_from_disk()?.into_values().collect())}
 
 fn update_teams_at<T>(
     path: &Path,
@@ -820,7 +821,12 @@ async fn handle_post(
             Err(error) => return rpc_error(id, -32602, error),
         },
         "ping" => serde_json::json!({}),
-        "tools/list" => tools_list_result(),
+        "tools/list" => {
+            let session=headers.get(SESSION_HEADER).and_then(|v|v.to_str().ok()).unwrap_or("");
+            let group=headers.get("X-EchoAgent-Group-Id").and_then(|v|v.to_str().ok()).unwrap_or("");
+            let member=headers.get("X-EchoAgent-Member-Id").and_then(|v|v.to_str().ok()).unwrap_or("");
+            if crate::groups::is_member_session(session) || crate::groups::has_member(group,member) {crate::groups::mcp_tools()} else {tools_list_result()}
+        },
         "tools/call" => match tools_call_for_session(
             &req.params,
             headers
@@ -1030,6 +1036,9 @@ async fn tools_call_for_session(
         .len();
     if argument_size > MAX_TOOL_ARGUMENT_BYTES {
         return Err("工具参数超过 128KB 上限".into());
+    }
+    if crate::groups::is_member_session(session_id) {
+        return crate::groups::mcp_call(session_id,&serde_json::json!({"name":name,"arguments":args}));
     }
     match name {
         "create_team" => {

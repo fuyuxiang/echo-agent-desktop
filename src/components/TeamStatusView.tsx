@@ -12,12 +12,13 @@ interface TeamStatusViewProps {
   messages?: ChatMessage[];
   onUseTeam?: (teamId: string) => void;
   onViewTasks?: () => void;
+  onOpenGroup?: (team: RuntimeTeamInfo) => void;
 }
 const EMPTY_LIVE: Record<string, SubagentRuntime> = {};
 const EMPTY_MESSAGES: ChatMessage[] = [];
 const readableError = (error: unknown) => String(error).replace(/^Error:\s*/, "");
 
-export function TeamStatusView({ sessionId, messages = EMPTY_MESSAGES, onUseTeam, onViewTasks }: TeamStatusViewProps) {
+export function TeamStatusView({ sessionId, messages = EMPTY_MESSAGES, onUseTeam, onViewTasks, onOpenGroup }: TeamStatusViewProps) {
   const [snapshot, setSnapshot] = useState<{ sessionId: string; teams: RuntimeTeamInfo[] } | null>(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -174,6 +175,7 @@ export function TeamStatusView({ sessionId, messages = EMPTY_MESSAGES, onUseTeam
           })}</ul>
           {tasks.length > 0 && <p className="team-status-view__description">{team.promptIds?.length ? "本轮任务" : "本会话成员任务"}：{tasks.filter((task) => task.status === "completed").length}/{tasks.length} 已完成</p>}
           <div className="team-status-view__actions">
+            {onOpenGroup && <button type="button" className="team-status-view__primary" onClick={() => onOpenGroup(team)}>打开群聊</button>}
             {onUseTeam && <button type="button" className="runtime-panel-refresh" onClick={() => onUseTeam(team.teamId)}>使用此团队</button>}
             {onViewTasks && <button type="button" className="runtime-panel-refresh" onClick={onViewTasks}>查看任务详情</button>}
             <button type="button" className="runtime-panel-refresh" onClick={() => setDisbanding(team.teamId)} disabled={mutationBusy}>解散团队</button>

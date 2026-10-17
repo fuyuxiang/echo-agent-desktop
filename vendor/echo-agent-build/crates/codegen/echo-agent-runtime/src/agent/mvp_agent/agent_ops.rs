@@ -4430,6 +4430,50 @@ impl MvpAgent {
                 );
             }
         }
+        // Collaboration is a native session policy, independent of the model's
+        // harness selection. A strict harness still receives the expert role;
+        // discussion sessions get a final allowlist, not a prompt-only promise.
+        let collaboration = session_meta.and_then(|m| m.get("echoagent.group"));
+        if let Some(group) = collaboration {
+            if let Some(profile) = parse_agent_profile_from_meta(session_meta) {
+                if profile.prompt_body != agent_definition.prompt_body {
+                    if let Some(role) = profile.prompt_body {
+                        let base = agent_definition.prompt_body.take().unwrap_or_default();
+                        agent_definition.prompt_body = Some(format!("{base}\n\n{role}"));
+                    }
+                }
+            }
+            agent_definition.memory = None;
+            agent_definition.max_turns = Some(agent_definition.max_turns.unwrap_or(20).min(20));
+            // All collaboration goes through persisted group work items. Native
+            // private subagents would bypass group budgets, visibility and the
+            // member memory namespace, so disable that alternate dispatch path.
+            agent_definition.allowed_subagent_types = Some(Vec::new());
+            agent_definition.session_tools_denylist.get_or_insert_with(Vec::new)
+                .extend(["task", "Agent", "workflow", "workflow_start", "workflow_create", "update_goal"].into_iter().map(str::to_string));
+            if group.get("readOnly").and_then(serde_json::Value::as_bool) == Some(true) {
+                agent_definition.session_tools_allowlist = Some([
+                    "read_file", "list_dir", "grep", "glob", "web_search", "web_fetch",
+                    "Read", "Glob", "Grep", "LS", "group_read_history", "group_get_work",
+                    "echoagent__group_read_history", "echoagent__group_get_work",
+                    "local_knowledge_search", "local_knowledge_fetch", "knowledge_context", "knowledge_ask", "knowledge_search", "knowledge_fetch_document", "knowledge_fetch_doc", "knowledge_list_documents", "knowledge_list_docs", "knowledge_who_knows",
+                    "echoagent_organization_memory__local_knowledge_search", "echoagent_organization_memory__local_knowledge_fetch", "echoagent_organization_memory__knowledge_context", "echoagent_organization_memory__knowledge_ask", "echoagent_organization_memory__knowledge_search", "echoagent_organization_memory__knowledge_fetch_document", "echoagent_organization_memory__knowledge_fetch_doc", "echoagent_organization_memory__knowledge_list_documents", "echoagent_organization_memory__knowledge_list_docs", "echoagent_organization_memory__knowledge_who_knows",
+                ].into_iter().map(str::to_string).collect());
+            }
+        }
+        let mut session_memory_config = self.memory_config.clone();
+        if let Some(group) = collaboration {
+            let valid = |s: &str| !s.is_empty() && s.len() <= 64 && s.bytes().all(|c| c.is_ascii_alphanumeric() || c == b'-');
+            let gid = group.get("groupId").and_then(serde_json::Value::as_str).filter(|s| valid(s));
+            let mid = group.get("memberId").and_then(serde_json::Value::as_str).filter(|s| valid(s));
+            match (gid, mid) {
+                (Some(gid), Some(mid)) => if let Some(config) = session_memory_config.as_mut() {
+                    config.root_dir_override = Some(echo_agent_config::echo_agent_home().join("group-memory").join(gid).join(mid).join(format!("generation-{}", group.get("generation").and_then(serde_json::Value::as_u64).unwrap_or(0))));
+                    config.flat_memory_root = true;
+                },
+                _ => session_memory_config = None,
+            }
+        }
         let pinned_model: Option<(acp::ModelId, ModelEntry)> = match &agent_definition
             .model
         {
@@ -4597,9 +4641,9 @@ impl MvpAgent {
             .cfg
             .borrow()
             .is_feature_enabled(crate::agent::config::Feature::WriteFile);
-        let goal_enabled = self.cfg.borrow().resolve_goal().value;
-        let background_workflows_enabled = self.cfg.borrow().resolve_workflows().value;
-        let subagents_enabled = self.cfg.borrow().subagents_enabled;
+        let goal_enabled = collaboration.is_none() && self.cfg.borrow().resolve_goal().value;
+        let background_workflows_enabled = collaboration.is_none() && self.cfg.borrow().resolve_workflows().value;
+        let subagents_enabled = collaboration.is_none() && self.cfg.borrow().subagents_enabled;
         let subagents_max_depth = self.cfg.borrow().subagents_max_depth;
         let workflow_max_concurrent_agents = self
             .cfg
@@ -4836,7 +4880,7 @@ impl MvpAgent {
                     persisted_goal_mode,
                     persisted_workflow_runs,
                     persisted_announcement_state,
-                    self.memory_config.clone(),
+                    session_memory_config,
                     loc_tracking_enabled,
                     feedback_flags,
                     self.managed_mcp_cache.clone(),

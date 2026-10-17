@@ -949,6 +949,26 @@ button,
   padding: 6px 10px 14px;
 }
 
+@media (max-height: 760px) {
+  .sidebar__nav {
+    gap: 2px;
+    padding: 2px 10px 10px;
+  }
+  .sidebar__nav-item {
+    height: 30px;
+    padding: 4px 12px;
+  }
+}
+
+@media (max-height: 640px) {
+  .sidebar__nav { gap: 0; padding-bottom: 6px; }
+  .sidebar__footer { height: 52px; padding: 4px 8px; }
+  .sidebar .group-sidebar { max-height: 30%; }
+  .sidebar .group-sidebar__item { height: 30px; flex-direction: row; align-items: center; gap: 6px; padding: 4px 12px; }
+  .sidebar .group-sidebar__item > span { flex: 1; min-width: 0; }
+  .sidebar .group-sidebar__item small { flex: none; white-space: nowrap; }
+}
+
 .sidebar__section-label {
   min-height: 34px;
   padding: 6px 10px;

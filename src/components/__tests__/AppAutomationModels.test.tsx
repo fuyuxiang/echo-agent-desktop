@@ -368,6 +368,10 @@ describe("自动化会话模型同步", () => {
     created();
     act(() => useSessionsStore.getState().upsert({ sessionId: "other", cwd: "/workspace", currentModelId: "model-b" }));
     fireEvent.click(screen.getByText("打开自动化"));
+    // Group ownership is resolved before loading. Establish the in-flight
+    // load explicitly so this still tests a late model response, not a task
+    // selection superseded before it ever reaches the Runtime.
+    await waitFor(() => expect(client.agentLoadSession).toHaveBeenCalledWith("auto-1", "/workspace"));
     fireEvent.click(screen.getByText("打开其他任务"));
     await waitFor(() => expect(screen.getByText("追问")).toBeEnabled());
     await act(async () => complete("model-a"));

@@ -331,7 +331,7 @@ export function registerForeignUpdateListener(
  * Variants we don't model (audio, embedded resources) degrade to a text
  * fallback carrying their name/uri instead of silently vanishing.
  */
-function normalizeToolCallContent(raw: unknown): ToolCallContent[] {
+export function normalizeToolCallContent(raw: unknown): ToolCallContent[] {
   if (!Array.isArray(raw)) return [];
   return (raw as unknown[]).slice(0, MAX_TOOL_CONTENT_BLOCKS).map((rawItem) => {
     const item = rawItem && typeof rawItem === "object"

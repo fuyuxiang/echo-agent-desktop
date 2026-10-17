@@ -98,8 +98,10 @@ export const MessageItem = memo(function MessageItem({
   latest = false,
   onToast,
   findQuery,
+  authorName,
 }: {
   message: ChatMessage;
+  authorName?: string;
   streaming: boolean;
   markdownConfig?: MarkdownConfig;
   /** Workspace used to resolve relative attachment paths. */
@@ -403,9 +405,9 @@ export const MessageItem = memo(function MessageItem({
       <div>
         <div className="msg__header">
           <span className="msg__avatar">
-            <img src={logoMarkUrl} alt="" aria-hidden="true" draggable={false} />
+            {authorName ? <span aria-hidden="true">{authorName.slice(0, 1)}</span> : <img src={logoMarkUrl} alt="" aria-hidden="true" draggable={false} />}
           </span>
-          <span className="msg__name">EchoAgent</span>
+          <span className="msg__name">{authorName ?? "EchoAgent"}</span>
         </div>
         <div className="msg__body">
           {message.parts.length === 0 && !message.complete && (

@@ -589,6 +589,122 @@ fn permission_mode_meta(mode: &str) -> serde_json::Map<String, serde_json::Value
     ])
 }
 
+/// Group sessions use the same ACP transport and session actor as ordinary
+/// tasks. Their profile and memory namespace are supplied on both lifecycle
+/// paths; a restore must never silently become the default assistant.
+pub(crate) async fn group_session(
+    tx: &AcpAgentTx,
+    cwd: &Path,
+    model: &str,
+    profile: &serde_json::Value,
+    group_id: &str,
+    member_id: &str,
+    generation: u64,
+    discussion: bool,
+    existing: Option<&str>,
+) -> Result<String> {
+    let mut meta = permission_mode_meta("ask");
+    meta.insert("modelId".into(), serde_json::json!(model));
+    meta.insert("agentProfile".into(), profile.clone());
+    meta.insert(
+        "echoagent.group".into(),
+        serde_json::json!({"groupId":group_id,"memberId":member_id,"generation":generation,"readOnly":discussion}),
+    );
+    meta.insert("noReplay".into(), serde_json::json!(true));
+    let mut servers = current_desktop_mcp_servers();
+    servers.retain(|server| !matches!(server,acp::McpServer::Http(http) if http.name == crate::team_mcp::MCP_SERVER_NAME));
+    if let (Some(url), Some(authorization)) = (
+        crate::team_mcp::server_url(),
+        crate::team_mcp::authorization_header(),
+    ) {
+        servers.push(acp::McpServer::Http(
+            acp::McpServerHttp::new(crate::team_mcp::MCP_SERVER_NAME, url).headers(vec![
+                acp::HttpHeader::new(crate::team_mcp::AUTH_HEADER, authorization),
+                acp::HttpHeader::new(crate::team_mcp::SESSION_HEADER, "${session_id}"),
+                acp::HttpHeader::new("X-EchoAgent-Group-Id", group_id),
+                acp::HttpHeader::new("X-EchoAgent-Member-Id", member_id),
+            ]),
+        ));
+    }
+    if let Some(sid) = existing {
+        let req =
+            acp::LoadSessionRequest::new(acp::SessionId::new(sid.to_string()), cwd.to_path_buf())
+                .mcp_servers(servers)
+                .meta(Some(meta));
+        let _: acp::LoadSessionResponse = acp_send(req, tx)
+            .await
+            .map_err(|e| anyhow!("恢复群成员会话失败：{e:?}"))?;
+        Ok(sid.into())
+    } else {
+        let req = acp::NewSessionRequest::new(cwd.to_path_buf())
+            .mcp_servers(servers)
+            .meta(Some(meta));
+        let response: acp::NewSessionResponse = acp_send(req, tx)
+            .await
+            .map_err(|e| anyhow!("创建群成员会话失败：{e:?}"))?;
+        Ok(response.session_id.0.to_string())
+    }
+}
+
+#[cfg(test)]
+pub(crate) async fn group_prompt(
+    tx: &AcpAgentTx,
+    session: &str,
+    prompt_id: &str,
+    text: &str,
+    attachments: &[String],
+) -> Result<crate::bridge::CompleteEvent> {
+    begin_group_prompt(tx, session, prompt_id, text, attachments)?
+        .complete()
+        .await
+}
+
+pub(crate) struct GroupPrompt {
+    session: String,
+    prompt_id: String,
+    response: tokio::sync::oneshot::Receiver<Result<acp::PromptResponse, acp::Error>>,
+}
+
+impl GroupPrompt {
+    pub(crate) async fn complete(self) -> Result<crate::bridge::CompleteEvent> {
+        let response = self
+            .response
+            .await
+            .map_err(|_| anyhow!("群成员执行通道已关闭"))?
+            .map_err(|e| anyhow!("群成员执行失败：{e:?}"))?;
+        completion_from_prompt_response(response, &self.session, &self.prompt_id)
+    }
+}
+
+/// Enqueue synchronously so the host can serialize prompt dispatch with Stop.
+/// Waiting for the model is deliberately outside that short dispatch boundary.
+pub(crate) fn begin_group_prompt(
+    tx: &AcpAgentTx,
+    session: &str,
+    prompt_id: &str,
+    text: &str,
+    attachments: &[String],
+) -> Result<GroupPrompt> {
+    let blocks = build_prompt_blocks(text, attachments, None)?;
+    let req = acp::PromptRequest::new(session.to_string(), blocks).meta(Some(
+        acp::Meta::from_iter([("promptId".into(), serde_json::json!(prompt_id))]),
+    ));
+    let (response_tx, response) = tokio::sync::oneshot::channel();
+    tx.send(
+        echo_agent_acp::AcpArgs {
+            request: req,
+            response_tx,
+        }
+        .into(),
+    )
+    .map_err(|_| anyhow!("群成员执行通道已关闭"))?;
+    Ok(GroupPrompt {
+        session: session.into(),
+        prompt_id: prompt_id.into(),
+        response,
+    })
+}
+
 /// Ask the embedded Runtime for the model catalog it currently exposes over
 /// ACP. This is deliberately queried after `internal/reload_models`; disk
 /// configuration alone is not evidence that the in-memory catalog changed.

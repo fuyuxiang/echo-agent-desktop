@@ -80,6 +80,8 @@ import {
   queueTerminalPolicy,
 } from "./stores/message-queue-store";
 import { useSubagentStore } from "./stores/subagent-store";
+import { resolveGroupForSession } from "./features/groups/group-client";
+import { useGroupEvents, useGroupStore } from "./features/groups/group-store";
 import {
   checkQuota,
   consumeQuotaAlert,
@@ -148,6 +150,7 @@ import {
 } from "./lib/session-control";
 
 const ChatView = lazy(() => import("./components/ChatView").then((module) => ({ default: module.ChatView })));
+const GroupWorkspace = lazy(() => import("./features/groups/GroupWorkspace").then(module => ({ default: module.GroupWorkspace })));
 const SettingsPanel = lazy(() => import("./components/SettingsPanel").then((module) => ({ default: module.SettingsPanel })));
 const SearchOverlay = lazy(() => import("./components/SearchOverlay").then((module) => ({ default: module.SearchOverlay })));
 const AboutDialog = lazy(() => import("./components/AboutDialog").then((module) => ({ default: module.AboutDialog })));
@@ -241,6 +244,7 @@ function Shell() {
   }, [init?.ok]);
 
   const [initError, setInitError] = useState<string | null>(null);
+  useGroupEvents(!!init?.ok);
   const [initAttempt, setInitAttempt] = useState(0);
   const [exitPreparing, setExitPreparing] = useState(false);
   const runtimeRecoveryRequested = useRef(false);
@@ -2105,13 +2109,30 @@ function Shell() {
     const focusedSessionId = sessionsStore.getState().currentSessionId;
     if (intent?.kind === "subagent" && focusedSessionId !== intent.source.parentSessionId) return;
     if (intent?.kind === "return" && focusedSessionId !== intent.point.childSessionId) return;
+    const generation = ++selectionGenerationRef.current;
+    if (!intent && !preservePlaceholder) {
+      let ownerId: string | null;
+      try {
+        ownerId = await resolveGroupForSession(sessionId, useGroupStore.getState().groups);
+      } catch (error) {
+        if (selectionGenerationRef.current !== generation) return;
+        showToast(`暂时无法确认会话归属，请稍后重试：${friendlyError(error)}`, 6000);
+        if (strict) throw error;
+        return;
+      }
+      if (selectionGenerationRef.current !== generation) return;
+      if (ownerId) {
+        await useGroupStore.getState().select(ownerId);
+        if (selectionGenerationRef.current === generation) handleNavigate("团队群聊");
+        return;
+      }
+    }
     if (!preservePlaceholder && placeholderView === "代码开发" && codingLeaveGuardRef.current) {
       if (!(await codingLeaveGuardRef.current())) {
         if (strict) throw new Error("请先处理代码开发中的未保存内容");
         return;
       }
     }
-    const generation = ++selectionGenerationRef.current;
     let entry = findSessionSummary(sessionId);
     // Subagent child sessions can be created after the last catalog refresh
     // and may live in an isolated worktree. Refresh the global catalog first;
@@ -2932,7 +2953,9 @@ function Shell() {
             </div>
           ) : codingWorkspaceActive ? null : (
             <Suspense fallback={<div className="app__notice" role="status">正在加载界面…</div>}>
-              {placeholderView ? (
+              {placeholderView === "团队群聊" ? (
+                <GroupWorkspace cwd={newSessionTargetCwd} modelId={newSessionModelId} models={models} workspaces={workspaces} onToast={showToast} onOpenSettings={() => openSettings("model")} onOpenKnowledgeBase={() => handleNavigate("知识库")} onOpenOrganization={() => handleNavigate("组织")} />
+              ) : placeholderView ? (
                 <PlaceholderPage
                   {...placeholderProps}
                   label={placeholderView}
@@ -2941,6 +2964,12 @@ function Shell() {
                 />
               ) : currentSessionId ? (
                 <ChatView
+                  onOpenTeamGroup={team => {
+                    if (!currentSessionId) return;
+                    const referenceText = sessionStore.getState().messages.slice(-12).map(message => `${message.role === "user" ? "用户" : "助手"}：${message.parts.filter(part => part.kind === "text").map(part => part.kind === "text" ? part.text : "").join("")}`).join("\n\n").slice(-30000);
+                    useGroupStore.getState().fromTeam(currentSessionId, team, referenceText);
+                    handleNavigate("团队群聊");
+                  }}
                   title={currentTitle}
                   onSend={handleSendCurrent}
                   onSendNow={handleSendNowCurrent}

@@ -23,8 +23,10 @@ vi.mock("../Sidebar", () => ({ Sidebar: ({ onSelect }: { onSelect: (id: string) 
   <>
     <button onClick={() => onSelect("parent")}>打开母任务</button>
     <button onClick={() => onSelect("other")}>打开其他任务</button>
+    <button onClick={() => onSelect("old-group-session")}>打开历史群会话</button>
   </>
 ) }));
+vi.mock("@/features/groups/GroupWorkspace", () => ({ GroupWorkspace: () => <div data-testid="active-group">群聊视图</div> }));
 vi.mock("../ChatView", () => ({ ChatView: (props: ComponentProps<typeof import("../ChatView").ChatView>) => {
   const child = props.title === "母任务" ? "child" : "grandchild";
   return <div>
@@ -49,12 +51,14 @@ import * as client from "@/lib/agent-client";
 import { useSessionsStore } from "@/stores/sessions-store";
 import { useSessionStore } from "@/stores/session-store";
 import { useProjectsStore } from "@/stores/projects-store";
+import { useGroupStore } from "@/features/groups/group-store";
 
 const catalog = [
   { sessionId: "parent", cwd: "/workspace", title: "母任务", currentModelId: "model-a" },
   { sessionId: "child", cwd: "/workspace", title: "子代理记录", currentModelId: "model-a", hidden: true, sessionKind: "subagent" },
   { sessionId: "grandchild", cwd: "/workspace", title: "孙子代理记录", currentModelId: "model-a", hidden: true, sessionKind: "subagent" },
   { sessionId: "other", cwd: "/workspace", title: "其他任务", currentModelId: "model-a" },
+  { sessionId: "old-group-session", cwd: "/workspace", title: "旧成员上下文", currentModelId: "model-a", hidden: true },
 ];
 const auth = { ready: true, runtimeReady: true, synchronized: true, providers: ["model-a"], runtimeModels: ["model-a"], defaultModelId: "model-a" };
 
@@ -71,6 +75,7 @@ beforeEach(() => {
   useSessionsStore.setState(useSessionsStore.getInitialState());
   useSessionStore.setState(useSessionStore.getInitialState());
   useProjectsStore.setState({ ...useProjectsStore.getInitialState(), projects: [] });
+  useGroupStore.setState({ groups: [], current: null, currentId: null });
   vi.mocked(client.agentInit).mockResolvedValue({ ok: true, cwd: "/workspace", auth } as never);
   vi.mocked(client.agentAuthStatus).mockResolvedValue(auth);
   vi.mocked(client.providersList).mockResolvedValue({ providers: [], models: [{ modelId: "model-a", name: "模型 A", providerId: "p" }] } as never);
@@ -80,6 +85,49 @@ beforeEach(() => {
 });
 
 describe("子代理任务层级导航", () => {
+  it("隐藏历史群会话即使已在普通目录中，也会打开所属群聊", async () => {
+    const group = { id:"historical-group",members:[],messages:[],works:[] };
+    vi.mocked(invoke).mockImplementation(async(command) => {
+      if(command === "notification_take_pending_opens") return [];
+      if(command === "group_list") return [group];
+      if(command === "group_owner") return "historical-group";
+      if(command === "group_snapshot") return group;
+      return null;
+    });
+    await start();
+    fireEvent.click(screen.getByRole("button", {name:"打开历史群会话"}));
+    expect(await screen.findByTestId("active-group")).toHaveTextContent("群聊视图");
+    expect(useGroupStore.getState().currentId).toBe("historical-group");
+    expect(client.agentLoadSession).not.toHaveBeenCalledWith("old-group-session",expect.anything());
+  });
+  it("归属查询失败时保留当前页面，允许重试且不按普通会话加载", async () => {
+    vi.mocked(invoke).mockImplementation(async(command) => {
+      if(command === "group_owner") throw new Error("归属数据库暂不可读");
+      return command === "notification_take_pending_opens" ? [] : null;
+    });
+    await start();
+    fireEvent.click(screen.getByRole("button", {name:"打开历史群会话"}));
+    await screen.findByText(/暂时无法确认会话归属/);
+    expect(client.agentLoadSession).not.toHaveBeenCalled();
+    expect(screen.getByText("首页")).toBeInTheDocument();
+  });
+  it("快速切换时忽略晚到的群归属查询，不覆盖新任务", async () => {
+    let resolveOwner!: (group: string) => void;
+    vi.mocked(invoke).mockImplementation(async(command,args) => {
+      if(command === "group_owner" && (args as {sessionId?:string})?.sessionId === "old-group-session")
+        return new Promise(resolve => {resolveOwner=resolve;});
+      if(command === "notification_take_pending_opens" || command === "group_list") return [];
+      return null;
+    });
+    await start();
+    fireEvent.click(screen.getByRole("button",{name:"打开历史群会话"}));
+    fireEvent.click(screen.getByRole("button",{name:"打开其他任务"}));
+    await waitFor(() => expect(screen.getByTestId("active-task")).toHaveTextContent("其他任务"));
+    await act(async () => resolveOwner("historical-group"));
+    expect(screen.queryByTestId("active-group")).toBeNull();
+    expect(screen.getByTestId("active-task")).toHaveTextContent("其他任务");
+    expect(client.agentLoadSession).not.toHaveBeenCalledWith("old-group-session",expect.anything());
+  });
   it("返回母任务并恢复进入时的子代理条目，嵌套时逐级返回", async () => {
     await start();
     fireEvent.click(screen.getByRole("button", { name: "打开母任务" }));

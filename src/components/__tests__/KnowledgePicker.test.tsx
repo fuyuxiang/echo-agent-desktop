@@ -11,6 +11,15 @@ vi.mock("@/lib/agent-client", () => ({
 }));
 
 describe("KnowledgePicker", () => {
+  it("群聊选择保存在群自己的范围内，等待派发时同步到实际成员会话", () => {
+    useKnowledgeStore.getState().setSourceCount(1);
+    render(<KnowledgePicker sessionId="group:a" deferRuntimeSync />);
+    fireEvent.click(screen.getByRole("button", { name: "知识来源，未选择" }));
+    fireEvent.click(screen.getByRole("menuitemcheckbox", { name: /个人知识库/ }));
+    expect(useKnowledgeStore.getState().sessionSources["group:a"]).toEqual(["personal"]);
+    expect(useKnowledgeStore.getState().defaultSources).toEqual([]);
+    expect(setKnowledgeSourcesMock).not.toHaveBeenCalled();
+  });
   it("菜单脱离裁切容器，支持方向键并在 Esc 后归还焦点", async () => {
     const { container } = render(<div style={{ overflow: "hidden" }}><KnowledgePicker /></div>);
     const trigger = screen.getByRole("button", { name: "知识来源，未选择" });

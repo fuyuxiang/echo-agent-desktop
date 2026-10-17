@@ -40,12 +40,15 @@ function sourceLabel(sources: KnowledgeSource[]): string {
 
 export function KnowledgePicker({
   sessionId,
+  deferRuntimeSync = false,
   disabled = false,
   onManage,
   onOpenOrganization,
   onToast,
 }: {
   sessionId?: string;
+  /** Group members attach the selected sources when their queued turn starts. */
+  deferRuntimeSync?: boolean;
   disabled?: boolean;
   onManage?: () => void;
   onOpenOrganization?: () => void;
@@ -117,6 +120,11 @@ export function KnowledgePicker({
       ? nextOrganizationScopeIds
       : [];
     const state = useKnowledgeStore.getState();
+    if (sessionId && deferRuntimeSync) {
+      state.setSessionSources(sessionId, next);
+      state.setSessionOrganizationScopeIds(sessionId, appliedOrganizationScopeIds);
+      return;
+    }
     if (sessionId) {
       const previous = [...selected];
       state.setSessionSources(sessionId, next);

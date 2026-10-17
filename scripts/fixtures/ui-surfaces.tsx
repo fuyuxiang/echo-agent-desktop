@@ -33,6 +33,7 @@ import ExecutionReviewFixture, { executionReviewTeamSnapshot, executionReviewFin
 import { useSessionStore } from "../../src/stores/session-store";
 import { useSessionsStore } from "../../src/stores/sessions-store";
 import { useProjectsStore } from "../../src/stores/projects-store";
+import { useGroupStore } from "../../src/features/groups/group-store";
 import { useMessageQueueStore } from "../../src/stores/message-queue-store";
 import "../../src/styles/global.css";
 import "../../src/styles/app.css";
@@ -133,6 +134,11 @@ if (query.get("surface") === "sidebar-scroll") {
   const variant = query.get("variant") ?? "both";
   const taskCount = ["projects", "short"].includes(variant) ? 2 : 54;
   const projectCount = ["tasks", "short"].includes(variant) ? 2 : 18;
+  useGroupStore.setState({ groups: Array.from({length: Math.min(12, Number(query.get("groups")) || 0)}, (_, index) => ({
+    id:`sidebar-group-${index}`, name:`群聊 ${index + 1}`, goal:"侧栏协作", cwd:"/review/EchoAgent", sourceSessionId:null, sourceTeamId:null,
+    coordinatorId:"coordinator", members:[], messages:[], works:[], decisions:[], archived:false, pinned:false, paused:false,
+    revision:1, updatedAt:12-index, maxCalls:12, tokenBudget:100000,
+  })) });
   useSessionsStore.setState({
     independent: Array.from({ length: taskCount }, (_, index) => ({
       sessionId: `sidebar-task-${index}`,

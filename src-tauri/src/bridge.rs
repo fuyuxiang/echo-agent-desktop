@@ -1128,6 +1128,7 @@ async fn handle_client_message(
         AcpClientMessage::SessionNotification(b) => {
             let update = serialize_session_update(&b.request.update);
             let sid = b.request.session_id.0.as_ref().to_string();
+            crate::groups::observe(&sid,&update,b.request.meta.as_ref().and_then(|m|serde_json::to_value(m).ok()).as_ref());
             // RED evidence comes from the native Runtime channel, not rendered
             // tool-card text or a client-supplied exit code. Resolve the session
             // through its native workspace capability before touching task data.
@@ -2072,6 +2073,7 @@ fn handle_session_notification(app: &AppHandle, params: &Value) {
         .and_then(|v| v.as_str())
         .unwrap_or("");
     tracing::info!(session_id, kind, "received echo.agent/session_notification");
+    crate::groups::observe(session_id,update,params.get("_meta"));
     match kind {
         "turn_completed" => {
             // Durable turn endings arrive through this extension notification,
