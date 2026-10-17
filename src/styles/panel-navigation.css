@@ -9,6 +9,7 @@
 .panel-navigation button:focus-visible { outline: 2px solid var(--echo-brand); outline-offset: 2px; }
 .panel-navigation span { font-size: 0.75rem; opacity: .75; flex-basis: 100%; }
 .capabilities-content { overflow: auto; overscroll-behavior: contain; }
+.capabilities-content.capability-tab { overflow: hidden; }
 .capabilities-section-title { margin: 0; font-size: 1.0625rem; font-weight: 650; color: var(--echo-text-strong); }
 .capabilities-panel--embedded { min-height: 0; }
 .capabilities-panel--embedded .um-scroll:not(.um-scroll--mcp) { padding: 20px 24px 32px; overscroll-behavior: contain; }

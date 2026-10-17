@@ -39,12 +39,10 @@ export function ExpertsTab({ pills, onGoHome, onToast, createExpertRequested, on
   }, [setPendingExpert, onGoHome]);
 
   return (
-    <div className="um-page">
+    <div className="capability-tab">
       {pills && <header className="um-topbar"><div className="um-topbar-left">{pills}</div></header>}
-      <div className="um-scroll">
-        <AssistantsPanel embedded onUseAssistant={handleUseLocal} onToast={onToast}
-          createExpertRequested={createExpertRequested} onCreateExpertRequestHandled={onCreateExpertRequestHandled} />
-      </div>
+      <AssistantsPanel embedded onUseAssistant={handleUseLocal} onToast={onToast}
+        createExpertRequested={createExpertRequested} onCreateExpertRequestHandled={onCreateExpertRequestHandled} />
     </div>
   );
 }

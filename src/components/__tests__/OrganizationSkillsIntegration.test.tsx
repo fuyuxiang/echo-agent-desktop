@@ -83,7 +83,7 @@ describe("专家技能页的组织 Skill 集成", () => {
     render(<SkillsTab pills={<span>页签</span>} />);
 
     expect(await screen.findByText("安全规范")).toBeInTheDocument();
-    expect(screen.getByText("用户全局技能 · ~/.echo-agent/skills")).toBeInTheDocument();
+    expect(screen.getByRole("heading", { name: "已安装技能" })).toBeInTheDocument();
     expect(screen.queryByText("选择来源目录")).not.toBeInTheDocument();
     expect(mocks.skillsList).toHaveBeenCalled();
     expect(screen.getByText("组织周报")).toBeInTheDocument();

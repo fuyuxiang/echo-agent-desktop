@@ -17,6 +17,7 @@ import {
 } from "@/foundation/components/Icon/icons";
 import { pluginsAction, pluginsList } from "@/lib/agent-client";
 import type { PluginEntry } from "@/lib/types";
+import { CapabilityEmptyState, CapabilityError, CapabilityPage } from "./experts-panel/shared/CapabilityPage";
 
 interface PluginsPanelProps {
   /** Current session id (for the plugins/list call). */
@@ -26,9 +27,10 @@ interface PluginsPanelProps {
 
 export function PluginsPanel({ sessionId, onToast }: PluginsPanelProps) {
   const [plugins, setPlugins] = useState<PluginEntry[]>([]);
-  const [loading, setLoading] = useState(false);
+  const [loading, setLoading] = useState(true);
   const [loadError, setLoadError] = useState<string | null>(null);
   const [busy, setBusy] = useState<string | null>(null);
+  const [search, setSearch] = useState("");
   const reloadGeneration = useRef(0);
   const actionInFlight = useRef(false);
   const currentSession = useRef(sessionId);
@@ -95,51 +97,47 @@ export function PluginsPanel({ sessionId, onToast }: PluginsPanelProps) {
 
   const enabledCount = plugins.filter((p) => p.enabled).length;
   const trustedCount = plugins.filter((p) => p.trusted).length;
+  const query = search.trim().toLowerCase();
+  const visible = plugins.filter(plugin => !query || [plugin.name, plugin.description, plugin.root, scopeLabel(plugin.scope)]
+    .some(value => value?.toLowerCase().includes(query)));
 
   return (
-    <div className="plugins-panel">
-      <div className="plugins-panel__header">
-        <h2 className="plugins-panel__title">插件</h2>
+    <CapabilityPage title="已安装插件" className="capability-page--plugins"
+      search={{ value: search, onChange: setSearch, label: "搜索插件", placeholder: "搜索插件…" }}
+      actions={
         <button
-          className="plugins-panel__action-btn"
+          type="button" className="capability-button"
           onClick={() => void reload(true)}
           disabled={loading || busy !== null}
           title="刷新"
         >
           <RefreshCwIcon size="sm" /> 刷新
         </button>
-      </div>
-
-      <div className="plugins-panel__stats">
-        {loadError && plugins.length === 0
+      }
+      summary={loadError && plugins.length === 0
           ? "插件列表未加载"
-          : `${plugins.length} 个插件 · ${enabledCount} 启用 · ${trustedCount} 受信任`}
-      </div>
+          : loading && plugins.length === 0 ? "正在读取插件…" : `${plugins.length} 个插件 · ${enabledCount} 启用 · ${trustedCount} 受信任`}>
 
       {!sessionId && (
-        <p className="plugins-panel__hint">
+        <p className="capability-notice">
           启用或禁用插件需要已打开的任务会话，请先从首页发起任务。
         </p>
       )}
 
       <div className="plugins-panel__list">
         {loadError && (
-          <div className="plugins-panel__load-error" role="alert">
-            <span>插件列表加载失败：{loadError}{plugins.length > 0 ? "。下方保留上次加载的结果。" : ""}</span>
-            <button type="button" className="form-button" onClick={() => void reload(true)} disabled={loading || busy !== null}>重试</button>
-          </div>
+          <CapabilityError onRetry={() => void reload(true)} retrying={loading || busy !== null}>
+            插件列表加载失败：{loadError}{plugins.length > 0 ? "。下方保留上次加载的结果。" : ""}
+          </CapabilityError>
         )}
         {plugins.length === 0 && !loading && !loadError && (
-          <div className="plugins-panel__empty">
-            <PuzzlePieceIcon size="xl" color="var(--echo-text-tertiary)" />
-            <p>暂无插件。</p>
-            <p className="plugins-panel__hint">
-              将本地插件放到 <code>~/.echo-agent/plugins/</code>，或项目的 <code>.echo-agent/plugins/</code>。
-            </p>
-            <p className="plugins-panel__hint">新建任务时会加载本地插件；已有任务可点击「刷新」重新加载。</p>
-          </div>
+          <CapabilityEmptyState icon={<PuzzlePieceIcon size="lg" />} title="暂无插件。"
+            description="支持加载本地插件，安装位置和加载方式见下方说明。" />
         )}
-        {plugins.map((p) => (
+        {plugins.length > 0 && visible.length === 0 && (
+          <CapabilityEmptyState icon={<PuzzlePieceIcon size="lg" />} title={`没有找到与「${search}」匹配的插件`} onClear={() => setSearch("")} />
+        )}
+        {visible.map((p) => (
           <div
             key={p.id ?? p.name}
             className={`plugins-panel__item ${p.enabled ? "" : "plugins-panel__item--muted"}`}
@@ -190,9 +188,14 @@ export function PluginsPanel({ sessionId, onToast }: PluginsPanelProps) {
             </div>
           </div>
         ))}
-        {loading && <div className="plugins-panel__empty">加载中…</div>}
+        {loading && <div className="capability-loading" role="status">加载中…</div>}
       </div>
-    </div>
+      <details className="capability-help">
+        <summary>本地插件加载说明</summary>
+        <p>默认用户插件目录为 <code>~/.echo-agent/plugins/</code>，项目插件目录为 <code>.echo-agent/plugins/</code>；自定义数据目录下使用对应的 <code>plugins/</code> 文件夹。</p>
+        <p>新建任务时会加载本地插件；已有任务可点击「刷新」重新加载。</p>
+      </details>
+    </CapabilityPage>
   );
 }
 

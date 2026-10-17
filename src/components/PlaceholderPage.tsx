@@ -274,7 +274,7 @@ export function PlaceholderPage({
     return (
       <DeferredPanel>
         <div className="panel-section panel-section--capabilities"><PanelNavigation active={label} onNavigate={onNavigate} />
-          <div className="capabilities-content">
+          <div className="capabilities-content capability-tab">
             <PluginsPanel sessionId={sessionId} onToast={onToast} />
           </div>
         </div>

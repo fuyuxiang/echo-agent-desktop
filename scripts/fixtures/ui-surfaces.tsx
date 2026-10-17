@@ -55,6 +55,31 @@ if (query.get("surface") === "automation-flow" && automationFlowRemoved) {
   useAutomationEditorStore.getState().begin(draftFromAutomation(automationFlowTask), automationFlowTask);
 }
 let agents: unknown[] = [];
+const extensionState = query.get("extensionState");
+const extensionCount = extensionState === "long" ? 48 : ["populated", "error"].includes(extensionState ?? "") ? 3 : 0;
+const extensionNames = ["需求评审", "文档整理", "数据分析"];
+const extensionName = (index: number) => `${extensionNames[index % extensionNames.length]} ${String(index + 1).padStart(2, "0")}`;
+if (extensionCount) agents = Array.from({ length: extensionCount }, (_, index) => ({
+  name: extensionName(index), description: "检查工作目标与交付结果，整理可以继续使用的建议。", scope: "user",
+  path: `/review/agents/expert-${index}.md`, raw: "检查工作目标与交付结果。", modelTags: ["default"], avatar: index % 20 + 1,
+}));
+let extensionSkills = Array.from({ length: extensionCount }, (_, index) => ({
+  name: `review-skill-${index}`, displayName: extensionName(index), description: "梳理需求、检查实现并生成可验证的交付报告。",
+  scope: index % 2 ? "plugin" : "user", enabled: true, path: `/review/skills/skill-${index}/SKILL.md`,
+}));
+let extensionPlugins = Array.from({ length: extensionCount }, (_, index) => ({
+  id: `user/review-${index}`, name: extensionName(index), description: "提供任务所需的技能、专家与工具。",
+  root: `/review/plugins/plugin-${index}`, scope: "user", enabled: true, trusted: true,
+  version: "1.0.0", skillCount: 2, agentCount: 1, mcpServerCount: 1,
+}));
+let extensionConnectors = Array.from({ length: extensionCount }, (_, index) => ({
+  name: `review-mcp-${index}`, displayName: extensionName(index), transport: "stdio", target: `review-tool-${index}`,
+  enabled: true, source: "user", status: "ready", live: true, editable: true, setupValues: {}, args: [], env: {},
+  tools: [{ name: "review", displayName: "检查交付结果", description: "检查需求和产物的一致性。", enabled: true }],
+}));
+let extensionConfig = JSON.stringify({ mcpServers: { "review-tool": { command: "review-tool" } } }, null, 2);
+const extensionAttempts: Record<string, number> = {};
+if (extensionState && extensionCount) useSessionStore.getState().setSession("review-extension-session");
 let rules: unknown[] = [];
 const orgUser = { id: "review-user", username: "review", displayName: "界面检查", role: "member", clearance: 1 };
 const orgScopes = [
@@ -140,6 +165,10 @@ Object.assign(window, {
     unregisterCallback: (id: number) => callbacks.delete(id),
     metadata: { currentWindow: { label: "main" }, currentWebview: { label: "main" } },
     invoke: async (command: string, args: any = {}) => {
+      if (extensionState === "error" && ["agents_list", "skills_list", "plugins_list", "mcp_list"].includes(command)) {
+        extensionAttempts[command] = (extensionAttempts[command] ?? 0) + 1;
+        if (extensionAttempts[command] === 1) throw new Error("隔离验收：列表暂不可用");
+      }
       switch (command) {
         case "team_snapshot": {
           if (query.get("teamState") === "error") throw new Error("隔离验收：团队快照读取失败");
@@ -206,12 +235,25 @@ Object.assign(window, {
         case "weixin_qr_start": return { qrUrl: "https://weixin.qq.com/x/review-qr" };
         case "weixin_qr_poll": return { status: "expired", connected: false };
         case "agents_list": return agents;
+        case "skills_list": return extensionSkills;
+        case "skills_toggle": extensionSkills = extensionSkills.map(skill => skill.name === args.name ? { ...skill, enabled: args.enabled } : skill); return;
+        case "mcp_list": return extensionConnectors;
+        case "mcp_toggle": extensionConnectors = extensionConnectors.map(server => server.name === args.name ? { ...server, enabled: args.enabled } : server); return { warnings: [] };
+        case "mcp_delete": extensionConnectors = extensionConnectors.filter(server => server.name !== args.name); return { warnings: [] };
+        case "mcp_toggle_tool": extensionConnectors = extensionConnectors.map(server => server.name === args.serverName ? { ...server, tools: server.tools.map(tool => tool.name === args.toolName ? { ...tool, enabled: args.enabled } : tool) } : server); return;
+        case "mcp_config_path": return "/review/mcp.json";
+        case "mcp_config_read": return { filePath: "/review/mcp.json", content: extensionConfig };
+        case "mcp_config_save": {
+          extensionConfig = args.content;
+          return { appliedLive: Boolean(args.sessionId), serverCount: Object.keys(JSON.parse(extensionConfig).mcpServers ?? {}).length, warnings: [] };
+        }
         case "agents_template": return JSON.stringify(args);
         case "agents_save": {
           const entry = { ...JSON.parse(args.raw), name: args.name, path: `/review/${args.name}.md`, scope: "user", raw: args.raw };
           agents = [...agents, entry]; return entry;
         }
-        case "plugins_list": return { plugins: [] };
+        case "plugins_list": return { plugins: extensionPlugins };
+        case "plugins_action": extensionPlugins = extensionPlugins.map(plugin => plugin.id === args.action.pluginId ? { ...plugin, enabled: args.action.type === "enable" } : plugin); return { status: "success" };
         case "tasks_list": return [{ id: "review-task", source: "task", description: "执行代码验证和生成报告", status: "running", sessionId: args.sessionId }];
         case "org_session": return { loggedIn: true, organizationMemoryEnabled: true, serverUrl: "https://10.132.19.82:8787", user: orgUser, bootstrap: { apiVersion: 1, user: orgUser, scopes: orgScopes, policy: { allowPersonalCloud: true, allowSkillSubmission: true }, serverTime: 1 } };
         case "org_list_scopes": return orgScopes;
@@ -323,7 +365,14 @@ function Fixture() {
     <HomePage onSend={() => {}} streaming={false} apiReady={query.get("state") !== "unconfigured"} creatingSession={query.get("state") === "loading"} sendError={query.get("state") === "error" ? "会话创建失败，请重试" : null} onOpenSettings={() => {}} onPlaceholder={() => {}} models={[{ id: "review/model", label: "评审模型", providerId: "review", providerKind: "custom" }]} modelId="review/model" cwd="/review/EchoAgent" />
   </div>;
   if (surface === "page") return <PlaceholderPage label={label} onNavigate={setLabel} cwd="/review/EchoAgent" />;
-  if (surface === "capabilities") return <PlaceholderPage label={label} onNavigate={setLabel} />;
+  if (surface === "capabilities") {
+    const content = <PlaceholderPage label={label} onNavigate={setLabel} sessionId={extensionCount ? "review-extension-session" : undefined} />;
+    if (query.get("extensionShell") !== "1") return content;
+    return <div className="app"><div className="app__body">
+      <Sidebar activeNav={label} onNewSession={() => {}} onNavigate={setLabel} onOpenSettings={() => {}} onOpenSearch={() => {}} onSelect={() => {}} />
+      <main className="app__main">{content}</main>
+    </div></div>;
+  }
   if (surface === "expert-entry") return <>
     {expertPageOpen ? (
       <div style={{ height: "100%" }}>

@@ -11,6 +11,7 @@ import { validateSidebarScroll } from "./validate-sidebar-scroll.mjs";
 import { validateOfficeExportMenu } from "./validate-office-export-menu.mjs";
 import { validateQueueUi } from "./validate-queue-ui.mjs";
 import { validateAutomationEditorUi } from "./validate-automation-editor-ui.mjs";
+import { validateExtensionLayouts } from "./validate-extension-layout.mjs";
 
 const output = reviewOutput(mkdtempSync(join(tmpdir(), "echo-ui-surfaces-")));
 console.log(`UI screenshots: ${output}`);
@@ -213,7 +214,7 @@ page.setDefaultNavigationTimeout(60000);
         assert.equal(await page.getByRole("tablist", { name: "扩展分类" }).count(), 0);
         const template = await page.getByText("推荐模板", { exact: true }).boundingBox();
         assert.ok(template && template.y < height - 100, "templates pushed below first screen");
-        assert.equal(await page.locator(".colleagues-panel-shell").evaluate(element => getComputedStyle(element).overflowY), "visible");
+        assert.equal(await page.locator(".capability-page").evaluate(element => getComputedStyle(element).overflowY), "auto");
       }
       if (surface === "coding") {
         await page.getByRole("button", { name: "切换开发任务" }).click();
@@ -301,6 +302,7 @@ page.setDefaultNavigationTimeout(60000);
 
   }
   await page.getByRole("heading", { name: "我的专家" }).waitFor();
+  layouts += await validateExtensionLayouts(page, output);
 
   await page.setViewportSize({ width: 1440, height: 900 });
   await page.goto("http://127.0.0.1:1439/__ui-review?surface=expert-entry");

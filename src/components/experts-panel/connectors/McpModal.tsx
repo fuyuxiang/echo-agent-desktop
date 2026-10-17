@@ -11,6 +11,7 @@ import type { McpServerEntry } from "@/lib/types";
 import { McpConfigEditor } from "./McpConfigEditor";
 import { useModalFocus } from "@/lib/use-modal-focus";
 import { useAppDialog } from "../../AppDialog";
+import { CapabilityEmptyState, CapabilityError, CapabilityPage } from "../shared/CapabilityPage";
 
 /** MCP management with persisted state, live health and per-server tool details. */
 export function McpModal({
@@ -24,7 +25,7 @@ export function McpModal({
 }) {
   const [editing, setEditing] = useState(initialEditing);
   const [servers, setServers] = useState<McpServerEntry[]>([]);
-  const [loading, setLoading] = useState(false);
+  const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
   const [search, setSearch] = useState("");
   const [error, setError] = useState("");
@@ -235,16 +236,177 @@ export function McpModal({
     }
   };
 
-  const content = (
-      <div
-        ref={dialogRef}
-        className={`mcp-modal${embedded ? " mcp-modal--embedded" : ""}`}
-        onClick={(e) => e.stopPropagation()}
-        role={embedded ? undefined : "dialog"}
-        aria-modal={embedded ? undefined : "true"}
-        aria-label={embedded ? undefined : "MCP 服务管理"}
-        tabIndex={embedded ? undefined : -1}
-      >
+  const listContent = (
+    <>
+      {error && <CapabilityError onRetry={() => void reload(true)} retrying={loading || refreshing}>
+        {error}{servers.length > 0 ? "。下方保留上次加载的结果。" : ""}
+      </CapabilityError>}
+
+      {loading && servers.length === 0 ? (
+        <div className="capability-loading" role="status">加载中…</div>
+      ) : error && servers.length === 0 ? null : servers.length === 0 ? (
+        <CapabilityEmptyState icon={<McpIcon size="lg" />}
+          title={embedded ? "还没有已配置的连接器" : "暂无 MCP 服务"}
+          description={embedded ? "点击「配置连接器」连接外部工具与服务，配置可随时保存。" : "点击「配置 MCP」连接外部工具与服务，配置可随时保存。"} />
+      ) : filtered.length === 0 ? (
+        <CapabilityEmptyState icon={<McpIcon size="lg" />}
+          title={`没有找到与「${search}」匹配的连接器`} onClear={() => setSearch("")} />
+      ) : (
+        <div className="mcp-list">
+          {filtered.map((server) => {
+            const state = statusOf(server);
+            const isExpanded = expanded === server.name;
+            return (
+              <div key={server.name} className={`mcp-item-wrap${isExpanded ? " mcp-item-wrap--expanded" : ""}`}>
+                <div className="mcp-item">
+                  <button type="button" className="mcp-item-main" aria-expanded={isExpanded}
+                    onClick={() => setExpanded(isExpanded ? null : server.name)}>
+                    <span className={`mcp-dot mcp-dot--${state.tone}`} />
+                    <div className="mcp-item-info">
+                      <div className="mcp-item-name">
+                        {server.displayName || server.name}
+                        {server.displayName && <code>{server.name}</code>}
+                      </div>
+                      <div className="mcp-item-meta">
+                        <span>{transportLabel(server.transport)}</span>
+                        <span>·</span>
+                        <span className={`mcp-state mcp-state--${state.tone}`}>{state.label}</span>
+                        <span>·</span>
+                        <span>{server.tools.length} 个工具</span>
+                      </div>
+                      {server.target && <div className="mcp-item-target" title={server.target}>{server.target}</div>}
+                    </div>
+                  </button>
+                  {server.authRequired && (
+                    <button type="button" className="um-btn um-btn--primary"
+                      aria-label={`授权 MCP 服务 ${server.displayName || server.name}`}
+                      disabled={mutating !== null || !server.enabled || server.setupRequired}
+                      onClick={() => void handleAuthorize(server)}>
+                      {mutating === `auth:${server.name}` ? "等待浏览器授权…" : "授权连接"}
+                    </button>
+                  )}
+                  <label className="sk-toggle" title={server.enabled ? "已启用" : "已停用"}>
+                    <input type="checkbox" checked={server.enabled}
+                      aria-label={`${server.enabled ? "停用" : "启用"} MCP 服务 ${server.displayName || server.name}`}
+                      disabled={mutating !== null || server.setupRequired}
+                      onChange={() => void handleToggle(server, !server.enabled)} />
+                    <span className="sk-toggle-track"><span className="sk-toggle-thumb" /></span>
+                  </label>
+                  {server.editable && (
+                    <button type="button" className="sk-inst-del" title="删除用户配置"
+                      aria-label={`删除 MCP 服务 ${server.displayName || server.name}`}
+                      disabled={mutating !== null}
+                      onClick={() => void handleDelete(server)}><DeleteIcon size="sm" /></button>
+                  )}
+                </div>
+                {authError?.name === server.name && <div className="ec-error" role="alert">授权失败：{authError.message}。可点击「授权连接」重试。</div>}
+                {isExpanded && (
+                  <div className="mcp-item-details">
+                    <div className="mcp-detail-grid">
+                      <span>来源</span><strong>{server.source || "本地"}{server.vendor ? ` · ${server.vendor}` : ""}</strong>
+                      <span>运行方式</span><strong>{server.live ? "当前会话已加载" : "已持久化，等待会话加载"}</strong>
+                    </div>
+                    {diagnostics[server.name]?.detail && (
+                      <div className="mcp-diagnostic-detail">
+                        <strong>{diagnostics[server.name].reason || "runtime"}</strong>
+                        <span>{diagnostics[server.name].detail}</span>
+                      </div>
+                    )}
+                    {server.setup && server.setup.fields.length > 0 && (
+                      <div className="mcp-setup-form">
+                        <strong>{server.setupRequired ? "完成服务配置" : "服务配置"}</strong>
+                        {server.setup.fields.map((field) => (
+                          <label key={field.id}>
+                            <span>{field.label}{field.required ? " *" : ""}</span>
+                            <select
+                              value={setupDrafts[server.name]?.[field.id]
+                                ?? server.setupValues[field.id]
+                                ?? field.default
+                                ?? ""}
+                              onChange={(event) => setSetupDrafts((current) => ({
+                                ...current,
+                                [server.name]: {
+                                  ...current[server.name],
+                                  [field.id]: event.target.value,
+                                },
+                              }))}
+                            >
+                              <option value="">请选择</option>
+                              {field.options.map((option) => (
+                                <option key={option.value} value={option.value}>{option.label}</option>
+                              ))}
+                            </select>
+                          </label>
+                        ))}
+                        <button type="button" className="um-btn um-btn--primary"
+                          disabled={mutating !== null}
+                          onClick={() => void handleSetup(server)}>
+                          {mutating === `setup:${server.name}` ? "应用中…" : server.setupRequired ? "应用并启动" : "更新配置"}
+                        </button>
+                      </div>
+                    )}
+                    {server.tools.length > 0 ? (
+                      <div className="mcp-tools">
+                        {server.tools.map((tool) => (
+                          <div key={tool.name} className={`mcp-tool${tool.enabled ? "" : " mcp-tool--disabled"}`}>
+                            <div>
+                              <strong>{tool.displayName || tool.name}</strong>
+                              {tool.description && <span>{tool.description}</span>}
+                            </div>
+                            <label className="sk-toggle mcp-tool-toggle" title="仅影响当前会话">
+                              <input type="checkbox" checked={tool.enabled}
+                                aria-label={`${tool.enabled ? "停用" : "启用"}工具 ${tool.displayName || tool.name}`}
+                                disabled={mutating !== null}
+                                onChange={() => void handleToolToggle(server, tool.name, !tool.enabled)} />
+                              <span className="sk-toggle-track"><span className="sk-toggle-thumb" /></span>
+                            </label>
+                          </div>
+                        ))}
+                      </div>
+                    ) : (
+                      <div className="mcp-no-tools">
+                        {server.live ? "当前未获取到工具，可点击「刷新诊断」重试" : "创建会话后将完成握手并列出工具"}
+                      </div>
+                    )}
+                  </div>
+                )}
+              </div>
+            );
+          })}
+        </div>
+      )}
+    </>
+  );
+  const summary = `${servers.length} 个连接器 · ${servers.reduce((sum, server) => sum + server.tools.length, 0)} 个工具`;
+  const editor = <McpConfigEditor embedded={embedded} onBack={() => setEditing(false)}
+    onSaved={() => void reload(true)} onToast={onToast} />;
+
+  if (embedded) {
+    if (editing) return editor;
+    return <CapabilityPage title="已配置连接器" className="capability-page--connectors"
+      search={{ value: search, onChange: setSearch, label: "搜索连接器", placeholder: "搜索名称、命令或 URL…" }}
+      actions={<>
+        <button type="button" className="capability-button" aria-label="刷新诊断" title="重新检查连接状态"
+          disabled={loading || refreshing || mutating !== null} onClick={() => void reload(true)}>
+          <RefreshCwIcon size="sm" /><span>{refreshing ? "诊断中…" : "刷新"}</span>
+        </button>
+        <button type="button" className="capability-button capability-button--primary" disabled={mutating !== null} onClick={() => setEditing(true)}>
+          <ConfigureIcon size="sm" /><span>配置连接器</span>
+        </button>
+      </>}
+      summary={<>
+        <span>{loading && servers.length === 0 ? "正在读取连接器…" : error && servers.length === 0 ? "连接器列表未加载" : summary}</span>
+        <span>配置会保存到本机，有活动任务时立即应用。</span>
+      </>}>
+      {listContent}
+      {dialog}
+    </CapabilityPage>;
+  }
+
+  return (
+    <div className="modal-overlay mcp-overlay" onClick={onClose}>
+      <div ref={dialogRef} className="mcp-modal" onClick={(event) => event.stopPropagation()}
+        role="dialog" aria-modal="true" aria-label="MCP 服务管理" tabIndex={-1}>
         <div className="mcp-modal-head">
           <div className="mcp-modal-titlewrap">
             <span className="mcp-modal-glyph"><McpIcon size="md" /></span>
@@ -254,199 +416,34 @@ export function McpModal({
             </div>
           </div>
           <div className="mcp-modal-headright">
-            {!editing && (
-              <>
-                <button type="button" className="um-btn um-btn--grey"
-                  disabled={refreshing} onClick={() => void reload(true)}>
-                  <RefreshCwIcon size="sm" /><span>{refreshing ? "诊断中…" : "刷新诊断"}</span>
-                </button>
-                <button type="button" className="um-btn um-btn--grey" onClick={() => setEditing(true)}>
-                  <ConfigureIcon size="sm" /><span>配置 MCP</span>
-                </button>
-              </>
-            )}
-            {!embedded && (
-              <button type="button" className="mcp-modal-close" onClick={onClose} aria-label="关闭" data-modal-initial-focus>
-                <XCloseIcon size="md" />
+            {!editing && <>
+              <button type="button" className="um-btn um-btn--grey" disabled={refreshing} onClick={() => void reload(true)}>
+                <RefreshCwIcon size="sm" /><span>{refreshing ? "诊断中…" : "刷新诊断"}</span>
               </button>
-            )}
+              <button type="button" className="um-btn um-btn--grey" onClick={() => setEditing(true)}>
+                <ConfigureIcon size="sm" /><span>配置 MCP</span>
+              </button>
+            </>}
+            <button type="button" className="mcp-modal-close" onClick={onClose} aria-label="关闭" data-modal-initial-focus>
+              <XCloseIcon size="md" />
+            </button>
           </div>
         </div>
-
         <div className="mcp-modal-body">
-          {editing ? (
-            <McpConfigEditor onBack={() => setEditing(false)}
-              onSaved={() => void reload(true)} onToast={onToast} />
-          ) : (
-            <div className="mcp-panel">
-              <div className="mcp-panel-searchrow">
-                <div className="um-search um-search--flex">
-                  <SearchIcon size="sm" className="um-search-icon" />
-                  <input className="um-search-input" value={search} placeholder="搜索名称、命令或 URL…"
-                    aria-label="搜索 MCP 服务"
-                    onChange={(e) => setSearch(e.target.value)} />
-                </div>
-                <span className="mcp-summary">{servers.length} 个服务 · {servers.reduce((sum, s) => sum + s.tools.length, 0)} 个工具</span>
+          {editing ? editor : <div className="mcp-panel">
+            <div className="mcp-panel-searchrow">
+              <div className="um-search um-search--flex">
+                <SearchIcon size="sm" className="um-search-icon" />
+                <input className="um-search-input" value={search} placeholder="搜索名称、命令或 URL…"
+                  aria-label="搜索 MCP 服务" onChange={(event) => setSearch(event.target.value)} />
               </div>
-
-              {error && (
-                <div className="mcp-load-error">
-                  <span>{error}</span>
-                  <button type="button" onClick={() => void reload(true)}>重试</button>
-                </div>
-              )}
-
-              {loading ? (
-                <div className="ec-loading">加载中…</div>
-              ) : error && servers.length === 0 ? null : servers.length === 0 ? (
-                <div className="mcp-empty">
-                  <McpIcon size="xl" className="mcp-empty-icon" />
-                  <div className="mcp-empty-title">暂无 MCP 服务</div>
-                  <div className="mcp-empty-hint">可直接配置，不需要先创建模型会话</div>
-                  <button type="button" className="um-btn um-btn--primary" onClick={() => setEditing(true)}>
-                    添加 MCP 服务
-                  </button>
-                </div>
-              ) : filtered.length === 0 ? (
-                <div className="mcp-empty">
-                  <div className="mcp-empty-hint">没有匹配「{search}」的服务</div>
-                </div>
-              ) : (
-                <div className="mcp-list">
-                  {filtered.map((server) => {
-                    const state = statusOf(server);
-                    const isExpanded = expanded === server.name;
-                    return (
-                      <div key={server.name} className={`mcp-item-wrap${isExpanded ? " mcp-item-wrap--expanded" : ""}`}>
-                        <div className="mcp-item">
-                          <button type="button" className="mcp-item-main"
-                            onClick={() => setExpanded(isExpanded ? null : server.name)}>
-                            <span className={`mcp-dot mcp-dot--${state.tone}`} />
-                            <div className="mcp-item-info">
-                              <div className="mcp-item-name">
-                                {server.displayName || server.name}
-                                {server.displayName && <code>{server.name}</code>}
-                              </div>
-                              <div className="mcp-item-meta">
-                                <span>{transportLabel(server.transport)}</span>
-                                <span>·</span>
-                                <span className={`mcp-state mcp-state--${state.tone}`}>{state.label}</span>
-                                <span>·</span>
-                                <span>{server.tools.length} 个工具</span>
-                              </div>
-                              {server.target && <div className="mcp-item-target" title={server.target}>{server.target}</div>}
-                            </div>
-                          </button>
-                          {server.authRequired && (
-                            <button type="button" className="um-btn um-btn--primary"
-                              aria-label={`授权 MCP 服务 ${server.displayName || server.name}`}
-                              disabled={mutating !== null || !server.enabled || server.setupRequired}
-                              onClick={() => void handleAuthorize(server)}>
-                              {mutating === `auth:${server.name}` ? "等待浏览器授权…" : "授权连接"}
-                            </button>
-                          )}
-                          <label className="sk-toggle" title={server.enabled ? "已启用" : "已停用"}>
-                            <input type="checkbox" checked={server.enabled}
-                              aria-label={`${server.enabled ? "停用" : "启用"} MCP 服务 ${server.displayName || server.name}`}
-                              disabled={mutating !== null || server.setupRequired}
-                              onChange={() => void handleToggle(server, !server.enabled)} />
-                            <span className="sk-toggle-track"><span className="sk-toggle-thumb" /></span>
-                          </label>
-                          {server.editable && (
-                            <button type="button" className="sk-inst-del" title="删除用户配置"
-                              aria-label={`删除 MCP 服务 ${server.displayName || server.name}`}
-                              disabled={mutating !== null}
-                              onClick={() => void handleDelete(server)}><DeleteIcon size="sm" /></button>
-                          )}
-                        </div>
-                        {authError?.name === server.name && <div className="ec-error" role="alert">授权失败：{authError.message}。可点击「授权连接」重试。</div>}
-                        {isExpanded && (
-                          <div className="mcp-item-details">
-                            <div className="mcp-detail-grid">
-                              <span>来源</span><strong>{server.source || "本地"}{server.vendor ? ` · ${server.vendor}` : ""}</strong>
-                              <span>运行方式</span><strong>{server.live ? "当前会话已加载" : "已持久化，等待会话加载"}</strong>
-                            </div>
-                            {diagnostics[server.name]?.detail && (
-                              <div className="mcp-diagnostic-detail">
-                                <strong>{diagnostics[server.name].reason || "runtime"}</strong>
-                                <span>{diagnostics[server.name].detail}</span>
-                              </div>
-                            )}
-                            {server.setup && server.setup.fields.length > 0 && (
-                              <div className="mcp-setup-form">
-                                <strong>{server.setupRequired ? "完成服务配置" : "服务配置"}</strong>
-                                {server.setup.fields.map((field) => (
-                                  <label key={field.id}>
-                                    <span>{field.label}{field.required ? " *" : ""}</span>
-                                    <select
-                                      value={setupDrafts[server.name]?.[field.id]
-                                        ?? server.setupValues[field.id]
-                                        ?? field.default
-                                        ?? ""}
-                                      onChange={(event) => setSetupDrafts((current) => ({
-                                        ...current,
-                                        [server.name]: {
-                                          ...current[server.name],
-                                          [field.id]: event.target.value,
-                                        },
-                                      }))}
-                                    >
-                                      <option value="">请选择</option>
-                                      {field.options.map((option) => (
-                                        <option key={option.value} value={option.value}>{option.label}</option>
-                                      ))}
-                                    </select>
-                                  </label>
-                                ))}
-                                <button type="button" className="um-btn um-btn--primary"
-                                  disabled={mutating !== null}
-                                  onClick={() => void handleSetup(server)}>
-                                  {mutating === `setup:${server.name}` ? "应用中…" : server.setupRequired ? "应用并启动" : "更新配置"}
-                                </button>
-                              </div>
-                            )}
-                            {server.tools.length > 0 ? (
-                              <div className="mcp-tools">
-                                {server.tools.map((tool) => (
-                                  <div key={tool.name} className={`mcp-tool${tool.enabled ? "" : " mcp-tool--disabled"}`}>
-                                    <div>
-                                      <strong>{tool.displayName || tool.name}</strong>
-                                      {tool.description && <span>{tool.description}</span>}
-                                    </div>
-                                    <label className="sk-toggle mcp-tool-toggle" title="仅影响当前会话">
-                                      <input type="checkbox" checked={tool.enabled}
-                                        aria-label={`${tool.enabled ? "停用" : "启用"}工具 ${tool.displayName || tool.name}`}
-                                        disabled={mutating !== null}
-                                        onChange={() => void handleToolToggle(server, tool.name, !tool.enabled)} />
-                                      <span className="sk-toggle-track"><span className="sk-toggle-thumb" /></span>
-                                    </label>
-                                  </div>
-                                ))}
-                              </div>
-                            ) : (
-                              <div className="mcp-no-tools">
-                                {server.live ? "当前未获取到工具，可点击「刷新诊断」重试" : "创建会话后将完成握手并列出工具"}
-                              </div>
-                            )}
-                          </div>
-                        )}
-                      </div>
-                    );
-                  })}
-                </div>
-              )}
+              <span className="mcp-summary">{summary}</span>
             </div>
-          )}
+            {listContent}
+          </div>}
         </div>
         {dialog}
       </div>
-  );
-
-  if (embedded) return content;
-
-  return (
-    <div className="modal-overlay mcp-overlay" onClick={onClose}>
-      {content}
     </div>
   );
 }

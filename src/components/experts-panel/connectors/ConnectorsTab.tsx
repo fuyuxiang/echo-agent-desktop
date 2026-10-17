@@ -13,13 +13,11 @@ interface Props {
  */
 export function ConnectorsTab({ pills, onToast }: Props) {
   return (
-    <div className="um-page">
+    <div className="capability-tab">
       {pills && <header className="um-topbar">
         <div className="um-topbar-left">{pills}</div>
       </header>}
-      <div className="um-scroll um-scroll--mcp">
         <McpModal embedded onClose={() => {}} onToast={onToast} />
-      </div>
     </div>
   );
 }

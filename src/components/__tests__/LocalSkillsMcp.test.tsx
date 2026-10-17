@@ -219,8 +219,8 @@ describe("本地 Skills / MCP 完整流程", () => {
   it("连接器页直接展示全局 MCP 管理，不再要求额外跳转", async () => {
     render(<ConnectorsTab pills={<span>连接器页签</span>} />);
 
-    expect(await screen.findByText("暂无 MCP 服务")).toBeInTheDocument();
-    expect(screen.getByText("MCP 服务管理")).toBeInTheDocument();
+    expect(await screen.findByText("还没有已配置的连接器")).toBeInTheDocument();
+    expect(screen.getByRole("heading", { name: "已配置连接器" })).toBeInTheDocument();
     expect(screen.queryByText("查看全局连接器")).not.toBeInTheDocument();
     expect(document.querySelector(".modal-overlay")).not.toBeInTheDocument();
   });

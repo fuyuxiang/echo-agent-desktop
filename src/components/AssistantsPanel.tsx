@@ -12,7 +12,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import {
   AssistantIcon,
   AddCircleIcon,
-  SearchIcon,
+  RefreshCwIcon,
   SparklesIcon,
   Code2Icon,
   FileTextIcon,
@@ -36,6 +36,7 @@ import type { AgentEntry } from "@/lib/types";
 import { useModalFocus } from "@/lib/use-modal-focus";
 import { useUnsavedClose } from "@/lib/use-unsaved-close";
 import { useAppDialog } from "./AppDialog";
+import { CapabilityEmptyState, CapabilityError, CapabilityPage } from "./experts-panel/shared/CapabilityPage";
 
 const AVATAR_PRESETS: { bg: string; emoji: string }[] = [
   { bg: "#FF6B9D", emoji: "🌸" },
@@ -132,7 +133,7 @@ const blankExpertDraft = (): EditorDraft => ({
 export function AssistantsPanel({ onUseAssistant, onToast, embedded = false, createExpertRequested, onCreateExpertRequestHandled }: AssistantsPanelProps) {
   const [searchQuery, setSearchQuery] = useState("");
   const [userAssistants, setUserAssistants] = useState<AgentEntry[]>([]);
-  const [loading, setLoading] = useState(false);
+  const [loading, setLoading] = useState(true);
   const [loadError, setLoadError] = useState<string | null>(null);
   const [editing, setEditing] = useState<EditorDraft | null>(null);
   const [profileAgent, setProfileAgent] = useState<AgentEntry | null>(null);
@@ -245,12 +246,13 @@ export function AssistantsPanel({ onUseAssistant, onToast, embedded = false, cre
     });
   }, [onToast, reload, requestConfirmation]);
 
+  const query = searchQuery.trim().toLowerCase();
   const filteredTemplates = ASSISTANT_TEMPLATES.filter((t) =>
-    t.name.toLowerCase().includes(searchQuery.toLowerCase()) ||
-    t.description.toLowerCase().includes(searchQuery.toLowerCase()));
+    t.name.toLowerCase().includes(query) ||
+    t.description.toLowerCase().includes(query));
   const filteredAssistants = userAssistants.filter((a) =>
-    a.name.toLowerCase().includes(searchQuery.toLowerCase()) ||
-    (a.description ?? "").toLowerCase().includes(searchQuery.toLowerCase()));
+    a.name.toLowerCase().includes(query) ||
+    (a.description ?? "").toLowerCase().includes(query));
 
   const getStatusVariant = useCallback((_agent: AgentEntry): StatusVariant => "idle", []);
 
@@ -270,51 +272,32 @@ export function AssistantsPanel({ onUseAssistant, onToast, embedded = false, cre
   }
 
   return (
-    <div className={`colleagues-panel-shell${embedded ? " colleagues-panel-shell--embedded" : ""}`}>
+    <>
+    <CapabilityPage title="我的专家" className={embedded ? "capability-page--experts capability-page--embedded" : "capability-page--experts"}
+      search={{ value: searchQuery, onChange: setSearchQuery, label: "搜索专家", placeholder: "搜索专家…" }}
+      actions={<>
+        <button type="button" className="capability-button" disabled={loading} onClick={() => void reload()} aria-label="刷新专家" title="刷新专家">
+          <RefreshCwIcon size="sm" /><span>刷新</span>
+        </button>
+        <button type="button" className="capability-button capability-button--primary" onClick={() => setEditing(blankExpertDraft())}>
+          <AddCircleIcon size="sm" /><span>创建专家</span>
+        </button>
+      </>}
+      summary={loading && userAssistants.length === 0 ? "正在读取专家…" : loadError && userAssistants.length === 0 ? "专家列表未加载" : `${userAssistants.length} 个专家`}>
       <div className="colleagues-panel colleagues-panel--dashboard">
-        {/* Section Header */}
         <div className="colleagues-panel-section">
-          <div className="colleagues-panel-section-header colleagues-panel-section-header--dashboard">
-            <h2 className="colleagues-panel-section-title">我的专家</h2>
-            <div className="colleagues-panel-section-actions">
-              <div className="colleagues-panel-search-wrap">
-                <SearchIcon size="sm" className="colleagues-panel-search-icon" />
-                <input
-                  type="text"
-                  className="colleagues-panel-search-input"
-                  aria-label="搜索专家"
-                  placeholder="搜索专家..."
-                  value={searchQuery}
-                  onChange={(e) => setSearchQuery(e.target.value)}
-                />
-              </div>
-              <button
-                className="colleagues-panel-create-btn"
-                onClick={() => setEditing(blankExpertDraft())}
-              >
-                <AddCircleIcon size="sm" />
-                <span>创建专家</span>
-              </button>
-            </div>
-          </div>
-
           {/* My Assistants Cards */}
           {loading && filteredAssistants.length === 0 && (
-            <div className="colleagues-panel-state">加载中…</div>
+            <div className="capability-loading" role="status">加载中…</div>
           )}
           {loadError && (
-            <div className="panel-inline-error" role="alert">
-              <span>专家列表加载失败：{loadError}</span>
-              <button type="button" onClick={() => void reload()} disabled={loading}>
-                {loading ? "重试中…" : "重试"}
-              </button>
-            </div>
+            <CapabilityError onRetry={() => void reload()} retrying={loading}>专家列表加载失败：{loadError}{userAssistants.length > 0 ? "。下方保留上次加载的结果。" : ""}</CapabilityError>
           )}
-          {!loading && !loadError && filteredAssistants.length === 0 && userAssistants.length === 0 && (
-            <div className="colleagues-panel-state colleagues-panel-state--empty">
-              <AssistantIcon size="xl" className="colleagues-panel-empty-icon" />
-              <p>创建你的第一个专家，或选择下方模板开始</p>
-            </div>
+          {!loading && !loadError && !searchQuery.trim() && userAssistants.length === 0 && (
+            <CapabilityEmptyState icon={<AssistantIcon size="lg" />} title="创建你的第一个专家，或选择下方模板开始" />
+          )}
+          {!loading && !loadError && searchQuery.trim() && filteredAssistants.length === 0 && (
+            <CapabilityEmptyState icon={<AssistantIcon size="lg" />} title={`没有找到与「${searchQuery}」匹配的专家`} onClear={() => setSearchQuery("")} />
           )}
 
           {filteredAssistants.length > 0 && (
@@ -391,7 +374,7 @@ export function AssistantsPanel({ onUseAssistant, onToast, embedded = false, cre
         </div>
 
         {/* Recommended Templates */}
-        <div className="colleagues-panel-section">
+        {filteredTemplates.length > 0 && <div className="colleagues-panel-section">
           <div className="colleagues-panel-section-header">
             <h3 className="colleagues-panel-section-subtitle">
               <SparklesIcon size="sm" />
@@ -425,7 +408,7 @@ export function AssistantsPanel({ onUseAssistant, onToast, embedded = false, cre
               );
             })}
           </div>
-        </div>
+        </div>}
 
         {/* Hire from Expert */}
         {userAssistants.length > 0 && (
@@ -456,6 +439,7 @@ export function AssistantsPanel({ onUseAssistant, onToast, embedded = false, cre
           </div>
         )}
       </div>
+    </CapabilityPage>
 
       {editing && (
         <CreateColleagueDialog
@@ -467,7 +451,7 @@ export function AssistantsPanel({ onUseAssistant, onToast, embedded = false, cre
         />
       )}
       {dialog}
-    </div>
+    </>
   );
 }
 

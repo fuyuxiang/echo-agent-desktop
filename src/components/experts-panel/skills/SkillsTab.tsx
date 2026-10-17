@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Upload } from "lucide-react";
 import {
-  SearchIcon, AddCircleIcon, RefreshCwIcon, PuzzlePieceIcon, DeleteIcon,
+  AddCircleIcon, RefreshCwIcon, PuzzlePieceIcon, DeleteIcon,
 } from "@/foundation/components/Icon/icons";
 import {
   skillsList, skillsRemove, skillsToggle, skillsUninstallPackage,
@@ -13,6 +13,7 @@ import { listenOrgSkillsChanged, orgSetSkillPreference } from "@/lib/org-client"
 import { useAppDialog } from "../../AppDialog";
 import { SkillCapabilityStatus } from "./SkillCapabilityStatus";
 import { useOrgSessionStore } from "@/stores/org-session-store";
+import { CapabilityEmptyState, CapabilityError, CapabilityPage } from "../shared/CapabilityPage";
 
 interface Props {
   pills: React.ReactNode;
@@ -220,53 +221,34 @@ export function SkillsTab({ pills, onToast }: Props) {
   }, [skills, onToast, reloadSkills, requestConfirmation]);
 
   return (
-    <div className="um-page">
-      <header className="um-topbar">
-        <div className="um-topbar-left">{pills ?? <h2 className="capabilities-section-title">已安装技能</h2>}</div>
-        <div className="um-topbar-right">
-          <div className="um-search">
-            <SearchIcon size="sm" className="um-search-icon" />
-            <input className="um-search-input" value={search} placeholder="搜索已安装技能"
-              aria-label="搜索已安装技能"
-              onChange={(event) => setSearch(event.target.value)} />
-          </div>
-          <button type="button" className="um-btn um-btn--grey" onClick={() => setImportOpen(true)}>
-            <AddCircleIcon size="sm" /><span>添加技能</span>
-          </button>
-        </div>
-      </header>
-
-      <div className="um-scroll">
-        <div className="ec-source-bar">
-          <span className="ec-source-label" title="~/.echo-agent/skills">
-            用户全局技能 · ~/.echo-agent/skills
-          </span>
-          <button type="button" className="ec-source-btn" onClick={() => void reloadSkills()}
+    <div className="capability-tab">
+      {pills && <header className="um-topbar"><div className="um-topbar-left">{pills}</div></header>}
+      <CapabilityPage title="已安装技能" className="capability-page--skills"
+        search={{ value: search, onChange: setSearch, label: "搜索已安装技能", placeholder: "搜索技能…" }}
+        actions={<>
+          <button type="button" className="capability-button" onClick={() => void reloadSkills()}
             disabled={loading} title="重新扫描全局和当前工作区技能">
             <RefreshCwIcon size="sm" /><span>刷新</span>
           </button>
-        </div>
+          <button type="button" className="capability-button capability-button--primary" onClick={() => setImportOpen(true)}>
+            <AddCircleIcon size="sm" /><span>添加技能</span>
+          </button>
+        </>}
+        summary={loading && skills.length === 0 ? "正在读取技能…" : error && skills.length === 0 ? "技能列表未加载" : `${skills.length} 个技能 · ${skills.filter(skill => skill.enabled).length} 个已启用`}>
 
         {error && (
-          <div className="ec-error">
-            加载失败：{error}
-            <button type="button" className="ec-source-btn" onClick={() => void reloadSkills()}>重试</button>
-          </div>
+          <CapabilityError onRetry={() => void reloadSkills()} retrying={loading}>
+            技能列表加载失败：{error}{skills.length > 0 ? "。下方保留上次加载的结果。" : ""}
+          </CapabilityError>
         )}
 
         {loading && skills.length === 0 ? (
-          <div className="ec-loading">正在读取已安装技能…</div>
+          <div className="capability-loading" role="status">正在读取已安装技能…</div>
         ) : error && skills.length === 0 ? null : skills.length === 0 ? (
-          <div className="ec-empty">
-            <PuzzlePieceIcon size="xl" className="ec-empty-icon" />
-            <p>还没有已安装的技能</p>
-            <p className="ec-empty-hint">点击「添加技能」安装本地技能，或在组织页面安装共享技能</p>
-          </div>
+          <CapabilityEmptyState icon={<PuzzlePieceIcon size="lg" />} title="还没有已安装的技能"
+            description="点击「添加技能」安装本地技能，或在组织页面安装共享技能" />
         ) : visible.length === 0 ? (
-          <div className="ec-empty">
-            <PuzzlePieceIcon size="xl" className="ec-empty-icon" />
-            <p>没有找到与「{search}」匹配的技能</p>
-          </div>
+          <CapabilityEmptyState icon={<PuzzlePieceIcon size="lg" />} title={`没有找到与「${search}」匹配的技能`} onClear={() => setSearch("")} />
         ) : (
           <div className="sk-inst-list">
             {visible.map((skill) => (
@@ -275,7 +257,7 @@ export function SkillsTab({ pills, onToast }: Props) {
             ))}
           </div>
         )}
-      </div>
+      </CapabilityPage>
 
       {importOpen && (
         <ImportSkillModal onClose={() => setImportOpen(false)} onToast={onToast}
