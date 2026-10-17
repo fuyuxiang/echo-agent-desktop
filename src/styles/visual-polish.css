@@ -1689,20 +1689,16 @@ button,
   font-weight: 700;
   letter-spacing: -0.015em;
 }
-
 .project-search__input,
 .resources-panel__search-input,
-.marketplace-panel__search-input,
 .um-search-input,
 .myfiles-search {
   border-color: var(--ui-line-strong);
   background: var(--ui-surface);
   box-shadow: var(--ui-shadow-xs);
 }
-
 .project-search__input:focus,
 .resources-panel__search-input:focus,
-.marketplace-panel__search-input:focus,
 .um-search-input:focus,
 .myfiles-search:focus-within {
   border-color: var(--ui-brand-line);
@@ -1809,9 +1805,9 @@ button,
   box-shadow: var(--ui-shadow-xs);
 }
 
-/* ---------- Expert / skill / connector market ---------- */
+/* ---------- Expert / skill / connector management ---------- */
 
-.um-market {
+.capabilities-panel {
   min-width: 0;
   background: transparent;
 }
@@ -1859,37 +1855,21 @@ button,
 .um-pill--active {
   box-shadow: 0 3px 10px rgba(18, 30, 28, 0.13);
 }
-
-.ec-scene-card,
-.ec-card,
-.ec-my-card,
-.sk-card,
-.cn-card {
+.sk-card {
   border: 1px solid var(--ui-line);
   box-shadow: var(--ui-shadow-xs);
 }
-
-.ec-card,
-.ec-my-card,
-.sk-card,
-.cn-card {
+.sk-card {
   transition: transform 160ms ease, box-shadow 160ms ease, border-color 160ms ease;
 }
-
-.ec-card:hover,
-.ec-my-card:hover,
-.sk-card:hover,
-.cn-card:hover {
+.sk-card:hover {
   transform: translateY(-2px);
   border-color: var(--ui-brand-line);
   box-shadow: var(--ui-shadow-sm);
 }
-
-/* ---------- Resource, plugin and marketplace pages ---------- */
-
+/* ---------- Resource and local plugin pages ---------- */
 .resources-panel,
-.plugins-panel,
-.marketplace-panel {
+.plugins-panel {
   width: 100%;
   max-width: var(--ui-content-width);
   margin: 0 auto;
@@ -1898,24 +1878,18 @@ button,
   box-sizing: border-box;
   color: var(--echo-text-strong);
 }
-
 .resources-panel > *:not(.resources-panel__header),
-.plugins-panel > *:not(.plugins-panel__header),
-.marketplace-panel > *:not(.marketplace-panel__header) {
+.plugins-panel > *:not(.plugins-panel__header) {
   padding-left: 0;
   padding-right: 0;
 }
-
 .resources-panel__header,
-.plugins-panel__header,
-.marketplace-panel__header {
+.plugins-panel__header {
   min-height: 52px;
   padding: 0;
 }
-
 .resources-panel__title,
-.plugins-panel__title,
-.marketplace-panel__title {
+.plugins-panel__title {
   color: var(--echo-text-strong);
   font-size: 1.625rem;
   font-weight: 720;
@@ -1929,10 +1903,8 @@ button,
   font-size: 0.8125rem;
   line-height: 1.55;
 }
-
 .resources-panel__action-btn,
-.plugins-panel__action-btn,
-.marketplace-panel__action-btn {
+.plugins-panel__action-btn {
   height: var(--ui-control-md);
   border-color: var(--ui-line-strong);
   border-radius: 10px;
@@ -1940,46 +1912,16 @@ button,
   box-shadow: var(--ui-shadow-xs);
 }
 
-/* This stylesheet loads after app.css. Keep every primary-state color paired
- * here so the generic surface rule above can never produce white-on-white in
- * light mode or erase the visual hierarchy between Refresh and Add source. */
-.marketplace-panel__action-btn.marketplace-panel__action-btn--primary {
-  border-color: var(--echo-button-primary-bg);
-  background: var(--echo-button-primary-bg);
-  color: var(--echo-button-primary-fg);
-}
-
-.marketplace-panel__action-btn.marketplace-panel__action-btn--primary:hover:not(:disabled) {
-  border-color: var(--echo-button-primary-bg-hover);
-  background: var(--echo-button-primary-bg-hover);
-}
-
-.marketplace-panel__action-btn.marketplace-panel__action-btn--primary:active:not(:disabled) {
-  border-color: var(--echo-button-primary-bg-active);
-  background: var(--echo-button-primary-bg-active);
-}
-
-.marketplace-panel__action-btn.marketplace-panel__action-btn--primary:disabled {
-  border-color: var(--echo-button-primary-bg-disabled);
-  background: var(--echo-button-primary-bg-disabled);
-  color: var(--echo-button-primary-fg-disabled);
-  opacity: 1;
-}
-
 .resources-panel__resource,
-.plugins-panel__item,
-.marketplace-source,
-.mp-plugin {
+.plugins-panel__item {
   border-color: var(--ui-line);
   border-radius: var(--ui-radius-md);
   background: var(--ui-surface);
   box-shadow: var(--ui-shadow-xs);
   transition: transform 160ms ease, box-shadow 160ms ease, border-color 160ms ease;
 }
-
 .resources-panel__resource:hover,
-.plugins-panel__item:hover,
-.mp-plugin:hover {
+.plugins-panel__item:hover {
   transform: translateY(-2px);
   border-color: var(--ui-brand-line);
   box-shadow: var(--ui-shadow-sm);
@@ -2542,11 +2484,10 @@ button,
 /* ---------- Main-pane responsive layout ---------- */
 
 @container app-main (max-width: 960px) {
-  .project-page,
-  .resources-panel,
-  .plugins-panel,
-  .marketplace-panel,
-  .placeholder-page--panel {
+.project-page,
+.resources-panel,
+.plugins-panel,
+.placeholder-page--panel {
     padding-left: 24px;
     padding-right: 24px;
   }
@@ -2769,12 +2710,10 @@ button,
   .browser-preview__input {
     flex-basis: 260px;
   }
-
-  .myfiles-toolbar,
-  .project-section__head,
-  .resources-panel__header,
-  .plugins-panel__header,
-  .marketplace-panel__header {
+.myfiles-toolbar,
+.project-section__head,
+.resources-panel__header,
+.plugins-panel__header {
     flex-wrap: wrap;
   }
 }
@@ -2817,10 +2756,8 @@ button,
   .home__title {
     font-size: clamp(1.75rem, 7cqi, 2rem);
   }
-
-  .project-grid,
-  .quota-panel__stats,
-  .cn-grid {
+.project-grid,
+.quota-panel__stats {
     grid-template-columns: minmax(0, 1fr);
   }
 
@@ -2840,10 +2777,7 @@ button,
   .pd-board {
     grid-auto-columns: minmax(230px, 78%);
   }
-
-  .ec-grid,
-  .ec-my-grid,
-  .sk-grid {
+.sk-grid {
     grid-template-columns: minmax(0, 1fr);
   }
 
@@ -2852,18 +2786,14 @@ button,
   .myfiles-col-scope {
     display: none;
   }
-
-  .resources-panel__header,
-  .plugins-panel__header,
-  .marketplace-panel__header,
-  .project-section__head {
+.resources-panel__header,
+.plugins-panel__header,
+.project-section__head {
     align-items: stretch;
     flex-direction: column;
   }
-
-  .project-search,
-  .resources-panel__search,
-  .marketplace-panel__search {
+.project-search,
+.resources-panel__search {
     width: 100%;
   }
 }
@@ -2880,13 +2810,11 @@ button,
   font-weight: 720;
   letter-spacing: -0.025em;
 }
-
 .models-settings-panel__card,
 .models-settings-panel__grouped,
 .about-dialog,
 .feedback-dialog,
 .create-colleague-dialog,
-.ec-modal,
 .connector-dialog {
   border-color: var(--ui-line);
   border-radius: var(--ui-radius-md);
@@ -2986,12 +2914,10 @@ button,
     max-width: 42%;
     opacity: 0.88;
   }
-
-  .resources-panel,
-  .plugins-panel,
-  .marketplace-panel,
-  .placeholder-page--panel,
-  .project-page {
+.resources-panel,
+.plugins-panel,
+.placeholder-page--panel,
+.project-page {
     padding-left: 24px;
     padding-right: 24px;
   }
@@ -3066,19 +2992,15 @@ button,
   .project-hero__art {
     display: none;
   }
-
-  .project-section__head,
-  .resources-panel__header,
-  .plugins-panel__header,
-  .marketplace-panel__header {
+.project-section__head,
+.resources-panel__header,
+.plugins-panel__header {
     align-items: flex-start;
     flex-direction: column;
   }
-
-  .project-search,
-  .resources-panel__search,
-  .marketplace-panel__search,
-  .um-search {
+.project-search,
+.resources-panel__search,
+.um-search {
     width: 100%;
   }
 

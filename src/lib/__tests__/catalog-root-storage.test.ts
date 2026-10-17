@@ -1,67 +1,17 @@
 import { beforeEach, describe, expect, it } from "vitest";
-import {
-  isLegacyWorkBuddyPath,
-  migrateCatalogRootStorage,
-  readCatalogRoot,
-  writeCatalogRoot,
-} from "../catalog-root-storage";
+import { migrateCatalogRootStorage } from "../catalog-root-storage";
 
-describe("catalog root storage migration", () => {
+describe("retired catalog preferences", () => {
   beforeEach(() => localStorage.clear());
-
-  it("clears historical WorkBuddy roots instead of loading them", () => {
-    localStorage.setItem("skillsCatalogRoot", "/Users/demo/.workbuddy/connectors-marketplace");
-    localStorage.setItem("connectorsRoot", "C:\\Users\\demo\\.WorkBuddy\\marketplace");
-
+  it("purges every retired source key while preserving unrelated preferences", () => {
+    const keys = ["expertsRoot", "skillsCatalogRoot", "connectorsRoot",
+      ...["experts", "skills", "connectors"].flatMap(kind => [1, 2].map(version => `echoagent.catalog.${kind}-root.v${version}`))];
+    keys.forEach(key => localStorage.setItem(key, "/retired/catalog"));
+    localStorage.setItem("echoagent.theme", "dark");
     migrateCatalogRootStorage();
-
-    expect(readCatalogRoot("skills")).toBe("");
-    expect(readCatalogRoot("connectors")).toBe("");
-    expect(localStorage.getItem("skillsCatalogRoot")).toBeNull();
-    expect(localStorage.getItem("connectorsRoot")).toBeNull();
-  });
-
-  it("drops ambiguous v1 roots so the backend can follow ECHO_AGENT_HOME", () => {
-    localStorage.setItem("expertsRoot", "/Users/demo/EchoAgent/agents");
-    localStorage.setItem(
-      "echoagent.catalog.experts-root.v1",
-      "/Users/demo/.echo-agent/experts-marketplace",
-    );
-
-    expect(readCatalogRoot("experts")).toBe("");
-    expect(localStorage.getItem("expertsRoot")).toBeNull();
-    expect(localStorage.getItem("echoagent.catalog.experts-root.v1"))
-      .toBeNull();
-  });
-
-  it("prefers the explicit v2 override and removes old keys", () => {
-    localStorage.setItem(
-      "echoagent.catalog.skills-root.v2",
-      "/Users/demo/custom-skills-marketplace",
-    );
-    localStorage.setItem("echoagent.catalog.skills-root.v1", "/Users/demo/.echo-agent/skills");
-    localStorage.setItem("skillsCatalogRoot", "/tmp/old-skills");
-
-    expect(readCatalogRoot("skills")).toBe("/Users/demo/custom-skills-marketplace");
-    expect(localStorage.getItem("echoagent.catalog.skills-root.v1")).toBeNull();
-    expect(localStorage.getItem("skillsCatalogRoot")).toBeNull();
-  });
-
-  it("recognizes both Unix and Windows legacy directory components", () => {
-    expect(isLegacyWorkBuddyPath("/Users/demo/.workbuddy/catalog")).toBe(true);
-    expect(isLegacyWorkBuddyPath("C:\\Users\\demo\\WorkBuddy\\catalog")).toBe(true);
-    expect(isLegacyWorkBuddyPath("/Users/demo/workbuddy-notes/catalog")).toBe(false);
-  });
-
-  it("never stores a blocked root", () => {
-    expect(writeCatalogRoot("connectors", "/Users/demo/.workbuddy/connectors")).toBe(false);
-    expect(localStorage.getItem("echoagent.catalog.connectors-root.v2")).toBeNull();
-
-    expect(writeCatalogRoot("connectors", "/Users/demo/.echo-agent/connectors-marketplace"))
-      .toBe(true);
-    expect(readCatalogRoot("connectors"))
-      .toBe("/Users/demo/.echo-agent/connectors-marketplace");
-    expect(localStorage.getItem("echoagent.catalog.connectors-root.v2"))
-      .toBe("/Users/demo/.echo-agent/connectors-marketplace");
+    keys.forEach(key => expect(localStorage.getItem(key)).toBeNull());
+    expect(localStorage.getItem("echoagent.theme")).toBe("dark");
+    migrateCatalogRootStorage();
+    expect(localStorage.getItem("echoagent.theme")).toBe("dark");
   });
 });

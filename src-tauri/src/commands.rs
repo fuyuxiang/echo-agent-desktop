@@ -2231,17 +2231,12 @@ pub fn agent_set_session_expert(
     // Requiring a live backend binding prevents a forged renderer payload from
     // attaching metadata to arbitrary historical session ids. Expert fields,
     // especially local avatar paths, are resolved against exact rows emitted
-    // by backend-managed catalogs rather than trusted from IPC.
+    // by the local agent store rather than trusted from IPC.
     if !valid_session_id(&session_id) {
         return Err("会话 ID 无效或过长".into());
     }
     state.session_workspace(&session_id)?;
     let binding = match source.as_str() {
-        "marketplace" => crate::experts::require_loaded_marketplace_expert(
-            &expert_id,
-            &expert_name,
-            avatar_local.as_deref(),
-        )?,
         "local" => crate::agents_store::require_listed_local_expert(
             &expert_id,
             &expert_name,

@@ -23,8 +23,6 @@ vi.mock("@/lib/org-client", () => ({
   orgListScopes: mocks.orgListScopes,
   orgSubmitSkill: mocks.orgSubmitSkill,
 }));
-vi.mock("../experts-panel/skills/SkillCatalogCard", () => ({ SkillCatalogCard: () => null }));
-vi.mock("../experts-panel/skills/SkillDetailModal", () => ({ SkillDetailModal: () => null }));
 vi.mock("../experts-panel/skills/ImportSkillModal", () => ({ ImportSkillModal: () => null }));
 
 import { SkillsTab } from "../experts-panel/skills/SkillsTab";

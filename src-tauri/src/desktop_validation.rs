@@ -440,11 +440,6 @@ pub async fn desktop_validation_ready(
             return crate::native_core_validation::launch(&window)
                 .inspect_err(|error| tracing::warn!(%error, "Core review launch rejected"));
         }
-        if std::env::var("ECHO_DESKTOP_REVIEW_CAPABILITIES").as_deref() == Ok("1") {
-            return crate::native_capabilities_validation::launch(&window).inspect_err(
-                |error| tracing::warn!(%error, "Capabilities review launch rejected"),
-            );
-        }
         if std::env::var("ECHO_DESKTOP_REVIEW_LOCAL").as_deref() == Ok("1") {
             #[cfg(target_os = "macos")]
             {
@@ -680,7 +675,6 @@ pub fn desktop_review_context(window: tauri::WebviewWindow) -> Result<serde_json
         "webdavRequested": std::env::var("ECHO_DESKTOP_REVIEW_WEBDAV").as_deref() == Ok("1"),
         "codeAgentRequested": std::env::var("ECHO_DESKTOP_REVIEW_CODE_AGENT").as_deref() == Ok("1"),
         "localRequested": std::env::var("ECHO_DESKTOP_REVIEW_LOCAL").as_deref() == Ok("1"),
-        "capabilitiesRequested": std::env::var("ECHO_DESKTOP_REVIEW_CAPABILITIES").as_deref() == Ok("1"),
         "coreRequested": std::env::var("ECHO_DESKTOP_REVIEW_CORE").as_deref() == Ok("1"),
         "ideRequested": std::env::var("ECHO_DESKTOP_REVIEW_IDE").as_deref() == Ok("1"),
         "browserRequested": std::env::var("ECHO_DESKTOP_REVIEW_BROWSER").as_deref() == Ok("1"),

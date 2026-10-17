@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import { MarketPills, type MarketTab } from "./MarketHeader";
+import { CapabilityPills, type CapabilityTab } from "./CapabilityHeader";
 import { ExpertsTab } from "./experts/ExpertsTab";
 import { SkillsTab } from "./skills/SkillsTab";
 import { ConnectorsTab } from "./connectors/ConnectorsTab";
@@ -9,25 +9,23 @@ interface Props {
   onGoHome?: () => void;
   onToast?: (message: string) => void;
   /** Slash navigation can open a specific capability tab directly. */
-  initialTab?: MarketTab;
+  initialTab?: CapabilityTab;
   /** The capability page owns navigation; standalone callers retain pills. */
   hideNavigation?: boolean;
   createExpertRequested?: boolean;
   onCreateExpertRequestHandled?: () => void;
 }
 
-/** 专家·技能·连接器 — EchoAgent-style unified market page.
- *  The pill group is rendered once here and passed into each tab's topbar
- *  left slot, mirroring EchoAgent's `headerLeft` pattern. */
+/** 专家、技能与连接器的本地管理页面。 */
 export function ExpertsPanel({ onGoHome, onToast, initialTab = "experts", hideNavigation = false, createExpertRequested, onCreateExpertRequestHandled }: Props) {
-  const [tab, setTab] = useState<MarketTab>(initialTab);
+  const [tab, setTab] = useState<CapabilityTab>(initialTab);
 
   useEffect(() => setTab(initialTab), [initialTab]);
 
-  const pills = hideNavigation ? null : <MarketPills active={tab} onChange={setTab} />;
+  const pills = hideNavigation ? null : <CapabilityPills active={tab} onChange={setTab} />;
 
   return (
-    <div className={`um-market${hideNavigation ? " um-market--embedded" : ""}`}>
+    <div className={`capabilities-panel${hideNavigation ? " capabilities-panel--embedded" : ""}`}>
       {tab === "experts" && (
         <ExpertsTab pills={pills} onGoHome={onGoHome} onToast={onToast} createExpertRequested={createExpertRequested} onCreateExpertRequestHandled={onCreateExpertRequestHandled} />
       )}

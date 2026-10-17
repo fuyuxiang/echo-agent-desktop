@@ -165,8 +165,7 @@ fn read_agent_file(path: &Path) -> Result<String, String> {
     String::from_utf8(bytes).map_err(|error| format!("Agent 定义不是有效 UTF-8：{error}"))
 }
 
-/// Public accessor for the user-scope agents directory (used by experts.rs
-/// to link team member agents for EchoAgent discovery).
+/// User-scope agents directory used by the local team collaboration tools.
 pub fn user_agents_dir_pub() -> PathBuf {
     user_agents_dir()
 }

@@ -44,7 +44,6 @@ export const CLIENT_SLASH_COMMANDS: readonly ClientSlashCommand[] = [
   { name: "skills", description: "打开技能", source: "client" },
   { name: "connectors", description: "打开连接器", source: "client" },
   { name: "automation", description: "打开自动化", source: "client" },
-  { name: "marketplace", description: "打开插件市场", source: "client" },
   { name: "usage", description: "打开 Token 用量统计", source: "client" },
   { name: "remember", description: "保存一条长期记忆", argumentHint: "[global|workspace] <内容>", source: "client" },
   { name: "plan", description: "切换当前会话的计划模式", argumentHint: "on|off", source: "client", requiresSession: true },
@@ -134,7 +133,7 @@ export function mergeSlashCommands(
   const merged: SlashCommand[] = [];
   for (const command of [...clientCommands, ...runtimeCommands]) {
     const name = command.name.trim().replace(/^\/+/, "").toLowerCase();
-    if (!name || seen.has(name)) continue;
+    if (!name || name === "marketplace" || seen.has(name)) continue;
     seen.add(name);
     merged.push({ ...command, name });
   }

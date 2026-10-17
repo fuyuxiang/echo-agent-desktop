@@ -1,5 +1,5 @@
 //! Fixed private Git/IDE acceptance; no caller-supplied script or shell command.
-use crate::native_capabilities_validation::{ordinary_private, require_main_internal};
+use crate::native_review_scope::{ordinary_private, require_main_internal};
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};

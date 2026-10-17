@@ -18,12 +18,10 @@ mod bridge;
 mod coding;
 mod coding_workspace;
 mod commands;
-mod connector_cli;
-mod connectors_catalog;
 mod desktop_preferences;
 mod desktop_validation;
 mod document_export;
-mod experts;
+mod expert_avatar;
 mod ext;
 mod live_info_mcp;
 mod logging;
@@ -32,12 +30,12 @@ mod meeting_capture;
 mod meeting_minutes;
 mod meta;
 mod native_browser_validation;
-mod native_capabilities_validation;
 mod native_coding_validation;
 mod native_core_validation;
 mod native_exit_validation;
 mod native_ide_validation;
 mod native_review_model;
+mod native_review_scope;
 mod notifications;
 mod office_mcp;
 mod org;
@@ -55,7 +53,6 @@ mod sessions;
 mod shell_fs;
 mod skill_installer;
 mod skills;
-mod skills_catalog;
 mod storage;
 mod team_mcp;
 mod theia;
@@ -821,7 +818,6 @@ pub fn run() {
             desktop_validation::desktop_review_complete,
             desktop_validation::desktop_review_context,
             native_browser_validation::desktop_review_browser_manifest,
-            native_capabilities_validation::desktop_review_capabilities_manifest,
             native_core_validation::desktop_review_core_manifest,
             native_core_validation::desktop_review_model_connection,
             native_exit_validation::native_exit_review_context,
@@ -963,26 +959,13 @@ pub fn run() {
             mcp::mcp_config_save,
             mcp::mcp_auth_trigger,
             mcp::mcp_auth_status,
-            // CLI-type connector authorization (cli.json driven)
-            connector_cli::connectors_cli_status,
-            connector_cli::connectors_cli_auth,
-            connector_cli::connectors_cli_auth_cancel,
-            connector_cli::connectors_cli_unauth,
-            connector_cli::connectors_cli_skills_dir,
             // experts / assistants (~/.echo-agent/agents/*.md)
             agents_store::agents_list,
             agents_store::agents_get,
             agents_store::agents_save,
             agents_store::agents_delete,
             agents_store::agents_template,
-            // expert marketplace (live from a local EchoAgent data dir)
-            experts::experts_default_root,
-            experts::experts_list_roots,
-            experts::experts_load,
-            experts::experts_thumbnail,
-            experts::experts_image_bytes,
-            experts::experts_read_agent_prompt,
-            experts::experts_link_agents,
+            expert_avatar::expert_avatar,
             // Safe, bounded previews for local chat image attachments.
             attachment_preview::attachment_thumbnail,
             // Persist clipboard file blobs under app_data_dir and
@@ -1012,17 +995,6 @@ pub fn run() {
             document_export::document_export,
             meeting_minutes::meeting_delete,
             meeting_minutes::meeting_open_audio,
-            // connector marketplace (live from a local EchoAgent marketplace dir)
-            connectors_catalog::connectors_default_root,
-            connectors_catalog::connectors_list_roots,
-            connectors_catalog::connectors_load,
-            connectors_catalog::connectors_icon,
-            connectors_catalog::connectors_read_mcp_config,
-            // skill catalog (runtime scan of agents + builtin skill dirs)
-            skills_catalog::skills_catalog_default_root,
-            skills_catalog::skills_catalog_list_roots,
-            skills_catalog::skills_catalog_load,
-            skills_catalog::skills_catalog_read_skill,
             // EchoAgent admin: memory / search / rewind / commands / plan / tasks / reload
             agent_admin::memory_list,
             agent_admin::memory_get,
@@ -1048,8 +1020,6 @@ pub fn run() {
             agent_admin::internal_reload,
             agent_admin::plugins_list,
             agent_admin::plugins_action,
-            agent_admin::marketplace_list,
-            agent_admin::marketplace_action,
             // first-party Browser Use / Computer Use runtime and safety UI
             automation::automation_capabilities,
             automation::automation_status,

@@ -5,7 +5,6 @@ import { ExpertsTab } from "../experts-panel/experts/ExpertsTab";
 import { agentsList, agentsSave, agentsTemplate } from "@/lib/agent-client";
 
 vi.mock("@/lib/agent-client", () => ({
-  expertsDefaultRoot: vi.fn().mockResolvedValue(null),
   agentsList: vi.fn(),
   agentsTemplate: vi.fn(),
   agentsSave: vi.fn(),

@@ -1,5 +1,5 @@
 //! Fixed private model-driven Browser Use acceptance, with a synthetic loopback page.
-use crate::native_capabilities_validation::{ordinary_private, require_main_internal};
+use crate::native_review_scope::{ordinary_private, require_main_internal};
 use serde::{Deserialize, Serialize};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};

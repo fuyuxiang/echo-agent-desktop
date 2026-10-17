@@ -13,15 +13,8 @@ import type {
   AgentEntry,
   Automation,
   AutomationUpdateEvent,
-  ExpertCatalog,
   AutomationSnapshot,
   AutomationStatus,
-  ConnectorCatalog,
-  ConnectorCliAuthDoneEvent,
-  ConnectorCliAuthLogEvent,
-  ConnectorCliAuthResult,
-  ConnectorCliAuthUrlEvent,
-  ConnectorCliStatus,
   McpAuthStatusEntry,
   McpAuthTriggerResult,
   McpConfigFile,
@@ -43,7 +36,6 @@ import type {
   SessionSummaryEvent,
   SessionUpdate,
   SessionUsage,
-  SkillCatalog,
   SkillInfo,
   SkillInstallResult,
   SkillPackageInspection,
@@ -1015,163 +1007,14 @@ export function onMcpStatusEvent(
   return listen<McpServerStatusEvent>("agent://mcp-status", (event) => cb(event.payload));
 }
 
-// ---------- CLI-type connector authorization (cli.json driven) ----------
-
-/** Probe a CLI connector: has cli.json / CLI installed / currently authed. */
-export async function connectorsCliStatus(
-  root: string,
-  source: string,
-): Promise<ConnectorCliStatus> {
-  return invoke<ConnectorCliStatus>("connectors_cli_status", { root, source });
-}
-
-/** Run the full CLI authorization flow (install → auth steps → verify).
- *  Long-running; auth URLs arrive via `onConnectorCliAuthUrl`. */
-export async function connectorsCliAuth(
-  root: string,
-  source: string,
-): Promise<ConnectorCliAuthResult> {
-  return invoke<ConnectorCliAuthResult>("connectors_cli_auth", { root, source });
-}
-
-/** Cancel an in-flight CLI authorization (kills the child process tree). */
-export async function connectorsCliAuthCancel(source: string): Promise<void> {
-  await invoke<void>("connectors_cli_auth_cancel", { source });
-}
-
-/** Run the connector's unAuth command (logout / credential wipe). */
-export async function connectorsCliUnauth(root: string, source: string): Promise<void> {
-  await invoke<void>("connectors_cli_unauth", { root, source });
-}
-
-/** Absolute path of the connector's bundled skills/ dir (null if none). */
-export async function connectorsCliSkillsDir(
-  root: string,
-  source: string,
-): Promise<string | null> {
-  return invoke<string | null>("connectors_cli_skills_dir", { root, source });
-}
-
-/** Subscribe to CLI auth URL events (show QR / open browser). */
-export function onConnectorCliAuthUrl(
-  cb: (e: ConnectorCliAuthUrlEvent) => void,
-): Promise<UnlistenFn> {
-  return listen<ConnectorCliAuthUrlEvent>("connector://cli-auth-url", (ev) => cb(ev.payload));
-}
-
-/** Subscribe to CLI auth log lines (progress display in the QR modal). */
-export function onConnectorCliAuthLog(
-  cb: (e: ConnectorCliAuthLogEvent) => void,
-): Promise<UnlistenFn> {
-  return listen<ConnectorCliAuthLogEvent>("connector://cli-auth-log", (ev) => cb(ev.payload));
-}
-
-/** Subscribe to CLI auth completion events. */
-export function onConnectorCliAuthDone(
-  cb: (e: ConnectorCliAuthDoneEvent) => void,
-): Promise<UnlistenFn> {
-  return listen<ConnectorCliAuthDoneEvent>("connector://cli-auth-done", (ev) => cb(ev.payload));
-}
-
-// ---------- connector marketplace (live local data dir) ----------
-
-/** First existing candidate marketplace root ("" if none found). */
-export async function connectorsDefaultRoot(): Promise<string> {
-  return invoke<string>("connectors_default_root");
-}
-
-/** Marketplace roots under `root` that contain the connectors manifest. */
-export async function connectorsListRoots(root: string): Promise<string[]> {
-  return invoke<string[]>("connectors_list_roots", { root });
-}
-
-/** Load categories + connectors from the marketplace manifest. */
-export async function connectorsLoad(root?: string): Promise<ConnectorCatalog> {
-  return invoke<ConnectorCatalog>("connectors_load", { root: root ?? null });
-}
-
-/** Read a local icon file as a `data:` URL (svg/png). */
-export async function connectorsIcon(path: string): Promise<string> {
-  return invoke<string>("connectors_icon", { path });
-}
-
-/** Read `<root>/connectors/<source>/mcp.json` raw text ("" if missing). */
-export async function connectorsReadMcpConfig(root: string, source: string): Promise<string> {
-  return invoke<string>("connectors_read_mcp_config", { root, source });
-}
-
 /** Open a URL in the system browser (scheme-whitelisted backend command). */
 export async function openUrl(url: string): Promise<void> {
   await invoke<void>("open_url", { url });
 }
 
-// ---------- skill catalog (runtime scan of agents + builtin dirs) ----------
-
-/** First existing candidate agents data root ("" if none found). */
-export async function skillsCatalogDefaultRoot(): Promise<string> {
-  return invoke<string>("skills_catalog_default_root");
-}
-
-/** Agents roots under `root` that look scannable. */
-export async function skillsCatalogListRoots(root: string): Promise<string[]> {
-  return invoke<string[]>("skills_catalog_list_roots", { root });
-}
-
-/** Scan both sources and return the merged, deduped skill catalog. */
-export async function skillsCatalogLoad(
-  root?: string,
-  builtinRoot?: string,
-): Promise<SkillCatalog> {
-  return invoke<SkillCatalog>("skills_catalog_load", {
-    root: root ?? null,
-    builtinRoot: builtinRoot ?? null,
-  });
-}
-
-/** Read the full SKILL.md text for a directory. */
-export async function skillsCatalogReadSkill(dir: string): Promise<string> {
-  return invoke<string>("skills_catalog_read_skill", { dir });
-}
-
-// ---------- expert marketplace (live local data dir) ----------
-
-/** First existing candidate data root ("" if none found). */
-export async function expertsDefaultRoot(): Promise<string> {
-  return invoke<string>("experts_default_root");
-}
-
-/** Data roots under `root` that contain the marketplace manifest. */
-export async function expertsListRoots(root: string): Promise<string[]> {
-  return invoke<string[]>("experts_list_roots", { root });
-}
-
-/** Load categories + experts by merging the manifest with each plugin.json. */
-export async function expertsLoad(root?: string): Promise<ExpertCatalog> {
-  return invoke<ExpertCatalog>("experts_load", { root: root ?? null });
-}
-
-/** Small base64 JPEG thumbnail for a local avatar path (cached server-side). */
-export async function expertsThumbnail(path: string): Promise<string> {
-  return invoke<string>("experts_thumbnail", { path });
-}
-
-/** Full-size local image as a `data:` URL (used for 精选场景 banners). */
-export async function expertsImageBytes(path: string): Promise<string> {
-  return invoke<string>("experts_image_bytes", { path });
-}
-
-/** Read the full agent prompt markdown from an expert's package directory. */
-export async function expertsReadAgentPrompt(
-  root: string,
-  plugin: string,
-  agentName: string,
-): Promise<string> {
-  return invoke<string>("experts_read_agent_prompt", { root, plugin, agentName });
-}
-
-/** Link a team expert's agents/*.md into ~/.echo-agent/agents/ for EchoAgent sub-agent discovery. */
-export async function expertsLinkAgents(root: string, plugin: string): Promise<number> {
-  return invoke<number>("experts_link_agents", { root, plugin });
+/** Load a bounded avatar preview already associated with a saved session. */
+export async function expertAvatar(path: string): Promise<string> {
+  return invoke<string>("expert_avatar", { path });
 }
 
 /** Bind an expert to a session (EchoAgent-only state). */
@@ -1650,10 +1493,9 @@ export async function webSearchConfigSave(
   return invoke<boolean>("web_search_config_save", { enable, model });
 }
 
-// ---------- plugins + marketplace (echo.agent/plugins/*, echo.agent/marketplace/*) ----------
+// ---------- local plugins (echo.agent/plugins/*) ----------
 
 import type {
-  MarketplaceListResponse,
   PluginsListResponse,
 } from "./types";
 
@@ -1681,19 +1523,6 @@ function requireSuccessfulAdminAction(value: unknown): unknown {
     }
   }
   throw new Error("操作未完成，请重试或重新加载列表。");
-}
-
-/** List marketplace sources + plugins via `echo.agent/marketplace/list`. */
-export async function marketplaceList(sessionId?: string): Promise<MarketplaceListResponse> {
-  return invoke<MarketplaceListResponse>("marketplace_list", { sessionId: sessionId ?? null });
-}
-
-/** Execute a marketplace action (install/uninstall/refresh/add_source/remove_source). */
-export async function marketplaceAction(
-  sessionId: string,
-  action: unknown,
-): Promise<unknown> {
-  return requireSuccessfulAdminAction(await invoke("marketplace_action", { sessionId, action }));
 }
 
 // ---------- notification center ----------

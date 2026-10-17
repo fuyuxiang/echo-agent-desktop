@@ -1,6 +1,6 @@
 /**
  * Pending-expert store — tracks an expert that has been "summoned" from the
- * marketplace but whose conversation hasn't started yet (user hasn't hit send).
+ * local experts page but whose conversation hasn't started yet (user hasn't hit send).
  *
  * Mirrors EchoAgent's `pendingExpertActivation` / `setPendingExpert` pattern:
  * summon → set pending → navigate home → composer shows badge + pre-fills
@@ -19,7 +19,7 @@ export interface PendingExpert {
   quickPrompt?: string;
   /** Expert id for persistence. */
   expertId: string;
-  /** Source: "marketplace" | "local". */
+  /** Source of the local expert definition. */
   source: string;
   /** Avatar preset or path (for the composer badge). */
   avatarLocal?: string;

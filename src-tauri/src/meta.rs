@@ -65,11 +65,11 @@ fn state_transaction() -> &'static Mutex<()> {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ExpertBinding {
-    /// Expert id (marketplace id or local agent name).
+    /// Expert id (local agent name; legacy ids remain readable).
     pub expert_id: String,
     /// Display name shown in the UI badge.
     pub expert_name: String,
-    /// "marketplace" | "local".
+    /// "local" for current bindings; historical source values remain readable.
     pub source: String,
     /// Local avatar image path (for the topbar/composer badge).
     #[serde(default, skip_serializing_if = "Option::is_none")]

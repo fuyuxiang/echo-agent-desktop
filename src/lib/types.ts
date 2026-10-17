@@ -628,50 +628,6 @@ export interface McpAuthStatusEntry {
   status: string;
 }
 
-// ---------- CLI-type connector authorization (cli.json driven) ----------
-
-/** Probe result for a CLI connector (`connectors_cli_status`). */
-export interface ConnectorCliStatus {
-  hasSpec: boolean;
-  /** versionCheck passed (CLI installed & new enough). */
-  installed: boolean;
-  cliVersion?: string;
-  /** status command matches the authed pattern. */
-  authed: boolean;
-  /** UI hint: show the auth URL as a QR code. */
-  qrModal: boolean;
-  error?: string;
-}
-
-/** Result of the CLI authorization flow (`connectors_cli_auth`). */
-export interface ConnectorCliAuthResult {
-  ok: boolean;
-  authed: boolean;
-  error?: string;
-}
-
-/** `connector://cli-auth-url` event payload. */
-export interface ConnectorCliAuthUrlEvent {
-  source: string;
-  url: string;
-  qrModal: boolean;
-  suppressBrowser: boolean;
-}
-
-/** `connector://cli-auth-log` event payload (CLI stdout/stderr tail). */
-export interface ConnectorCliAuthLogEvent {
-  source: string;
-  line: string;
-}
-
-/** `connector://cli-auth-done` event payload. */
-export interface ConnectorCliAuthDoneEvent {
-  source: string;
-  ok: boolean;
-  authed: boolean;
-  error?: string;
-}
-
 // ---------- experts / assistants (~/.echo-agent/agents/*.md) ----------
 
 /** One agent definition (subagent template). */
@@ -858,7 +814,7 @@ export interface AgentDefaults {
   rememberToolApprovals?: boolean;
 }
 
-// ---------- plugins + marketplace (echo.agent/plugins/*, echo.agent/marketplace/*) ----------
+// ---------- local plugins (echo.agent/plugins/*) ----------
 
 /** One installed plugin (subset of EchoAgent's PluginInfo). */
 export interface PluginEntry {
@@ -878,44 +834,11 @@ export interface PluginEntry {
   hookCount?: number;
   mcpServerCount?: number;
   mcpStatus?: string;
-  marketplaceSource?: string;
   conflict?: unknown;
 }
 
 export interface PluginsListResponse {
   plugins: PluginEntry[];
-}
-
-/** One plugin from a marketplace source (with install status). */
-export interface MarketplacePluginEntry {
-  name: string;
-  version?: string;
-  description?: string;
-  category?: string;
-  author?: string;
-  tags?: string[];
-  homepage?: string;
-  relativePath: string;
-  skillCount: number;
-  hasHooks: boolean;
-  hasAgents: boolean;
-  hasMcp: boolean;
-  installStatus: string;
-  installedVersion?: string;
-  remoteUrl?: string;
-  remoteRef?: string;
-}
-
-export interface MarketplaceScanResult {
-  sourceName: string;
-  sourceKind: string;
-  sourceUrlOrPath: string;
-  plugins: MarketplacePluginEntry[];
-  error?: string;
-}
-
-export interface MarketplaceListResponse {
-  sources: MarketplaceScanResult[];
 }
 
 // ---------- notification center ----------
@@ -1008,184 +931,8 @@ export interface AutomationUpdateEvent {
   error?: string;
 }
 
-// ---------- connector marketplace (read live from a local data dir) ----------
-
-/** One connector category chip (mirrors the Rust `ConnectorCategory`). */
-export interface ConnectorCategory {
-  id: string;
-  zh: string;
-}
-
-/** One connector card (mirrors the Rust `ConnectorItem`, camelCase). */
-export interface ConnectorItem {
-  id: string;
-  name: string;
-  nameEn?: string;
-  desc: string;
-  descEn?: string;
-  /** Directory key — locates `icons/<source>.*` and `connectors/<source>/mcp.json`. */
-  source: string;
-  /** "mcp" | "cli" | "skill-only" | "unknown". */
-  kind: string;
-  /** "token" | "server-side" | "oneid-token" | undefined. */
-  authMode?: string;
-  /** Example prompts (zh). */
-  examplesZh: string[];
-  /** Derived category id. */
-  cat: string;
-  /** Absolute local icon path — feed to `connectorsIcon`. */
-  iconLocal?: string;
-  /** Token-authorization form schema (token-mode connectors only). */
-  tokenSchema?: TokenSchema;
-}
-
-/** One field in a token-schema form (mirrors Rust `TokenField`). */
-export interface TokenField {
-  /** Env-var name the value is injected as (e.g. `WENDAO_API_KEY`). */
-  key: string;
-  label?: string;
-  /** "password" → masked input; otherwise plain text. */
-  type?: string;
-  required?: boolean;
-  placeholder?: string;
-  description?: string;
-}
-
-/** The `token-schema.json` payload (mirrors Rust `TokenSchema`). */
-export interface TokenSchema {
-  title?: string;
-  description?: string;
-  docUrl?: string;
-  docLabel?: string;
-  fields: TokenField[];
-}
-
-/** Catalog payload returned by `connectors_load`. */
-export interface ConnectorCatalog {
-  root: string;
-  categories: ConnectorCategory[];
-  connectors: ConnectorItem[];
-}
-
-// ---------- skill catalog (runtime scan of agents + builtin dirs) ----------
-
-/** One skill category chip (mirrors the Rust `SkillCategory`). */
-export interface SkillCategory {
-  id: string;
-  zh: string;
-}
-
-/** One skill card (mirrors the Rust `SkillItem`, camelCase). */
-export interface SkillItem {
-  /** Skill name from frontmatter (falls back to the directory name). */
-  id: string;
-  name: string;
-  desc: string;
-  descEn?: string;
-  version?: string;
-  whenToUse?: string;
-  /** Absolute directory containing the SKILL.md. */
-  sourceDir: string;
-  /** "connector" (from a connector package) | "builtin". */
-  origin: "connector" | "builtin";
-  /** Owning connector source name (connector origin only). */
-  plugin?: string;
-  /** Absolute local icon path (connector skills) — feed to `connectorsIcon`. */
-  iconLocal?: string;
-  /** Derived category id. */
-  cat: string;
-  /** Built-in skills are featured (精选). */
-  featured?: boolean;
-}
-
-/** Catalog payload returned by `skills_catalog_load`. */
-export interface SkillCatalog {
-  root: string;
-  builtinRoot: string;
-  categories: SkillCategory[];
-  skills: SkillItem[];
-}
-
 /** Raw mcp.json file content returned by the `mcp_config_read` command. */
 export interface McpConfigFile {
   filePath: string;
   content: string;
-}
-
-// ---------- expert marketplace (read live from a local data dir) ----------
-
-/** One expert category (mirrors the Rust `ExpertCategory`). */
-export interface ExpertCategory {
-  id: string;
-  zh: string;
-  en: string;
-}
-
-/** One expert / team card (mirrors the Rust `ExpertItem`, camelCase). */
-export interface ExpertItem {
-  id: string;
-  cat: string;
-  name: string;
-  nameEn?: string;
-  /** Profession / 职称 — the bold card title. */
-  title: string;
-  titleEn?: string;
-  desc: string;
-  tags: string[];
-  /** "agent" | "team". */
-  type: "agent" | "team" | string;
-  author?: string;
-  /** operationalTag text — the 特邀专家 ribbon; absent when not set. */
-  ribbon?: string;
-  /** Default starter prompt (zh) — used to seed the summon persona. */
-  init?: string;
-  opc?: boolean;
-  /** Pinned sort slot (displayPosition). */
-  pos?: number;
-  updated?: string;
-  /** Absolute local avatar path — feed to `expertsThumbnail`. */
-  avatarLocal?: string;
-  /** COS fallback URL (used if the local file is missing). */
-  avatarUrl?: string;
-  /** Plugin directory name — used to locate `agents/<agentName>.md`. */
-  plugin?: string;
-  /** Agent markdown filename stem (lead agent for teams). */
-  agentName?: string;
-  /** Quick prompts ("试试这样问我") from the manifest. */
-  quickPrompts?: string[];
-}
-
-/** Catalog payload returned by `experts_load`. */
-export interface ExpertCatalog {
-  root: string;
-  categories: ExpertCategory[];
-  experts: ExpertItem[];
-  /** 精选场景 parsed from `<root>/_meta/featuredScenes.json` (may be empty). */
-  featuredScenes: CatalogFeaturedScene[];
-}
-
-/** A 精选场景 as returned by the backend (local banner resolved when present). */
-export interface CatalogFeaturedScene {
-  id: string;
-  zh: string;
-  expertIds: string[];
-  /** Absolute local banner path — feed to `expertsImageBytes`. */
-  imageLocal?: string;
-  /** COS fallback URL. */
-  imageUrl?: string;
-}
-
-/** A featured-scene banner as rendered (catalog scene or the gradient fallback
- *  authored in `featured-scenes.ts`). */
-export interface FeaturedScene {
-  id: string;
-  zh: string;
-  expertIds: string[];
-  /** Absolute local banner path — feed to `expertsImageBytes`. */
-  imageLocal?: string;
-  /** Remote banner image (COS); when absent, the local gradient is used. */
-  image?: string;
-  /** Gradient endpoints for the offline fallback banner. */
-  from?: string;
-  to?: string;
 }

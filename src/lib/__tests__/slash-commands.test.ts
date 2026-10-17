@@ -60,6 +60,16 @@ describe("slash command helpers", () => {
     ]);
   });
 
+  it("does not restore the retired market command from runtime suggestions", () => {
+    expect(isClientSlashCommand("marketplace")).toBe(false);
+    expect(mergeSlashCommands(availableClientSlashCommands(true), [
+      { name: "/MARKETPLACE", source: "builtin" },
+      { name: "local-plugin:review", source: "plugin:local-plugin" },
+    ]).map(command => command.name)).not.toContain("marketplace");
+    expect(mergeSlashCommands([], [{ name: "local-plugin:review", source: "plugin:local-plugin" }]))
+      .toHaveLength(1);
+  });
+
   it("gates session-only client commands and formats source labels", () => {
     expect(availableClientSlashCommands(false).some((c) => c.name === "plan")).toBe(false);
     expect(availableClientSlashCommands(true).some((c) => c.name === "plan")).toBe(true);

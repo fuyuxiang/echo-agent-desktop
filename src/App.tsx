@@ -1257,7 +1257,7 @@ function Shell() {
     // Extension management uses the active Runtime session's trusted workspace
     // and broadcasts changes from it. Clearing that session on entry made all
     // install/source/toggle actions unreachable, even after opening a chat.
-    if (["专家·技能·连接器", "技能", "连接器", "插件·市场", "插件市场"].includes(label)) {
+    if (["专家·技能·连接器", "技能", "连接器", "插件"].includes(label)) {
       return;
     }
     sessionsStore.getState().setCurrent(null);
@@ -2466,9 +2466,6 @@ function Shell() {
         return true;
       case "automation":
         handleNavigate("自动化");
-        return true;
-      case "marketplace":
-        handleNavigate("插件市场");
         return true;
       case "usage":
         handleNavigate("用量统计");

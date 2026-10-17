@@ -21,26 +21,23 @@ vi.mock("../Sidebar", () => ({ Sidebar: ({ onSelect, onNavigate }: {
   onSelect: (id: string) => void; onNavigate: (label: string) => void;
 }) => <>
   <button onClick={() => onSelect("source")}>打开源会话</button>
-  {['插件·市场', '插件市场', '专家·技能·连接器', '项目'].map(label =>
+  {['插件', '专家·技能·连接器', '项目'].map(label =>
     <button key={label} onClick={() => onNavigate(label)}>导航{label}</button>)}
 </> }));
 vi.mock("../ChatView", () => ({ ChatView: () => <div>真实会话已加载</div> }));
 vi.mock("../PlaceholderPage", async () => {
-  const { MarketplacePanel } = await import("../MarketplacePanel");
   const { PluginsPanel } = await import("../PluginsPanel");
   return { PlaceholderPage: ({ label, sessionId, onNavigate }: {
     label: string; sessionId?: string; onNavigate?: (label: string) => void;
-  }) => label === '插件市场' ? <MarketplacePanel sessionId={sessionId} />
-    : label === '插件·市场' ? <PluginsPanel sessionId={sessionId} onBrowseMarket={() => onNavigate?.('插件市场')} />
-      : <><span>{label}页面</span><button onClick={() => onNavigate?.('插件市场')}>从扩展导航市场</button></> };
+  }) => label === '插件' ? <PluginsPanel sessionId={sessionId} />
+      : <><span>{label}页面</span><button onClick={() => onNavigate?.('插件')}>管理本地插件</button></> };
 });
 vi.mock("@/lib/agent-client", async original => ({
   ...await original<object>(), agentInit: vi.fn(), agentAuthStatus: vi.fn(), providersList: vi.fn(),
   agentListAllSessions: vi.fn(), agentListWorkspaces: vi.fn(async () => []),
   agentLoadSession: vi.fn(async () => 'model-a'), subscribeAgentEvents: vi.fn(async () => () => {}),
-  internalReload: vi.fn(async () => {}), pluginsList: vi.fn(async () => ({ plugins: [], warnings: [] })),
-  marketplaceList: vi.fn(async () => ({ sources: [], warnings: [] })),
-  marketplaceAction: vi.fn(async () => ({ status: 'success' })),
+  internalReload: vi.fn(async () => {}), pluginsList: vi.fn(async () => ({ plugins: [{ id: "user/demo", name: "本地插件", enabled: true, trusted: true }], warnings: [] })),
+  pluginsAction: vi.fn(async () => ({ status: "success" })),
 }));
 
 import App from "@/App";
@@ -67,15 +64,12 @@ async function start() {
   act(() => useSessionStore.getState().setMessages([{ id: 'user', role: 'user', complete: true, parts: [{ kind: 'text', text: '保留当前上下文' }] }]));
 }
 describe('extension navigation preserves the live management context', () => {
-  it.each(['直接市场', '插件·市场', '专家·技能·连接器'])('allows actual source action after %s', async route => {
+  it.each(['插件', '专家·技能·连接器'])('allows local plugin toggle after %s', async route => {
     await start(); const before = useSessionStore.getState().messages;
-    fireEvent.click(screen.getByRole('button', { name: `导航${route === '直接市场' ? '插件市场' : route}` }));
-    if (route === '插件·市场') fireEvent.click(await screen.findByRole('button', { name: '浏览市场' }));
-    if (route === '专家·技能·连接器') fireEvent.click(await screen.findByRole('button', { name: '从扩展导航市场' }));
-    fireEvent.click(await screen.findByRole('button', { name: '添加源' }));
-    fireEvent.change(screen.getByLabelText('市场源 Git URL'), { target: { value: 'https://example.invalid/owned.git' } });
-    fireEvent.click(screen.getByRole('button', { name: '添加' }));
-    await waitFor(() => expect(client.marketplaceAction).toHaveBeenCalledWith('source', { type: 'add_source', url: 'https://example.invalid/owned.git' }));
+    fireEvent.click(screen.getByRole('button', { name: `导航${route}` }));
+    if (route === '专家·技能·连接器') fireEvent.click(await screen.findByRole('button', { name: '管理本地插件' }));
+    fireEvent.click(await screen.findByRole('button', { name: '已启用' }));
+    await waitFor(() => expect(client.pluginsAction).toHaveBeenCalledWith('source', { type: 'disable', pluginId: 'user/demo' }));
     expect(useSessionsStore.getState().currentSessionId).toBe('source');
     expect(useSessionStore.getState().messages).toEqual(before);
   });

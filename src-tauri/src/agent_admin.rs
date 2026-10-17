@@ -53,7 +53,6 @@ const MAX_ADMIN_RESPONSE_STRING_BYTES: usize = 256 * 1024;
 const MAX_ADMIN_RESPONSE_NODES: usize = 100_000;
 const MAX_REWIND_PROMPT_BYTES: usize = 4 * 1024 * 1024;
 const MAX_ADMIN_RESULTS: usize = 2_000;
-const MAX_ADMIN_LISTED_SOURCES: usize = 256;
 const MAX_ADMIN_LISTED_PLUGINS: usize = 4_096;
 const MAX_LOCAL_PATH_CHARS: usize = 4_096;
 const MAX_REMOTE_SOURCE_CHARS: usize = 2_048;
@@ -62,8 +61,6 @@ const MAX_REMOTE_SOURCE_CHARS: usize = 2_048;
 struct AdminCapabilities {
     plugin_ids: HashSet<String>,
     plugin_roots: HashSet<PathBuf>,
-    marketplace_sources: HashSet<String>,
-    marketplace_plugins: HashSet<(String, String)>,
 }
 
 fn admin_capabilities() -> &'static Mutex<AdminCapabilities> {
@@ -1502,6 +1499,14 @@ fn parse_slash_commands(v: &serde_json::Value) -> Vec<SlashCommand> {
     arr.iter()
         .take(MAX_ADMIN_RESULTS)
         .filter_map(|item| {
+            if item
+                .get("name")?
+                .as_str()?
+                .trim_start_matches('/')
+                .eq_ignore_ascii_case("marketplace")
+            {
+                return None;
+            }
             let meta = item.get("_meta");
             let source = meta
                 .and_then(|m| m.get("pluginName"))
@@ -2043,7 +2048,7 @@ pub(crate) fn request_internal_reload(state: &AppState, kind: &str) -> Result<()
 }
 
 // ========================================================================
-// Plugins + Marketplace (echo.agent/plugins/*, echo.agent/marketplace/*)
+// Local plugins (echo.agent/plugins/*)
 // ========================================================================
 
 fn action_object_mut(
@@ -2125,24 +2130,6 @@ fn normalize_install_source(filesystem: &FilesystemAccess, source: &str) -> Resu
     Ok(canonical.to_string_lossy().into_owned())
 }
 
-fn normalize_plugin_relative_path(value: &str) -> Option<String> {
-    if value.is_empty() || value.len() > 1_024 || value.chars().any(char::is_control) {
-        return None;
-    }
-    let normalized = value.replace('\\', "/");
-    let normalized = normalized.trim_start_matches("./");
-    let parts = normalized.split('/').collect::<Vec<_>>();
-    if parts.is_empty()
-        || parts.len() > 32
-        || parts
-            .iter()
-            .any(|part| part.is_empty() || part.contains(':') || matches!(*part, "." | ".."))
-    {
-        return None;
-    }
-    Some(parts.join("/"))
-}
-
 fn remember_plugins(value: &serde_json::Value) -> Result<(), String> {
     validate_admin_response(value)?;
     let plugins = value
@@ -2177,54 +2164,6 @@ fn remember_plugins(value: &serde_json::Value) -> Result<(), String> {
         .unwrap_or_else(|poisoned| poisoned.into_inner());
     capabilities.plugin_ids = ids;
     capabilities.plugin_roots = roots;
-    Ok(())
-}
-
-fn remember_marketplace(value: &serde_json::Value) -> Result<(), String> {
-    validate_admin_response(value)?;
-    let sources = value
-        .get("sources")
-        .and_then(serde_json::Value::as_array)
-        .ok_or_else(|| "Agent Runtime 返回的市场列表格式无效".to_string())?;
-    if sources.len() > MAX_ADMIN_LISTED_SOURCES {
-        return Err("Agent Runtime 返回的市场源数量过多".into());
-    }
-    let mut identities = HashSet::new();
-    let mut pairs = HashSet::new();
-    let mut plugin_count = 0_usize;
-    for source in sources {
-        let identity = source
-            .get("sourceUrlOrPath")
-            .and_then(serde_json::Value::as_str)
-            .filter(|value| {
-                !value.is_empty()
-                    && value.chars().count() <= MAX_LOCAL_PATH_CHARS
-                    && !value.chars().any(char::is_control)
-            })
-            .ok_or_else(|| "Agent Runtime 返回了无效市场源".to_string())?;
-        identities.insert(identity.to_string());
-        let plugins = source
-            .get("plugins")
-            .and_then(serde_json::Value::as_array)
-            .ok_or_else(|| "Agent Runtime 返回了无效市场插件列表".to_string())?;
-        plugin_count = plugin_count.saturating_add(plugins.len());
-        if plugin_count > MAX_ADMIN_LISTED_PLUGINS {
-            return Err("Agent Runtime 返回的市场插件数量过多".into());
-        }
-        for plugin in plugins {
-            let relative = plugin
-                .get("relativePath")
-                .and_then(serde_json::Value::as_str)
-                .and_then(normalize_plugin_relative_path)
-                .ok_or_else(|| "Agent Runtime 返回了无效插件相对路径".to_string())?;
-            pairs.insert((identity.to_string(), relative));
-        }
-    }
-    let mut capabilities = admin_capabilities()
-        .lock()
-        .unwrap_or_else(|poisoned| poisoned.into_inner());
-    capabilities.marketplace_sources = identities;
-    capabilities.marketplace_plugins = pairs;
     Ok(())
 }
 
@@ -2334,85 +2273,6 @@ fn normalize_plugin_action(
     }
 }
 
-fn require_listed_marketplace_source(source: &str) -> Result<(), String> {
-    if admin_capabilities()
-        .lock()
-        .unwrap_or_else(|poisoned| poisoned.into_inner())
-        .marketplace_sources
-        .contains(source)
-    {
-        Ok(())
-    } else {
-        Err("市场源未出现在后端最近加载的列表中，请刷新后重试".into())
-    }
-}
-
-fn normalize_marketplace_action(
-    filesystem: &FilesystemAccess,
-    action: &mut serde_json::Value,
-) -> Result<(), String> {
-    let object = action_object_mut(action)?;
-    let kind = action_kind(object)?.to_string();
-    match kind.as_str() {
-        "refresh" => {
-            ensure_action_keys(object, &["type", "sourceUrlOrPath"])?;
-            crate::policy::require_feature("skills")?;
-            crate::policy::require_skill_upload()?;
-            if let Some(source) = object.get("sourceUrlOrPath") {
-                if !source.is_null() {
-                    let source = source
-                        .as_str()
-                        .ok_or_else(|| "市场源字段无效".to_string())?;
-                    require_listed_marketplace_source(source)?;
-                }
-            }
-            Ok(())
-        }
-        "install" | "update" | "uninstall" => {
-            ensure_action_keys(object, &["type", "sourceUrlOrPath", "pluginRelativePath"])?;
-            if kind != "uninstall" {
-                crate::policy::require_feature("skills")?;
-                crate::policy::require_skill_upload()?;
-            }
-            let source = required_action_string(object, "sourceUrlOrPath", MAX_LOCAL_PATH_CHARS)?;
-            let relative = normalize_plugin_relative_path(required_action_string(
-                object,
-                "pluginRelativePath",
-                1_024,
-            )?)
-            .ok_or_else(|| "市场插件相对路径无效".to_string())?;
-            let listed = admin_capabilities()
-                .lock()
-                .unwrap_or_else(|poisoned| poisoned.into_inner())
-                .marketplace_plugins
-                .contains(&(source.to_string(), relative.clone()));
-            if !listed {
-                return Err("只能操作后端最近加载的市场插件".into());
-            }
-            object.insert(
-                "pluginRelativePath".into(),
-                serde_json::Value::String(relative),
-            );
-            Ok(())
-        }
-        "add_source" => {
-            ensure_action_keys(object, &["type", "url"])?;
-            crate::policy::require_feature("skills")?;
-            crate::policy::require_skill_upload()?;
-            let source = required_action_string(object, "url", MAX_LOCAL_PATH_CHARS)?;
-            let source = normalize_install_source(filesystem, source)?;
-            object.insert("url".into(), serde_json::Value::String(source));
-            Ok(())
-        }
-        "remove_source" => {
-            ensure_action_keys(object, &["type", "sourceUrlOrPath"])?;
-            let source = required_action_string(object, "sourceUrlOrPath", MAX_LOCAL_PATH_CHARS)?;
-            require_listed_marketplace_source(source)
-        }
-        _ => Err("不支持的市场管理操作".into()),
-    }
-}
-
 /// List installed plugins via `echo.agent/plugins/list`. `session_id` is optional —
 /// EchoAgent answers from the session's registry when given, otherwise from the
 /// shared snapshot. Returns the raw `PluginsListResponse` JSON so the frontend
@@ -2469,65 +2329,13 @@ pub async fn plugins_action(
     Ok(value)
 }
 
-/// List marketplace sources + their plugins via `echo.agent/marketplace/list`.
-/// Returns the raw `MarketplaceListResponse` JSON.
-#[tauri::command]
-pub async fn marketplace_list(
-    state: State<'_, AppState>,
-    session_id: Option<String>,
-) -> Result<serde_json::Value, String> {
-    if let Some(session_id) = session_id.as_deref() {
-        require_live_session(&state, session_id)?;
-    }
-    let tx = state
-        .tx
-        .lock()
-        .unwrap()
-        .clone()
-        .ok_or("agent not initialized")?;
-    let sid = session_id.unwrap_or_default();
-    let params = raw_params(&serde_json::json!({ "sessionId": sid }));
-    let value = call_ext(&tx, "echo.agent/marketplace/list", params)
-        .await
-        .map_err(|e| e.to_string())?;
-    remember_marketplace(&value)?;
-    Ok(value)
-}
-
-/// Execute a marketplace action (install/uninstall/refresh/update/add_source/
-/// remove_source). `action` shape matches EchoAgent's `MarketplaceAction` enum.
-#[tauri::command]
-pub async fn marketplace_action(
-    state: State<'_, AppState>,
-    filesystem: State<'_, FilesystemAccess>,
-    session_id: String,
-    mut action: serde_json::Value,
-) -> Result<serde_json::Value, String> {
-    require_live_session(&state, &session_id)?;
-    normalize_marketplace_action(&filesystem, &mut action)?;
-    let tx = state
-        .tx
-        .lock()
-        .unwrap()
-        .clone()
-        .ok_or("agent not initialized")?;
-    let payload = serde_json::json!({ "sessionId": session_id, "action": action });
-    let params = raw_params(&payload);
-    let value = call_ext(&tx, "echo.agent/marketplace/action", params)
-        .await
-        .map_err(|e| e.to_string())?;
-    validate_admin_response(&value)?;
-    Ok(value)
-}
-
 #[cfg(test)]
 mod tests {
     use super::{
         check_expected_revision, delete_session_memory_artifacts_from_storage, file_revision,
         init_sqlite_vec, kill_running_task, list_memory, list_running_tasks,
         normalize_plugin_action, parse_model_reload_ack, parse_rewind_execution,
-        parse_slash_commands, remember_marketplace, remember_plugins,
-        request_internal_reload_and_wait, require_listed_marketplace_source,
+        parse_slash_commands, remember_plugins, request_internal_reload_and_wait,
         require_listed_plugin_id, resolve_memory_path, rewind_execute_payload, rewind_point_values,
         secure_remote_source, validate_admin_action, MemoryEntryScope, MemoryIndex, MemoryStorage,
         ModelReloadAck, RawSearchHit, RunningTaskSource, MAX_ADMIN_ACTION_STRING_BYTES,
@@ -3176,7 +2984,25 @@ mod tests {
     }
 
     #[test]
-    fn plugin_and_marketplace_actions_require_backend_listed_capabilities() {
+    fn desktop_commands_exclude_retired_market_browsing_but_keep_local_capabilities() {
+        let commands = parse_slash_commands(&serde_json::json!({ "commands": [
+            { "name": "marketplace" },
+            { "name": "/MARKETPLACE" },
+            { "name": "compact" },
+            { "name": "local:review", "_meta": { "pluginName": "local" } },
+            { "name": "notes", "_meta": { "scope": "user" } }
+        ] }));
+        assert_eq!(
+            commands
+                .iter()
+                .map(|command| command.name.as_str())
+                .collect::<Vec<_>>(),
+            vec!["compact", "local:review", "notes"]
+        );
+    }
+
+    #[test]
+    fn plugin_actions_require_backend_listed_capabilities() {
         let root = tempfile::tempdir().unwrap();
         let listed_plugin = root.path().join("plugin");
         std::fs::create_dir(&listed_plugin).unwrap();
@@ -3189,16 +3015,6 @@ mod tests {
         .unwrap();
         assert!(require_listed_plugin_id("user/12345678/demo").is_ok());
         assert!(require_listed_plugin_id("user/12345678/forged").is_err());
-
-        remember_marketplace(&serde_json::json!({
-            "sources": [{
-                "sourceUrlOrPath": "https://example.test/catalog.git",
-                "plugins": [{ "relativePath": "plugins/demo" }]
-            }]
-        }))
-        .unwrap();
-        assert!(require_listed_marketplace_source("https://example.test/catalog.git").is_ok());
-        assert!(require_listed_marketplace_source("/private/forged").is_err());
 
         let access = crate::shell_fs::FilesystemAccess::default();
         let mut remove = serde_json::json!({ "type": "remove", "path": listed_plugin });

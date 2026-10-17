@@ -427,7 +427,7 @@ describe("Sidebar", () => {
     expect(screen.queryByRole("menu", { name: "更多功能" })).toBeNull();
   });
 
-  it.each(["专家·技能·连接器", "技能", "连接器", "插件·市场", "插件市场"])("扩展子页 %s 始终选中同一个侧栏入口", activeNav => {
+  it.each(["专家·技能·连接器", "技能", "连接器", "插件"])("扩展子页 %s 始终选中同一个侧栏入口", activeNav => {
     render(<Sidebar {...base} activeNav={activeNav} />);
     expect(screen.getByRole("button", { name: "扩展" })).toHaveClass("sidebar__nav-item--active");
     expect(screen.getByText("更多").closest("button")).not.toHaveClass("sidebar__nav-item--active");

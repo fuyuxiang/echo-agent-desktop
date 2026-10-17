@@ -52,21 +52,14 @@ try {
         await page.locator(".app-dialog").waitFor({ state: "hidden" });
       }
     }
-    for (const variant of ["expert", "connector", "token", "upload"]) {
+    for (const variant of ["upload"]) {
       await page.goto(`http://127.0.0.1:1439/__ui-review?surface=details&detailVariant=${variant}&theme=${theme}`);
-      const isUpload = variant === "upload";
-      await page.locator(isUpload ? ".sk-upload" : ".ec-modal").waitFor();
-      await inspect(`details-${variant}-${width}-${theme}`, isUpload ? ".sk-upload" : ".ec-modal", isUpload ? ".sk-import-head" : ".ec-modal-header", isUpload ? ".sk-upload-footer" : ".ec-modal-footer", isUpload ? ".sk-import-body" : ".ec-modal-body");
+      await page.locator(".sk-upload").waitFor();
+      await inspect(`details-${variant}-${width}-${theme}`, ".sk-upload", ".sk-import-head", ".sk-upload-footer", ".sk-import-body");
       if (!baseline) {
-        await page.locator(isUpload ? ".sk-import-body" : ".ec-modal-body").evaluate(el => { el.scrollTop = el.scrollHeight; });
-        await inspect(`details-${variant}-scrolled-${width}-${theme}`, isUpload ? ".sk-upload" : ".ec-modal", isUpload ? ".sk-import-head" : ".ec-modal-header", isUpload ? ".sk-upload-footer" : ".ec-modal-footer", isUpload ? ".sk-import-body" : ".ec-modal-body");
-        if (variant === "token") {
-          await page.locator(".cn-token-input").first().fill("隔离测试输入");
-          await page.keyboard.press("Escape");
-          await page.getByRole("alertdialog", { name: "舍弃未保存的修改？" }).waitFor();
-          await page.getByRole("button", { name: "继续编辑" }).click();
-          assert.equal(await page.locator(".cn-token-input").first().inputValue(), "隔离测试输入");
-        }
+        await page.locator(".sk-import-body").evaluate(el => { el.scrollTop = el.scrollHeight; });
+        await inspect(`details-${variant}-scrolled-${width}-${theme}`, ".sk-upload", ".sk-import-head", ".sk-upload-footer", ".sk-import-body");
+
       }
     }
     for (const state of ["short", "long", "loading", "error"]) {

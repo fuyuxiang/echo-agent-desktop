@@ -4,7 +4,7 @@
  * 显示已安装的 EchoAgent 插件（含 skills/agents/hooks/mcp 计数），支持启用/禁用。
  * 对应 EchoAgent 的 plugins-panel。
  *
- * 插件来源：~/.echo-agent/plugins/、项目 .echo-agent/plugins/、marketplace 安装。
+ * 插件来源：~/.echo-agent/plugins/、项目 .echo-agent/plugins/ 及已配置的本地目录。
  */
 import { useCallback, useEffect, useRef, useState } from "react";
 import {
@@ -22,10 +22,9 @@ interface PluginsPanelProps {
   /** Current session id (for the plugins/list call). */
   sessionId?: string;
   onToast?: (msg: string) => void;
-  onBrowseMarket?: () => void;
 }
 
-export function PluginsPanel({ sessionId, onToast, onBrowseMarket }: PluginsPanelProps) {
+export function PluginsPanel({ sessionId, onToast }: PluginsPanelProps) {
   const [plugins, setPlugins] = useState<PluginEntry[]>([]);
   const [loading, setLoading] = useState(false);
   const [loadError, setLoadError] = useState<string | null>(null);
@@ -35,11 +34,15 @@ export function PluginsPanel({ sessionId, onToast, onBrowseMarket }: PluginsPane
   const currentSession = useRef(sessionId);
   currentSession.current = sessionId;
 
-  const reload = useCallback(async () => {
+  const reload = useCallback(async (rescan = false) => {
     const generation = ++reloadGeneration.current;
     setLoading(true);
     setLoadError(null);
     try {
+      if (rescan && sessionId) {
+        await pluginsAction(sessionId, { type: "reload" });
+        if (reloadGeneration.current !== generation) return;
+      }
       const resp = await pluginsList(sessionId);
       if (reloadGeneration.current !== generation) return;
       setPlugins(resp.plugins ?? []);
@@ -74,7 +77,7 @@ export function PluginsPanel({ sessionId, onToast, onBrowseMarket }: PluginsPane
         await pluginsAction(sessionId, {
           type: plugin.enabled ? "disable" : "enable",
           // Runtime actions use the stable backend-generated ID; display names
-          // are not unique across project/user/marketplace scopes.
+          // are not unique across project/user scopes.
           pluginId,
         });
         if (currentSession.current !== sessionId) return;
@@ -99,8 +102,8 @@ export function PluginsPanel({ sessionId, onToast, onBrowseMarket }: PluginsPane
         <h2 className="plugins-panel__title">插件</h2>
         <button
           className="plugins-panel__action-btn"
-          onClick={reload}
-          disabled={loading}
+          onClick={() => void reload(true)}
+          disabled={loading || busy !== null}
           title="刷新"
         >
           <RefreshCwIcon size="sm" /> 刷新
@@ -123,7 +126,7 @@ export function PluginsPanel({ sessionId, onToast, onBrowseMarket }: PluginsPane
         {loadError && (
           <div className="plugins-panel__load-error" role="alert">
             <span>插件列表加载失败：{loadError}{plugins.length > 0 ? "。下方保留上次加载的结果。" : ""}</span>
-            <button type="button" className="form-button" onClick={() => void reload()} disabled={loading}>重试</button>
+            <button type="button" className="form-button" onClick={() => void reload(true)} disabled={loading || busy !== null}>重试</button>
           </div>
         )}
         {plugins.length === 0 && !loading && !loadError && (
@@ -131,9 +134,9 @@ export function PluginsPanel({ sessionId, onToast, onBrowseMarket }: PluginsPane
             <PuzzlePieceIcon size="xl" color="var(--echo-text-tertiary)" />
             <p>暂无插件。</p>
             <p className="plugins-panel__hint">
-              浏览市场安装插件，或把插件放到 <code>~/.echo-agent/plugins/</code>。
+              将本地插件放到 <code>~/.echo-agent/plugins/</code>，或项目的 <code>.echo-agent/plugins/</code>。
             </p>
-            {onBrowseMarket && <button type="button" className="form-button" onClick={onBrowseMarket}>浏览市场</button>}
+            <p className="plugins-panel__hint">新建任务时会加载本地插件；已有任务可点击「刷新」重新加载。</p>
           </div>
         )}
         {plugins.map((p) => (
@@ -173,16 +176,13 @@ export function PluginsPanel({ sessionId, onToast, onBrowseMarket }: PluginsPane
                 {p.hookCount !== undefined && p.hookCount > 0 && (
                   <span title="Hooks"><SparklesIcon size="sm" /> {p.hookCount}</span>
                 )}
-                {p.marketplaceSource && (
-                  <span className="plugins-panel__source">{p.marketplaceSource}</span>
-                )}
               </div>
             </div>
             <div className="plugins-panel__item-actions">
               <button
                 className={`plugins-panel__toggle ${p.enabled ? "plugins-panel__toggle--on" : ""}`}
                 onClick={() => handleToggle(p)}
-                disabled={busy !== null || !sessionId}
+                disabled={loading || busy !== null || !sessionId}
                 title={p.enabled ? "禁用" : "启用"}
               >
                 {busy === (p.id ?? p.name) ? "…" : p.enabled ? "已启用" : "已禁用"}

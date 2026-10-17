@@ -1,7 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
 import { act, fireEvent, render, screen } from "@testing-library/react";
 import { PluginsPanel } from "../PluginsPanel";
-import { pluginsList } from "@/lib/agent-client";
+import { pluginsAction, pluginsList } from "@/lib/agent-client";
 
 vi.mock("@/lib/agent-client", () => ({
   pluginsList: vi.fn(),
@@ -48,4 +48,28 @@ describe("PluginsPanel load states", () => {
     expect(screen.queryByText("旧项目插件")).toBeNull();
     expect(screen.getByText("当前项目插件")).toBeInTheDocument();
   });
+  it("refresh reloads local plugin definitions before displaying the new snapshot", async () => {
+    vi.mocked(pluginsList).mockResolvedValueOnce({ plugins: [] })
+      .mockResolvedValueOnce({ plugins: [{ id: "user/local", name: "新加入的本地插件", enabled: false }] });
+    vi.mocked(pluginsAction).mockResolvedValueOnce({ status: "success" });
+    render(<PluginsPanel sessionId="local-session" />);
+    expect(await screen.findByText("暂无插件。")).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "浏览市场" })).toBeNull();
+    fireEvent.click(screen.getByRole("button", { name: "刷新" }));
+    expect(await screen.findByText("新加入的本地插件")).toBeInTheDocument();
+    expect(pluginsAction).toHaveBeenLastCalledWith("local-session", { type: "reload" });
+    expect(screen.getByRole("button", { name: "已禁用" })).toBeEnabled();
+  });
+
+  it("a failed local reload keeps the previous plugins available and reports the error", async () => {
+    vi.mocked(pluginsList).mockResolvedValueOnce({ plugins: [{ id: "user/kept", name: "保留插件", enabled: true }] });
+    vi.mocked(pluginsAction).mockRejectedValueOnce(new Error("重新扫描失败"));
+    render(<PluginsPanel sessionId="local-session" />);
+    await screen.findByText("保留插件");
+    fireEvent.click(screen.getByRole("button", { name: "刷新" }));
+    expect(await screen.findByRole("alert")).toHaveTextContent("重新扫描失败");
+    expect(screen.getByText("保留插件")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "已启用" })).toBeEnabled();
+  });
+
 });

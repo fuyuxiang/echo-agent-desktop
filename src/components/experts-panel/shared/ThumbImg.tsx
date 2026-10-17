@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from "react";
-import { expertsThumbnail } from "@/lib/agent-client";
+import { expertAvatar } from "@/lib/agent-client";
 import { safeRemoteImageUrl } from "@/lib/browser-preview";
 import { LetterAvatar } from "./LetterAvatar";
 
@@ -19,7 +19,7 @@ function loadThumb(path: string): Promise<string> {
   if (hit) return Promise.resolve(hit);
   let p = inflight.get(path);
   if (!p) {
-    p = expertsThumbnail(path)
+    p = expertAvatar(path)
       .then((b64) => {
         const url = b64 ? `data:image/jpeg;base64,${b64}` : "";
         if (url) cache.set(path, url);
@@ -48,8 +48,7 @@ interface ThumbImgProps {
 
 /** Avatar that prefers a local file (loaded as a tiny cached JPEG, only when the
  *  element scrolls near the viewport) and falls back to a remote URL, then to a
- *  colored letter. This keeps the ~100 MB of full-res source avatars from ever
- *  loading wholesale — only the visible cards decode. */
+ *  colored letter. Existing conversation avatars remain available without loading any catalog. */
 export function ThumbImg({
   local, url, name, size = 40, shape = "square", color, className,
 }: ThumbImgProps) {

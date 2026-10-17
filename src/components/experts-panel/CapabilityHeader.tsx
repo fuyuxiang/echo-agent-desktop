@@ -2,21 +2,20 @@ import {
   ExpertTabIcon, SkillTabIcon, ConnectorTabIcon,
 } from "@/foundation/components/Icon/icons";
 
-export type MarketTab = "experts" | "skills" | "connectors";
+export type CapabilityTab = "experts" | "skills" | "connectors";
 
-const TABS: { key: MarketTab; label: string; Icon: typeof ExpertTabIcon }[] = [
+const TABS: { key: CapabilityTab; label: string; Icon: typeof ExpertTabIcon }[] = [
   { key: "experts", label: "专家", Icon: ExpertTabIcon },
   { key: "skills", label: "技能", Icon: SkillTabIcon },
   { key: "connectors", label: "连接器", Icon: ConnectorTabIcon },
 ];
 
-/** The dark pill tab group (专家 / 技能 / 连接器) shown at the top-left of every
- *  market tab's topbar (截图 1–4). */
-export function MarketPills({
+/** Navigation for locally managed extension capabilities. */
+export function CapabilityPills({
   active, onChange,
 }: {
-  active: MarketTab;
-  onChange: (t: MarketTab) => void;
+  active: CapabilityTab;
+  onChange: (t: CapabilityTab) => void;
 }) {
   return (
     <div className="um-pills" role="tablist" aria-label="扩展分类">

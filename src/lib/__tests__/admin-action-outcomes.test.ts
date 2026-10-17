@@ -2,18 +2,18 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 
 vi.mock("@tauri-apps/api/core", () => ({ invoke: vi.fn() }));
 import { invoke } from "@tauri-apps/api/core";
-import { marketplaceAction, pluginsAction } from "../agent-client";
+import { pluginsAction } from "../agent-client";
 
 const ipc = vi.mocked(invoke);
 describe("Runtime extension action outcomes", () => {
   beforeEach(() => vi.clearAllMocks());
 
-  for (const [name, action] of [["marketplace", marketplaceAction], ["plugins", pluginsAction]] as const) {
+  for (const [name, action] of [["plugins", pluginsAction]] as const) {
     it(`${name} preserves a real successful outcome`, async () => {
       const outcome = { status: "success", message: "Applied", requiresReload: false, requiresRestart: false };
       ipc.mockResolvedValueOnce(outcome);
       await expect(action("session-1", { type: "reload" })).resolves.toEqual(outcome);
-      expect(ipc).toHaveBeenCalledWith(`${name === "marketplace" ? "marketplace" : "plugins"}_action`, {
+      expect(ipc).toHaveBeenCalledWith("plugins_action", {
         sessionId: "session-1", action: { type: "reload" },
       });
     });

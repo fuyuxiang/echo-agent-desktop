@@ -10,8 +10,8 @@ import { tmpdir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
 import { setTimeout as delay } from 'node:timers/promises';
 import { pathToFileURL } from 'node:url';
-import { auditCapabilitiesGitConfiguration, capabilitiesGitProcessEnvironment,
-  runCapabilitiesGitCommand } from './lib/capabilities-git-resource.mjs';
+import { auditNativeGitConfiguration, nativeGitProcessEnvironment,
+  runNativeGitCommand } from './lib/native-git-review.mjs';
 import { readonlyCompatibilitySourceRevocations } from './lib/native-core-review-isolation.mjs';
 
 const digest = value => createHash('sha256').update(value).digest('hex');
@@ -124,9 +124,9 @@ export async function runNativeIdeGitReview({ executable, resourceOnly = false, 
     }
     return [...owned];
   };
-  const env = capabilitiesGitProcessEnvironment();
+  const env = nativeGitProcessEnvironment();
   const git = async args => {
-    const reply = await runCapabilitiesGitCommand('git', args, { cwd, env });
+    const reply = await runNativeGitCommand('git', args, { cwd, env });
     assert.equal(reply.exitCode, 0, `Owned Git command failed: ${reply.stderr.slice(-1200)}`);
     assert(!reply.timedOut && !reply.overflow); return reply.stdout;
   };
@@ -138,7 +138,7 @@ export async function runNativeIdeGitReview({ executable, resourceOnly = false, 
     // Empty init template prevents copying external executables; inspect actual
     // system/global/local configuration before any checkout, stage or commit.
     await git(['init', '--quiet', '--template=', '--initial-branch=review']); chmodSync(join(cwd, '.git'), 0o700);
-    gitAudit = await auditCapabilitiesGitConfiguration('file:///private/unused-owned-ide-fixture', cwd, Object.keys(synthetic));
+    gitAudit = await auditNativeGitConfiguration('file:///private/unused-owned-ide-fixture', cwd, Object.keys(synthetic));
     assert(gitAudit.safe, 'Effective Git configuration needs a safe dedicated test resource');
     result.globalGitAudit = gitAudit;
     await git(['config', 'user.name', 'Echo IDE synthetic review']); await git(['config', 'user.email', 'review@example.invalid']);
@@ -287,7 +287,7 @@ export async function runNativeIdeGitReview({ executable, resourceOnly = false, 
     const worktreeRoot = expected.worktreeRoot;
     assert(lstatSync(worktreeRoot).isDirectory() && !lstatSync(worktreeRoot).isSymbolicLink()); assert.equal(realpathSync(worktreeRoot), worktreeRoot);
     assert.equal(physical(join(worktreeRoot, file)).toString('utf8'), version(1));
-    const worktreeHead = await runCapabilitiesGitCommand('git', ['rev-parse', 'HEAD'], { cwd: worktreeRoot, env });
+    const worktreeHead = await runNativeGitCommand('git', ['rev-parse', 'HEAD'], { cwd: worktreeRoot, env });
     assert.equal(worktreeHead.exitCode, 0); assert.equal(worktreeHead.stdout.trim(), expected.committedHead);
     assert.equal(physical(join(cwd, file)).toString('utf8'), version(3));
     result.worktreePhysical = { root: worktreeRoot, head: worktreeHead.stdout.trim(), savedSha256: digest(version(1)), originalSourceSha256: digest(version(3)), originalHeadUnchanged: true };

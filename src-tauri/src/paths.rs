@@ -23,8 +23,6 @@ const HOME_DIR_NAME: &str = ".echo-agent";
 const LEGACY_HOME_DIR_NAME: &str = concat!(".g", "rok");
 const MIGRATION_MARKER: &str = ".legacy-data-migrated";
 const LEGACY_AUTH_FILE: &str = "auth.json";
-const EXPERTS_MARKETPLACE_DIR_NAME: &str = "experts-marketplace";
-const CONNECTORS_MARKETPLACE_DIR_NAME: &str = "connectors-marketplace";
 
 /// Parse startup options without converting filesystem arguments to UTF-8.
 /// Other desktop/platform arguments are left for their existing handlers.
@@ -197,49 +195,12 @@ fn default_workspace_path(base: &Path) -> PathBuf {
     base.join("EchoAgent")
 }
 
-/// Canonical roots for the catalogs shown in the Experts · Skills ·
-/// Connectors panel. Keep these derived from `ECHO_AGENT_HOME`, just like the
-/// runtime-owned agents, skills and MCP configuration, so a redirected data
-/// home never leaves catalog reads behind in `~/.echo-agent`.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub(crate) struct CatalogRoots {
-    pub experts: PathBuf,
-    pub connectors: PathBuf,
-    pub builtin_skills: PathBuf,
+/// Built-in skills follow the active data home during legacy migration.
+fn builtin_skills_root(data_home: &Path) -> PathBuf {
+    data_home.join("resources").join("builtin-skills")
 }
 
-fn catalog_roots(data_home: &Path) -> CatalogRoots {
-    CatalogRoots {
-        experts: data_home.join(EXPERTS_MARKETPLACE_DIR_NAME),
-        connectors: data_home.join(CONNECTORS_MARKETPLACE_DIR_NAME),
-        builtin_skills: data_home.join("resources").join("builtin-skills"),
-    }
-}
-
-pub(crate) fn experts_marketplace_dir() -> PathBuf {
-    catalog_roots(&echo_agent_home_dir()).experts
-}
-
-pub(crate) fn connectors_marketplace_dir() -> PathBuf {
-    catalog_roots(&echo_agent_home_dir()).connectors
-}
-
-pub(crate) fn builtin_skills_dir() -> PathBuf {
-    catalog_roots(&echo_agent_home_dir()).builtin_skills
-}
-
-/// Resolve the first non-empty path override. The first name is the current
-/// public spelling; later names are compatibility aliases retained for users
-/// of older builds.
-pub(crate) fn first_env_path(names: &[&str]) -> Option<PathBuf> {
-    names.iter().find_map(|name| {
-        std::env::var_os(name)
-            .filter(|value| !value.is_empty())
-            .map(PathBuf::from)
-    })
-}
-
-pub(crate) fn push_unique_path(paths: &mut Vec<PathBuf>, path: PathBuf) {
+fn push_unique_path(paths: &mut Vec<PathBuf>, path: PathBuf) {
     if !paths.contains(&path) {
         paths.push(path);
     }
@@ -267,6 +228,9 @@ pub fn initialize_runtime_home() -> Result<PathBuf, String> {
     // not by the WebView, so request-time enforcement cannot be bypassed by
     // invoking a different settings command.
     std::env::set_var(SECURE_PROVIDER_URLS_ENV, "1");
+    // Desktop extensions are local. Never auto-register a remote catalog,
+    // even if a parent CLI process enabled it for its own use.
+    std::env::set_var("ECHO_AGENT_OFFICIAL_MARKETPLACE_AUTO_REGISTER", "false");
     // EchoAgent uses only per-provider credentials. Remove retired account
     // overrides before background threads start so the inert runtime adapter
     // cannot inherit an obsolete account token from the parent process.
@@ -289,12 +253,8 @@ pub fn initialize_runtime_home() -> Result<PathBuf, String> {
         .map_err(|e| format!("write migration marker {}: {e}", marker.display()))?;
     }
 
-    // Catalogs used to be resolved independently from fixed locations under
-    // the OS home directory. Import an existing valid catalog into the active
-    // data home once, without overwriting a target or deleting the source.
-    // Failure is non-fatal because the catalog resolvers retain legacy read
-    // fallbacks and the rest of the application must remain usable.
-    migrate_legacy_catalog_roots(&target);
+    // Preserve locally bundled skills without importing retired browse catalogs.
+    migrate_legacy_builtin_skills(&target);
 
     // Migration may have copied a world-readable legacy file. Harden it on
     // every startup so existing installations are repaired without requiring
@@ -307,39 +267,15 @@ pub fn initialize_runtime_home() -> Result<PathBuf, String> {
     Ok(target)
 }
 
-fn migrate_legacy_catalog_roots(data_home: &Path) {
+fn migrate_legacy_builtin_skills(data_home: &Path) {
     let Some(user_home) = legacy_catalog_user_home() else {
         return;
     };
-    let roots = catalog_roots(data_home);
     let old_default_home = user_home.join(HOME_DIR_NAME);
-
-    let expert_source = [
-        user_home.join("EchoAgent").join("agents"),
-        user_home.join("agents"),
-    ]
-    .into_iter()
-    .find(|path| path.join("_meta").join("_expert_center.json").is_file());
-    if let Some(source) = expert_source {
-        if let Err(error) = migrate_catalog_dir(&source, &roots.experts) {
-            eprintln!("migrate legacy expert marketplace: {error}");
-        }
-    }
-
-    let connector_source = old_default_home.join(CONNECTORS_MARKETPLACE_DIR_NAME);
-    if connector_source
-        .join(".echo-agent-connector")
-        .join("connectors.json")
-        .is_file()
-    {
-        if let Err(error) = migrate_catalog_dir(&connector_source, &roots.connectors) {
-            eprintln!("migrate legacy connector marketplace: {error}");
-        }
-    }
 
     let builtin_source = old_default_home.join("resources").join("builtin-skills");
     if builtin_source.is_dir() {
-        if let Err(error) = migrate_catalog_dir(&builtin_source, &roots.builtin_skills) {
+        if let Err(error) = migrate_catalog_dir(&builtin_source, &builtin_skills_root(data_home)) {
             eprintln!("migrate legacy built-in skills: {error}");
         }
     }
@@ -538,7 +474,7 @@ fn copy_file_if_missing(source: &Path, destination: &Path) -> io::Result<()> {
 #[cfg(test)]
 mod tests {
     use super::{
-        catalog_roots, default_workspace_path, legacy_catalog_home_for, merge_missing,
+        builtin_skills_root, default_workspace_path, legacy_catalog_home_for, merge_missing,
         migrate_catalog_dir, parse_data_home_args, redirected_default_workspace,
         reject_legacy_workbuddy_path, write_private_file,
     };
@@ -618,19 +554,10 @@ mod tests {
     }
 
     #[test]
-    fn catalog_layout_uses_children_of_one_data_home() {
+    fn builtin_skills_follow_the_active_data_home() {
         let root = Path::new("/data/echo-agent-home");
-        let catalog = catalog_roots(root);
         assert_eq!(
-            catalog.experts,
-            Path::new("/data/echo-agent-home/experts-marketplace")
-        );
-        assert_eq!(
-            catalog.connectors,
-            Path::new("/data/echo-agent-home/connectors-marketplace")
-        );
-        assert_eq!(
-            catalog.builtin_skills,
+            builtin_skills_root(root),
             Path::new("/data/echo-agent-home/resources/builtin-skills")
         );
     }

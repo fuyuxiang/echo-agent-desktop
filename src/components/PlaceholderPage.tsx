@@ -20,9 +20,6 @@ const AutomationPanel = lazy(() =>
 const PluginsPanel = lazy(() =>
   import("./PluginsPanel").then((module) => ({ default: module.PluginsPanel })),
 );
-const MarketplacePanel = lazy(() =>
-  import("./MarketplacePanel").then((module) => ({ default: module.MarketplacePanel })),
-);
 const KnowledgeBasePanel = lazy(() =>
   import("./KnowledgeBasePanel").then((module) => ({ default: module.KnowledgeBasePanel })),
 );
@@ -53,7 +50,6 @@ function PanelNavigation({ active, onNavigate }: { active: string; onNavigate?: 
     <strong>扩展</strong>
     <div className="panel-navigation__links">{tabs.map(([route, title]) => <button key={route} type="button" aria-current={route === active ? "page" : undefined}
       onClick={() => onNavigate?.(route)}>{title}</button>)}</div>
-    <button className="panel-navigation__market" type="button" aria-current={active === "插件市场" ? "page" : undefined} onClick={() => onNavigate?.("插件市场")}>浏览市场</button>
   </nav>;
 }
 
@@ -121,7 +117,7 @@ interface PlaceholderPageProps {
     promptTextOverride?: string,
   ) => boolean | void | Promise<boolean | void>;
   onCancelCodingRun?: () => boolean | void | Promise<boolean | void>;
-  /** Current session id (for plugins/marketplace actions that need a session). */
+  /** Current session id (for plugin actions that need a session). */
   sessionId?: string;
   /** 项目页：进入项目（新建会话并注入说明）。 */
   onStartProject?: (project: ProjectMeta) => void;
@@ -147,7 +143,7 @@ interface PlaceholderPageProps {
   notificationAutomationSequence?: number;
 }
 
-/** EchoAgent 功能面板（项目/组织/专家能力/自动化/知识库/插件市场）。 */
+/** EchoAgent 功能面板（项目/组织/专家能力/自动化/知识库/插件）。 */
 export function PlaceholderPage({
   label,
   onNavigate,
@@ -274,12 +270,12 @@ export function PlaceholderPage({
     );
   }
 
-  if (label === "插件·市场" || label === "插件市场") {
+  if (label === "插件") {
     return (
       <DeferredPanel>
         <div className="panel-section panel-section--capabilities"><PanelNavigation active={label} onNavigate={onNavigate} />
           <div className="capabilities-content">
-            {label === "插件市场" ? <MarketplacePanel sessionId={sessionId} onToast={onToast} /> : <PluginsPanel sessionId={sessionId} onToast={onToast} onBrowseMarket={() => onNavigate?.("插件市场")} />}
+            <PluginsPanel sessionId={sessionId} onToast={onToast} />
           </div>
         </div>
       </DeferredPanel>

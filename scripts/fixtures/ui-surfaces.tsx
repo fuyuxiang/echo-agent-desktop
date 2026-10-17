@@ -173,9 +173,6 @@ Object.assign(window, {
         case "agent_auth_status": return { ready: false, providers: [], runtimeReady: false, synchronized: true, runtimeModels: [], reason: "尚未配置可用模型" };
         case "desktop_preferences_get": return { closeToTray: true, showNotificationTaskTitle: false };
         case "subagents_config_get": return { maxDepth: 2 };
-        case "connectors_load": return { categories: [], connectors: [] };
-        case "experts_load": return { categories: [], experts: [] };
-        case "skills_catalog_load": return { categories: [], skills: [] };
         case "automations_snapshot": return { automations: query.get("surface") === "automation-flow" && !automationFlowRemoved ? [automationFlowTask] : [], records: [] };
         case "automations_save": {
           if (query.get("surface") !== "automation-flow") throw new Error("This fixture does not save automations");
@@ -184,7 +181,6 @@ Object.assign(window, {
           automationFlowRemoved = false;
           return automationFlowTask;
         }
-        case "connectors_read_mcp_config": return "";
         case "memory_config_get": return memory;
         case "memory_list": return [
           { scope: "session", path: "2026-09-06-interval-01a074eb.md", content: "<think>The user is asking me to write a memory summary. Looking at this session, I was tasked with researching today's AI news focused on AI coding and embodied intelligence.", size: 180, revision: "r1", modifiedAt: "2026-09-06T10:00:00Z", readOnly: true },
@@ -209,28 +205,12 @@ Object.assign(window, {
         case "agent_list_workspaces": return [{ cwd: "/review/EchoAgent", sessionCount: 3 }, { cwd: "/review/设计系统", sessionCount: 2 }];
         case "weixin_qr_start": return { qrUrl: "https://weixin.qq.com/x/review-qr" };
         case "weixin_qr_poll": return { status: "expired", connected: false };
-        case "experts_default_root": return "";
         case "agents_list": return agents;
         case "agents_template": return JSON.stringify(args);
         case "agents_save": {
           const entry = { ...JSON.parse(args.raw), name: args.name, path: `/review/${args.name}.md`, scope: "user", raw: args.raw };
           agents = [...agents, entry]; return entry;
         }
-        case "marketplace_list": return { sources: [{
-          sourceName: "插件目录",
-          sourceKind: "git",
-          sourceUrlOrPath: "https://example.test/plugins.git",
-          plugins: Array.from({ length: 324 }, (_, index) => ({
-            name: `示例插件 ${String(index + 1).padStart(2, "0")}`,
-            relativePath: `plugins/example-${index + 1}`,
-            description: "用于检查长列表的滚动行为",
-            skillCount: 0,
-            hasHooks: false,
-            hasAgents: false,
-            hasMcp: false,
-            installStatus: "available",
-          })),
-        }] };
         case "plugins_list": return { plugins: [] };
         case "tasks_list": return [{ id: "review-task", source: "task", description: "执行代码验证和生成报告", status: "running", sessionId: args.sessionId }];
         case "org_session": return { loggedIn: true, organizationMemoryEnabled: true, serverUrl: "https://10.132.19.82:8787", user: orgUser, bootstrap: { apiVersion: 1, user: orgUser, scopes: orgScopes, policy: { allowPersonalCloud: true, allowSkillSubmission: true }, serverTime: 1 } };
@@ -272,7 +252,7 @@ function ConversationLayoutFixture() {
 
 function Fixture() {
   const surface = query.get("surface") ?? "memory";
-  const aliases: Record<string, string> = { "技能管理": "技能", "连接器管理": "连接器", "插件管理": "插件·市场" };
+  const aliases: Record<string, string> = { "技能管理": "技能", "连接器管理": "连接器", "插件管理": "插件" };
   const [label, setLabel] = useState(aliases[query.get("label") ?? ""] ?? query.get("label") ?? "专家·技能·连接器");
   const [createExpertRequested, setCreateExpertRequested] = useState(false);
   const [expertPageOpen, setExpertPageOpen] = useState(false);

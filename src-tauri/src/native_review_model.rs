@@ -1,5 +1,5 @@
 //! Model bindings for explicitly configured, isolated native acceptance only.
-use crate::native_capabilities_validation::ordinary_private;
+use crate::native_review_scope::ordinary_private;
 use serde::Serialize;
 use std::path::Path;
 
@@ -10,10 +10,6 @@ pub(crate) fn allowed_model(id: &str) -> bool {
         id,
         "echoagent-ojlab/chat-qwen" | "echoagent-ojlab/chat-xc" | PRIVATE_MODEL_ID
     )
-}
-
-pub(crate) fn default_model() -> String {
-    "echoagent-ojlab/chat-qwen".into()
 }
 
 // Deliberately no Debug: this DTO may contain the explicitly supplied key.
