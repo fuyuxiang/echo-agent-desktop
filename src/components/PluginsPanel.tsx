@@ -6,7 +6,7 @@
  *
  * 插件来源：~/.echo-agent/plugins/、项目 .echo-agent/plugins/ 及已配置的本地目录。
  */
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useLayoutEffect, useRef, useState } from "react";
 import {
   PuzzlePieceIcon,
   RefreshCwIcon,
@@ -14,8 +14,12 @@ import {
   SkillIcon,
   AgentToolIcon,
   McpIcon,
+  DeleteIcon,
 } from "@/foundation/components/Icon/icons";
 import { pluginsAction, pluginsList } from "@/lib/agent-client";
+import { openLocalPath } from "@/lib/markdown-host";
+import { ensureSession } from "@/lib/ensure-session";
+import { useAppDialog } from "./AppDialog";
 import type { PluginEntry } from "@/lib/types";
 import { CapabilityEmptyState, CapabilityError, CapabilityPage } from "./experts-panel/shared/CapabilityPage";
 
@@ -31,32 +35,46 @@ export function PluginsPanel({ sessionId, onToast }: PluginsPanelProps) {
   const [loadError, setLoadError] = useState<string | null>(null);
   const [busy, setBusy] = useState<string | null>(null);
   const [search, setSearch] = useState("");
+  const dialog = useAppDialog("plugin-management");
+  const previousSession = useRef(sessionId);
+  useLayoutEffect(() => { if (previousSession.current && previousSession.current !== sessionId) dialog.dismiss(); previousSession.current = sessionId; }, [sessionId]);
   const reloadGeneration = useRef(0);
   const actionInFlight = useRef(false);
   const currentSession = useRef(sessionId);
+  const scope = useRef({ id: sessionId, epoch: 0 });
+  if (scope.current.id !== sessionId) scope.current = { id: sessionId, epoch: scope.current.epoch + 1 };
+  const mounted = useRef(true);
+  useEffect(() => { mounted.current = true; return () => { mounted.current = false; }; }, []);
   currentSession.current = sessionId;
 
-  const reload = useCallback(async (rescan = false) => {
+  const loadSnapshot = useCallback(async (target: string | undefined, rescan = false) => {
     const generation = ++reloadGeneration.current;
+    const epoch = scope.current.epoch;
+    const active = () => mounted.current && generation === reloadGeneration.current && epoch === scope.current.epoch;
     setLoading(true);
     setLoadError(null);
     try {
-      if (rescan && sessionId) {
-        await pluginsAction(sessionId, { type: "reload" });
-        if (reloadGeneration.current !== generation) return;
+      if (rescan && target) {
+        await pluginsAction(target, { type: "reload" });
+        if (!active()) return null;
       }
-      const resp = await pluginsList(sessionId);
-      if (reloadGeneration.current !== generation) return;
+      const resp = await pluginsList(target);
+      if (!active()) return null;
       setPlugins(resp.plugins ?? []);
+      return resp.plugins ?? [];
     } catch (e) {
-      if (reloadGeneration.current !== generation) return;
+      if (!active()) return null;
       const message = String(e).replace(/^Error:\s*/, "");
       setLoadError(message);
-      onToast?.(`加载插件失败：${message}`);
+      throw e;
     } finally {
-      if (reloadGeneration.current === generation) setLoading(false);
+      if (active()) setLoading(false);
     }
-  }, [sessionId, onToast]);
+  }, []);
+  const reload = useCallback(async (rescan = false) => {
+    try { await loadSnapshot(sessionId, rescan); }
+    catch (e) { onToast?.(`加载插件失败：${String(e).replace(/^Error:\s*/, "")}`); }
+  }, [sessionId, onToast, loadSnapshot]);
 
   useEffect(() => {
     void reload();
@@ -68,32 +86,63 @@ export function PluginsPanel({ sessionId, onToast }: PluginsPanelProps) {
   const handleToggle = useCallback(
     async (plugin: PluginEntry) => {
       if (actionInFlight.current) return;
-      if (!sessionId) {
-        onToast?.("请先从首页发起任务，再启用或禁用插件");
-        return;
-      }
       const pluginId = plugin.id ?? plugin.name;
       actionInFlight.current = true;
+      const start = scope.current;
       setBusy(pluginId);
       try {
-        await pluginsAction(sessionId, {
+        const targetSession = sessionId ?? await ensureSession();
+        const active = () => mounted.current && (scope.current.epoch === start.epoch || (!start.id && scope.current.epoch === start.epoch + 1 && currentSession.current === targetSession));
+        if (!active()) return;
+        await pluginsAction(targetSession, {
           type: plugin.enabled ? "disable" : "enable",
           // Runtime actions use the stable backend-generated ID; display names
           // are not unique across project/user scopes.
           pluginId,
         });
-        if (currentSession.current !== sessionId) return;
+        if (!active()) return;
         onToast?.(plugin.enabled ? `已禁用「${plugin.name}」` : `已启用「${plugin.name}」`);
-        await reload();
+        await loadSnapshot(targetSession);
       } catch (e) {
-        onToast?.(`操作失败：${String(e).replace(/^Error:\s*/, "")}`);
+        if (mounted.current && (scope.current.epoch === start.epoch || (!start.id && scope.current.epoch === start.epoch + 1))) onToast?.(`操作失败：${String(e).replace(/^Error:\s*/, "")}`);
       } finally {
         actionInFlight.current = false;
         setBusy(null);
       }
     },
-    [sessionId, onToast, reload],
+    [sessionId, onToast, loadSnapshot],
   );
+
+  const removePlugin = (plugin: PluginEntry) => {
+    const uninstall = plugin.management?.uninstallable;
+    const names = plugin.management?.packagePlugins ?? [];
+    const label = uninstall ? "卸载插件" : "移除配置";
+    let applied = false;
+    dialog.requestConfirmation({ title: `${label}“${plugin.name}”？`, danger: true, confirmLabel: label,
+      description: uninstall ? (names.length > 1 ? `该安装包包含 ${names.join("、")}，卸载会一并移除这些插件。工作区文件保留。` : "将移除本机安装包及其中的能力。工作区文件保留。") : `将从插件路径配置中移除，原始目录和文件会保留。${(plugin.management?.pathPlugins?.length ?? 0) > 1 ? `此路径还提供：${plugin.management!.pathPlugins!.join("、")}。` : ""}`,
+      action: async () => {
+        if (actionInFlight.current) throw new Error("其他插件操作正在进行，请稍后重试");
+        actionInFlight.current = true; setBusy(plugin.id ?? plugin.name);
+        const start = scope.current;
+        try {
+          const target = sessionId ?? await ensureSession();
+          const active = () => mounted.current && (scope.current.epoch === start.epoch || (!start.id && scope.current.epoch === start.epoch + 1 && currentSession.current === target));
+          if (!active()) return;
+          if (!applied) {
+            await pluginsAction(target, uninstall ? { type: "uninstall", pluginId: plugin.id, confirmed: true } : { type: "remove", path: plugin.management?.removalPath ?? plugin.root });
+            applied = true;
+          }
+          if (!active()) return;
+          const response = await loadSnapshot(target, true);
+          if (!active() || !response) return;
+          if (response.some(entry => entry.id === plugin.id && entry.root === plugin.root)) {
+            throw new Error("操作已提交，但插件仍在加载列表中，请刷新后检查来源配置。");
+          }
+          onToast?.(uninstall ? "插件已卸载" : "已移除插件配置，原文件保留");
+        } finally { actionInFlight.current = false; setBusy(null); }
+      },
+    });
+  };
 
   const enabledCount = plugins.filter((p) => p.enabled).length;
   const trustedCount = plugins.filter((p) => p.trusted).length;
@@ -118,11 +167,6 @@ export function PluginsPanel({ sessionId, onToast }: PluginsPanelProps) {
           ? "插件列表未加载"
           : loading && plugins.length === 0 ? "正在读取插件…" : `${plugins.length} 个插件 · ${enabledCount} 启用 · ${trustedCount} 受信任`}>
 
-      {!sessionId && (
-        <p className="capability-notice">
-          启用或禁用插件需要已打开的任务会话，请先从首页发起任务。
-        </p>
-      )}
 
       <div className="plugins-panel__list">
         {loadError && (
@@ -177,10 +221,12 @@ export function PluginsPanel({ sessionId, onToast }: PluginsPanelProps) {
               </div>
             </div>
             <div className="plugins-panel__item-actions">
+              {(p.management?.uninstallable || p.management?.removable) && <button type="button" className="capability-button plugins-panel__remove" aria-label={`${p.management.uninstallable ? "卸载" : "移除"}插件 ${p.name}`} disabled={loading || busy !== null} onClick={() => removePlugin(p)}><DeleteIcon size="sm" />{p.management.uninstallable ? "卸载" : "移除"}</button>}
+              {!p.management?.uninstallable && !p.management?.removable && p.root && <button type="button" className="capability-button" disabled={busy !== null} onClick={() => { void openLocalPath(p.root!, { revealFile: true }).catch(error => onToast?.(`无法打开插件来源：${String(error)}`)); }}>来源目录</button>}
               <button
                 className={`plugins-panel__toggle ${p.enabled ? "plugins-panel__toggle--on" : ""}`}
                 onClick={() => handleToggle(p)}
-                disabled={loading || busy !== null || !sessionId}
+                disabled={loading || busy !== null}
                 title={p.enabled ? "禁用" : "启用"}
               >
                 {busy === (p.id ?? p.name) ? "…" : p.enabled ? "已启用" : "已禁用"}
@@ -195,6 +241,7 @@ export function PluginsPanel({ sessionId, onToast }: PluginsPanelProps) {
         <p>默认用户插件目录为 <code>~/.echo-agent/plugins/</code>，项目插件目录为 <code>.echo-agent/plugins/</code>；自定义数据目录下使用对应的 <code>plugins/</code> 文件夹。</p>
         <p>新建任务时会加载本地插件；已有任务可点击「刷新」重新加载。</p>
       </details>
+      {dialog.dialog}
     </CapabilityPage>
   );
 }

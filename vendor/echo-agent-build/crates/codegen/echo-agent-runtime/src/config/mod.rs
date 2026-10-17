@@ -1652,7 +1652,19 @@ pub(crate) fn remove_plugin_path(path: &str) -> Result<(), Box<dyn std::error::E
         .and_then(|v| v.as_table_mut())
         && let Some(paths) = plugins.get_mut("paths").and_then(|v| v.as_array_mut())
     {
-        paths.retain(|v| v.as_str().is_none_or(|s| s != path));
+        let canonical = std::path::Path::new(path).canonicalize().ok();
+        paths.retain(|v| {
+            v.as_str().is_none_or(|configured| {
+                configured != path
+                    && !canonical.as_ref().is_some_and(|canonical| {
+                        std::path::Path::new(configured)
+                            .canonicalize()
+                            .ok()
+                            .as_ref()
+                            == Some(canonical)
+                    })
+            })
+        });
     }
     crate::util::config::atomic_write_string(&config_path, &toml::to_string_pretty(&config)?)?;
     Ok(())

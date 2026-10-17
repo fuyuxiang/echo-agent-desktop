@@ -2061,6 +2061,15 @@ pub async fn agent_delete_session(
     session_id: String,
     cwd: Option<String>,
 ) -> Result<SessionDeleteResult, String> {
+    delete_session_data(&app, &state, &session_id, cwd.as_deref()).await
+}
+
+pub(crate) async fn delete_session_data(
+    app: &tauri::AppHandle,
+    state: &AppState,
+    session_id: &str,
+    cwd: Option<&str>,
+) -> Result<SessionDeleteResult, String> {
     if !valid_session_id(&session_id) {
         return Err("会话 ID 无效或过长".into());
     }
@@ -2070,6 +2079,20 @@ pub async fn agent_delete_session(
         &session_id,
         cwd.as_deref(),
     )?;
+    delete_owned_session_data(state, session_id, &workspace).await
+}
+
+/// The caller proves ownership before entering this helper. Group cleanup uses
+/// its durable session ledger and native catalog, so history remains deletable
+/// even after the original working directory was moved or removed.
+pub(crate) async fn delete_owned_session_data(
+    state: &AppState,
+    session_id: &str,
+    workspace: &std::path::Path,
+) -> Result<SessionDeleteResult, String> {
+    if !valid_session_id(session_id) || !workspace.is_absolute() {
+        return Err("会话标识或原工作区路径无效".into());
+    }
     let tx = state
         .tx
         .lock()
@@ -2083,7 +2106,44 @@ pub async fn agent_delete_session(
     agent_runtime::delete_session(&tx, &session_id, Some(&workspace_arg))
         .await
         .map_err(|e| e.to_string())?;
-    let (memory_summaries_deleted, memory_cleanup_warning) =
+    Ok(forget_deleted_session(state, &workspace, session_id).await)
+}
+
+/// Group ownership is proven by the durable member ledger. Locate by exact ID
+/// across historical workspaces, including records whose summary is damaged.
+pub(crate) async fn delete_group_session_data(
+    state: &AppState,
+    session_id: &str,
+    workspace: &std::path::Path,
+) -> Result<SessionDeleteResult, String> {
+    if !valid_session_id(session_id) || !workspace.is_absolute() {
+        return Err("会话标识或原工作区路径无效".into());
+    }
+    let tx = state
+        .tx
+        .lock()
+        .unwrap()
+        .clone()
+        .ok_or("Agent Runtime 尚未就绪，请稍后重试")?;
+    crate::automation::stop_existing_session(session_id).await?;
+    agent_runtime::delete_session(&tx, session_id, None)
+        .await
+        .map_err(|e| e.to_string())?;
+    if !echo_agent_runtime::session::persistence::session_history_paths(session_id, None)
+        .map_err(|e| e.to_string())?
+        .is_empty()
+    {
+        return Err("内部执行历史尚未清理完成".into());
+    }
+    Ok(forget_deleted_session(state, workspace, session_id).await)
+}
+
+pub(crate) async fn forget_deleted_session(
+    state: &AppState,
+    workspace: &std::path::Path,
+    session_id: &str,
+) -> SessionDeleteResult {
+    let (memory_summaries_deleted, mut memory_cleanup_warning) =
         match crate::agent_admin::delete_session_memory_artifacts(&workspace, &session_id) {
             Ok(count) => (count, None),
             Err(error) => {
@@ -2101,11 +2161,15 @@ pub async fn agent_delete_session(
     crate::permission_config::forget_session_permission_mode(&session_id);
     if let Err(error) = crate::meta::clear_session_metadata(&session_id) {
         tracing::warn!(%error, %session_id, "session deleted but sidecar metadata cleanup failed");
+        memory_cleanup_warning = Some(match memory_cleanup_warning {
+            Some(previous) => format!("{previous}；会话附属信息清理失败：{error}"),
+            None => format!("会话附属信息清理失败：{error}"),
+        });
     }
-    Ok(SessionDeleteResult {
+    SessionDeleteResult {
         memory_summaries_deleted,
         memory_cleanup_warning,
-    })
+    }
 }
 
 /// Pin or unpin a session. EchoAgent's `Summary` has no `pinned` field, so this is

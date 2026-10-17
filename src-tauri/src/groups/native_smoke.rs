@@ -66,6 +66,22 @@ async fn isolated_native_runtime() {
     });
     let home = crate::paths::echo_agent_home_dir();
     std::fs::create_dir_all(&home).unwrap();
+    let plugin = tempfile::Builder::new()
+        .prefix(".echo-plugin-removal-test-")
+        .tempdir_in(std::env::current_dir().unwrap())
+        .unwrap();
+    std::fs::write(
+        plugin.path().join("plugin.json"),
+        r#"{"name":"relative-removal-regression"}"#,
+    )
+    .unwrap();
+    let relative_plugin = plugin
+        .path()
+        .file_name()
+        .unwrap()
+        .to_str()
+        .unwrap()
+        .to_string();
     std::fs::write(
         home.join("config.toml"),
         format!(
@@ -86,6 +102,8 @@ name = "Group integration model"
 max_completion_tokens = 1024
 [memory]
 enabled = false
+[plugins]
+paths = ["{relative_plugin}"]
 "#
         ),
     )
@@ -432,6 +450,116 @@ enabled = false
     }
     assert!(crate::sessions::list_workspaces().is_empty(),
         "This isolated Runtime only created group sessions; none may appear in ordinary workspace counts");
+    // Exercise the real Runtime's permanent-history deletion, including
+    // retired/restored native contexts, before removing the group transaction.
+    db().unwrap()
+        .update(&gid, |g| {
+            g.paused = true;
+            let ids = g
+                .works
+                .iter()
+                .filter(|w| !w.terminal())
+                .map(|w| w.id.clone())
+                .collect::<Vec<_>>();
+            for id in ids {
+                g.finish(&id, None, false);
+            }
+            Ok(())
+        })
+        .unwrap();
+    // History is owned by the group even when the source workspace no longer exists.
+    std::fs::remove_dir_all(workspace.path()).unwrap();
+    let native_sessions = db().unwrap().sessions(&gid).unwrap();
+    assert!(native_sessions.len() >= 2);
+    let removed: Value = crate::ext::call_ext(
+        &tx,
+        "echo.agent/plugins/action",
+        crate::ext::raw_params(
+            &json!({"sessionId":sid,"action":{"type":"remove","path":relative_plugin}}),
+        ),
+    )
+    .await
+    .unwrap();
+    assert_eq!(removed["status"], "success");
+    let config: toml::Value = std::fs::read_to_string(home.join("config.toml"))
+        .unwrap()
+        .parse()
+        .unwrap();
+    assert!(!config["plugins"]["paths"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .any(|path| path.as_str() == Some(&relative_plugin)));
+    assert!(
+        plugin.path().join("plugin.json").exists(),
+        "removing configuration must preserve its source"
+    );
+    let mut physical_paths = vec![];
+    for native in &native_sessions {
+        let paths =
+            echo_agent_runtime::session::persistence::session_history_paths(native, None).unwrap();
+        assert!(!paths.is_empty());
+        // Deletion must work without catalog metadata, after a real restart's
+        // in-memory workspace map would have disappeared.
+        for path in &paths {
+            std::fs::write(path.join("summary.json"), "{broken").unwrap();
+        }
+        physical_paths.extend(paths);
+    }
+    // Exercise the exact implementation used by the Tauri command with an
+    // empty in-memory workspace map, as after an application restart.
+    let state = crate::commands::AppState::default();
+    *state.tx.lock().unwrap() = Some(tx.clone());
+    let deleted = delete_group_data(&state, gid.clone(), true).await.unwrap();
+    assert_eq!(deleted.session_ids.len(), native_sessions.len());
+    assert!(physical_paths.iter().all(|path| !path.exists()));
+    assert_eq!(
+        db().unwrap().pending_cleanup().unwrap()[0]
+            .session_ids
+            .len(),
+        native_sessions.len()
+    );
+    for native in &native_sessions {
+        assert!(
+            !crate::sessions::persisted_session_exists(native).unwrap(),
+            "native session survived deletion: {native}"
+        );
+    }
+    assert!(db().unwrap().get(&gid).is_err());
+    for native in &native_sessions {
+        assert!(db().unwrap().owner(native).unwrap().is_none());
+    }
+    // Exact-ID cleanup also removes directory-only remnants and duplicate
+    // historical copies, without relying on a valid encoded workspace/summary.
+    let orphan_id = id();
+    let orphan_paths = [
+        home.join("sessions/orphan-a").join(&orphan_id),
+        home.join("sessions/orphan-b").join(&orphan_id),
+    ];
+    for path in &orphan_paths {
+        std::fs::create_dir_all(path).unwrap();
+        std::fs::write(path.join("updates.jsonl"), "private orphan history").unwrap();
+    }
+    std::fs::write(orphan_paths[0].join("summary.json"), "{broken").unwrap();
+    crate::agent_runtime::delete_session(&tx, &orphan_id, None)
+        .await
+        .unwrap();
+    assert!(orphan_paths.iter().all(|path| !path.exists()));
+    #[cfg(unix)]
+    {
+        let protected = home.join("protected-source");
+        std::fs::create_dir_all(&protected).unwrap();
+        std::fs::write(protected.join("keep.txt"), "preserve this source").unwrap();
+        let redirected_id = id();
+        let redirected = home.join("sessions/orphan-a").join(&redirected_id);
+        std::os::unix::fs::symlink(&protected, &redirected).unwrap();
+        assert!(
+            crate::agent_runtime::delete_session(&tx, &redirected_id, None)
+                .await
+                .is_err()
+        );
+        assert!(protected.join("keep.txt").exists());
+    }
     cancel.cancel();
     tokio::time::timeout(
         std::time::Duration::from_secs(20),

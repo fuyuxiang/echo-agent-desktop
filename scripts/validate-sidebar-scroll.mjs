@@ -2,6 +2,34 @@ import assert from "node:assert/strict";
 import { join } from "node:path";
 
 export async function validateSidebarScroll(page, output) {
+  const validateHeadings = async () => {
+    await page.mouse.move(page.viewportSize().width - 1, 0);
+    const headings = await page.locator(".sidebar__list-section").evaluateAll(sections => sections.map(section => {
+      const label = section.querySelector(".sidebar__section-label");
+      const style = getComputedStyle(label);
+      const box = label.getBoundingClientRect();
+      const textBox = label.querySelector("span").getBoundingClientRect();
+      const chevronBox = label.querySelector("svg").getBoundingClientRect();
+      return {
+        name: label.textContent.replace(/\s*\(.*\)/, ""),
+        left: box.left,
+        top: box.top,
+        chevronAfterText: chevronBox.left >= textBox.right,
+        borderTopWidth: getComputedStyle(section).borderTopWidth,
+        typography: [style.fontFamily, style.fontSize, style.fontWeight, style.color, style.padding, box.height],
+      };
+    }));
+    assert.deepEqual(headings.map(heading => heading.name), ["任务", "项目", "群聊"], "sidebar lists should appear in task, project, chat order");
+    for (const heading of headings) {
+      assert.deepEqual(heading.typography, headings[0].typography, `${heading.name}: list heading style should match tasks`);
+      assert.equal(heading.left, headings[0].left, `${heading.name}: list headings should align`);
+      assert.equal(heading.borderTopWidth, "0px", `${heading.name}: list sections should have no separator`);
+      assert.ok(heading.chevronAfterText, `${heading.name}: collapse arrow should follow the label`);
+    }
+    assert.ok(headings[0].top < headings[1].top && headings[1].top < headings[2].top, "list headings should follow their document order visually");
+    const contentBottom = await page.locator(".sidebar__content").evaluate(element => element.getBoundingClientRect().bottom);
+    assert.ok(headings[2].top + headings[2].typography.at(-1) <= contentBottom + 1, "chat heading should remain visible inside the sidebar");
+  };
   const snapshot = () => page.evaluate(() => {
     const rect = (selector) => {
       const box = document.querySelector(selector).getBoundingClientRect();
@@ -13,7 +41,7 @@ export async function validateSidebarScroll(page, output) {
     };
     return {
       content: rect(".sidebar__content"),
-      taskHeader: rect(".sidebar__section-head"),
+      taskHeader: rect(".sidebar__list-section--tasks > .sidebar__section-head"),
       projectHeader: rect(".sidebar__list-section--projects > .sidebar__section-label"),
       taskListRect: rect("#sidebar-task-list"),
       tasks: scroll("#sidebar-task-list"),
@@ -79,6 +107,7 @@ export async function validateSidebarScroll(page, output) {
     await page.goto("http://127.0.0.1:1439/__ui-review?surface=sidebar-scroll&variant=both&groups=12");
     const groupList = page.getByRole("region",{name:"最近群聊"});
     await groupList.waitFor();
+    await validateHeadings();
     const before = await snapshot();
     assert.ok(before.tasks.clientHeight >= 36 && before.projects.clientHeight >= 36, `12 groups must leave a full ordinary row visible at height ${height}: ${JSON.stringify(before)}`);
     assert.ok(before.projectHeader.bottom <= before.content.bottom + 1, "groups must not push projects outside the sidebar");
@@ -89,11 +118,20 @@ export async function validateSidebarScroll(page, output) {
     assert.equal(after.tasks.top,before.tasks.top,"scrolling groups must not move tasks");
     assert.equal(after.projects.top,before.projects.top,"scrolling groups must not move projects");
     await page.screenshot({path:join(output,`sidebar-three-lists-${height}.png`)});
-    await page.getByRole("button",{name:/^团队群聊 \(/}).click();
+    await page.getByRole("button",{name:/^群聊 \(/}).click();
     assert.equal(await groupList.count(),0);
     const collapsed = await snapshot();
     assert.ok(collapsed.tasks.clientHeight > before.tasks.clientHeight,"collapsing groups must free room for tasks");
     await page.getByRole("button",{name:"查看全部群聊"}).waitFor();
+    layouts++;
+  }
+
+  for (const theme of ["light", "dark"]) {
+    await page.setViewportSize({ width: 1024, height: 720 });
+    await page.goto(`http://127.0.0.1:1439/__ui-review?surface=sidebar-scroll&variant=short&groups=1&theme=${theme}`);
+    await page.getByRole("region", { name: "最近群聊" }).waitFor();
+    await validateHeadings();
+    await page.locator(".sidebar").screenshot({ path: join(output, `sidebar-short-chats-${theme}.png`) });
     layouts++;
   }
 

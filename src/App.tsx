@@ -7,6 +7,8 @@ import { SidebarResizeHandle } from "./components/SidebarResizeHandle";
 import { SidebarLayoutContext, useAppSidebarLayout } from "./lib/sidebar-layout";
 import { HomePage } from "./components/HomePage";
 import { PlaceholderPage } from "./components/PlaceholderPage";
+import { CapabilitySection } from "./components/CapabilitySection";
+import { isCapabilityView } from "./lib/capability-navigation";
 import { Toast, type ToastAction } from "./components/Toast";
 // PermissionDialog is now inline in ChatView (PermissionInlineCard), not a global modal.
 import { ThemeProvider } from "./components/ThemeProvider";
@@ -150,6 +152,7 @@ import {
 } from "./lib/session-control";
 
 const ChatView = lazy(() => import("./components/ChatView").then((module) => ({ default: module.ChatView })));
+import { GroupActionsHost } from "./features/groups/GroupActions";
 const GroupWorkspace = lazy(() => import("./features/groups/GroupWorkspace").then(module => ({ default: module.GroupWorkspace })));
 const SettingsPanel = lazy(() => import("./components/SettingsPanel").then((module) => ({ default: module.SettingsPanel })));
 const SearchOverlay = lazy(() => import("./components/SearchOverlay").then((module) => ({ default: module.SearchOverlay })));
@@ -1261,7 +1264,7 @@ function Shell() {
     // Extension management uses the active Runtime session's trusted workspace
     // and broadcasts changes from it. Clearing that session on entry made all
     // install/source/toggle actions unreachable, even after opening a chat.
-    if (["专家·技能·连接器", "技能", "连接器", "插件"].includes(label)) {
+    if (isCapabilityView(label)) {
       return;
     }
     sessionsStore.getState().setCurrent(null);
@@ -2123,7 +2126,7 @@ function Shell() {
       if (selectionGenerationRef.current !== generation) return;
       if (ownerId) {
         await useGroupStore.getState().select(ownerId);
-        if (selectionGenerationRef.current === generation) handleNavigate("团队群聊");
+        if (selectionGenerationRef.current === generation) handleNavigate("专家团");
         return;
       }
     }
@@ -2953,8 +2956,10 @@ function Shell() {
             </div>
           ) : codingWorkspaceActive ? null : (
             <Suspense fallback={<div className="app__notice" role="status">正在加载界面…</div>}>
-              {placeholderView === "团队群聊" ? (
-                <GroupWorkspace cwd={newSessionTargetCwd} modelId={newSessionModelId} models={models} workspaces={workspaces} onToast={showToast} onOpenSettings={() => openSettings("model")} onOpenKnowledgeBase={() => handleNavigate("知识库")} onOpenOrganization={() => handleNavigate("组织")} />
+              {placeholderView === "专家团" ? (
+                <CapabilitySection active="专家团" onNavigate={handleNavigate}>
+                  <GroupWorkspace cwd={newSessionTargetCwd} modelId={newSessionModelId} models={models} workspaces={workspaces} onToast={showToast} onOpenSettings={() => openSettings("model")} onOpenKnowledgeBase={() => handleNavigate("知识库")} onOpenOrganization={() => handleNavigate("组织")} />
+                </CapabilitySection>
               ) : placeholderView ? (
                 <PlaceholderPage
                   {...placeholderProps}
@@ -2968,7 +2973,7 @@ function Shell() {
                     if (!currentSessionId) return;
                     const referenceText = sessionStore.getState().messages.slice(-12).map(message => `${message.role === "user" ? "用户" : "助手"}：${message.parts.filter(part => part.kind === "text").map(part => part.kind === "text" ? part.text : "").join("")}`).join("\n\n").slice(-30000);
                     useGroupStore.getState().fromTeam(currentSessionId, team, referenceText);
-                    handleNavigate("团队群聊");
+                    handleNavigate("专家团");
                   }}
                   title={currentTitle}
                   onSend={handleSendCurrent}
@@ -3113,6 +3118,7 @@ function Shell() {
         refreshSignal={taskRefreshSignal}
         onToast={showToast}
       />
+      <GroupActionsHost onFeedback={showActionToast} />
       {automationExitDialog}
       <SecondarySidebar onSelectExpert={handleStartWithExpert} onCreateExpert={handleCreateExpert} onToast={showToast} />
     </div>

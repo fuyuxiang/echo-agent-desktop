@@ -77,3 +77,10 @@
   .capability-page .mcp-item-main { flex-basis: 100%; }
   .capability-page .mcp-item-details { padding-inline: 16px; }
 }
+.capability-page .plugins-panel__item-actions { display:flex; flex:0 0 auto; align-items:center; justify-content:flex-end; gap:8px; flex-wrap:wrap; }
+.capability-page .plugins-panel__remove { color:var(--echo-status-error); }
+@container capability-page (max-width: 520px) {
+  .capability-page .plugins-panel__item { flex-wrap:wrap; }
+  .capability-page .plugins-panel__item-content { flex-basis:calc(100% - 48px); }
+  .capability-page .plugins-panel__item-actions { width:100%; }
+}

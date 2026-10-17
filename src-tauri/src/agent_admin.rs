@@ -61,6 +61,7 @@ const MAX_REMOTE_SOURCE_CHARS: usize = 2_048;
 struct AdminCapabilities {
     plugin_ids: HashSet<String>,
     plugin_roots: HashSet<PathBuf>,
+    plugin_config_paths: std::collections::HashMap<PathBuf, String>,
 }
 
 fn admin_capabilities() -> &'static Mutex<AdminCapabilities> {
@@ -2141,12 +2142,19 @@ fn remember_plugins(value: &serde_json::Value) -> Result<(), String> {
     }
     let mut ids = HashSet::new();
     let mut roots = HashSet::new();
+    let mut config_paths = std::collections::HashMap::new();
     for plugin in plugins {
         if let Some(id) = plugin.get("id").and_then(serde_json::Value::as_str) {
             if !valid_admin_id(id) {
                 return Err("Agent Runtime 返回了无效插件 ID".into());
             }
             ids.insert(id.to_string());
+        }
+        if let Some(path) = plugin.pointer("/management/removalPath").and_then(serde_json::Value::as_str) {
+            if let Ok(canonical) = Path::new(path).canonicalize() {
+                roots.insert(canonical.clone());
+                config_paths.insert(canonical, path.to_string());
+            }
         }
         if let Some(root) = plugin.get("root").and_then(serde_json::Value::as_str) {
             if root.chars().count() > MAX_LOCAL_PATH_CHARS || root.contains('\0') {
@@ -2164,6 +2172,7 @@ fn remember_plugins(value: &serde_json::Value) -> Result<(), String> {
         .unwrap_or_else(|poisoned| poisoned.into_inner());
     capabilities.plugin_ids = ids;
     capabilities.plugin_roots = roots;
+    capabilities.plugin_config_paths = config_paths;
     Ok(())
 }
 
@@ -2255,10 +2264,10 @@ fn normalize_plugin_action(
             if !listed {
                 return Err("只能移除后端最近加载的精确插件路径".into());
             }
-            object.insert(
-                "path".into(),
-                serde_json::Value::String(canonical.to_string_lossy().into_owned()),
-            );
+            let configured = admin_capabilities().lock().unwrap_or_else(|p| p.into_inner())
+                .plugin_config_paths.get(&canonical).cloned()
+                .unwrap_or_else(|| canonical.to_string_lossy().into_owned());
+            object.insert("path".into(), serde_json::Value::String(configured));
             Ok(())
         }
         "enable" | "disable" => {
@@ -2270,6 +2279,86 @@ fn normalize_plugin_action(
             require_listed_plugin_id(plugin_id)
         }
         _ => Err("不支持的插件管理操作".into()),
+    }
+}
+
+fn annotate_plugin_management(value: &mut serde_json::Value) {
+    let registry = echo_agent_core::plugins::InstallRegistry::load();
+    let configured =
+        std::fs::read_to_string(crate::paths::echo_agent_home_dir().join("config.toml"))
+            .ok()
+            .and_then(|s| s.parse::<toml::Value>().ok())
+            .and_then(|v| v.get("plugins")?.get("paths")?.as_array().cloned())
+            .unwrap_or_default()
+            .into_iter()
+            .filter_map(|v| v.as_str().map(str::to_owned))
+            .filter_map(|raw| Path::new(&raw).canonicalize().ok().map(|path| (raw, path)))
+            .collect::<Vec<_>>();
+    if let Some(plugins) = value
+        .get_mut("plugins")
+        .and_then(serde_json::Value::as_array_mut)
+    {
+        let known = plugins
+            .iter()
+            .filter_map(|plugin| {
+                Some((
+                    plugin.get("name")?.as_str()?.to_owned(),
+                    Path::new(plugin.get("root")?.as_str()?)
+                        .canonicalize()
+                        .ok()?,
+                ))
+            })
+            .collect::<Vec<_>>();
+        for plugin in plugins {
+            let root = plugin
+                .get("root")
+                .and_then(serde_json::Value::as_str)
+                .map(PathBuf::from);
+            let canonical = root.as_ref().and_then(|p| p.canonicalize().ok());
+            let source = plugin
+                .pointer("/origin/type")
+                .and_then(serde_json::Value::as_str)
+                .unwrap_or("")
+                .to_string();
+            let package = root
+                .as_ref()
+                .and_then(|root| {
+                    registry.find_repo_key_by_plugin_root(
+                        root,
+                        &root.canonicalize().unwrap_or_else(|_| root.clone()),
+                    )
+                })
+                .and_then(|key| registry.get_repo(key));
+            let managed = source == "marketplace_install" && package.is_some();
+            let owner = canonical
+                .as_ref()
+                .filter(|_| {
+                    source == "config_path"
+                        || (source.is_empty()
+                            && plugin.get("scope").and_then(serde_json::Value::as_str)
+                                == Some("config"))
+                })
+                .and_then(|root| {
+                    configured
+                        .iter()
+                        .filter(|(_, path)| root.starts_with(path))
+                        .max_by_key(|(_, path)| path.components().count())
+                });
+            let mut names = package
+                .map(|repo| repo.plugins.keys().cloned().collect::<Vec<_>>())
+                .unwrap_or_default();
+            names.sort();
+            let shared = owner
+                .map(|(_, path)| {
+                    known
+                        .iter()
+                        .filter(|(_, root)| root.starts_with(path))
+                        .map(|(name, _)| name.clone())
+                        .collect::<Vec<_>>()
+                })
+                .unwrap_or_default();
+            plugin["management"] = serde_json::json!({"uninstallable":managed,"removable":owner.is_some(),"removalPath":owner.map(|(raw,_)|raw),"pathPlugins":shared,"packagePlugins":names});
+        }
     }
 }
 
@@ -2295,9 +2384,10 @@ pub async fn plugins_list(
     // to the shared snapshot.
     let sid = session_id.unwrap_or_default();
     let params = raw_params(&serde_json::json!({ "sessionId": sid }));
-    let value = call_ext(&tx, "echo.agent/plugins/list", params)
+    let mut value = call_ext(&tx, "echo.agent/plugins/list", params)
         .await
         .map_err(|e| e.to_string())?;
+    annotate_plugin_management(&mut value);
     remember_plugins(&value)?;
     Ok(value)
 }
@@ -3021,6 +3111,14 @@ mod tests {
         assert!(normalize_plugin_action(&access, &mut remove).is_ok());
         let mut forged = serde_json::json!({ "type": "remove", "path": root.path() });
         assert!(normalize_plugin_action(&access, &mut forged).is_err());
+        // A configured parent may expose several plugin subdirectories. The
+        // IPC capability must authorize the configured path and preserve its
+        // exact spelling so removing it cannot silently become a no-op.
+        let configured = format!("{}/./", root.path().display());
+        remember_plugins(&serde_json::json!({"plugins":[{"id":"config/12345678/demo","root":listed_plugin,"management":{"removalPath":configured}}]})).unwrap();
+        let mut remove_parent = serde_json::json!({"type":"remove","path":root.path()});
+        normalize_plugin_action(&access, &mut remove_parent).unwrap();
+        assert_eq!(remove_parent["path"].as_str(), Some(configured.as_str()));
     }
 
     #[test]

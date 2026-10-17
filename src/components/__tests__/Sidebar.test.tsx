@@ -60,7 +60,7 @@ describe("Sidebar", () => {
     const nav = container.querySelector(".sidebar__nav");
     expect(nav).not.toBeNull();
     expect(within(nav as HTMLElement).getAllByRole("button").map((button) => button.textContent?.trim())).toEqual([
-      "新建任务", "项目", "团队群聊", "组织", "扩展", "代码开发", "更多知识与工具",
+      "新建任务", "项目", "组织", "专家·技能·连接器", "代码开发", "更多知识与工具",
     ]);
     expect(screen.queryByText("助理")).not.toBeInTheDocument();
   });
@@ -427,9 +427,9 @@ describe("Sidebar", () => {
     expect(screen.queryByRole("menu", { name: "更多功能" })).toBeNull();
   });
 
-  it.each(["专家·技能·连接器", "技能", "连接器", "插件"])("扩展子页 %s 始终选中同一个侧栏入口", activeNav => {
+  it.each(["专家·技能·连接器", "专家团", "技能", "连接器", "插件"])("扩展子页 %s 始终选中同一个侧栏入口", activeNav => {
     render(<Sidebar {...base} activeNav={activeNav} />);
-    expect(screen.getByRole("button", { name: "扩展" })).toHaveClass("sidebar__nav-item--active");
+    expect(screen.getByRole("button", { name: "专家·技能·连接器" })).toHaveClass("sidebar__nav-item--active");
     expect(screen.getByText("更多").closest("button")).not.toHaveClass("sidebar__nav-item--active");
   });
 

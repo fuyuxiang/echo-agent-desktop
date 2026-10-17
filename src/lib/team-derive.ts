@@ -72,7 +72,7 @@ export function isCreateTeamTool(tc: {
   // 原生名（旧会话）或 MCP 限定名 echoagent__create_team（现行路径）。
   if (k === "create_team" || k === "team_create" || k === "echoagent__create_team") return true;
   const title = (tc.title || "").toLowerCase();
-  if (title.includes("create_team") || title.includes("创建团队")) return true;
+  if (title.includes("create_team") || title.includes("创建任务编组") || title.includes("创建专家团") || title.includes("创建团队")) return true;
   const obj = teamToolInput(tc);
   if (obj) {
     if ("team_id" in obj && "members" in obj) return true;

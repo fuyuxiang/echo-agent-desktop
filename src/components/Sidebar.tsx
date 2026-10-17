@@ -42,9 +42,8 @@ const logoMarkUrl = "/app-icon.png";
 
 const NAV = [
   { label: "项目", icon: EchoProjectNavIcon },
-  { label: "团队群聊", icon: EchoExpertNavIcon },
   { label: "组织", icon: BuildingIcon },
-  { label: "专家·技能·连接器", display: "扩展", icon: EchoExpertNavIcon },
+  { label: "专家·技能·连接器", icon: EchoExpertNavIcon },
   { label: "代码开发", icon: Code2Icon },
 ];
 
@@ -975,7 +974,7 @@ export function Sidebar({
           <EchoNewTaskIcon size="md" />
           <span>新建任务</span>
         </button>
-        {NAV.map(({ label, display, icon: Icon }) => (
+        {NAV.map(({ label, icon: Icon }) => (
           <button
             key={label}
             className={
@@ -985,14 +984,13 @@ export function Sidebar({
             onClick={() => onNavigate(label)}
           >
             <Icon size="md" />
-            <span>{display ?? label}</span>
+            <span>{label}</span>
           </button>
         ))}
         <MoreDropdown onNavigate={onNavigate} activeNav={activeNav} />
       </nav>
 
       <div className="sidebar__content">
-        <GroupSidebar active={activeNav === "团队群聊"} onOpen={() => onNavigate("团队群聊")} />
         {sessionsError && (
           <div className="sidebar__empty" role="alert">
             <span>会话目录加载失败：{sessionsError}</span>
@@ -1190,6 +1188,10 @@ export function Sidebar({
           </div>
         )}
         </div>
+        <GroupSidebar
+          active={activeNav === "专家团"}
+          onOpen={() => onNavigate("专家团")}
+        />
       </div>
 
       <div className="sidebar__footer">

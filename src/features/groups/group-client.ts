@@ -6,7 +6,8 @@ export interface GroupMember { removed?: boolean; id: string; name: string; expe
 export interface GroupKnowledge { personal: boolean; organization: boolean; organizationScopeIds: string[]; context: string }
 export interface GroupMessage { knowledge?: GroupKnowledge; id: string; seq: number; memberId: string | null; kind: string; text: string; createdAt: number; workId: string | null; replyTo: string | null; attachments: string[]; toolCalls: Record<string, unknown>[] }
 export interface GroupWork { id: string; rootId: string; parentId: string | null; continuationOf: string | null; memberId: string; prompt: string; status: string; discussion: boolean; sessionId: string | null; output: string; error: string | null; createdAt: number; tokens: number }
-export interface Group { id: string; name: string; goal: string; cwd: string; sourceSessionId: string | null; sourceTeamId: string | null; coordinatorId: string; members: GroupMember[]; messages: GroupMessage[]; works: GroupWork[]; decisions: { id: string; text: string; messageId: string | null; confirmed: boolean }[]; archived: boolean; pinned: boolean; paused: boolean; revision: number; updatedAt: number; maxCalls: number; tokenBudget: number }
+export interface GroupDecision { id: string; text: string; messageId: string | null; confirmed: boolean; voided?: boolean; history?: { text: string; changedAt: number; action?: string }[]; updatedAt?: number | null }
+export interface Group { id: string; name: string; goal: string; cwd: string; sourceSessionId: string | null; sourceTeamId: string | null; coordinatorId: string; members: GroupMember[]; messages: GroupMessage[]; works: GroupWork[]; decisions: GroupDecision[]; archived: boolean; pinned: boolean; paused: boolean; revision: number; updatedAt: number; maxCalls: number; tokenBudget: number }
 export interface CreateGroupInput { coordinatorName?: string; coordinatorRole?: string; name: string; goal: string; cwd: string; modelId: string; members: string[]; sourceSessionId?: string; sourceTeamId?: string; referenceText?: string; roles?: Record<string, string>; models?: Record<string, string> }
 export interface SendGroupInput { knowledge?: GroupKnowledge; id: string; text: string; memberIds: string[]; discussion: boolean; attachments: string[]; replyTo: string | null }
 export const groupList = () => invoke<Group[]>("group_list");
@@ -25,8 +26,13 @@ export async function groupSend(groupId: string, input: SendGroupInput): Promise
   await invoke<void>("group_send", { groupId, input });
 }
 export const groupControl = (groupId: string, action: "pause" | "resume" | "stop" | "archive" | "pin" | "retry", workId?: string) => invoke<void>("group_control", { groupId, action, workId: workId ?? null });
-export const groupSettings = (groupId: string, input: { name: string; goal: string; coordinatorId: string; maxCalls: number; tokenBudget: number; cwd?: string; members: { id: string; role: string; modelId: string }[] }) => invoke<void>("group_settings", { groupId, input });
-export const onGroupChanged = (callback: (groupId: string) => void) => listen<{ groupId: string }>("group://changed", event => callback(event.payload.groupId));
+export const groupMetadata = (groupId: string, patch: { name?: string; pinned?: boolean; archived?: boolean }) => invoke<void>("group_metadata", { groupId, name: patch.name ?? null, pinned: patch.pinned ?? null, archived: patch.archived ?? null });
+export const groupDelete = (groupId: string, stopWork: boolean) => invoke<{ sessionIds: string[] }>("group_delete", { groupId, stopWork });
+export interface GroupCleanupReceipt { groupId: string; sessionIds: string[] }
+export const groupCleanupPending = async () => await invoke<GroupCleanupReceipt[]>("group_cleanup_pending");
+export const groupCleanupAck = async (groupId: string) => { await invoke<void>("group_cleanup_ack", { groupId }); };
+export const groupSettings = (groupId: string, input: { expectedRevision?: number; name: string; goal: string; coordinatorId: string; maxCalls: number; tokenBudget: number; cwd?: string; members: { id: string; role: string; modelId: string }[] }) => invoke<void>("group_settings", { groupId, input });
+export const onGroupChanged = (callback: (groupId: string, deleted?: boolean, sessionIds?: string[]) => void) => listen<{ groupId: string; deleted?: boolean; sessionIds?: string[] }>("group://changed", event => callback(event.payload.groupId, event.payload.deleted, event.payload.sessionIds));
 
 export const terminalWork = (status: string) => ["completed", "failed", "cancelled"].includes(status);
 export function mentionedMembers(text: string, members: GroupMember[]): string[] {
@@ -75,3 +81,5 @@ export const groupSaveTeam = (groupId: string, name: string) => invoke<TeamTempl
 export const groupDeleteTeam = (templateId: string) => invoke<void>("group_team_delete", { templateId });
 export const groupMemberChange = (groupId: string, action: "add" | "remove" | "refresh", memberId?: string, expert?: string) => invoke<void>("group_member_change", { groupId, action, memberId: memberId ?? null, expert: expert ?? null });
 export const groupDecision = (groupId: string, text: string, messageId: string, decisionId?: string) => invoke<void>("group_decision", { groupId, text, messageId, decisionId: decisionId ?? null });
+
+export const groupDecisionChange = (groupId: string, decisionId: string, action: "edit" | "void" | "restore", text?: string) => invoke<void>("group_decision_change", { groupId, decisionId, action, text: text ?? null });

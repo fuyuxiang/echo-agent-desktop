@@ -40,9 +40,9 @@ pub(super) fn call_in_group(
                 && w.status == "running"
         })
         .cloned()
-        .ok_or("没有正在执行的群内请求")?;
+        .ok_or("没有正在执行的专家团内请求")?;
     if work.epoch != g.epoch || g.archived {
-        return Err("群内协作已停止".into());
+        return Err("专家团内协作已停止".into());
     }
     match name {
         "group_call_member" => {
@@ -61,7 +61,7 @@ pub(super) fn call_in_group(
                 .iter()
                 .find(|m| !m.removed && (m.id == target || m.name == target))
                 .map(|m| m.id.clone())
-                .ok_or("成员不在本群中")?;
+                .ok_or("成员不在本专家团中")?;
             if target == member {
                 return Err("不能向自己派发工作".into());
             }
@@ -120,7 +120,7 @@ pub(super) fn call_in_group(
                 .works
                 .iter()
                 .find(|w| w.id == id)
-                .ok_or("工作不属于本群或不存在")?;
+                .ok_or("工作不属于本专家团或不存在")?;
             Ok(json!({"id":w.id,"status":w.status,"output":w.output,"error":w.error}))
         }
         "group_record_decision" => {
@@ -130,22 +130,22 @@ pub(super) fn call_in_group(
                 .iter()
                 .any(|m| m.id == source && m.kind == "user")
             {
-                return Err("决定必须引用用户在本群的消息".into());
+                return Err("决定必须引用用户在本专家团的消息".into());
             }
             let text = text(
                 args.get("text").and_then(Value::as_str).unwrap_or(""),
                 2000,
                 "决定",
             )?;
-            if g.decisions.len() >= 100 {
-                return Err("决定记录已达上限".into());
-            }
             let d = Decision {
                 id: id(),
                 text,
                 message_id: Some(source.into()),
                 created_at: now(),
                 confirmed: false,
+                voided: false,
+                history: vec![],
+                updated_at: None,
             };
             let result = json!(d);
             g.decisions.push(d);

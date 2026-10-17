@@ -8081,10 +8081,8 @@ button.diff__path {
   flex: 1 1 0;
   min-height: 0;
 }
-.sidebar__list-section--projects {
-  margin-top: 4px;
-  padding-top: 4px;
-  border-top: 1px solid var(--ui-line, var(--echo-border-default));
+.sidebar__list-section + .sidebar__list-section {
+  margin-top: 6px;
 }
 .sidebar__list-section > .sidebar__section-head,
 .sidebar__list-section > .sidebar__section-label {

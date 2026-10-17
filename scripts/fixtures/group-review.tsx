@@ -1,23 +1,30 @@
 // Isolated browser fixture; only production group components are rendered.
-import React, { useEffect } from "react";
+import React, { useEffect, useState } from "react";
 import { createRoot } from "react-dom/client";
 import { ThemeProvider } from "../../src/components/ThemeProvider";
 import { GroupWorkspace } from "../../src/features/groups/GroupWorkspace";
+import { CapabilitySection } from "../../src/components/CapabilitySection";
+import { PlaceholderPage } from "../../src/components/PlaceholderPage";
+import { Sidebar } from "../../src/components/Sidebar";
 import { useGroupEvents, useGroupStore } from "../../src/features/groups/group-store";
 import { usePermissionStore } from "../../src/stores/permission-store";
 import type { Group, TeamTemplate } from "../../src/features/groups/group-client";
 import "../../src/styles/global.css";
 import "../../src/styles/app.css";
+import "../../src/styles/visual-polish.css";
 import "../../src/styles/form-controls.css";
 
 const theme = new URLSearchParams(location.search).get("theme") ?? "light";
 localStorage.setItem("echoagent.theme", theme);
 document.documentElement.dataset.theme = theme;
+import { GroupActionsHost } from "../../src/features/groups/GroupActions";
+
 const callbacks = new Map<number, (event: unknown) => void>(), listeners = new Map<number, string>();
 let counter = 0;
 const groups: Group[] = JSON.parse(sessionStorage.getItem("group-review") ?? "[]");
 const templates: TeamTemplate[] = JSON.parse(sessionStorage.getItem("group-review-templates") ?? "[]");
-let failNextSend = false;
+let failNextSend = false, failNextDelete = false;
+const cleanupReceipts = new Map<string, {groupId:string;sessionIds:string[]}>();
 const changed = (group: Group) => {
   group.revision++; group.updatedAt = Date.now();
   sessionStorage.setItem("group-review", JSON.stringify(groups));
@@ -33,6 +40,8 @@ Object.assign(window, { __TAURI_EVENT_PLUGIN_INTERNALS__: { unregisterListener: 
     if (command === "plugin:event|unlisten") { listeners.delete(args.eventId); return; }
     if (command === "agents_list") return experts;
     if (command === "group_list") return structuredClone(groups);
+    if (command === "group_cleanup_pending") return [...cleanupReceipts.values()];
+    if (command === "group_cleanup_ack") { cleanupReceipts.delete(args.groupId); return; }
     if (command === "group_team_templates") return structuredClone(templates);
     if (command === "group_team_save") {
       const group = groups.find(group => group.id === args.groupId)!;
@@ -53,6 +62,27 @@ Object.assign(window, { __TAURI_EVENT_PLUGIN_INTERNALS__: { unregisterListener: 
       const decision = group.decisions.find(decision => decision.id === args.decisionId);
       if (decision) decision.confirmed = true;
       else group.decisions.push({id:crypto.randomUUID(), text:args.text, messageId:args.messageId, confirmed:true});
+      changed(group); return;
+    }
+    if (command === "group_metadata") {
+      const group = groups.find(group => group.id === args.groupId)!;
+      for (const key of ["name", "pinned", "archived"] as const) if (args[key] !== null && args[key] !== undefined) (group as any)[key] = args[key];
+      changed(group); return;
+    }
+    if (command === "group_delete") {
+      if (failNextDelete) { failNextDelete = false; throw new Error("隔离验收：尚未确认停止，专家团记录已保留"); }
+      const index = groups.findIndex(group => group.id === args.groupId);
+      cleanupReceipts.set(args.groupId,{groupId:args.groupId,sessionIds:[]});
+      if (index >= 0) groups.splice(index, 1);
+      sessionStorage.setItem("group-review", JSON.stringify(groups));
+      return { sessionIds: [] };
+    }
+    if (command === "group_decision_change") {
+      const group = groups.find(group => group.id === args.groupId)!;
+      const decision = group.decisions.find(decision => decision.id === args.decisionId)!;
+      if (args.action === "edit") { decision.history ??= []; decision.history.push({text:decision.text,changedAt:Date.now()}); decision.text=args.text; }
+      if (args.action === "void") decision.voided=true;
+      if (args.action === "restore") decision.voided=false;
       changed(group); return;
     }
     if (command === "group_snapshot") return structuredClone(groups.find(group => group.id === args.groupId));
@@ -100,6 +130,12 @@ Object.assign(window, { __TAURI_EVENT_PLUGIN_INTERNALS__: { unregisterListener: 
   },
 }, groupReview: {
   failSend: () => { failNextSend = true; },
+  failDelete: () => { failNextDelete = true; },
+  seedMany: (count: number) => {
+    const base: Group = groups[0] ?? {id:"seed",name:"seed",goal:"",cwd:"/review/团队工作区",sourceSessionId:null,sourceTeamId:null,coordinatorId:"c",members:[],messages:[],works:[],decisions:[],archived:false,pinned:false,paused:false,revision:1,updatedAt:1,maxCalls:12,tokenBudget:100000};
+    for (let index=0; index<count; index++) groups.push({...structuredClone(base),id:`seed-${index}`,name:`目录专家团 ${index}`,goal:index===count-1?"唯一目标检索关键词":"验证历史目录",messages:[],works:[],decisions:[],archived:false,pinned:false});
+    changed(groups.at(-1)!);
+  },
   history: () => {
     const group = groups.find(group => group.id === useGroupStore.getState().currentId)!;
     for (let i=0;i<40;i++) group.messages.push({id:crypto.randomUUID(),seq:group.messages.length+1,kind:"reference",text:`历史资料 ${i}`,createdAt:Date.now(),memberId:null,workId:null,replyTo:null,attachments:[],toolCalls:[]});
@@ -122,8 +158,18 @@ Object.assign(window, { __TAURI_EVENT_PLUGIN_INTERNALS__: { unregisterListener: 
   permission: () => usePermissionStore.getState().request({ requestId: "group-permission", sessionId: "native-1", toolCallId: "tool-write", toolCall: { toolCallId: "tool-write", title: "写入需求文档", kind: "edit", content: [] }, options: [{ optionId: "allow-once", kind: "allow", title: "Allow once" }, { optionId: "reject-once", kind: "deny", title: "Reject" }] } as any),
 } });
 function Review() {
+  const [label, setLabel] = useState("专家团");
   useGroupEvents(true);
   useEffect(() => { useGroupStore.setState({ current: null, currentId: null }); }, []);
-  return <GroupWorkspace cwd="/review/团队工作区" modelId="local/mock" models={[{ id: "local/mock", label: "本地验收模型" }]} workspaces={[{ cwd: "/review/团队工作区", sessionCount: 1 }]} onToast={() => {}} onOpenSettings={() => {}} />;
+  const content = label === "专家团" ? (
+    <CapabilitySection active={label} onNavigate={setLabel}>
+      <GroupWorkspace cwd="/review/团队工作区" modelId="local/mock" models={[{ id: "local/mock", label: "本地验收模型" }]} workspaces={[{ cwd: "/review/团队工作区", sessionCount: 1 }]} onToast={() => {}} onOpenSettings={() => {}} />
+    </CapabilitySection>
+  ) : <PlaceholderPage label={label} onNavigate={setLabel} />;
+  if (new URLSearchParams(location.search).get("groupShell") !== "1") return content;
+  return <div className="app"><div className="app__body">
+    <Sidebar activeNav={label} onNewSession={() => {}} onNavigate={setLabel} onOpenSettings={() => {}} onOpenSearch={() => {}} onSelect={() => {}} />
+    <main className="app__main">{content}</main>
+  </div></div>;
 }
-createRoot(document.getElementById("root")!).render(<ThemeProvider><Review /></ThemeProvider>);
+createRoot(document.getElementById("root")!).render(<ThemeProvider><Review /><GroupActionsHost /></ThemeProvider>);

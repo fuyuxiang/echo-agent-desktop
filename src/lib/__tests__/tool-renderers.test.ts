@@ -57,7 +57,7 @@ describe("rendererLabel / rendererIcon", () => {
   it("各渲染器有标签与图标", () => {
     expect(rendererLabel("command")).toBe("终端命令");
     expect(rendererLabel("image-gen")).toBe("图像生成");
-    expect(rendererLabel("team-create")).toBe("创建团队");
+    expect(rendererLabel("team-create")).toBe("创建任务编组");
     expect(rendererLabel("personal-knowledge")).toBe("个人知识");
     expect(rendererLabel("weather")).toBe("天气查询");
     expect(rendererLabel("default")).toBe("工具");

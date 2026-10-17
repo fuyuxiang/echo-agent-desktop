@@ -2,7 +2,7 @@ use super::*;
 use serde::{Deserialize, Serialize};
 
 #[tauri::command]
-pub fn group_member_change(
+pub async fn group_member_change(
     app: tauri::AppHandle,
     state: State<'_, crate::commands::AppState>,
     group_id: String,
@@ -10,6 +10,12 @@ pub fn group_member_change(
     member_id: Option<String>,
     expert: Option<String>,
 ) -> Result<(), String> {
+    let _dispatch = tokio::time::timeout(
+        std::time::Duration::from_secs(30),
+        runtime::dispatch_lock(&group_id).lock_owned(),
+    )
+    .await
+    .map_err(|_| "成员仍在准备执行，请稍后调整成员".to_string())?;
     let snapshot = db()?.get(&group_id)?;
     if snapshot.works.iter().any(|w| !w.terminal()) {
         return Err("请完成或停止当前工作后调整成员".into());
@@ -183,7 +189,7 @@ pub fn group_team_save(group_id: String, name: String) -> Result<TeamTemplate, S
         .clone();
     let mut template = TeamTemplate {
         id: id(),
-        name: text(&name, 80, "团队名称")?,
+        name: text(&name, 80, "专家团名称")?,
         description: g.goal,
         members: g
             .members
@@ -216,12 +222,18 @@ pub fn group_team_delete(template_id: String) -> Result<(), String> {
 }
 
 #[tauri::command]
-pub fn group_decision(
+pub async fn group_decision(
     group_id: String,
     text: String,
     message_id: String,
     decision_id: Option<String>,
 ) -> Result<(), String> {
+    let _dispatch = tokio::time::timeout(
+        std::time::Duration::from_secs(30),
+        runtime::dispatch_lock(&group_id).lock_owned(),
+    )
+    .await
+    .map_err(|_| "成员仍在准备执行，请稍后更新决定".to_string())?;
     db()?.update(&group_id, |g| {
         if let Some(id) = decision_id {
             let decision = g
@@ -229,14 +241,14 @@ pub fn group_decision(
                 .iter_mut()
                 .find(|d| d.id == id)
                 .ok_or("决定记录不存在")?;
+            if decision.voided {
+                return Err("该决定已作废，请先恢复决定".into());
+            }
             decision.confirmed = true;
             return Ok(());
         }
         if !g.messages.iter().any(|m| m.id == message_id) {
             return Err("来源消息不存在".into());
-        }
-        if g.decisions.len() >= 100 {
-            return Err("决定记录已达上限".into());
         }
         g.decisions.push(Decision {
             id: id(),
@@ -244,8 +256,84 @@ pub fn group_decision(
             message_id: Some(message_id),
             created_at: now(),
             confirmed: true,
+            voided: false,
+            history: vec![],
+            updated_at: None,
         });
         Ok(())
+    })?;
+    changed(&group_id);
+    Ok(())
+}
+
+pub(super) fn change_decision(
+    g: &mut Group,
+    decision_id: &str,
+    action: &str,
+    value: Option<&str>,
+) -> Result<(), String> {
+    let decision = g
+        .decisions
+        .iter_mut()
+        .find(|d| d.id == decision_id)
+        .ok_or("决定记录不存在")?;
+    match action {
+        "edit" => {
+            if decision.voided {
+                return Err("请先恢复已作废的决定".into());
+            }
+            let value = text(value.unwrap_or(""), 2000, "决定内容")?;
+            if decision.text != value {
+                decision.history.push(DecisionVersion {
+                    action: "edit".into(),
+                    text: decision.text.clone(),
+                    changed_at: now(),
+                });
+                decision.text = value;
+            }
+            decision.confirmed = true;
+        }
+        "void" => {
+            if !decision.voided {
+                decision.history.push(DecisionVersion {
+                    action: "void".into(),
+                    text: decision.text.clone(),
+                    changed_at: now(),
+                });
+            }
+            decision.voided = true;
+        }
+        "restore" => {
+            if decision.voided {
+                decision.history.push(DecisionVersion {
+                    action: "restore".into(),
+                    text: decision.text.clone(),
+                    changed_at: now(),
+                });
+            }
+            decision.voided = false;
+            decision.confirmed = true;
+        }
+        _ => return Err("不支持的决定操作".into()),
+    }
+    decision.updated_at = Some(now());
+    Ok(())
+}
+#[tauri::command]
+pub async fn group_decision_change(
+    group_id: String,
+    decision_id: String,
+    action: String,
+    text: Option<String>,
+) -> Result<(), String> {
+    let _dispatch = tokio::time::timeout(
+        std::time::Duration::from_secs(30),
+        runtime::dispatch_lock(&group_id).lock_owned(),
+    )
+    .await
+    .map_err(|_| "成员仍在准备执行，请稍后更新决定".to_string())?;
+    db()?.update(&group_id, |g| {
+        change_decision(g, &decision_id, &action, text.as_deref())
     })?;
     changed(&group_id);
     Ok(())

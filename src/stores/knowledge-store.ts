@@ -53,7 +53,7 @@ interface KnowledgeState extends PersistedKnowledgePreferences {
   setSessionSources: (sessionId: string, sources: KnowledgeSource[]) => void;
   setDefaultOrganizationScopeIds: (scopeIds: string[]) => void;
   setSessionOrganizationScopeIds: (sessionId: string, scopeIds: string[]) => void;
-  forgetSession: (sessionId: string) => void;
+  forgetSession: (sessionId: string) => boolean;
   bindSessionSources: (sessionId: string, consumeDefault?: boolean) => KnowledgeSource[];
   setSourceCount: (count: number) => void;
   beginTurnTrace: (
@@ -178,8 +178,8 @@ function loadPreferences(): PersistedKnowledgePreferences {
 
 function persistPreferences(state: Pick<KnowledgeState,
   "defaultSources" | "defaultOrganizationScopeIds" | "sessionSources" | "sessionOrganizationScopeIds"
->): void {
-  if (typeof localStorage === "undefined") return;
+>): boolean {
+  if (typeof localStorage === "undefined") return false;
   try {
     localStorage.setItem(STORAGE_KEY, JSON.stringify({
       defaultSources: state.defaultSources,
@@ -187,8 +187,10 @@ function persistPreferences(state: Pick<KnowledgeState,
       sessionSources: state.sessionSources,
       sessionOrganizationScopeIds: state.sessionOrganizationScopeIds,
     }));
+    return true;
   } catch {
     // Preference persistence must never block a task submission.
+    return false;
   }
 }
 
@@ -248,18 +250,22 @@ export const useKnowledgeStore = create<KnowledgeState>((set, get) => ({
     persistPreferences({ ...state, sessionOrganizationScopeIds });
     return { sessionOrganizationScopeIds };
   }),
-  forgetSession: (sessionId) => set((state) => {
-    const sessionSources = { ...state.sessionSources };
-    const sessionOrganizationScopeIds = { ...state.sessionOrganizationScopeIds };
-    const retrievals = { ...state.retrievals };
-    const turnTraces = { ...state.turnTraces };
-    delete sessionSources[sessionId];
-    delete sessionOrganizationScopeIds[sessionId];
-    delete retrievals[sessionId];
-    delete turnTraces[sessionId];
-    persistPreferences({ ...state, sessionSources, sessionOrganizationScopeIds });
-    return { sessionSources, sessionOrganizationScopeIds, retrievals, turnTraces };
-  }),
+  forgetSession: (sessionId) => {
+    let saved = false;
+    set((state) => {
+      const sessionSources = { ...state.sessionSources };
+      const sessionOrganizationScopeIds = { ...state.sessionOrganizationScopeIds };
+      const retrievals = { ...state.retrievals };
+      const turnTraces = { ...state.turnTraces };
+      delete sessionSources[sessionId];
+      delete sessionOrganizationScopeIds[sessionId];
+      delete retrievals[sessionId];
+      delete turnTraces[sessionId];
+      saved = persistPreferences({ ...state, sessionSources, sessionOrganizationScopeIds });
+      return { sessionSources, sessionOrganizationScopeIds, retrievals, turnTraces };
+    });
+    return saved;
+  },
   bindSessionSources: (sessionId, consumeDefault = false) => {
     const state = get();
     const existing = state.sessionSources[sessionId];

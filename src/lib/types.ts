@@ -818,6 +818,8 @@ export interface AgentDefaults {
 
 /** One installed plugin (subset of EchoAgent's PluginInfo). */
 export interface PluginEntry {
+  origin?: { type: string; sourceName?: string; gitUrl?: string };
+  management?: { uninstallable: boolean; removable: boolean; packagePlugins: string[]; removalPath?: string | null; pathPlugins?: string[] };
   name: string;
   id?: string;
   root?: string;

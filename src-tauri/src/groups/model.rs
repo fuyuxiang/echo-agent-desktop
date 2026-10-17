@@ -101,6 +101,21 @@ pub struct Decision {
     pub created_at: u64,
     #[serde(default)]
     pub confirmed: bool,
+    #[serde(default)]
+    pub voided: bool,
+    #[serde(default)]
+    pub history: Vec<DecisionVersion>,
+    #[serde(default)]
+    pub updated_at: Option<u64>,
+}
+
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct DecisionVersion {
+    #[serde(default)]
+    pub action: String,
+    pub text: String,
+    pub changed_at: u64,
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -163,10 +178,10 @@ impl Group {
         depth: u32,
     ) -> Result<String, String> {
         if self.archived || self.paused {
-            return Err("群聊已暂停或归档，请先恢复协作".into());
+            return Err("专家团已暂停或归档，请先恢复协作".into());
         }
         if !self.members.iter().any(|m| m.id == member && !m.removed) {
-            return Err("指定成员不在本群中".into());
+            return Err("指定成员不在本专家团中".into());
         }
         let calls = self.works.iter().filter(|w| w.root_id == root).count();
         if calls >= self.max_calls || depth > 3 {
@@ -189,7 +204,7 @@ impl Group {
             .sum::<u64>()
             >= self.token_budget
         {
-            return Err("本次协作已达到 Token 预算，请调整群设置后继续".into());
+            return Err("本次协作已达到 Token 预算，请调整专家团设置后继续".into());
         }
         let key = id();
         self.works.push(Work {

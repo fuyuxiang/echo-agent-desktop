@@ -6,18 +6,40 @@ use std::path::{Path, PathBuf};
 pub struct Store {
     pub path: PathBuf,
 }
+#[derive(serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CleanupReceipt {
+    pub group_id: String,
+    pub session_ids: Vec<String>,
+}
 impl Store {
     pub fn open(path: &Path) -> Result<Self, String> {
         if let Some(parent) = path.parent() {
             std::fs::create_dir_all(parent).map_err(|e| e.to_string())?;
         }
         if std::fs::symlink_metadata(path).is_ok_and(|m| m.file_type().is_symlink()) {
-            return Err("拒绝打开符号链接群聊数据库".into());
+            return Err("拒绝打开符号链接专家团数据库".into());
         }
         let store = Self { path: path.into() };
         let c = store.connect()?;
+        c.execute_batch("CREATE TABLE IF NOT EXISTS group_deletions(group_id TEXT NOT NULL, session_id TEXT NOT NULL, cwd TEXT NOT NULL, PRIMARY KEY(group_id,session_id));").map_err(|e| e.to_string())?;
         c.execute_batch("CREATE TABLE IF NOT EXISTS team_templates(id TEXT PRIMARY KEY,name TEXT NOT NULL,data TEXT NOT NULL);").map_err(|e|e.to_string())?;
         c.execute_batch("PRAGMA journal_mode=WAL; CREATE TABLE IF NOT EXISTS groups(id TEXT PRIMARY KEY, data TEXT NOT NULL, updated INTEGER NOT NULL); CREATE TABLE IF NOT EXISTS members(session_id TEXT PRIMARY KEY, group_id TEXT NOT NULL, member_id TEXT NOT NULL); CREATE TABLE IF NOT EXISTS messages(id TEXT PRIMARY KEY, group_id TEXT NOT NULL, seq INTEGER NOT NULL, data TEXT NOT NULL, UNIQUE(group_id,seq)); CREATE INDEX IF NOT EXISTS message_group ON messages(group_id,seq); CREATE TABLE IF NOT EXISTS work_items(id TEXT PRIMARY KEY, group_id TEXT NOT NULL, data TEXT NOT NULL); CREATE INDEX IF NOT EXISTS work_group ON work_items(group_id); PRAGMA user_version=1;").map_err(|e| e.to_string())?;
+        c.execute_batch("CREATE TABLE IF NOT EXISTS group_cleanup(group_id TEXT PRIMARY KEY, session_ids TEXT NOT NULL); CREATE TABLE IF NOT EXISTS group_previews(id TEXT PRIMARY KEY, data TEXT NOT NULL, updated INTEGER NOT NULL); CREATE INDEX IF NOT EXISTS group_preview_updated ON group_previews(updated DESC,id DESC);").map_err(|e| e.to_string())?;
+        let missing = {
+            let mut query = c
+                .prepare("SELECT data FROM groups WHERE id NOT IN (SELECT id FROM group_previews)")
+                .map_err(|e| e.to_string())?;
+            let rows = query
+                .query_map([], |row| row.get::<_, String>(0))
+                .map_err(|e| e.to_string())?;
+            rows.collect::<Result<Vec<_>, _>>()
+                .map_err(|e| e.to_string())?
+        };
+        for data in missing {
+            let group: Group = serde_json::from_str(&data).map_err(|e| e.to_string())?;
+            Self::write_preview(&c, &group)?;
+        }
         #[cfg(unix)]
         {
             use std::os::unix::fs::PermissionsExt;
@@ -35,7 +57,7 @@ impl Store {
     pub fn templates(&self) -> Result<Vec<super::management::TeamTemplate>, String> {
         let c = self.connect()?;
         let mut statement = c
-            .prepare("SELECT data FROM team_templates ORDER BY name LIMIT 500")
+            .prepare("SELECT data FROM team_templates ORDER BY name")
             .map_err(|e| e.to_string())?;
         let result = statement
             .query_map([], |r| r.get::<_, String>(0))
@@ -59,7 +81,7 @@ impl Store {
     pub fn list(&self) -> Result<Vec<Group>, String> {
         let c = self.connect()?;
         let mut q = c
-            .prepare("SELECT data FROM groups ORDER BY updated DESC LIMIT 500")
+            .prepare("SELECT data FROM group_previews ORDER BY updated DESC, id DESC")
             .map_err(|e| e.to_string())?;
         let rows = q
             .query_map([], |r| r.get::<_, String>(0))
@@ -74,8 +96,9 @@ impl Store {
             .query_row("SELECT data FROM groups WHERE id=?", [id], |r| r.get(0))
             .optional()
             .map_err(|e| e.to_string())?
-            .ok_or("群聊不存在")?;
-        let mut g: Group = serde_json::from_str(&data).map_err(|e| format!("群配置损坏：{e}"))?;
+            .ok_or("专家团不存在")?;
+        let mut g: Group =
+            serde_json::from_str(&data).map_err(|e| format!("专家团配置损坏：{e}"))?;
         let mut q = c
             .prepare("SELECT data FROM messages WHERE group_id=? ORDER BY seq")
             .map_err(|e| e.to_string())?;
@@ -100,6 +123,48 @@ impl Store {
     }
     pub fn get(&self, id: &str) -> Result<Group, String> {
         Self::read(&self.connect()?, id)
+    }
+    fn write_preview(c: &Connection, group: &Group) -> Result<(), String> {
+        let mut preview = group.clone();
+        preview.decisions.clear();
+        for member in &mut preview.members {
+            member.profile = serde_json::json!({});
+        }
+        preview.messages = preview
+            .messages
+            .into_iter()
+            .rev()
+            .take(1)
+            .map(|mut message| {
+                message.text = message.text.chars().take(160).collect();
+                message.tool_calls.clear();
+                message.attachments.clear();
+                message.knowledge = Knowledge::default();
+                message
+            })
+            .collect();
+        // Stored headers keep recent work in reverse order; migrations and
+        // ordinary writes must produce the same ordering and retain newest work.
+        preview
+            .works
+            .sort_by(|a, b| a.created_at.cmp(&b.created_at).then(a.id.cmp(&b.id)));
+        preview.works = preview
+            .works
+            .into_iter()
+            .rev()
+            .enumerate()
+            .filter(|(index, work)| *index < 100 || !work.terminal())
+            .map(|(_, work)| work)
+            .map(|mut work| {
+                work.prompt.clear();
+                work.output.clear();
+                work.seen_events.clear();
+                work.error = None;
+                work
+            })
+            .collect();
+        c.execute("INSERT INTO group_previews VALUES(?1,?2,?3) ON CONFLICT(id) DO UPDATE SET data=excluded.data,updated=excluded.updated", params![preview.id,serde_json::to_string(&preview).map_err(|e| e.to_string())?,preview.updated_at]).map_err(|e| e.to_string())?;
+        Ok(())
     }
     fn write(c: &Connection, g: &Group, previous: Option<&Group>) -> Result<(), String> {
         let mut header = g.clone();
@@ -131,6 +196,7 @@ impl Store {
             })
             .collect();
         c.execute("INSERT INTO groups VALUES(?1,?2,?3) ON CONFLICT(id) DO UPDATE SET data=excluded.data,updated=excluded.updated", params![g.id, serde_json::to_string(&header).map_err(|e| e.to_string())?,g.updated_at]).map_err(|e| e.to_string())?;
+        Self::write_preview(c, &header)?;
         for m in &g.members {
             for sid in [&m.session_id, &m.discussion_session_id]
                 .into_iter()
@@ -165,7 +231,7 @@ impl Store {
             }
             c.execute("INSERT INTO messages VALUES(?1,?2,?3,?4) ON CONFLICT(id) DO UPDATE SET data=excluded.data WHERE messages.group_id=excluded.group_id AND messages.seq=excluded.seq",params![m.id,g.id,m.seq,serde_json::to_string(m).map_err(|e| e.to_string())?]).map_err(|e| e.to_string())?;
             if c.changes() == 0 {
-                return Err("消息标识已被其他群聊使用，请重新发送".into());
+                return Err("消息标识已被其他专家团使用，请重新发送".into());
             }
         }
         for w in &g.works {
@@ -187,7 +253,7 @@ impl Store {
             .map_err(|e| e.to_string())?
             .is_some()
         {
-            return Err("群聊已存在".into());
+            return Err("专家团已存在".into());
         }
         Self::write(&tx, g, None)?;
         tx.commit().map_err(|e| e.to_string())
@@ -213,6 +279,105 @@ impl Store {
         tx.commit().map_err(|e| e.to_string())?;
         Ok(out)
     }
+    /// Include retired model/workspace contexts, not only current member sessions.
+    pub fn sessions(&self, group: &str) -> Result<Vec<String>, String> {
+        let c = self.connect()?;
+        let mut q = c
+            .prepare("SELECT session_id FROM members WHERE group_id=? ORDER BY session_id")
+            .map_err(|e| e.to_string())?;
+        let rows = q
+            .query_map([group], |r| r.get::<_, String>(0))
+            .map_err(|e| e.to_string())?;
+        rows.collect::<Result<Vec<_>, _>>()
+            .map_err(|e| e.to_string())
+    }
+    pub fn stage_session_delete(
+        &self,
+        group: &str,
+        session: &str,
+        cwd: &str,
+    ) -> Result<(), String> {
+        self.connect()?
+            .execute(
+                "INSERT OR IGNORE INTO group_deletions VALUES(?1,?2,?3)",
+                params![group, session, cwd],
+            )
+            .map_err(|e| e.to_string())?;
+        Ok(())
+    }
+    pub fn deletion_sessions(&self, group: &str) -> Result<Vec<(String, String)>, String> {
+        let c = self.connect()?;
+        let mut q = c
+            .prepare(
+                "SELECT session_id,cwd FROM group_deletions WHERE group_id=? ORDER BY session_id",
+            )
+            .map_err(|e| e.to_string())?;
+        let rows = q
+            .query_map([group], |r| Ok((r.get(0)?, r.get(1)?)))
+            .map_err(|e| e.to_string())?;
+        rows.collect::<Result<Vec<_>, _>>()
+            .map_err(|e| e.to_string())
+    }
+    pub fn delete(&self, id: &str) -> Result<(), String> {
+        let mut c = self.connect()?;
+        let tx = c
+            .transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)
+            .map_err(|e| e.to_string())?;
+        let g = Self::read(&tx, id)?;
+        if g.works.iter().any(|w| !w.terminal()) {
+            return Err("专家团仍有工作尚未确认停止，记录已保留，请稍后重试".into());
+        }
+        let sessions = {
+            let mut query = tx.prepare("SELECT session_id FROM members WHERE group_id=? UNION SELECT session_id FROM group_deletions WHERE group_id=?").map_err(|e| e.to_string())?;
+            let rows = query
+                .query_map([id, id], |row| row.get::<_, String>(0))
+                .map_err(|e| e.to_string())?;
+            rows.collect::<Result<Vec<_>, _>>()
+                .map_err(|e| e.to_string())?
+        };
+        tx.execute(
+            "INSERT OR REPLACE INTO group_cleanup VALUES(?1,?2)",
+            params![
+                id,
+                serde_json::to_string(&sessions).map_err(|e| e.to_string())?
+            ],
+        )
+        .map_err(|e| e.to_string())?;
+        tx.execute("DELETE FROM group_previews WHERE id=?", [id])
+            .map_err(|e| e.to_string())?;
+        for table in ["messages", "work_items", "members", "group_deletions"] {
+            tx.execute(&format!("DELETE FROM {table} WHERE group_id=?"), [id])
+                .map_err(|e| e.to_string())?;
+        }
+        tx.execute("DELETE FROM groups WHERE id=?", [id])
+            .map_err(|e| e.to_string())?;
+        tx.commit().map_err(|e| e.to_string())
+    }
+    pub fn pending_cleanup(&self) -> Result<Vec<CleanupReceipt>, String> {
+        let c = self.connect()?;
+        let mut query = c
+            .prepare("SELECT group_id,session_ids FROM group_cleanup ORDER BY group_id")
+            .map_err(|e| e.to_string())?;
+        let rows = query
+            .query_map([], |row| {
+                Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
+            })
+            .map_err(|e| e.to_string())?;
+        rows.map(|row| {
+            let (group_id, data) = row.map_err(|e| e.to_string())?;
+            Ok(CleanupReceipt {
+                group_id,
+                session_ids: serde_json::from_str(&data).map_err(|e| e.to_string())?,
+            })
+        })
+        .collect()
+    }
+    pub fn ack_cleanup(&self, group: &str) -> Result<(), String> {
+        self.connect()?
+            .execute("DELETE FROM group_cleanup WHERE group_id=?", [group])
+            .map_err(|e| e.to_string())?;
+        Ok(())
+    }
     pub fn owner(&self, session: &str) -> Result<Option<(String, String)>, String> {
         self.connect()?
             .query_row(
@@ -226,7 +391,7 @@ impl Store {
     pub fn bind_owner(&self, session: &str, group: &str, member: &str) -> Result<(), String> {
         self.connect()?
             .execute(
-                "INSERT OR REPLACE INTO members VALUES(?1,?2,?3)",
+                "INSERT OR REPLACE INTO members SELECT ?1,?2,?3 WHERE EXISTS(SELECT 1 FROM groups WHERE id=?2)",
                 params![session, group, member],
             )
             .map_err(|e| e.to_string())?;

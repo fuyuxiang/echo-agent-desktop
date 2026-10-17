@@ -16,8 +16,10 @@ pub fn referenced_team(text: &str, team_ids: &[String]) -> Result<Option<String>
         return Ok(None);
     }
     static QUOTED: LazyLock<Regex> = LazyLock::new(|| {
-        Regex::new(r#"(?:使用|用)\s*团队\s*[“「\"']([^”」\"']+)[”」\"']"#)
-            .expect("valid team reference")
+        Regex::new(
+            r#"(?:使用|用)\s*(?:任务编组|专家团队|专家团|团队)\s*[“「\"']([^”」\"']+)[”」\"']"#,
+        )
+        .expect("valid team reference")
     });
     if let Some(capture) = QUOTED.captures(text) {
         let id = capture[1].trim();
@@ -26,13 +28,13 @@ pub fn referenced_team(text: &str, team_ids: &[String]) -> Result<Option<String>
             .find(|name| name.as_str() == id)
             .cloned()
             .map(Some)
-            .ok_or_else(|| format!("本会话没有团队“{id}”，请先创建或选择已有团队。"));
+            .ok_or_else(|| format!("本会话没有任务编组“{id}”，请先创建或选择已有任务编组。"));
     }
     let matches = team_ids
         .iter()
         .filter(|id| {
             let pattern = format!(
-                r#"团队\s*(?:“{}”|「{}」|{}(?:[\s，,。；;：:的]|$))"#,
+                r#"(?:任务编组|专家团队|专家团|团队)\s*(?:“{}”|「{}」|{}(?:[\s，,。；;：:的]|$))"#,
                 regex::escape(id),
                 regex::escape(id),
                 regex::escape(id)
@@ -41,7 +43,7 @@ pub fn referenced_team(text: &str, team_ids: &[String]) -> Result<Option<String>
         })
         .collect::<Vec<_>>();
     static UNNAMED: LazyLock<Regex> = LazyLock::new(|| {
-        Regex::new(r"(?:使用|用|让)团队(?:来|完成|处理|分工|协作|，|,|\s|$)|按团队分工")
+        Regex::new(r"(?:使用|用|让)\s*(?:任务编组|专家团队|专家团|团队)(?:来|完成|处理|分工|协作|，|,|\s|$)|按(?:任务编组|专家团队|专家团|团队)分工")
             .expect("valid unnamed team reference")
     });
     let continuing =
@@ -79,7 +81,7 @@ pub fn explicit_team_request(
     }
     static REQUEST: LazyLock<Regex> = LazyLock::new(|| {
         Regex::new(
-        r#"^(?:请|帮我|请帮我|麻烦)?\s*(?:使用|用)\s*(?:已经有的|已有的|现有的|已有|现有|本地的)?(?P<members>.+?)(?:来)?(?:创建|组建|建立|新建)(?:一个)?(?:专家)?团队\s*[「“\"'‘]?(?P<name>[^\s，,。；;：:！!「」“”\"'‘’]+)[」”\"'’]?(?:[\s，,。；;：:！!]|$)"#
+        r#"^(?:请|帮我|请帮我|麻烦)?\s*(?:使用|用)\s*(?:已经有的|已有的|现有的|已有|现有|本地的)?(?P<members>.+?)(?:来)?(?:创建|组建|建立|新建)(?:一个)?(?:任务编组|专家团队|专家团|团队)\s*[「“\"'‘]?(?P<name>[^\s，,。；;：:！!「」“”\"'‘’]+)[」”\"'’]?(?:[\s，,。；;：:！!]|$)"#
     ).expect("valid team request pattern")
     });
     let Some(capture) = REQUEST.captures(text) else {
@@ -100,7 +102,7 @@ pub fn explicit_team_request(
             continue;
         }
         if !available.iter().any(|agent| agent == name) {
-            return Err(format!("无法创建团队：本地专家“{name}”不存在。请在专家页面创建，或在团队面板选择已有专家。"));
+            return Err(format!("无法创建任务编组：本地专家“{name}”不存在。请在专家页面创建，或在任务编组面板选择已有专家。"));
         }
         if !members.contains(&name.to_string()) {
             members.push(name.to_string());
@@ -122,6 +124,56 @@ mod tests {
         ["业务分析师", "代码专家", "文档助手"]
             .map(str::to_string)
             .to_vec()
+    }
+
+    #[test]
+    fn expert_team_commands_preserve_legacy_names_and_intent_guards() {
+        let ids = ["1".to_string(), "123".to_string()];
+        for label in ["任务编组", "专家团", "团队", "专家团队"] {
+            let request = explicit_team_request(
+                &format!("请用代码专家、文档助手创建{label}「123」，完成任务"),
+                &agents(),
+            )
+            .unwrap()
+            .unwrap();
+            assert_eq!(request.name, "123");
+            assert_eq!(request.members, ["代码专家", "文档助手"]);
+            for prompt in [
+                format!("请使用{label}“123”，完成任务"),
+                format!("请用{label}123，完成任务"),
+            ] {
+                assert_eq!(
+                    referenced_team(&prompt, &ids).unwrap().as_deref(),
+                    Some("123")
+                );
+            }
+            assert_eq!(
+                referenced_team(&format!("请让{label}完成任务"), &ids[..1])
+                    .unwrap()
+                    .as_deref(),
+                Some("1")
+            );
+            assert!(referenced_team(&format!("请使用{label}“999”完成任务"), &ids).is_err());
+            assert_eq!(
+                referenced_team(&format!("不要使用{label}1"), &ids).unwrap(),
+                None
+            );
+            assert!(
+                explicit_team_request(&format!("怎么用代码专家创建{label}123？"), &agents())
+                    .unwrap()
+                    .is_none()
+            );
+            assert!(
+                explicit_team_request(&format!("请不要用代码专家创建{label}123"), &agents())
+                    .unwrap()
+                    .is_none()
+            );
+            assert!(explicit_team_request(
+                &format!("请用缺失专家创建{label}123，完成任务"),
+                &agents()
+            )
+            .is_err());
+        }
     }
 
     #[test]

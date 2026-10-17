@@ -880,3 +880,219 @@ async fn paused_preparation_returns_to_queue_and_dispatch_enqueues_before_awaiti
     pending.complete().await.unwrap();
     assert_eq!(store.get(&g.id).unwrap().works[0].status, "running");
 }
+
+#[test]
+fn group_delete_cascades_records_and_ownership_but_keeps_templates_and_other_groups() {
+    let dir = tempfile::tempdir().unwrap();
+    let store = Store::open(&dir.path().join("groups.sqlite")).unwrap();
+    let mut first = group();
+    first.members[0].session_id = Some("native-current".into());
+    first.post(None, "user", "需要删除的记录".into(), None);
+    let work = first
+        .enqueue(
+            "request",
+            &first.coordinator_id.clone(),
+            "工作".into(),
+            false,
+            None,
+            0,
+        )
+        .unwrap();
+    first.finish(&work, None, false);
+    store.create(&first).unwrap();
+    store
+        .bind_owner("native-old-workspace", &first.id, &first.members[0].id)
+        .unwrap();
+    store
+        .stage_session_delete(&first.id, "native-old-workspace", "/old")
+        .unwrap();
+    let other = group();
+    store.create(&other).unwrap();
+    let template = management::TeamTemplate {
+        id: id(),
+        name: "保留模板".into(),
+        description: "".into(),
+        source: "常用团队".into(),
+        members: vec![],
+        coordinator_name: None,
+        coordinator_role: None,
+        default_model_id: None,
+    };
+    store.save_template(&template).unwrap();
+    assert_eq!(store.sessions(&first.id).unwrap().len(), 2);
+    store.delete(&first.id).unwrap();
+    assert!(store.get(&first.id).is_err());
+    assert!(store.owner("native-current").unwrap().is_none());
+    assert!(store.owner("native-old-workspace").unwrap().is_none());
+    assert!(store.deletion_sessions(&first.id).unwrap().is_empty());
+    let receipts = Store::open(&store.path).unwrap().pending_cleanup().unwrap();
+    assert_eq!(receipts.len(), 1);
+    assert_eq!(receipts[0].group_id, first.id);
+    assert!(receipts[0]
+        .session_ids
+        .contains(&"native-current".to_string()));
+    store.ack_cleanup(&first.id).unwrap();
+    assert!(store.pending_cleanup().unwrap().is_empty());
+    assert!(store.get(&other.id).is_ok());
+    assert_eq!(store.templates().unwrap()[0].id, template.id);
+    store
+        .bind_owner("late-session", &first.id, &first.members[0].id)
+        .unwrap();
+    assert!(store.owner("late-session").unwrap().is_none());
+}
+
+#[test]
+fn group_delete_refuses_unfinished_work_without_removing_history() {
+    let dir = tempfile::tempdir().unwrap();
+    let store = Store::open(&dir.path().join("groups.sqlite")).unwrap();
+    let mut g = group();
+    g.post(None, "user", "保留我的记录".into(), None);
+    g.enqueue(
+        "request",
+        &g.coordinator_id.clone(),
+        "未完成".into(),
+        false,
+        None,
+        0,
+    )
+    .unwrap();
+    store.create(&g).unwrap();
+    assert!(store.delete(&g.id).unwrap_err().contains("尚未确认停止"));
+    assert_eq!(store.get(&g.id).unwrap().messages.len(), 1);
+}
+
+#[test]
+fn group_catalog_does_not_lose_older_groups_behind_five_hundred_archives() {
+    let dir = tempfile::tempdir().unwrap();
+    let store = Store::open(&dir.path().join("groups.sqlite")).unwrap();
+    let mut old = group();
+    old.updated_at = 1;
+    store.create(&old).unwrap();
+    for index in 0..500 {
+        let mut g = group();
+        g.archived = true;
+        g.updated_at = index + 2;
+        store.create(&g).unwrap();
+    }
+    let groups = store.list().unwrap();
+    assert_eq!(groups.len(), 501);
+    assert!(groups.iter().any(|g| g.id == old.id && !g.archived));
+}
+
+#[test]
+fn catalog_previews_exclude_expert_and_decision_history_without_altering_snapshots() {
+    let dir = tempfile::tempdir().unwrap();
+    let store = Store::open(&dir.path().join("groups.sqlite")).unwrap();
+    let mut g = group();
+    g.members[0].profile = json!({"promptBody":"private expert instructions"});
+    g.post(None, "user", "请求".into(), None).knowledge.context = "private knowledge".into();
+    g.decisions.push(Decision {
+        id: id(),
+        text: "有效决定".into(),
+        message_id: None,
+        created_at: now(),
+        confirmed: true,
+        voided: false,
+        history: vec![],
+        updated_at: None,
+    });
+    store.create(&g).unwrap();
+    let preview = store.list().unwrap().remove(0);
+    assert!(preview.decisions.is_empty());
+    assert_eq!(preview.members[0].profile, json!({}));
+    assert!(preview.messages[0].knowledge.context.is_empty());
+    let full = store.get(&g.id).unwrap();
+    assert_eq!(full.members[0].profile, g.members[0].profile);
+    assert_eq!(full.decisions.len(), 1);
+    assert_eq!(full.messages[0].knowledge.context, "private knowledge");
+}
+
+#[test]
+fn decisions_can_be_corrected_voided_and_restored_with_audit_history() {
+    let mut g = group();
+    for index in 0..101 {
+        g.decisions.push(Decision {
+            id: index.to_string(),
+            text: "旧决定".into(),
+            message_id: None,
+            created_at: now(),
+            confirmed: true,
+            voided: false,
+            history: vec![],
+            updated_at: None,
+        });
+    }
+    management::change_decision(&mut g, "100", "edit", Some("更正后的决定")).unwrap();
+    assert_eq!(g.decisions[100].text, "更正后的决定");
+    assert_eq!(g.decisions[100].history[0].text, "旧决定");
+    management::change_decision(&mut g, "100", "void", None).unwrap();
+    assert!(g.decisions[100].voided);
+    assert!(
+        management::change_decision(&mut g, "100", "edit", Some("不能偷偷更改作废记录")).is_err()
+    );
+    management::change_decision(&mut g, "100", "restore", None).unwrap();
+    assert!(!g.decisions[100].voided);
+    assert!(management::change_decision(&mut g, "100", "edit", Some(" ")).is_err());
+}
+
+#[test]
+fn decision_context_uses_current_versions_and_bounds_prompt_without_losing_history() {
+    let mut g = group();
+    g.decisions.push(Decision {
+        id: id(),
+        text: "当前决定".into(),
+        message_id: None,
+        created_at: now(),
+        confirmed: true,
+        voided: false,
+        history: vec![DecisionVersion {
+            action: "edit".into(),
+            text: "已过期的旧决定".into(),
+            changed_at: now(),
+        }],
+        updated_at: None,
+    });
+    let context = runtime::decision_context(&g).unwrap();
+    assert!(context.contains("当前决定"));
+    assert!(!context.contains("已过期的旧决定"));
+    g.decisions[0].text = "长".repeat(24_001);
+    assert!(runtime::decision_context(&g).is_err());
+    assert_eq!(g.decisions[0].text.chars().count(), 24_001);
+    g.decisions[0].voided = true;
+    assert!(runtime::decision_context(&g).is_ok());
+}
+
+#[test]
+fn group_memory_cleanup_removes_only_the_owned_namespace_and_can_be_retried() {
+    let home = tempfile::tempdir().unwrap();
+    let owned = home
+        .path()
+        .join("group-memory/owned-group/member/generation-1");
+    let other = home.path().join("group-memory/another-group");
+    let experts = home.path().join("agents");
+    for path in [&owned, &other, &experts] {
+        std::fs::create_dir_all(path).unwrap();
+        std::fs::write(path.join("MEMORY.md"), "保留相应范围的记忆").unwrap();
+    }
+    remove_group_memory(home.path(), "owned-group").unwrap();
+    assert!(!home.path().join("group-memory/owned-group").exists());
+    assert!(other.join("MEMORY.md").exists());
+    assert!(experts.join("MEMORY.md").exists());
+    remove_group_memory(home.path(), "owned-group").unwrap();
+    assert!(remove_group_memory(home.path(), "../agents").is_err());
+    #[cfg(unix)]
+    {
+        let linked = home.path().join("group-memory/linked-group");
+        std::os::unix::fs::symlink(&experts, &linked).unwrap();
+        assert!(remove_group_memory(home.path(), "linked-group").is_err());
+        assert!(experts.join("MEMORY.md").exists());
+        let redirected = tempfile::tempdir().unwrap();
+        std::os::unix::fs::symlink(
+            home.path().join("group-memory"),
+            redirected.path().join("group-memory"),
+        )
+        .unwrap();
+        assert!(remove_group_memory(redirected.path(), "another-group").is_err());
+        assert!(other.join("MEMORY.md").exists());
+    }
+}

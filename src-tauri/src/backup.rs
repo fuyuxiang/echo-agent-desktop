@@ -607,19 +607,19 @@ fn prepare_group_database(
 ) -> Result<(), String> {
     let mut connection =
         rusqlite::Connection::open_with_flags(path, rusqlite::OpenFlags::SQLITE_OPEN_READ_WRITE)
-            .map_err(|e| format!("群聊备份数据库无效：{e}"))?;
+            .map_err(|e| format!("专家团备份数据库无效：{e}"))?;
     let integrity: String = connection
         .query_row("PRAGMA integrity_check", [], |row| row.get(0))
-        .map_err(|e| format!("无法验证群聊数据库：{e}"))?;
+        .map_err(|e| format!("无法验证专家团数据库：{e}"))?;
     if integrity != "ok" {
-        return Err("群聊数据库完整性验证失败".into());
+        return Err("专家团数据库完整性验证失败".into());
     }
     let transaction = connection.transaction().map_err(|e| e.to_string())?;
     for table in ["groups", "messages", "work_items", "team_templates"] {
         let rows = {
             let mut statement = transaction
                 .prepare(&format!("SELECT id,data FROM {table}"))
-                .map_err(|e| format!("群聊备份表不完整：{e}"))?;
+                .map_err(|e| format!("专家团备份表不完整：{e}"))?;
             let result = statement
                 .query_map([], |row| {
                     Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
@@ -631,7 +631,7 @@ fn prepare_group_database(
         };
         for (id, data) in rows {
             let mut value: serde_json::Value =
-                serde_json::from_str(&data).map_err(|e| format!("群聊备份记录损坏：{e}"))?;
+                serde_json::from_str(&data).map_err(|e| format!("专家团备份记录损坏：{e}"))?;
             rebase_value(&mut value, manifest, home, app_data);
             transaction
                 .execute(
@@ -640,6 +640,42 @@ fn prepare_group_database(
                 )
                 .map_err(|e| e.to_string())?;
         }
+    }
+    let has_deletions: bool = transaction.query_row("SELECT EXISTS(SELECT 1 FROM sqlite_master WHERE type='table' AND name='group_deletions')", [], |row| row.get(0)).map_err(|e| e.to_string())?;
+    if has_deletions {
+        let entries = {
+            let mut query = transaction
+                .prepare("SELECT group_id,session_id,cwd FROM group_deletions")
+                .map_err(|e| e.to_string())?;
+            let rows = query
+                .query_map([], |row| {
+                    Ok((
+                        row.get::<_, String>(0)?,
+                        row.get::<_, String>(1)?,
+                        row.get::<_, String>(2)?,
+                    ))
+                })
+                .map_err(|e| e.to_string())?;
+            rows.collect::<Result<Vec<_>, _>>()
+                .map_err(|e| e.to_string())?
+        };
+        for (group, session, cwd) in entries {
+            let mut value = serde_json::Value::String(cwd);
+            rebase_value(&mut value, manifest, home, app_data);
+            transaction
+                .execute(
+                    "UPDATE group_deletions SET cwd=?1 WHERE group_id=?2 AND session_id=?3",
+                    rusqlite::params![value.as_str().ok_or("删除重试路径无效")?, group, session],
+                )
+                .map_err(|e| e.to_string())?;
+        }
+    }
+    // Derived metadata is rebuilt from rebased records when the store opens.
+    let has_previews: bool = transaction.query_row("SELECT EXISTS(SELECT 1 FROM sqlite_master WHERE type='table' AND name='group_previews')", [], |row| row.get(0)).map_err(|e| e.to_string())?;
+    if has_previews {
+        transaction
+            .execute("DELETE FROM group_previews", [])
+            .map_err(|e| e.to_string())?;
     }
     transaction.commit().map_err(|e| e.to_string())?;
     connection
@@ -937,6 +973,18 @@ mod tests {
     use super::*;
 
     #[test]
+    fn group_restore_accepts_legacy_database_without_cleanup_tables() {
+        let source = tempfile::tempdir().unwrap();
+        let target = tempfile::tempdir().unwrap();
+        let c = rusqlite::Connection::open(source.path().join("collaboration.sqlite")).unwrap();
+        c.execute_batch("CREATE TABLE groups(id TEXT PRIMARY KEY,data TEXT); CREATE TABLE messages(id TEXT PRIMARY KEY,data TEXT); CREATE TABLE work_items(id TEXT PRIMARY KEY,data TEXT); CREATE TABLE team_templates(id TEXT PRIMARY KEY,data TEXT);").unwrap();
+        let archive = target.path().join("restore-pending.zip");
+        export(source.path(), source.path(), &archive, BTreeMap::new()).unwrap();
+        apply_pending_at(target.path(), target.path()).unwrap();
+        assert!(target.path().join("collaboration.sqlite").exists());
+    }
+
+    #[test]
     fn group_database_backup_includes_wal_and_restore_rebases_paths_and_removes_old_sidecars() {
         let source = tempfile::tempdir().unwrap();
         let target = tempfile::tempdir().unwrap();
@@ -944,6 +992,17 @@ mod tests {
             rusqlite::Connection::open(source.path().join("collaboration.sqlite")).unwrap();
         connection.execute_batch("PRAGMA journal_mode=WAL; PRAGMA wal_autocheckpoint=0; CREATE TABLE groups(id TEXT PRIMARY KEY,data TEXT); CREATE TABLE messages(id TEXT PRIMARY KEY,data TEXT); CREATE TABLE work_items(id TEXT PRIMARY KEY,data TEXT); CREATE TABLE team_templates(id TEXT PRIMARY KEY,data TEXT);").unwrap();
         let path = source.path().join("projects/shared/file.md");
+        connection.execute_batch("CREATE TABLE group_deletions(group_id TEXT,session_id TEXT,cwd TEXT,PRIMARY KEY(group_id,session_id)); CREATE TABLE group_previews(id TEXT PRIMARY KEY,data TEXT,updated INTEGER); INSERT INTO group_previews VALUES('cached','{}',1);").unwrap();
+        connection
+            .execute(
+                "INSERT INTO group_deletions VALUES('group','native',?1)",
+                [source
+                    .path()
+                    .join("projects/shared")
+                    .to_string_lossy()
+                    .as_ref()],
+            )
+            .unwrap();
         connection
             .execute(
                 "INSERT INTO messages VALUES('latest',?1)",
@@ -973,6 +1032,24 @@ mod tests {
             })
             .unwrap();
         let data: serde_json::Value = serde_json::from_str(&data).unwrap();
+        let retry_cwd: String = restored
+            .query_row(
+                "SELECT cwd FROM group_deletions WHERE group_id='group'",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(
+            retry_cwd,
+            target.path().join("projects/shared").to_string_lossy()
+        );
+        assert_eq!(
+            restored
+                .query_row("SELECT count(*) FROM group_previews", [], |row| row
+                    .get::<_, usize>(0))
+                .unwrap(),
+            0
+        );
         assert_eq!(
             data["attachments"][0],
             target

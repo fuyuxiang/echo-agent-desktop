@@ -2850,6 +2850,66 @@ impl SessionDeletion {
     }
 }
 
+/// Exact storage lookup for deletion, independent of readable summaries and UI
+/// catalog limits. Never follow a redirected storage directory.
+pub fn session_history_paths(session_id: &str, cwd: Option<&str>) -> io::Result<Vec<PathBuf>> {
+    session_history_paths_in(&echo_agent_home().join("sessions"), session_id, cwd)
+}
+
+fn session_history_paths_in(
+    root: &Path,
+    session_id: &str,
+    cwd: Option<&str>,
+) -> io::Result<Vec<PathBuf>> {
+    let mut components = Path::new(session_id).components();
+    if !matches!(components.next(), Some(std::path::Component::Normal(_)))
+        || components.next().is_some()
+        || session_id.contains(['/', '\\'])
+    {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidInput,
+            "invalid session id",
+        ));
+    }
+    let inspect = |path: &Path| -> io::Result<bool> {
+        match std::fs::symlink_metadata(path) {
+            Ok(meta) if meta.is_dir() && !meta.file_type().is_symlink() => Ok(true),
+            Ok(_) => Err(io::Error::new(
+                io::ErrorKind::InvalidData,
+                format!("unsafe session directory: {}", path.display()),
+            )),
+            Err(e) if e.kind() == io::ErrorKind::NotFound => Ok(false),
+            Err(e) => Err(e),
+        }
+    };
+    if !inspect(root)? {
+        return Ok(vec![]);
+    }
+    let scope = cwd.map(crate::util::echo_agent_home::encode_cwd_dirname);
+    let mut paths = vec![];
+    for entry in std::fs::read_dir(root)? {
+        let entry = entry?;
+        if scope
+            .as_ref()
+            .is_some_and(|scope| entry.file_name() != std::ffi::OsStr::new(scope))
+        {
+            continue;
+        }
+        if !entry.file_type()?.is_dir() {
+            continue;
+        }
+        let parent = entry.path();
+        if !inspect(&parent)? {
+            continue;
+        }
+        let path = parent.join(session_id);
+        if inspect(&path)? {
+            paths.push(path);
+        }
+    }
+    Ok(paths)
+}
+
 /// Permanently delete a session's history: the remote (writeback) copy
 /// when `needs_remote`, the local on-disk session directory, and the
 /// FTS search-index entry.
@@ -2884,6 +2944,7 @@ pub async fn delete_session_history(
         .iter()
         .find(|s| s.info.id == sid)
         .map(|s| s.info.clone());
+    let paths = session_history_paths(session_id, cwd).map_err(DeleteSessionError::Local)?;
 
     // Remote delete first (authoritative for cloud history). A genuine
     // failure aborts before any local mutation so the row does not
@@ -2899,30 +2960,32 @@ pub async fn delete_session_history(
         false
     };
 
-    let removed = match local_info {
-        Some(info) => {
-            JsonlStorageAdapter::default()
-                .delete_session(&info)
-                .await
-                .map_err(DeleteSessionError::Local)?;
-            Some(info)
+    for path in &paths {
+        match tokio::fs::remove_dir_all(path).await {
+            Ok(()) => {}
+            Err(e) if e.kind() == io::ErrorKind::NotFound => {}
+            Err(e) => return Err(DeleteSessionError::Local(e)),
         }
-        None => None,
-    };
-    let local_removed = removed.is_some();
-
-    // Also evict when no workspace was named: that row outlives the directory
-    // and nothing else prunes it.
-    if local_removed || cwd.is_none() {
-        crate::session::storage::search::evict_session(
-            &crate::util::echo_agent_home::echo_agent_home(),
-            session_id,
-        )
-        .await;
     }
+    if !session_history_paths(session_id, cwd)
+        .map_err(DeleteSessionError::Local)?
+        .is_empty()
+    {
+        return Err(DeleteSessionError::Local(io::Error::other(
+            "session history survived deletion",
+        )));
+    }
+    let local_removed = !paths.is_empty();
+
+    // A stale search row can outlive an absent or damaged summary.
+    crate::session::storage::search::evict_session(
+        &crate::util::echo_agent_home::echo_agent_home(),
+        session_id,
+    )
+    .await;
     // The eviction above is a point in time. Queue the indexer as well so an upsert already under
     // way, which would otherwise write the row back, is followed by a re-read that finds nothing.
-    if let Some(info) = removed {
+    if let Some(info) = local_info {
         crate::session::storage::search::notify_session_updated(
             search_index,
             &info.id.to_string(),

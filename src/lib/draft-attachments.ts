@@ -1,4 +1,4 @@
-import { readDurable, writeDurable } from "./durable-ui-state";
+import { readDurable, writeDurable, useStorageHealth } from "./durable-ui-state";
 import { touchDraft } from "./draft-lifecycle";
 const KEY = "echoagent.draft-attachments.v1";
 type Drafts = Record<string, string[]>;
@@ -11,14 +11,16 @@ function read(): Drafts {
       && paths.every((path) => typeof path === "string")));
 }
 export function draftAttachments(key: string): string[] { return unsaved.get(key) ?? read()[key] ?? []; }
-export function saveDraftAttachments(key: string, paths: string[]): void {
+export function saveDraftAttachments(key: string, paths: string[]): boolean {
   const data = read();
   const previous = unsaved.get(key) ?? data[key] ?? [];
-  if (!unsaved.size && previous.length === paths.length && previous.every((path, index) => path === paths[index])) return;
+  if (!unsaved.size && previous.length === paths.length && previous.every((path, index) => path === paths[index])) return !useStorageHealth.getState().errors[KEY];
   for (const [scope, pending] of unsaved) {
     if (pending.length) data[scope] = pending; else delete data[scope];
   }
   if (paths.length) data[key] = [...paths]; else delete data[key];
-  if (writeDurable(KEY, data)) unsaved.clear(); else unsaved.set(key, [...paths]);
+  const saved = writeDurable(KEY, data);
+  if (saved) unsaved.clear(); else unsaved.set(key, [...paths]);
   touchDraft(key);
+  return saved;
 }

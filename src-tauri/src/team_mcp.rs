@@ -1,9 +1,9 @@
-//! EchoAgent 内嵌 MCP server —— 团队工具的非侵入式实现。
+//! EchoAgent 内嵌 MCP server —— 任务编组工具的非侵入式实现。
 //!
 //! `create_team` / `team_status` / `team_delete` 通过本模块提供的**标准 MCP
 //! streamable-http server** 实现（仅监听
 //! 127.0.0.1），EchoAgent 作为 MCP client 连接，工具以 `echoagent__create_team`
-//! 等名字出现，不需要修改内嵌 Runtime 的团队工具启用集。
+//! 等名字出现，不需要修改内嵌 Runtime 的任务编组工具启用集。
 //!
 //! 注册路径（双保险）：
 //!  1. `agent_runtime::new_session` 时通过 ACP `mcp_servers` 参数传入 —— 会话立即可用
@@ -12,7 +12,7 @@
 //!     写盘）—— `load_session` 恢复的会话也能用（EchoAgent 会话启动时从
 //!     config.toml 加载 MCP server 列表）。
 //!
-//! 状态：团队数据持久化到 `~/.echo-agent/echoagent-teams.json`，应用/agent 重启
+//! 状态：任务编组数据持久化到 `~/.echo-agent/echoagent-teams.json`，应用/agent 重启
 //! 不丢（旧实现里 TEAMS 在 EchoAgent 进程内存中，agent 崩溃重启即丢）。
 //! Entries are scoped by the Runtime's authoritative ACP session header.
 //!
@@ -44,7 +44,7 @@ use tauri::Emitter;
 #[cfg(unix)]
 use std::os::unix::fs::OpenOptionsExt;
 
-// ---------- 团队状态（进程级 + 磁盘持久化）----------
+// ---------- 任务编组状态（进程级 + 磁盘持久化）----------
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -139,7 +139,7 @@ fn validate_session_id(session_id: &str) -> Result<(), String> {
         || session_id.len() > 256
         || session_id.chars().any(char::is_control)
     {
-        return Err("团队所属会话无效".into());
+        return Err("任务编组所属会话无效".into());
     }
     Ok(())
 }
@@ -234,7 +234,7 @@ pub(crate) fn prepare_prompt(
                 .collect::<Vec<_>>();
             if !missing.is_empty() {
                 return Err(format!(
-                    "团队“{id}”的专家已不可用：{}。请在专家页面恢复，或重新创建团队。",
+                    "任务编组“{id}”的专家已不可用：{}。请在专家页面恢复，或重新创建任务编组。",
                     missing.join("、")
                 ));
             }
@@ -242,7 +242,7 @@ pub(crate) fn prepare_prompt(
         update_teams(|all| {
             let team = all
                 .get_mut(&team_key(Some(session_id), id))
-                .ok_or("团队已被解散，请重新选择团队")?;
+                .ok_or("任务编组已被解散，请重新选择任务编组")?;
             if !team.prompt_ids.iter().any(|value| value == prompt_id) {
                 if team.prompt_ids.len() == 128 {
                     team.prompt_ids.remove(0);
@@ -255,6 +255,8 @@ pub(crate) fn prepare_prompt(
         notify_changed(session_id);
     }
     if selected_id.is_none()
+        && !visible_text.contains("任务编组")
+        && !visible_text.contains("专家团")
         && !visible_text.contains("团队")
         && !visible_text.to_lowercase().contains("team")
     {
@@ -265,7 +267,7 @@ pub(crate) fn prepare_prompt(
         .map(|agent| serde_json::json!({ "name": agent.name, "role": agent.description }))
         .collect::<Vec<_>>();
     Ok(format!(
-        "\n\n<system-reminder>\n<echoagent_team_context>\n{}\nTeams listed here are already registered in this session. Use the selected team description as its goal and its roles as member assignments. Only when the user requests team execution, actually delegate relevant work for the selected team to its exact member names using the task/spawn_subagent tool; respect dependencies, retrieve results, and consolidate the deliverables. Creating a directory or describing roles does not create a team. If the user explicitly asks to create a different team, first discover create_team with search_tool, invoke it with use_tool, and confirm success before dispatching members. Never claim a team or a task exists without a successful tool result. Do not create additional teams unless requested.\n</echoagent_team_context>\n</system-reminder>",
+        "\n\n<system-reminder>\n<echoagent_team_context>\n{}\nTeams listed here are already registered in this session. In the desktop UI these session-scoped assignments are called 任务编组; 专家团 is a separate persistent group chat. Creating or disbanding a task grouping does not create or delete an independent group chat. Use the selected team description as its goal and its roles as member assignments. Only when the user requests team execution, actually delegate relevant work for the selected team to its exact member names using the task/spawn_subagent tool; respect dependencies, retrieve results, and consolidate the deliverables. Creating a directory or describing roles does not create a team. If the user explicitly asks to create a different team, first discover create_team with search_tool, invoke it with use_tool, and confirm success before dispatching members. Never claim a team or a task exists without a successful tool result. Do not create additional teams unless requested.\n</echoagent_team_context>\n</system-reminder>",
         serde_json::json!({ "selectedTeam": selected_id, "teams": teams, "availableExperts": catalog })
     ))
 }
@@ -278,33 +280,34 @@ fn teams_file() -> PathBuf {
 fn team_store_lock_path(path: &Path) -> Result<PathBuf, String> {
     let parent = path
         .parent()
-        .ok_or_else(|| format!("团队状态路径没有父目录：{}", path.display()))?;
+        .ok_or_else(|| format!("任务编组状态路径没有父目录：{}", path.display()))?;
     let name = path
         .file_name()
-        .ok_or_else(|| format!("团队状态路径没有文件名：{}", path.display()))?;
+        .ok_or_else(|| format!("任务编组状态路径没有文件名：{}", path.display()))?;
     Ok(parent.join(format!("{}.lock", name.to_string_lossy())))
 }
 
 fn acquire_team_store_lock(path: &Path) -> Result<File, String> {
     let parent = path
         .parent()
-        .ok_or_else(|| format!("团队状态路径没有父目录：{}", path.display()))?;
-    std::fs::create_dir_all(parent).map_err(|error| format!("创建团队状态目录失败：{error}"))?;
+        .ok_or_else(|| format!("任务编组状态路径没有父目录：{}", path.display()))?;
+    std::fs::create_dir_all(parent)
+        .map_err(|error| format!("创建任务编组状态目录失败：{error}"))?;
     let parent_metadata = std::fs::symlink_metadata(parent)
-        .map_err(|error| format!("检查团队状态目录失败：{error}"))?;
+        .map_err(|error| format!("检查任务编组状态目录失败：{error}"))?;
     if parent_metadata.file_type().is_symlink() || !parent_metadata.is_dir() {
-        return Err("团队状态目录必须是真实目录，不能是符号链接".into());
+        return Err("任务编组状态目录必须是真实目录，不能是符号链接".into());
     }
     crate::paths::harden_private_dir(parent)?;
 
     let lock_path = team_store_lock_path(path)?;
     match std::fs::symlink_metadata(&lock_path) {
         Ok(metadata) if metadata.file_type().is_symlink() || !metadata.is_file() => {
-            return Err("团队状态锁必须是普通文件，不能是符号链接".into());
+            return Err("任务编组状态锁必须是普通文件，不能是符号链接".into());
         }
         Ok(_) => {}
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
-        Err(error) => return Err(format!("检查团队状态锁失败：{error}")),
+        Err(error) => return Err(format!("检查任务编组状态锁失败：{error}")),
     }
 
     let mut options = OpenOptions::new();
@@ -320,12 +323,12 @@ fn acquire_team_store_lock(path: &Path) -> Result<File, String> {
     }
     let file = options
         .open(&lock_path)
-        .map_err(|error| format!("打开团队状态锁失败：{error}"))?;
+        .map_err(|error| format!("打开任务编组状态锁失败：{error}"))?;
     let opened_lock_metadata = file
         .metadata()
-        .map_err(|error| format!("检查已打开的团队状态锁失败：{error}"))?;
+        .map_err(|error| format!("检查已打开的任务编组状态锁失败：{error}"))?;
     if opened_lock_metadata.file_type().is_symlink() || !opened_lock_metadata.is_file() {
-        return Err("团队状态锁在打开期间被替换".into());
+        return Err("任务编组状态锁在打开期间被替换".into());
     }
     crate::paths::harden_private_file(&lock_path)?;
 
@@ -338,10 +341,10 @@ fn acquire_team_store_lock(path: &Path) -> Result<File, String> {
             {
                 std::thread::sleep(TEAM_STORE_LOCK_RETRY_DELAY);
             }
-            Err(error) => return Err(format!("锁定团队状态失败：{error}")),
+            Err(error) => return Err(format!("锁定任务编组状态失败：{error}")),
         }
     }
-    Err("等待其他 EchoAgent 实例保存团队状态超时，请稍后重试".into())
+    Err("等待其他 EchoAgent 实例保存任务编组状态超时，请稍后重试".into())
 }
 
 fn with_team_store_access_at<T>(
@@ -353,7 +356,7 @@ fn with_team_store_access_at<T>(
         .unwrap_or_else(|poisoned| poisoned.into_inner());
     let file = acquire_team_store_lock(path)?;
     let result = operation();
-    let unlock = FileExt::unlock(&file).map_err(|error| format!("解锁团队状态失败：{error}"));
+    let unlock = FileExt::unlock(&file).map_err(|error| format!("解锁任务编组状态失败：{error}"));
     match (result, unlock) {
         (Err(error), _) => Err(error),
         (Ok(_), Err(error)) => Err(error),
@@ -366,14 +369,14 @@ fn quarantine_invalid_team_store(path: &Path, reason: &str) -> String {
     if let Err(error) = std::fs::rename(path, &backup) {
         tracing::warn!(path = %path.display(), %error, "failed to quarantine invalid team store");
         format!(
-            "团队状态文件损坏或不安全（{reason}），且隔离失败：{error}。原文件未被覆盖，请手动检查 {}",
+            "任务编组状态文件损坏或不安全（{reason}），且隔离失败：{error}。原文件未被覆盖，请手动检查 {}",
             path.display()
         )
     } else {
         let _ = crate::paths::harden_private_file(&backup);
         tracing::warn!(path = %path.display(), backup = %backup.display(), "invalid team store was quarantined");
         format!(
-            "团队状态文件损坏或不安全（{reason}），已隔离至 {}。请检查备份后重试",
+            "任务编组状态文件损坏或不安全（{reason}），已隔离至 {}。请检查备份后重试",
             backup.display()
         )
     }
@@ -385,10 +388,10 @@ fn load_teams_from_disk_at(path: &Path) -> Result<HashMap<String, TeamInfo>, Str
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
             return Ok(HashMap::new());
         }
-        Err(error) => return Err(format!("读取团队状态失败：{error}")),
+        Err(error) => return Err(format!("读取任务编组状态失败：{error}")),
     };
     if metadata.file_type().is_symlink() || !metadata.is_file() {
-        return Err("团队状态必须是普通文件，不能是符号链接或目录".into());
+        return Err("任务编组状态必须是普通文件，不能是符号链接或目录".into());
     }
     if metadata.len() > MAX_TEAM_STORE_BYTES {
         return Err(quarantine_invalid_team_store(path, "超过 4MB 上限"));
@@ -405,12 +408,12 @@ fn load_teams_from_disk_at(path: &Path) -> Result<HashMap<String, TeamInfo>, Str
     }
     let file = options
         .open(path)
-        .map_err(|error| format!("打开团队状态失败：{error}"))?;
+        .map_err(|error| format!("打开任务编组状态失败：{error}"))?;
     let opened_metadata = file
         .metadata()
-        .map_err(|error| format!("检查已打开的团队状态失败：{error}"))?;
+        .map_err(|error| format!("检查已打开的任务编组状态失败：{error}"))?;
     if opened_metadata.file_type().is_symlink() || !opened_metadata.is_file() {
-        return Err("团队状态在打开期间被替换为非普通文件".into());
+        return Err("任务编组状态在打开期间被替换为非普通文件".into());
     }
     if opened_metadata.len() > MAX_TEAM_STORE_BYTES {
         return Err(quarantine_invalid_team_store(path, "超过 4MB 上限"));
@@ -419,7 +422,7 @@ fn load_teams_from_disk_at(path: &Path) -> Result<HashMap<String, TeamInfo>, Str
     if file
         .take(MAX_TEAM_STORE_BYTES.saturating_add(1))
         .read_to_end(&mut bytes)
-        .map_err(|error| format!("读取团队状态失败：{error}"))?
+        .map_err(|error| format!("读取任务编组状态失败：{error}"))?
         > MAX_TEAM_STORE_BYTES as usize
         || bytes.len() as u64 > MAX_TEAM_STORE_BYTES
     {
@@ -433,20 +436,22 @@ fn load_teams_from_disk_at(path: &Path) -> Result<HashMap<String, TeamInfo>, Str
 
 fn save_teams_to_disk_at(path: &Path, teams: &HashMap<String, TeamInfo>) -> Result<(), String> {
     validate_team_store(teams)?;
-    let contents =
-        serde_json::to_vec_pretty(teams).map_err(|error| format!("序列化团队状态失败：{error}"))?;
+    let contents = serde_json::to_vec_pretty(teams)
+        .map_err(|error| format!("序列化任务编组状态失败：{error}"))?;
     if contents.len() as u64 > MAX_TEAM_STORE_BYTES {
-        return Err("团队状态超过 4MB 上限".into());
+        return Err("任务编组状态超过 4MB 上限".into());
     }
     crate::paths::write_private_file(path, &contents)
-        .map_err(|error| format!("保存团队状态失败：{error}"))
+        .map_err(|error| format!("保存任务编组状态失败：{error}"))
 }
 
 fn read_teams_from_disk() -> Result<HashMap<String, TeamInfo>, String> {
     let path = teams_file();
     with_team_store_access_at(&path, || load_teams_from_disk_at(&path))
 }
-pub(crate) fn team_catalog()->Result<Vec<TeamInfo>,String>{Ok(read_teams_from_disk()?.into_values().collect())}
+pub(crate) fn team_catalog() -> Result<Vec<TeamInfo>, String> {
+    Ok(read_teams_from_disk()?.into_values().collect())
+}
 
 fn update_teams_at<T>(
     path: &Path,
@@ -502,7 +507,9 @@ fn normalized_team_id(value: &str) -> Result<String, String> {
         || value.len() > MAX_TEAM_ID_BYTES
         || value.chars().any(char::is_control)
     {
-        return Err(format!("团队 ID 必须为 1–{MAX_TEAM_ID_CHARS} 个非控制字符"));
+        return Err(format!(
+            "任务编组 ID 必须为 1–{MAX_TEAM_ID_CHARS} 个非控制字符"
+        ));
     }
     Ok(value.to_string())
 }
@@ -527,14 +534,14 @@ fn normalized_member_name(value: &str) -> Result<String, String> {
 
 fn validate_team_store(teams: &HashMap<String, TeamInfo>) -> Result<(), String> {
     if teams.len() > MAX_TEAMS {
-        return Err(format!("团队数量超过 {MAX_TEAMS} 个上限"));
+        return Err(format!("任务编组数量超过 {MAX_TEAMS} 个上限"));
     }
     for (key, team) in teams {
         let normalized_id = normalized_team_id(&team.team_id)?;
         if normalized_id != team.team_id
             || team_key(team.session_id.as_deref(), &team.team_id) != *key
         {
-            return Err("团队状态中的 ID 不一致或含有多余空白".into());
+            return Err("任务编组状态中的 ID 不一致或含有多余空白".into());
         }
         if let Some(session) = &team.session_id {
             validate_session_id(session)?;
@@ -554,11 +561,11 @@ fn validate_team_store(teams: &HashMap<String, TeamInfo>) -> Result<(), String> 
                 .as_ref()
                 .is_some_and(|text| text.len() > MAX_TEAM_DESCRIPTION_BYTES)
         {
-            return Err("团队说明或任务关联超过上限".into());
+            return Err("任务编组说明或任务关联超过上限".into());
         }
         if team.members.is_empty() || team.members.len() > MAX_TEAM_MEMBERS {
             return Err(format!(
-                "团队 '{}' 成员数必须为 1–{MAX_TEAM_MEMBERS}",
+                "任务编组 '{}' 成员数必须为 1–{MAX_TEAM_MEMBERS}",
                 team.team_id
             ));
         }
@@ -566,11 +573,11 @@ fn validate_team_store(teams: &HashMap<String, TeamInfo>) -> Result<(), String> 
         for member in &team.members {
             let normalized_name = normalized_member_name(&member.name)?;
             if normalized_name != member.name {
-                return Err(format!("团队 '{}' 的成员名含有多余空白", team.team_id));
+                return Err(format!("任务编组 '{}' 的成员名含有多余空白", team.team_id));
             }
             if !names.insert(member.name.as_str()) {
                 return Err(format!(
-                    "团队 '{}' 包含重复成员 '{}'",
+                    "任务编组 '{}' 包含重复成员 '{}'",
                     team.team_id, member.name
                 ));
             }
@@ -585,7 +592,7 @@ fn validate_team_store(teams: &HashMap<String, TeamInfo>) -> Result<(), String> 
                 || stored_path.extension().and_then(|value| value.to_str()) != Some("md")
             {
                 return Err(format!(
-                    "团队 '{}' 的成员 '{}' 文件路径无效",
+                    "任务编组 '{}' 的成员 '{}' 文件路径无效",
                     team.team_id, member.name
                 ));
             }
@@ -822,11 +829,25 @@ async fn handle_post(
         },
         "ping" => serde_json::json!({}),
         "tools/list" => {
-            let session=headers.get(SESSION_HEADER).and_then(|v|v.to_str().ok()).unwrap_or("");
-            let group=headers.get("X-EchoAgent-Group-Id").and_then(|v|v.to_str().ok()).unwrap_or("");
-            let member=headers.get("X-EchoAgent-Member-Id").and_then(|v|v.to_str().ok()).unwrap_or("");
-            if crate::groups::is_member_session(session) || crate::groups::has_member(group,member) {crate::groups::mcp_tools()} else {tools_list_result()}
-        },
+            let session = headers
+                .get(SESSION_HEADER)
+                .and_then(|v| v.to_str().ok())
+                .unwrap_or("");
+            let group = headers
+                .get("X-EchoAgent-Group-Id")
+                .and_then(|v| v.to_str().ok())
+                .unwrap_or("");
+            let member = headers
+                .get("X-EchoAgent-Member-Id")
+                .and_then(|v| v.to_str().ok())
+                .unwrap_or("");
+            if crate::groups::is_member_session(session) || crate::groups::has_member(group, member)
+            {
+                crate::groups::mcp_tools()
+            } else {
+                tools_list_result()
+            }
+        }
         "tools/call" => match tools_call_for_session(
             &req.params,
             headers
@@ -913,7 +934,7 @@ fn tool_def(name: &str, description: &str, schema: serde_json::Value) -> serde_j
     serde_json::json!({ "name": name, "description": description, "inputSchema": schema })
 }
 
-const CREATE_TEAM_DESC: &str = "Create a persistent expert team in the current session using existing local experts. Use their exact, case-sensitive names. A directory or a task prompt does not create a team. After success, delegate actual work with the task tool using each member name as subagent_type.";
+const CREATE_TEAM_DESC: &str = "Create a persistent task grouping (任务编组) in the current session using existing local experts. This does not create an independent group chat (专家团). Use their exact, case-sensitive names. A directory or a task prompt does not create a team. After success, delegate actual work with the task tool using each member name as subagent_type.";
 const TEAM_STATUS_DESC: &str =
     "Check the status of agent teams. Returns registered team members and their agent file paths.";
 const TEAM_DELETE_DESC: &str =
@@ -1012,7 +1033,7 @@ async fn tools_call_for_session(
     params: &serde_json::Value,
     session_id: Option<&str>,
 ) -> Result<serde_json::Value, String> {
-    let session_id = session_id.ok_or("团队工具缺少会话信息，请重新打开当前会话后重试")?;
+    let session_id = session_id.ok_or("任务编组工具缺少会话信息，请重新打开当前会话后重试")?;
     validate_session_id(session_id)?;
     let params = params
         .as_object()
@@ -1038,7 +1059,10 @@ async fn tools_call_for_session(
         return Err("工具参数超过 128KB 上限".into());
     }
     if crate::groups::is_member_session(session_id) {
-        return crate::groups::mcp_call(session_id,&serde_json::json!({"name":name,"arguments":args}));
+        return crate::groups::mcp_call(
+            session_id,
+            &serde_json::json!({"name":name,"arguments":args}),
+        );
     }
     match name {
         "create_team" => {
@@ -1100,7 +1124,7 @@ pub(crate) fn create_team_for_session(
     let agents_dir = crate::agents_store::user_agents_dir_pub();
     let team_id = normalized_team_id(&input.team_id)?;
     if input.members.is_empty() || input.members.len() > MAX_TEAM_MEMBERS {
-        return Err(format!("团队成员数必须为 1–{MAX_TEAM_MEMBERS}"));
+        return Err(format!("任务编组成员数必须为 1–{MAX_TEAM_MEMBERS}"));
     }
     if input.description.as_ref().is_some_and(|description| {
         description.chars().count() > MAX_TEAM_DESCRIPTION_CHARS
@@ -1108,7 +1132,7 @@ pub(crate) fn create_team_for_session(
             || description.contains('\0')
     }) {
         return Err(format!(
-            "团队说明不能超过 {MAX_TEAM_DESCRIPTION_CHARS} 个字符且不能包含 NUL"
+            "任务编组说明不能超过 {MAX_TEAM_DESCRIPTION_CHARS} 个字符且不能包含 NUL"
         ));
     }
     // 去重 + 校验成员名，避免 LLM 误传带路径分隔符/后缀的名字（会写出 agent 目录外）。
@@ -1231,11 +1255,11 @@ pub(crate) fn create_team_for_session(
                 return Ok(());
             }
             return Err(format!(
-                "团队 '{team_id}' 已存在且成员不同，请使用其他名称或先解散原团队"
+                "任务编组 '{team_id}' 已存在且成员不同，请使用其他名称或先解散原团队"
             ));
         }
         if teams.len() >= MAX_TEAMS {
-            return Err(format!("团队数量已达 {MAX_TEAMS} 个上限"));
+            return Err(format!("任务编组数量已达 {MAX_TEAMS} 个上限"));
         }
         teams.insert(
             key,
@@ -1263,7 +1287,7 @@ pub(crate) fn create_team_for_session(
     Ok(CreateTeamOutput {
         team_id: team_id.clone(),
         message: format!(
-            "团队 '{}' 已创建，{} 名成员已就绪: {}。\n\
+            "任务编组 '{}' 已创建，{} 名成员已就绪: {}。\n\
              用法: 调用 task 工具时，subagent_type 参数必须填写成员名（完全一致，区分大小写），\
              例如 {{\"subagent_type\": \"{}\", \"prompt\": \"...\"}}。",
             team_id,
@@ -1288,7 +1312,7 @@ fn team_status_for_session(
     let result = match requested_id {
         Some(id) => match teams.get(&team_key(session_id, &id)) {
             Some(t) => vec![t.clone()],
-            None => return Err(format!("团队 '{}' 不存在", id)),
+            None => return Err(format!("任务编组 '{}' 不存在", id)),
         },
         None => {
             let mut values = teams
@@ -1320,7 +1344,7 @@ fn team_delete_for_session(
     let files_to_delete = update_teams(|teams| {
         let team = teams
             .get(&key)
-            .ok_or_else(|| format!("团队 '{}' 不存在", team_id))?
+            .ok_or_else(|| format!("任务编组 '{}' 不存在", team_id))?
             .clone();
         let mut files = Vec::new();
         if delete_files {
@@ -1353,11 +1377,11 @@ fn team_delete_for_session(
     }
     let message = if delete_files {
         format!(
-            "团队 '{}' 已解散，{} 个成员 agent 文件已删除，{} 个删除失败。",
+            "任务编组 '{}' 已解散，{} 个成员 agent 文件已删除，{} 个删除失败。",
             team_id, deleted_count, failed_count
         )
     } else {
-        format!("团队 '{}' 已解散（成员 agent 文件保留）。", team_id)
+        format!("任务编组 '{}' 已解散（成员 agent 文件保留）。", team_id)
     };
     Ok(TeamDeleteOutput { team_id, message })
 }

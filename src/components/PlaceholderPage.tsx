@@ -1,4 +1,3 @@
-import "@/styles/panel-navigation.css";
 import { lazy, Suspense, type ReactNode } from "react";
 import { AgentToolIcon } from "@/foundation/components/Icon/icons";
 import type { ProjectMeta } from "@/stores/projects-store";
@@ -6,7 +5,7 @@ import { openExternalUrl, openLocalPath } from "@/lib/agent-client";
 import type { WorkspaceInfo } from "@/lib/agent-client";
 import type { ModelOption } from "./ModelSelector";
 import type { SlashCommandInvocation } from "@/lib/slash-commands";
-import { CAPABILITY_NAV_ITEMS } from "@/lib/capability-navigation";
+import { CapabilitySection } from "./CapabilitySection";
 
 const ProjectsPanel = lazy(() =>
   import("./ProjectsPanel").then((module) => ({ default: module.ProjectsPanel })),
@@ -43,15 +42,6 @@ const CodingWorkbench = lazy(() =>
     default: module.CodingWorkbench,
   })),
 );
-
-function PanelNavigation({ active, onNavigate }: { active: string; onNavigate?: (label: string) => void }) {
-  const tabs = CAPABILITY_NAV_ITEMS.map(({ route, title }) => [route, title]);
-  return <nav className="panel-navigation panel-navigation--capabilities" aria-label="扩展管理">
-    <strong>扩展</strong>
-    <div className="panel-navigation__links">{tabs.map(([route, title]) => <button key={route} type="button" aria-current={route === active ? "page" : undefined}
-      onClick={() => onNavigate?.(route)}>{title}</button>)}</div>
-  </nav>;
-}
 
 function DeferredPanel({ children }: { children: ReactNode }) {
   return (
@@ -221,7 +211,7 @@ export function PlaceholderPage({
     const initialTab = label === "技能" ? "skills" : label === "连接器" ? "connectors" : "experts";
     return (
       <DeferredPanel>
-        <div className="panel-section panel-section--capabilities"><PanelNavigation active={label} onNavigate={onNavigate} /><ExpertsPanel onGoHome={onGoHome} onToast={onToast} initialTab={initialTab} hideNavigation createExpertRequested={createExpertRequested} onCreateExpertRequestHandled={onCreateExpertRequestHandled} /></div>
+        <CapabilitySection active={label} onNavigate={onNavigate}><ExpertsPanel onGoHome={onGoHome} onToast={onToast} initialTab={initialTab} hideNavigation createExpertRequested={createExpertRequested} onCreateExpertRequestHandled={onCreateExpertRequestHandled} /></CapabilitySection>
       </DeferredPanel>
     );
   }
@@ -273,11 +263,11 @@ export function PlaceholderPage({
   if (label === "插件") {
     return (
       <DeferredPanel>
-        <div className="panel-section panel-section--capabilities"><PanelNavigation active={label} onNavigate={onNavigate} />
+        <CapabilitySection active={label} onNavigate={onNavigate}>
           <div className="capabilities-content capability-tab">
             <PluginsPanel sessionId={sessionId} onToast={onToast} />
           </div>
-        </div>
+        </CapabilitySection>
       </DeferredPanel>
     );
   }

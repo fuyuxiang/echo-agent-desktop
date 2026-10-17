@@ -33,7 +33,7 @@ Object.assign(window, { __TAURI_EVENT_PLUGIN_INTERNALS__: { unregisterListener: 
     if (command === "team_create") {
       if (nextCreateError) { nextCreateError = false; throw new Error("隔离验证：保存失败，请重试"); }
       const entries = teams[args.sessionId] ??= [];
-      if (entries.some((team) => team.teamId === args.input.team_id)) throw new Error("团队名称已存在");
+      if (entries.some((team) => team.teamId === args.input.team_id)) throw new Error("专家团名称已存在");
       entries.push({ teamId: args.input.team_id, members: args.input.members.map((member: any) => member.name), roles: Object.fromEntries(args.input.members.map((member: any) => [member.name, member.role])), description: args.input.description, createdAt: Date.now() / 1000 });
       changed(args.sessionId); return;
     }
@@ -42,15 +42,16 @@ Object.assign(window, { __TAURI_EVENT_PLUGIN_INTERNALS__: { unregisterListener: 
   },
 } });
 const history: ChatMessage[] = [
-  { id: "user", role: "user", complete: true, parts: [{ kind: "text", text: "请使用已经有的业务分析师、代码专家、文档助手创建团队123，分别分析需求并生成代码和需求文档" }] },
+  { id: "user", role: "user", complete: true, parts: [{ kind: "text", text: "请使用已经有的业务分析师、代码专家、文档助手创建专家团123，分别分析需求并生成代码和需求文档" }] },
   { id: "assistant", role: "assistant", promptId: "old-turn", complete: true, parts: [{ kind: "tool_call", toolCall: { toolCallId: "old-spawn", kind: "spawn_subagent", title: "分析需求", status: "completed", rawInput: { subagent_type: "业务分析师", description: "分析需求" }, content: [] } }] },
 ];
 function Review() {
   const [sessionId, setSession] = useState("a");
   const [draft, setDraft] = useState("");
   const [detail, setDetail] = useState(false);
+  const [groupRequested, setGroupRequested] = useState(false);
   return <main style={{ maxWidth: 1000, margin: "24px auto", padding: 16, color: "var(--echo-text-strong)" }}>
-    <p>隔离团队交互验证 · 内存服务与真实生产组件</p>
+    <p>隔离专家团交互验证 · 内存服务与真实生产组件</p>
     <div style={{ display: "flex", flexWrap: "wrap", gap: 8 }}>
       <button onClick={() => { setSession(sessionId === "a" ? "b" : "a"); setDraft(""); }}>切换会话</button><span>当前会话：{sessionId}</span>
       <button onClick={() => { nextReadError = true; }}>模拟读取失败</button>
@@ -60,7 +61,8 @@ function Review() {
         for (const [index, name] of ["业务分析师", "代码专家"].entries()) store.applyEvent({ sessionId, phase: index ? "spawned" : "finished", subagentId: `${sessionId}-${index}`, subagentType: name, description: name, status: index ? "running" : "completed" });
       }}>模拟成员执行</button>
     </div>
-    <TeamStatusView sessionId={sessionId} messages={sessionId === "a" ? history : []} onUseTeam={(name) => setDraft(`请使用团队“${name}”，完成以下任务：`)} onViewTasks={() => setDetail(true)} />
+    <TeamStatusView sessionId={sessionId} messages={sessionId === "a" ? history : []} onUseTeam={(name) => setDraft(`请使用任务编组“${name}”，完成以下任务：`)} onViewTasks={() => setDetail(true)} onOpenGroup={() => setGroupRequested(true)} />
+    {groupRequested && <p role="status">已选择用任务编组创建独立专家团</p>}
     <label>任务输入<textarea aria-label="任务输入" value={draft} onChange={(event) => setDraft(event.target.value)} style={{ width: "100%" }} /></label>
     {detail && <p role="note">已打开子代理任务详情</p>}
     <p>本地专家定义：{experts.length} 个</p>

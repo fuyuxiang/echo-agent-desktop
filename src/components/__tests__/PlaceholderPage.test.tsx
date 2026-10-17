@@ -63,9 +63,9 @@ describe("PlaceholderPage", () => {
     const panel = await screen.findByTestId("experts-panel");
     expect(panel).toHaveAttribute("data-embedded", "true");
     expect(screen.queryByText("专家、技能与连接器")).toBeNull();
-    expect(screen.getAllByRole("navigation", { name: "扩展管理" })).toHaveLength(1);
-    const nav = screen.getByRole("navigation", { name: "扩展管理" });
-    expect(within(nav).getAllByRole("button")).toHaveLength(4);
+    expect(screen.getAllByRole("navigation", { name: "专家·技能·连接器管理" })).toHaveLength(1);
+    const nav = screen.getByRole("navigation", { name: "专家·技能·连接器管理" });
+    expect(within(nav).getAllByRole("button").map(button => button.textContent)).toEqual(["专家", "专家团", "技能", "连接器", "插件"]);
     expect(screen.queryByRole("button", { name: "浏览市场" })).toBeNull();
     for (const [label, content] of [["技能", "skills"], ["连接器", "connectors"], ["专家", "experts"]]) {
       fireEvent.click(within(nav).getByRole("button", { name: label }));

@@ -21,10 +21,11 @@ vi.mock("../Sidebar", () => ({ Sidebar: ({ onSelect, onNavigate }: {
   onSelect: (id: string) => void; onNavigate: (label: string) => void;
 }) => <>
   <button onClick={() => onSelect("source")}>打开源会话</button>
-  {['插件', '专家·技能·连接器', '项目'].map(label =>
+  {['插件', '专家·技能·连接器', '专家团', '项目'].map(label =>
     <button key={label} onClick={() => onNavigate(label)}>导航{label}</button>)}
 </> }));
 vi.mock("../ChatView", () => ({ ChatView: () => <div>真实会话已加载</div> }));
+vi.mock("@/features/groups/GroupWorkspace", () => ({ GroupWorkspace: () => <div>专家团工作区</div> }));
 vi.mock("../PlaceholderPage", async () => {
   const { PluginsPanel } = await import("../PluginsPanel");
   return { PlaceholderPage: ({ label, sessionId, onNavigate }: {
@@ -64,10 +65,15 @@ async function start() {
   act(() => useSessionStore.getState().setMessages([{ id: 'user', role: 'user', complete: true, parts: [{ kind: 'text', text: '保留当前上下文' }] }]));
 }
 describe('extension navigation preserves the live management context', () => {
-  it.each(['插件', '专家·技能·连接器'])('allows local plugin toggle after %s', async route => {
+  it.each(['插件', '专家·技能·连接器', '专家团'])('allows local plugin toggle after %s', async route => {
     await start(); const before = useSessionStore.getState().messages;
     fireEvent.click(screen.getByRole('button', { name: `导航${route}` }));
     if (route === '专家·技能·连接器') fireEvent.click(await screen.findByRole('button', { name: '管理本地插件' }));
+    if (route === '专家团') {
+      await screen.findByText('专家团工作区');
+      expect(screen.getByRole('button', { name: '专家团' })).toHaveAttribute('aria-current', 'page');
+      fireEvent.click(screen.getByRole('button', { name: '插件' }));
+    }
     fireEvent.click(await screen.findByRole('button', { name: '已启用' }));
     await waitFor(() => expect(client.pluginsAction).toHaveBeenCalledWith('source', { type: 'disable', pluginId: 'user/demo' }));
     expect(useSessionsStore.getState().currentSessionId).toBe('source');

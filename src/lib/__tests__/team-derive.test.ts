@@ -29,6 +29,9 @@ function teamMsg(
 }
 
 describe("isCreateTeamTool", () => {
+  it.each(["创建专家团", "创建团队"])("兼容只有 %s 标题的工具记录", (title) => {
+    expect(isCreateTeamTool({ kind: "other", title, toolCallId: "legacy-title" })).toBe(true);
+  });
   it("kind=create_team 命中", () => {
     expect(
       isCreateTeamTool({ kind: "create_team", title: "", toolCallId: "x" }),

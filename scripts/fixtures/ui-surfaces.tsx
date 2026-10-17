@@ -72,6 +72,7 @@ let extensionPlugins = Array.from({ length: extensionCount }, (_, index) => ({
   id: `user/review-${index}`, name: extensionName(index), description: "提供任务所需的技能、专家与工具。",
   root: `/review/plugins/plugin-${index}`, scope: "user", enabled: true, trusted: true,
   version: "1.0.0", skillCount: 2, agentCount: 1, mcpServerCount: 1,
+  ...(query.get("pluginManagement") === "1" ? {management:{uninstallable:index===0,removable:index===1,packagePlugins:[extensionName(index)],removalPath:`/review/plugins/plugin-${index}`,pathPlugins:[extensionName(index)]}} : {}),
 }));
 let extensionConnectors = Array.from({ length: extensionCount }, (_, index) => ({
   name: `review-mcp-${index}`, displayName: extensionName(index), transport: "stdio", target: `review-tool-${index}`,
@@ -259,7 +260,13 @@ Object.assign(window, {
           agents = [...agents, entry]; return entry;
         }
         case "plugins_list": return { plugins: extensionPlugins };
-        case "plugins_action": extensionPlugins = extensionPlugins.map(plugin => plugin.id === args.action.pluginId ? { ...plugin, enabled: args.action.type === "enable" } : plugin); return { status: "success" };
+        case "plugins_action": {
+          if (["uninstall", "remove"].includes(args.action.type)) {
+            if (query.get("pluginRemoveFailure") === "1" && !extensionAttempts.removePlugin) { extensionAttempts.removePlugin = 1; return {status:"internal_error",message:"隔离验收：插件目录暂时不可写，安装记录保留"}; }
+            extensionPlugins = extensionPlugins.filter(plugin => args.action.type === "uninstall" ? plugin.id !== args.action.pluginId : plugin.root !== args.action.path);
+          } else if (["enable", "disable"].includes(args.action.type)) extensionPlugins = extensionPlugins.map(plugin => plugin.id === args.action.pluginId ? {...plugin,enabled:args.action.type==="enable"}:plugin);
+          return {status:"success"};
+        }
         case "tasks_list": return [{ id: "review-task", source: "task", description: "执行代码验证和生成报告", status: "running", sessionId: args.sessionId }];
         case "org_session": return { loggedIn: true, organizationMemoryEnabled: true, serverUrl: "https://10.132.19.82:8787", user: orgUser, bootstrap: { apiVersion: 1, user: orgUser, scopes: orgScopes, policy: { allowPersonalCloud: true, allowSkillSubmission: true }, serverTime: 1 } };
         case "org_list_scopes": return orgScopes;

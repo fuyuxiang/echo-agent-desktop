@@ -360,17 +360,34 @@ impl SessionActor {
                         requires_restart: false,
                     };
                 }
-                // Extract plugin name from ID (last segment of "scope/hex8/name").
+                // Stable identity and the exact loaded root select the package.
+                // A display name can occur in several unrelated repositories.
                 let plugin_name = plugin_id.rsplit('/').next().unwrap_or(&plugin_id);
                 let mut registry = echo_agent_core::plugins::InstallRegistry::load();
-                match registry.find_plugin(plugin_name) {
+                let snapshot = self.plugin_registry.borrow().clone();
+                let repo_key = snapshot
+                    .as_ref()
+                    .and_then(|plugins| {
+                        plugins
+                            .list()
+                            .into_iter()
+                            .find(|plugin| plugin.id.0 == plugin_id)
+                    })
+                    .and_then(|plugin| {
+                        registry.find_repo_key_by_plugin_root(&plugin.root, &plugin.canonical_root)
+                    })
+                    .map(str::to_owned);
+                match repo_key
+                    .as_deref()
+                    .and_then(|key| registry.get_repo(key).map(|repo| (key, repo)))
+                {
                     None => ActionOutcome {
                         status: OutcomeStatus::NotFound,
                         message: format!("Plugin \"{plugin_name}\" not found in install registry."),
                         requires_reload: false,
                         requires_restart: false,
                     },
-                    Some((repo_key, repo, _plugin)) => {
+                    Some((repo_key, repo)) => {
                         let repo_key = repo_key.to_string();
                         let repo_path = repo.path.clone();
                         let plugin_names: Vec<String> = repo.plugins.keys().cloned().collect();
@@ -393,11 +410,23 @@ impl SessionActor {
                         if let Err(e) =
                             echo_agent_core::plugins::git_install::remove_repo_path(&repo_path)
                         {
-                            tracing::warn!("Failed to remove repo path: {e}");
+                            return ActionOutcome {
+                                status: OutcomeStatus::InternalError,
+                                message: format!("卸载失败，安装记录已保留，可重试：{e}"),
+                                requires_reload: false,
+                                requires_restart: false,
+                            };
                         }
                         registry.remove(&repo_key);
                         if let Err(e) = registry.save() {
-                            tracing::warn!("Failed to save install registry: {e}");
+                            return ActionOutcome {
+                                status: OutcomeStatus::InternalError,
+                                message: format!(
+                                    "插件文件已移除，但安装记录更新失败，请重试卸载：{e}"
+                                ),
+                                requires_reload: true,
+                                requires_restart: false,
+                            };
                         }
                         ActionOutcome {
                             status: OutcomeStatus::Success,
@@ -595,7 +624,7 @@ impl SessionActor {
                 }
                 let resolved = Self::resolve_path(&self.session_info.cwd, &path);
                 let path_str = resolved.display().to_string();
-                match crate::config::remove_plugin_path(&path_str) {
+                match crate::config::remove_plugin_path(&path) {
                     Ok(()) => {
                         let mut msg = format!("Removed plugin path: {path_str}");
                         if let Some(ref handle) = self.plugin_registry_handle {

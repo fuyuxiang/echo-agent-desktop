@@ -5,14 +5,14 @@ import { useGroupStore } from "../group-store";
 vi.mock("@tauri-apps/api/core", () => ({ invoke: vi.fn() }));
 vi.mock("../group-client", async original => ({ ...await original<typeof import("../group-client")>(), groupList: vi.fn(), groupSnapshot: vi.fn() }));
 const group = (id: string): Group => ({ id, name: id, goal: "交付", cwd: "/work", sourceSessionId: null, sourceTeamId: null, coordinatorId: "c", members: [], messages: [], works: [], decisions: [], archived: false, pinned: false, paused: false, revision: 1, updatedAt: 1, maxCalls: 12, tokenBudget: 10000 });
-describe("团队群聊状态与路由", () => {
+describe("专家团状态与路由", () => {
   it("未确认保存的消息重试沿用请求 ID，确认后可以重新提问", () => {
     const first = useGroupStore.getState().requestId("a", "same message");
     expect(useGroupStore.getState().requestId("a", "same message")).toBe(first);
     useGroupStore.getState().acknowledgeSend("a");
     expect(useGroupStore.getState().requestId("a", "same message")).not.toBe(first);
   });
-  it("无效的目录响应不会破坏原来的群聊和普通任务导航", async () => {
+  it("无效的目录响应不会破坏原来的专家团和普通任务导航", async () => {
     useGroupStore.setState({ groups: [group("previous")] });
     vi.mocked(groupList).mockResolvedValue(null as never);
     await useGroupStore.getState().refresh();
@@ -35,20 +35,28 @@ describe("团队群聊状态与路由", () => {
     expect(useGroupStore.getState().draftOptions("a")).toEqual(options);
     expect(useGroupStore.getState().drafts.a).toBe("未发送的正文");
   });
-  it("快速切换群聊时忽略晚到的旧快照", async () => {
+  it("快速切换专家团时忽略晚到的旧快照", async () => {
     const pending: ((g: Group) => void)[] = [];
     vi.mocked(groupSnapshot).mockImplementation(() => new Promise(resolve => pending.push(resolve)));
     const a = useGroupStore.getState().select("a"), b = useGroupStore.getState().select("b");
     pending[1](group("b")); await b; pending[0](group("a")); await a;
     expect(useGroupStore.getState().current?.id).toBe("b");
   });
-  it("刷新失败保留上次成功的群聊记录", async () => {
+  it("刷新失败保留上次成功的专家团记录", async () => {
     vi.mocked(groupSnapshot).mockResolvedValueOnce(group("a")).mockRejectedValueOnce(new Error("暂时离线"));
     await useGroupStore.getState().select("a"); await useGroupStore.getState().select("a");
     expect(useGroupStore.getState().current?.name).toBe("a"); expect(useGroupStore.getState().error).toContain("暂时离线");
   });
-  it("目录刷新不会把用户带离当前群聊", async () => { useGroupStore.setState({ currentId: "a", current: group("a") }); vi.mocked(groupList).mockResolvedValue([group("b")]); await useGroupStore.getState().refresh(); expect(useGroupStore.getState().currentId).toBe("a"); });
+  it("目录刷新不会把用户带离当前专家团", async () => { useGroupStore.setState({ currentId: "a", current: group("a") }); vi.mocked(groupList).mockResolvedValue([group("b")]); await useGroupStore.getState().refresh(); expect(useGroupStore.getState().currentId).toBe("a"); });
   it("同名的不同来源团队不会串群", () => { const existing = { ...group("a"), sourceSessionId: "source-a", sourceTeamId: "交付组" }; useGroupStore.setState({ groups: [existing] }); useGroupStore.getState().fromTeam("source-b", { teamId: "交付组", members: ["专家"], createdAt: 0 }); expect(useGroupStore.getState().createFrom?.sessionId).toBe("source-b"); });
+  it("来源编组已有归档专家团时打开原记录，不创建重复专家团", async () => {
+    const existing={...group("archived-linked"),sourceSessionId:"source",sourceTeamId:"交付组",archived:true};
+    useGroupStore.setState({groups:[existing],createFrom:null});
+    vi.mocked(groupSnapshot).mockResolvedValue(existing);
+    useGroupStore.getState().fromTeam("source",{teamId:"交付组",members:[],createdAt:0});
+    expect(useGroupStore.getState().createFrom).toBeNull();
+    expect(useGroupStore.getState().currentId).toBe(existing.id);
+  });
   it("状态不能把等待确认的执行误报为完成", () => { const g = group("a"); g.works = [{ id: "w", status: "uncertain" }] as Group["works"]; expect(groupStatus(g)).toBe("需要检查"); });
   it("成员提及支持中文和前缀重名，忽略代码、邮箱和文件", () => {
     const members = [{ id: "a", name: "代码", expert: "代码" }, { id: "b", name: "代码 专家", expert: "代码 专家" }, { id: "c", name: "分析师", expert: "分析师" }] as GroupMember[];
@@ -72,4 +80,23 @@ describe("团队群聊状态与路由", () => {
     vi.mocked(invoke).mockRejectedValueOnce(new Error("暂不可读"));
     await expect(resolveGroupForSession("historical-native",[])).rejects.toThrow("暂不可读");
   });
+});
+
+it("删除后晚到的目录、快照和输入回调不能重新生成群聊数据", async () => {
+  const id="late-deleted-group";
+  const value=group(id);
+  useGroupStore.setState({groups:[value],currentId:id,current:value,drafts:{[id]:"旧草稿"}});
+  let listDone!: (groups: Group[])=>void, snapshotDone!: (group: Group)=>void;
+  vi.mocked(groupList).mockImplementationOnce(()=>new Promise(resolve=>{listDone=resolve;}));
+  vi.mocked(groupSnapshot).mockImplementationOnce(()=>new Promise(resolve=>{snapshotDone=resolve;}));
+  const refreshing=useGroupStore.getState().refresh(), selecting=useGroupStore.getState().select(id);
+  useGroupStore.getState().forget(id);
+  listDone([value]); snapshotDone(value); await Promise.all([refreshing,selecting]);
+  useGroupStore.getState().setDraft(id,"晚到草稿");
+  useGroupStore.getState().setDraftOptions(id,{targets:[],discussion:false,replyTo:null});
+  expect(useGroupStore.getState().groups.some(g=>g.id===id)).toBe(false);
+  expect(useGroupStore.getState().currentId).toBeNull();
+  expect(useGroupStore.getState().drafts[id]).toBeUndefined();
+  expect(useGroupStore.getState().drafts[`options:${id}`]).toBeUndefined();
+  expect(()=>useGroupStore.getState().requestId(id,"late send")).toThrow("已删除");
 });

@@ -2,6 +2,37 @@ use super::{DeleteSessionError, SessionDeletion, classify_remote_delete};
 use crate::remote::client::BackendError;
 
 #[test]
+fn deletion_paths_include_corrupt_and_missing_summaries_without_catalog_limits() {
+    let home = tempfile::tempdir().unwrap();
+    let root = home.path().join("sessions");
+    let first = root.join("workspace-a").join("owned-id");
+    let second = root.join("workspace-b").join("owned-id");
+    let other = root.join("workspace-b").join("other-id");
+    for path in [&first, &second, &other] {
+        std::fs::create_dir_all(path).unwrap();
+        std::fs::write(path.join("updates.jsonl"), "private history").unwrap();
+    }
+    std::fs::write(first.join("summary.json"), "{broken").unwrap();
+    let paths = super::session_history_paths_in(&root, "owned-id", None).unwrap();
+    assert_eq!(paths.len(), 2);
+    assert!(paths.contains(&first) && paths.contains(&second));
+    assert!(super::session_history_paths_in(&root, "../other-id", None).is_err());
+    assert!(
+        super::session_history_paths_in(&root, "missing-id", None)
+            .unwrap()
+            .is_empty()
+    );
+    #[cfg(unix)]
+    {
+        let linked = root.join("workspace-c");
+        std::fs::create_dir(&linked).unwrap();
+        std::os::unix::fs::symlink(&other, linked.join("owned-id")).unwrap();
+        assert!(super::session_history_paths_in(&root, "owned-id", None).is_err());
+        assert!(other.join("updates.jsonl").exists());
+    }
+}
+
+#[test]
 fn remote_ok_reports_removed() {
     assert!(
         classify_remote_delete(Ok(())).unwrap(),

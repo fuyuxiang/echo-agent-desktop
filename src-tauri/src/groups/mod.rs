@@ -28,11 +28,11 @@ pub fn initialize(app: tauri::AppHandle) -> Result<(), String> {
         })?;
     store.recover().map_err(|error| {
         *INIT_ERROR.get_or_init(Default::default).lock().unwrap() =
-            Some(format!("群聊记录恢复失败，已有数据已保留：{error}"));
+            Some(format!("专家团记录恢复失败，已有数据已保留：{error}"));
         error
     })?;
-    STORE.set(store).map_err(|_| "群聊服务已初始化")?;
-    APP.set(app).map_err(|_| "群聊事件已初始化")?;
+    STORE.set(store).map_err(|_| "专家团服务已初始化")?;
+    APP.set(app).map_err(|_| "专家团事件已初始化")?;
     Ok(())
 }
 fn db() -> Result<&'static Store, String> {
@@ -42,7 +42,7 @@ fn db() -> Result<&'static Store, String> {
             .lock()
             .unwrap()
             .clone()
-            .unwrap_or_else(|| "群聊服务尚未就绪".into())
+            .unwrap_or_else(|| "专家团服务尚未就绪".into())
     })
 }
 fn changed(group_id: &str) {
@@ -132,10 +132,10 @@ pub fn group_create(
         .as_ref()
         .is_some_and(|root| root.to_string_lossy() != cwd)
     {
-        return Err("群聊工作区与来源会话不一致".into());
+        return Err("专家团工作区与来源会话不一致".into());
     }
     let definitions = crate::agents_store::team_agents();
-    let name = text(&input.name, 80, "群名称")?;
+    let name = text(&input.name, 80, "专家团名称")?;
     let goal = input.goal.unwrap_or_default();
     if goal.chars().count() > 4096 {
         return Err("协作目标不能超过 4096 字".into());
@@ -283,7 +283,19 @@ pub fn group_create(
 
 #[tauri::command]
 pub fn group_list() -> Result<Vec<Group>, String> {
-    db()?.list()
+    let mut groups = db()?.list()?;
+    // Cards, global search and sidebar routing need metadata, not private
+    // expert definitions or the complete decision revision history.
+    for group in &mut groups {
+        group.decisions.clear();
+        for member in &mut group.members {
+            member.profile = json!({});
+        }
+        for message in &mut group.messages {
+            message.knowledge = Knowledge::default();
+        }
+    }
+    Ok(groups)
 }
 #[tauri::command]
 pub fn group_snapshot(group_id: String) -> Result<Group, String> {
@@ -313,10 +325,10 @@ fn send(g: &mut Group, input: &SendInput) -> Result<(), String> {
         return Ok(());
     }
     if g.messages.len() >= 20_000 || g.works.len() >= 10_000 {
-        return Err("群历史已达到存储上限，请围绕新目标建立群聊".into());
+        return Err("专家团历史已达到存储上限，请围绕新目标建立专家团".into());
     }
     if g.paused || g.archived {
-        return Err("请先恢复群聊协作".into());
+        return Err("请先恢复专家团协作".into());
     }
     if input.id.len() > 128 || input.id.is_empty() {
         return Err("消息标识无效".into());
@@ -472,7 +484,12 @@ pub async fn group_control(
 ) -> Result<(), String> {
     // A later prompt for the same member must not overtake an acknowledged
     // stop, including when the previous turn completes during cancellation.
-    let _dispatch = runtime::dispatch_lock(&group_id).lock_owned().await;
+    let _dispatch = tokio::time::timeout(
+        std::time::Duration::from_secs(30),
+        runtime::dispatch_lock(&group_id).lock_owned(),
+    )
+    .await
+    .map_err(|_| "成员仍在准备执行，记录已保留，请稍后重试".to_string())?;
     let mut sessions = vec![];
     db()?.update(&group_id, |g| {
         match action.as_str() {
@@ -483,8 +500,8 @@ pub async fn group_control(
             }
             "pause" => g.paused = true,
             "archive" => {
-                if g.works.iter().any(|w| w.active() || w.status == "queued" || w.status == "waiting_children") {
-                    return Err("请先停止或完成当前工作，再归档群聊".into());
+                if g.works.iter().any(|w| !w.terminal()) {
+                    return Err("请先停止或完成当前工作，再归档专家团".into());
                 }
                 g.archived = true;
             }
@@ -512,7 +529,7 @@ pub async fn group_control(
                     message.knowledge = source.knowledge;
                 }
             }
-            _ => return Err("不支持的群聊操作".into()),
+            _ => return Err("不支持的专家团操作".into()),
         }
         g.ready_callbacks();
         Ok(())
@@ -540,9 +557,204 @@ pub async fn group_control(
     }
 }
 
+#[derive(serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct DeleteResult {
+    pub session_ids: Vec<String>,
+}
+
+#[tauri::command]
+pub fn group_cleanup_pending() -> Result<Vec<store::CleanupReceipt>, String> {
+    db()?.pending_cleanup()
+}
+
+#[tauri::command]
+pub fn group_cleanup_ack(group_id: String) -> Result<(), String> {
+    db()?.ack_cleanup(&group_id)
+}
+
+fn remove_group_memory(home: &std::path::Path, group_id: &str) -> Result<(), String> {
+    if group_id.is_empty()
+        || group_id.len() > 64
+        || !group_id
+            .bytes()
+            .all(|c| c.is_ascii_alphanumeric() || c == b'-')
+    {
+        return Err("专家团记忆标识无效，记录已保留".into());
+    }
+    let root = home.join("group-memory");
+    for path in [&root, &root.join(group_id)] {
+        match std::fs::symlink_metadata(path) {
+            Ok(metadata) if metadata.is_dir() && !metadata.file_type().is_symlink() => {}
+            Ok(_) => return Err("专家团记忆目录无效，记录已保留，请检查存储目录后重试".into()),
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(()),
+            Err(error) => return Err(format!("读取专家团记忆目录失败，记录已保留：{error}")),
+        }
+    }
+    std::fs::remove_dir_all(root.join(group_id))
+        .map_err(|error| format!("专家团记忆清理未完成，记录已保留，可重试删除：{error}"))
+}
+
+#[tauri::command]
+pub async fn group_delete(
+    state: State<'_, crate::commands::AppState>,
+    group_id: String,
+    stop_work: bool,
+) -> Result<DeleteResult, String> {
+    delete_group_data(&state, group_id, stop_work).await
+}
+
+pub(super) async fn delete_group_data(
+    state: &crate::commands::AppState,
+    group_id: String,
+    stop_work: bool,
+) -> Result<DeleteResult, String> {
+    let _dispatch = tokio::time::timeout(
+        std::time::Duration::from_secs(30),
+        runtime::dispatch_lock(&group_id).lock_owned(),
+    )
+    .await
+    .map_err(|_| "成员仍在准备执行，记录已保留，请稍后重试".to_string())?;
+    let store = db()?;
+    let snapshot = store.get(&group_id)?;
+    if !stop_work && snapshot.works.iter().any(|w| !w.terminal()) {
+        return Err("专家团正在工作，请确认停止工作后再删除".into());
+    }
+    let sessions = store.update(&group_id, |g| g.stop_work(None))?;
+    changed(&group_id);
+    if !sessions.is_empty() {
+        let tx = state
+            .tx
+            .lock()
+            .unwrap()
+            .clone()
+            .ok_or("Agent Runtime 尚未就绪，专家团已暂停，记录已保留，请稍后重试")?;
+        for (sid, prompt) in sessions {
+            tokio::time::timeout(
+                std::time::Duration::from_secs(20),
+                crate::agent_runtime::cancel(&tx, &sid, "stop", Some(&prompt)),
+            )
+            .await
+            .map_err(|_| "停止工作超时，记录已保留，请稍后重试".to_string())?
+            .map_err(|e| format!("尚未确认工作停止，记录已保留：{e}"))?;
+        }
+        let deadline = tokio::time::Instant::now() + std::time::Duration::from_secs(15);
+        while store.get(&group_id)?.works.iter().any(|w| !w.terminal()) {
+            if tokio::time::Instant::now() >= deadline {
+                return Err("工作仍在停止，专家团及记录已保留，请稍后重试删除".into());
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+        }
+    }
+    // Resolve historical workspaces before any native deletion. The ledger
+    // survives partial cleanup or a restart so retries clean the same scope.
+    let catalog = crate::sessions::list_all_sessions(true)?;
+    for sid in store.sessions(&group_id)? {
+        let cwd = state
+            .session_workspace(&sid)
+            .ok()
+            .map(|p| p.to_string_lossy().into_owned())
+            .or_else(|| {
+                catalog
+                    .iter()
+                    .find(|s| s.session_id == sid)
+                    .map(|s| s.cwd.clone())
+            })
+            .unwrap_or_else(|| snapshot.cwd.clone());
+        store.stage_session_delete(&group_id, &sid, &cwd)?;
+    }
+    let entries = store.deletion_sessions(&group_id)?;
+    for (sid, cwd) in &entries {
+        // Continuing after a failed attempt must create fresh contexts.
+        store.update(&group_id, |g| {
+            for member in &mut g.members {
+                if member.session_id.as_ref() == Some(sid) {
+                    member.session_id = None;
+                    member.seen_seq = 0;
+                    member.generation += 1;
+                }
+                if member.discussion_session_id.as_ref() == Some(sid) {
+                    member.discussion_session_id = None;
+                    member.discussion_seen_seq = 0;
+                    member.generation += 1;
+                }
+            }
+            Ok(())
+        })?;
+        changed(&group_id);
+        let result = tokio::time::timeout(
+            std::time::Duration::from_secs(60),
+            crate::commands::delete_group_session_data(&state, sid, std::path::Path::new(cwd)),
+        )
+        .await
+        .map_err(|_| "执行记录清理超时，专家团记录已保留，可稍后重试".to_string())?
+        .map_err(|e| format!("内部执行记录清理未完成，专家团记录已保留，可重试删除：{e}"))?;
+        if !echo_agent_runtime::session::persistence::session_history_paths(sid, None)
+            .map_err(|e| e.to_string())?
+            .is_empty()
+        {
+            return Err("内部执行历史尚未清理完成，专家团记录已保留，请重试删除".into());
+        }
+        if let Some(error) = result.memory_cleanup_warning {
+            return Err(format!(
+                "内部摘要清理未完成，专家团记录已保留，可重试删除：{error}"
+            ));
+        }
+    }
+    remove_group_memory(&crate::paths::echo_agent_home_dir(), &group_id)?;
+    store.delete(&group_id)?;
+    OWNERS
+        .get_or_init(Default::default)
+        .write()
+        .unwrap()
+        .retain(|_, owner| !owner.as_ref().is_some_and(|(group, _)| group == &group_id));
+    let session_ids = entries.into_iter().map(|(sid, _)| sid).collect::<Vec<_>>();
+    if let Some(app) = APP.get() {
+        let _ = app.emit(
+            "group://changed",
+            json!({"groupId":group_id,"deleted":true,"sessionIds":session_ids}),
+        );
+    }
+    Ok(DeleteResult { session_ids })
+}
+
+#[tauri::command]
+pub async fn group_metadata(
+    group_id: String,
+    name: Option<String>,
+    pinned: Option<bool>,
+    archived: Option<bool>,
+) -> Result<(), String> {
+    let _dispatch = tokio::time::timeout(
+        std::time::Duration::from_secs(30),
+        runtime::dispatch_lock(&group_id).lock_owned(),
+    )
+    .await
+    .map_err(|_| "成员仍在准备执行，记录已保留，请稍后重试".to_string())?;
+    db()?.update(&group_id, |g| {
+        if let Some(name) = name {
+            g.name = text(&name, 80, "专家团名称")?;
+        }
+        if let Some(pinned) = pinned {
+            g.pinned = pinned;
+        }
+        if let Some(archived) = archived {
+            if archived && g.works.iter().any(|w| !w.terminal()) {
+                return Err("请先停止当前工作，再归档专家团".into());
+            }
+            g.archived = archived;
+        }
+        Ok(())
+    })?;
+    changed(&group_id);
+    Ok(())
+}
+
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct SettingsInput {
+    #[serde(default)]
+    pub expected_revision: Option<u64>,
     pub name: String,
     pub goal: String,
     pub coordinator_id: String,
@@ -559,12 +771,18 @@ pub struct MemberSettings {
     pub model_id: String,
 }
 #[tauri::command]
-pub fn group_settings(
+pub async fn group_settings(
     app: tauri::AppHandle,
     state: State<'_, crate::commands::AppState>,
     group_id: String,
     input: SettingsInput,
 ) -> Result<(), String> {
+    let _dispatch = tokio::time::timeout(
+        std::time::Duration::from_secs(30),
+        runtime::dispatch_lock(&group_id).lock_owned(),
+    )
+    .await
+    .map_err(|_| "成员仍在准备执行，记录已保留，请稍后重试".to_string())?;
     let cwd = input
         .cwd
         .as_ref()
@@ -579,10 +797,16 @@ pub fn group_settings(
         crate::policy::require_model(&m.model_id)?;
     }
     db()?.update(&group_id, |g| {
-        if g.works.iter().any(|w| !w.terminal()) {
-            return Err("请完成或停止当前工作，再修改群设置".into());
+        if input
+            .expected_revision
+            .is_some_and(|revision| revision != g.revision)
+        {
+            return Err("专家团设置已更新，请检查最新内容后重试保存".into());
         }
-        g.name = text(&input.name, 80, "群名称")?;
+        if g.works.iter().any(|w| !w.terminal()) {
+            return Err("请完成或停止当前工作，再修改专家团设置".into());
+        }
+        g.name = text(&input.name, 80, "专家团名称")?;
         if input.goal.chars().count() > 4096 {
             return Err("协作目标过长".into());
         }
@@ -610,7 +834,7 @@ pub fn group_settings(
             .iter()
             .any(|m| m.id == input.coordinator_id && !m.removed)
         {
-            return Err("协调员必须是群成员".into());
+            return Err("协调员必须是专家团成员".into());
         }
         g.coordinator_id = input.coordinator_id;
         if !(2..=50).contains(&input.max_calls) || !(1000..=2_000_000).contains(&input.token_budget)
