@@ -85,14 +85,14 @@ export async function validateConversationLayout(page, output) {
       const hovered = (await rows())[0];
       assert.deepEqual(hovered, before[0], "hover must keep session title and metadata positions stationary");
       assert.equal(await page.locator(".sidebar__conv").first().locator(".sidebar__conv-action").evaluate(element => getComputedStyle(element).opacity), "1", "hover must reveal the session action");
-      assert.equal(await page.locator(".sidebar__conv").first().locator(".sidebar__conv-status").evaluate(element => getComputedStyle(element).visibility), "hidden", "hover action should replace the status visually");
+      assert.equal(await page.locator(".sidebar__conv").first().locator(".sidebar__conv-status").evaluate(element => getComputedStyle(element).visibility), "visible", "hover must keep the status dot visible beside the action");
       await page.mouse.move(width - 10, 10);
       const first = page.locator(".sidebar__conv").first();
       await first.locator(".sidebar__conv-select").focus();
       assert.equal(await first.locator(".sidebar__conv-status").evaluate(element => getComputedStyle(element).visibility), "visible", "selection focus must keep the status visible");
       await page.keyboard.press("Tab");
       await page.waitForFunction(() => getComputedStyle(document.querySelector(".sidebar__conv-action")).opacity === "1");
-      assert.equal(await first.locator(".sidebar__conv-status").evaluate(element => getComputedStyle(element).visibility), "hidden", "keyboard action focus should replace the status visually");
+      assert.equal(await first.locator(".sidebar__conv-status").evaluate(element => getComputedStyle(element).visibility), "visible", "keyboard action focus must keep the status dot visible");
       await page.evaluate(() => { if (document.activeElement instanceof HTMLElement) document.activeElement.blur(); });
       await page.waitForFunction(() => getComputedStyle(document.querySelector(".sidebar__conv-action")).opacity === "0");
       assert.ok(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth + 1), "chat layout overflows horizontally");

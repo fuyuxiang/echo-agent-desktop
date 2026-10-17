@@ -28,7 +28,7 @@ pub fn referenced_team(text: &str, team_ids: &[String]) -> Result<Option<String>
             .find(|name| name.as_str() == id)
             .cloned()
             .map(Some)
-            .ok_or_else(|| format!("本会话没有任务编组“{id}”，请先创建或选择已有任务编组。"));
+            .ok_or_else(|| format!("本会话没有团队“{id}”，请先创建或选择已有团队。"));
     }
     let matches = team_ids
         .iter()
@@ -102,7 +102,7 @@ pub fn explicit_team_request(
             continue;
         }
         if !available.iter().any(|agent| agent == name) {
-            return Err(format!("无法创建任务编组：本地专家“{name}”不存在。请在专家页面创建，或在任务编组面板选择已有专家。"));
+            return Err(format!("无法创建团队：本地专家“{name}”不存在。请在专家页面创建，或在团队面板选择已有专家。"));
         }
         if !members.contains(&name.to_string()) {
             members.push(name.to_string());

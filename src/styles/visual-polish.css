@@ -1043,13 +1043,15 @@ button,
 }
 
 .sidebar__conv {
-  min-height: 38px;
+  min-height: 36px;
+  padding-top: 4px;
+  padding-bottom: 4px;
 }
 
-.sidebar__conv--active {
-  background: var(--ui-brand-soft);
+.sidebar__conv--active,
+.sidebar__conv--active:hover {
+  background: color-mix(in srgb, var(--echo-text-strong) 7%, transparent);
   color: var(--echo-text-strong);
-  box-shadow: inset 2px 0 var(--echo-brand);
 }
 
 .sidebar__footer {

@@ -221,12 +221,12 @@ describe("ChatView pause/yield/resume 闭环", () => {
     const { container } = renderChat();
     const toolbar = container.querySelector(".chatview__utility-actions");
     expect(toolbar).not.toBeNull();
-    for (const label of ["查找", "变更", "子代理", "任务编组", "浏览器", "分享"]) {
+    for (const label of ["查找", "变更", "子代理", "团队", "浏览器", "分享"]) {
       expect(toolbar).toContainElement(screen.getByRole("button", { name: label }));
     }
   });
 
-  it.each(["变更", "任务编组"])("跨会话关闭%s面板不会恢复旧会话的位置或停止跟随", (label) => {
+  it.each(["变更", "团队"])("跨会话关闭%s面板不会恢复旧会话的位置或停止跟随", (label) => {
     const { container, rerender } = renderChat();
     const viewport = container.querySelector<HTMLElement>(".chatview__scroll")!;
     Object.defineProperty(viewport, "scrollHeight", { configurable: true, value: 2000 });

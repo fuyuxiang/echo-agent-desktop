@@ -10,7 +10,7 @@ import type { Group } from "@/features/groups/group-client";
 const teamMessage = (status: "in_progress" | "completed"): ChatMessage => ({
   id: "assistant-team", role: "assistant", complete: status === "completed",
   parts: [{ kind: "tool_call", toolCall: {
-    toolCallId: "create-team", kind: "echoagent__create_team", title: "创建任务编组", status,
+    toolCallId: "create-team", kind: "echoagent__create_team", title: "创建团队", status,
     rawInput: { team_id: "release-team", members: ["planner"] }, content: [],
   } }],
 });
@@ -46,7 +46,7 @@ describe("TeamStatusView", () => {
   it("无专家团时给出明确空状态", async () => {
     vi.mocked(teamSnapshot).mockResolvedValue([]);
     render(<TeamStatusView sessionId="session-a" messages={[]} />);
-    expect(await screen.findByText(/本会话还没有任务编组/)).toBeInTheDocument();
+    expect(await screen.findByText(/本会话还没有团队/)).toBeInTheDocument();
     expect(teamSnapshot).toHaveBeenCalledWith("session-a");
   });
 
@@ -54,10 +54,10 @@ describe("TeamStatusView", () => {
     const team={teamId:"delivery",members:["代码专家"],createdAt:1};
     vi.mocked(teamSnapshot).mockResolvedValue([team]);
     const open=vi.fn(); render(<TeamStatusView sessionId="source" onOpenGroup={open} />);
-    const create=await screen.findByRole("button",{name:"以此编组创建专家团"});
+    const create=await screen.findByRole("button",{name:"以此团队创建专家团"});
     fireEvent.click(create); expect(open).toHaveBeenCalledWith(team);
     act(()=>useGroupStore.setState({groups:[{id:"linked",sourceSessionId:"source",sourceTeamId:"delivery",archived:true} as Group]}));
-    expect(screen.queryByRole("button",{name:"以此编组创建专家团"})).toBeNull();
+    expect(screen.queryByRole("button",{name:"以此团队创建专家团"})).toBeNull();
     expect(screen.getByRole("button",{name:"打开专家团"})).toBeEnabled();
   });
 
@@ -79,7 +79,7 @@ describe("TeamStatusView", () => {
     const finishes: Array<(snapshot: Awaited<ReturnType<typeof teamSnapshot>>) => void> = [];
     vi.mocked(teamSnapshot).mockImplementation(() => new Promise((resolve) => { finishes.push(resolve); }));
     const { rerender } = render(<TeamStatusView sessionId="session-a" messages={[]} />);
-    expect(screen.getByRole("status")).toHaveTextContent("正在读取任务编组状态");
+    expect(screen.getByRole("status")).toHaveTextContent("正在读取团队状态");
     rerender(<TeamStatusView sessionId="session-a" messages={[teamMessage("completed")]} />);
     await act(async () => finishes[1]([{ teamId: "新专家团", members: ["new"], createdAt: 20 }]));
     await act(async () => finishes[0]([{ teamId: "旧专家团", members: ["old"], createdAt: 10 }]));
@@ -98,7 +98,7 @@ describe("TeamStatusView", () => {
     expect(await screen.findByRole("alert")).toHaveTextContent("已保留上次结果");
     expect(screen.getByText("保留专家团")).toBeInTheDocument();
     fireEvent.click(screen.getByRole("button", { name: "刷新" }));
-    expect(await screen.findByText(/本会话还没有任务编组/)).toBeInTheDocument();
+    expect(await screen.findByText(/本会话还没有团队/)).toBeInTheDocument();
     expect(screen.queryByRole("alert")).not.toBeInTheDocument();
   });
 
@@ -106,10 +106,10 @@ describe("TeamStatusView", () => {
     vi.mocked(teamSnapshot).mockResolvedValue([]);
     vi.mocked(teamCreate).mockRejectedValueOnce(new Error("成员暂不可用")).mockResolvedValueOnce(undefined);
     render(<TeamStatusView sessionId="session-a" />);
-    await screen.findByText(/本会话还没有任务编组/);
-    fireEvent.click(screen.getByRole("button", { name: "创建任务编组" }));
+    await screen.findByText(/本会话还没有团队/);
+    fireEvent.click(screen.getByRole("button", { name: "创建团队" }));
     await screen.findByRole("checkbox", { name: "代码专家" });
-    const name = screen.getByRole("textbox", { name: "任务编组名称" });
+    const name = screen.getByRole("textbox", { name: "团队名称" });
     fireEvent.change(name, { target: { value: "交付组" } });
     expect(screen.getByRole("button", { name: "确认创建" })).toBeDisabled();
     fireEvent.click(await screen.findByRole("checkbox", { name: "代码专家" }));
@@ -127,13 +127,13 @@ describe("TeamStatusView", () => {
     vi.mocked(teamDisband).mockRejectedValueOnce(new Error("保存失败")).mockResolvedValueOnce(undefined);
     render(<TeamStatusView sessionId="session-a" />);
     await screen.findByText("交付组");
-    fireEvent.click(screen.getByRole("button", { name: "解散任务编组" }));
+    fireEvent.click(screen.getByRole("button", { name: "解散团队" }));
     expect(teamDisband).not.toHaveBeenCalled();
     fireEvent.click(screen.getByRole("button", { name: "确认解散" }));
     expect(await screen.findByRole("alert")).toHaveTextContent("保存失败");
     vi.mocked(teamSnapshot).mockResolvedValue([]);
     fireEvent.click(screen.getByRole("button", { name: "确认解散" }));
-    await screen.findByText(/本会话还没有任务编组/);
+    await screen.findByText(/本会话还没有团队/);
     expect(teamDisband).toHaveBeenCalledWith("session-a", "交付组");
   });
 
@@ -145,7 +145,7 @@ describe("TeamStatusView", () => {
     await screen.findByText("A专家团");
     rerender(<TeamStatusView sessionId="session-b" />);
     expect(screen.queryByText("A专家团")).not.toBeInTheDocument();
-    await screen.findByText(/本会话还没有任务编组/);
+    await screen.findByText(/本会话还没有团队/);
     const calls = vi.mocked(teamSnapshot).mock.calls.length;
     act(() => notify?.("session-a"));
     expect(teamSnapshot).toHaveBeenCalledTimes(calls);
@@ -172,9 +172,9 @@ describe("TeamStatusView", () => {
       { id: "assistant", role: "assistant", complete: true, parts: [{ kind: "tool_call", toolCall: { toolCallId: "spawn", kind: "spawn_subagent", title: "任务", status: "completed", content: [], rawInput: { subagent_type: "代码专家", description: "生成代码" } } }] },
     ];
     render(<TeamStatusView sessionId="session-a" messages={messages} />);
-    fireEvent.click(await screen.findByRole("button", { name: "恢复任务编组“123”" }));
+    fireEvent.click(await screen.findByRole("button", { name: "恢复团队“123”" }));
     expect(await screen.findByRole("checkbox", { name: "文档助手" })).toBeChecked();
-    expect(screen.getByRole("textbox", { name: "任务编组名称" })).toHaveValue("123");
+    expect(screen.getByRole("textbox", { name: "团队名称" })).toHaveValue("123");
   });
 
 });

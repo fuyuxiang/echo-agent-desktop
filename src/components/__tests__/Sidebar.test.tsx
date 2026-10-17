@@ -6,6 +6,7 @@ import { useSessionsStore } from "@/stores/sessions-store";
 import { useProjectsStore } from "@/stores/projects-store";
 import { resetOrgSessionMirror, useOrgSessionStore } from "@/stores/org-session-store";
 import { SidebarLayoutContext } from "@/lib/sidebar-layout";
+import type { SessionStatus } from "@/lib/types";
 
 vi.mock("@/lib/agent-client", () => ({
   agentRenameSession: vi.fn().mockResolvedValue(undefined),
@@ -113,29 +114,85 @@ describe("Sidebar", () => {
     expect(screen.queryByText("子代理内部会话")).toBeNull();
   });
 
-  it("在侧栏精确展示运行、等待用户、未开始、停止与失败", () => {
+  it("直接显示最后更新时间，按分钟刷新并在重新聚焦后追上实际时间", () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2026-10-18T10:05:00Z"));
     useSessionsStore.getState().setIndependent([
-      { sessionId: "running", title: "后台分析", cwd: "", status: "working" },
-      { sessionId: "permission", title: "等待确认", cwd: "", status: "awaiting_permission" },
-      { sessionId: "answer", title: "等待选项", cwd: "", status: "awaiting_answer" },
-      { sessionId: "approval", title: "等待方案", cwd: "", status: "awaiting_approval" },
-      { sessionId: "pending", title: "新建任务", cwd: "", status: "pending" },
-      { sessionId: "stopped", title: "已取消任务", cwd: "", status: "stopped" },
-      { sessionId: "failed", title: "失败任务", cwd: "", status: "failed" },
+      { sessionId: "recent", title: "数字会话标识", cwd: "", updatedAt: "2026-10-18T10:00:00Z" },
+    ]);
+    const { container } = render(<Sidebar {...base} />);
+    const time = container.querySelector("time");
+    expect(time).toHaveTextContent("5分钟前");
+    expect(time).toHaveAttribute("datetime", "2026-10-18T10:00:00Z");
+    expect(time).toHaveAttribute("title", expect.stringContaining("最后更新："));
+    act(() => vi.advanceTimersByTime(60_000));
+    expect(time).toHaveTextContent("6分钟前");
+    vi.setSystemTime(new Date("2026-10-18T11:05:00Z"));
+    fireEvent.focus(window);
+    expect(time).toHaveTextContent("1小时前");
+  });
+
+  it("不为缺失或损坏的日期伪造时间，未来日期显示刚刚", () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2026-10-18T10:05:00Z"));
+    useSessionsStore.getState().setIndependent([
+      { sessionId: "missing", title: "没有日期", cwd: "" },
+      { sessionId: "invalid", title: "损坏日期", cwd: "", updatedAt: "invalid" },
+      { sessionId: "future", title: "设备时钟偏差", cwd: "", updatedAt: "2026-10-18T10:06:00Z" },
+    ]);
+    const { container } = render(<Sidebar {...base} />);
+    expect(container.querySelectorAll("time")).toHaveLength(1);
+    expect(screen.getByText("刚刚")).toBeInTheDocument();
+  });
+
+  it("所有活动状态只显示圆点，悬停提示和可访问名称保留精确状态", () => {
+    const statuses: [SessionStatus, string][] = [
+      ["working", "运行中"], ["planning", "规划中"], ["pending", "未开始"],
+      ["awaiting_permission", "授权待确认"], ["awaiting_answer", "等待回答"],
+      ["awaiting_approval", "方案待批准"], ["pausing", "正在暂停"],
+      ["paused", "已暂停"], ["stopping", "正在停止"], ["stopped", "已停止"], ["failed", "失败"],
+    ];
+    useSessionsStore.getState().setIndependent([
+      ...statuses.map(([status]) => ({ sessionId: status, title: `会话 ${status}`, cwd: "", status })),
       { sessionId: "done", title: "普通历史", cwd: "", status: "completed" },
+      { sessionId: "unknown", title: "状态未知", cwd: "" },
     ]);
 
     render(<Sidebar {...base} />);
 
-    expect(screen.getByText("运行中")).toBeInTheDocument();
-    expect(screen.getByText("授权待确认")).toBeInTheDocument();
-    expect(screen.getByText("等待回答")).toBeInTheDocument();
-    expect(screen.getByText("方案待批准")).toBeInTheDocument();
-    expect(screen.getByText("未开始")).toBeInTheDocument();
-    expect(screen.getByText("已停止")).toBeInTheDocument();
-    expect(screen.getByText("失败")).toBeInTheDocument();
-    expect(screen.getByText("普通历史").closest(".sidebar__conv"))
-      .not.toHaveTextContent("已完成");
+    for (const [status, label] of statuses) {
+      const button = screen.getByRole("button", { name: `会话 ${status} · ${label}` });
+      const indicator = within(button).getByRole("img", { name: label });
+      expect(indicator).toHaveAttribute("title", label);
+      expect(indicator.textContent).toBe("");
+      expect(button).toHaveTextContent(`会话 ${status}`);
+      expect(button).not.toHaveTextContent(label);
+      expect(button).toHaveAttribute("title", `会话 ${status} · ${label}`);
+    }
+    for (const title of ["普通历史", "状态未知"]) {
+      expect(within(screen.getByRole("button", { name: title })).queryByRole("img")).toBeNull();
+    }
+  });
+
+  it("状态实时切换时同步圆点和提示，保留时间、选中状态与点击行为", () => {
+    const onSelect = vi.fn();
+    const session = { sessionId: "live", title: "后台分析", cwd: "/workspace", updatedAt: "2026-10-18T10:00:00Z" };
+    useSessionsStore.getState().setIndependent([{ ...session, status: "working" }]);
+    useSessionsStore.getState().setCurrent("live");
+    render(<Sidebar {...base} onSelect={onSelect} />);
+    const button = screen.getByRole("button", { name: /后台分析 · 运行中/ });
+    fireEvent.click(within(button).getByRole("img", { name: "运行中" }));
+    expect(onSelect).toHaveBeenCalledWith("live", "/workspace");
+
+    for (const [status, label] of [["awaiting_permission", "授权待确认"], ["failed", "失败"], ["completed", ""]] as const) {
+      act(() => useSessionsStore.getState().upsert({ ...session, status }));
+      expect(button).toHaveAttribute("aria-current", "page");
+      expect(button.querySelector("time")).toHaveAttribute("datetime", useSessionsStore.getState().independent[0].updatedAt);
+      expect(button).toHaveAttribute("title", [session.title, label].filter(Boolean).join(" · "));
+      if (label) expect(within(button).getByRole("img", { name: label })).toBeInTheDocument();
+      else expect(within(button).queryByRole("img")).toBeNull();
+      expect(button).not.toHaveTextContent("运行中");
+    }
   });
 
   it("搜索按钮触发 onOpenSearch,设置按钮触发 onOpenSettings", () => {
@@ -227,7 +284,7 @@ describe("Sidebar", () => {
 
   it("项目会话只在其真实项目下展示", () => {
     useSessionsStore.setState({ deletedSessionIds: [],
-      independent: [{ sessionId: "project-session", title: "项目对话", cwd: "/workspace" }],
+      independent: [{ sessionId: "project-session", title: "项目对话", cwd: "/workspace", status: "awaiting_answer" }],
     });
     useProjectsStore.setState({
       projects: [{
@@ -249,6 +306,10 @@ describe("Sidebar", () => {
     expect(screen.queryByText("项目对话")).toBeNull();
     fireEvent.click(screen.getByRole("button", { name: "展开客户项目对话" }));
     expect(screen.getByText("项目对话")).toBeInTheDocument();
+    expect(screen.getByText("项目对话").closest("button")?.querySelector("time"))
+      .toHaveAttribute("datetime", "2026-09-05T00:00:00.000Z");
+    expect(screen.getByRole("button", { name: /项目对话 · 等待回答/ })).not.toHaveTextContent("等待回答");
+    expect(screen.getByRole("img", { name: "等待回答" })).toHaveAttribute("title", "等待回答");
     expect(screen.getByRole("button", { name: /^\u4efb\u52a1/ })).toHaveTextContent("任务 (0)");
   });
 
@@ -274,7 +335,7 @@ describe("Sidebar", () => {
     await waitFor(() => expect(screen.queryByRole("dialog", { name: "移入项目" })).toBeNull());
     expect(screen.getByRole("button", { name: /^\u4efb\u52a1/ })).toHaveTextContent("任务 (0)");
     expect(screen.getByText("需求探索")).toBeInTheDocument();
-    expect(screen.getByText("需求探索").closest(".sidebar__conv")?.querySelector("button")).toHaveFocus();
+    await waitFor(() => expect(screen.getByText("需求探索").closest(".sidebar__conv")?.querySelector("button")).toHaveFocus());
     expect(useSessionsStore.getState().independent[0].cwd).toBe("/original");
     expect(useProjectsStore.getState().projects[0].conversations[0]).toMatchObject({
       sessionId: "task-session", modelId: "model-a", pendingProjectContext: true,

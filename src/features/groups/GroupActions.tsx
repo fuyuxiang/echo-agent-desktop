@@ -93,7 +93,7 @@ export function GroupActionsHost({ onFeedback }: { onFeedback?: (message: string
         await refreshGroup(target.id); notify(save ? "已保存专家团模板" : "专家团名称已更新");
       }) });
     } else if (kind === "delete") {
-      dialog.requestConfirmation({ title: `删除专家团“${target.name}”？`, description: <><p>将永久删除这个专家团的聊天、工作、决定记录及该专家团的记忆，无法恢复。个人专家、已保存模板和工作区文件会保留。</p>{target.sourceSessionId && <p>来源任务与任务编组会保留，可用于创建新的独立专家团。</p>}<p>{active ? "当前还有未结束的工作，将先停止工作，确认停止后再删除。" : "如果确认前有新的工作开始，将先停止工作后删除。"}</p></>, danger: true, confirmLabel: active ? "停止工作并删除" : "永久删除", returnFocus, action: () => run(target.id, async () => {
+      dialog.requestConfirmation({ title: `删除专家团“${target.name}”？`, description: <><p>将永久删除这个专家团的聊天、工作、决定记录及该专家团的记忆，无法恢复。个人专家、已保存模板和工作区文件会保留。</p>{target.sourceSessionId && <p>来源任务与团队会保留，可用于创建新的独立专家团。</p>}<p>{active ? "当前还有未结束的工作，将先停止工作，确认停止后再删除。" : "如果确认前有新的工作开始，将先停止工作后删除。"}</p></>, danger: true, confirmLabel: active ? "停止工作并删除" : "永久删除", returnFocus, action: () => run(target.id, async () => {
         await useGroupStore.getState().remove(target.id, true);
         requestAnimationFrame(() => {
           const next = document.querySelector<HTMLButtonElement>(".groups-page .groups-page__header .btn--primary")

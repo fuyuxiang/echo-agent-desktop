@@ -802,9 +802,9 @@ export function ChatView({
                 }
                 onClick={() => toggleRuntimePanel("teams", teamsOpen, setTeamsOpen)}
                 aria-expanded={teamsOpen}
-                title="任务编组状态"
+                title="团队状态"
               >
-                任务编组
+                团队
               </button>
             )}
 
@@ -912,12 +912,12 @@ export function ChatView({
                   onUseTeam={(teamId) => {
                     if (!sessionId) return;
                     const next = draft.trim()
-                      ? `${draft}\n\n请使用任务编组“${teamId}”，按成员职责分工完成以上任务。`
-                      : `请使用任务编组“${teamId}”，按成员职责分工完成以下任务：\n`;
+                      ? `${draft}\n\n请使用团队“${teamId}”，按成员职责分工完成以上任务。`
+                      : `请使用团队“${teamId}”，按成员职责分工完成以下任务：\n`;
                     setResendText(next);
                     setResendAttachments(undefined);
                     setResendNonce((nonce) => nonce + 1);
-                    onToast?.("已填入任务编组指令，请补充任务后发送");
+                    onToast?.("已填入团队指令，请补充任务后发送");
                   }}
                   onViewTasks={() => {
                     setTeamsOpen(false);

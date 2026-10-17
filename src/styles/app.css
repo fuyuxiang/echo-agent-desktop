@@ -8300,10 +8300,9 @@ button.diff__path {
   position: relative;
   display: flex;
   align-items: center;
-  /* EchoAgent CDP conversation-agent-card: gap=0, w=240px */
-  gap: 0;
+  gap: 6px;
   width: 100%;
-  min-height: 38px;
+  min-height: 36px;
   height: auto;
   /* EchoAgent: no leading icon — text aligns with the 任务/空间 section label text */
   padding: 4px 12px;
@@ -8325,7 +8324,7 @@ button.diff__path {
 .sidebar__conv-select {
   display: flex;
   align-items: center;
-  gap: 6px;
+  justify-content: center;
   flex: 1;
   min-width: 0;
   min-height: 28px;
@@ -8338,27 +8337,54 @@ button.diff__path {
   text-align: left;
   cursor: pointer;
 }
+.sidebar__conv-line {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 2px 6px;
+  flex: 1;
+  min-width: 0;
+}
+.sidebar__conv-heading {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  /* Keep three title characters and an ellipsis, even with both the pin and
+   * status present. The timestamp wraps naturally when it cannot fit. */
+  flex: 1 1 calc(4em + 32px);
+  min-width: 0;
+}
 .sidebar__conv-title {
   flex: 1;
   min-width: 0;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+  font-size: 0.8125rem;
+  font-weight: 400;
+}
+.sidebar__conv--active .sidebar__conv-title {
+  font-weight: 500;
+}
+.sidebar__conv-time {
+  flex: none;
+  color: var(--echo-text-tertiary);
+  font-size: 0.75rem;
+  font-weight: 400;
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
 }
 .sidebar__conv-action {
-  position: absolute;
-  right: 8px;
-  top: 50%;
-  transform: translateY(-50%);
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  width: 22px;
-  height: 22px;
+  flex: 0 0 24px;
+  width: 24px;
+  height: 24px;
   padding: 0;
   border: 0;
   border-radius: 6px;
-  background: var(--ui-surface-raised, var(--echo-bg-primary));
+  background: transparent;
   color: var(--echo-text-tertiary);
   cursor: pointer;
   opacity: 0;
@@ -8366,27 +8392,17 @@ button.diff__path {
   transition: opacity 140ms ease, background-color 140ms ease;
 }
 .sidebar__conv:hover .sidebar__conv-action,
-.sidebar__conv:has(> .sidebar__conv-action:focus) .sidebar__conv-action {
+.sidebar__conv:focus-within .sidebar__conv-action,
+.sidebar__conv-action[aria-expanded="true"] {
   opacity: 1;
   pointer-events: auto;
-}
-.sidebar__conv:hover .sidebar__conv-status,
-.sidebar__conv:hover .sidebar__conv-pin,
-.sidebar__conv:has(> .sidebar__conv-action:focus) .sidebar__conv-status,
-.sidebar__conv:has(> .sidebar__conv-action:focus) .sidebar__conv-pin {
-  visibility: hidden;
 }
 .sidebar__conv-action:hover {
   background: var(--ui-surface-raised, var(--echo-bg-primary));
   color: var(--echo-text-strong);
 }
 @media (hover: none) and (pointer: coarse) {
-  .sidebar__conv-select { padding-right: 24px; }
   .sidebar__conv-action { opacity: 1; pointer-events: auto; }
-  .sidebar__conv:hover .sidebar__conv-status,
-  .sidebar__conv:hover .sidebar__conv-pin,
-  .sidebar__conv:has(> .sidebar__conv-action:focus) .sidebar__conv-status,
-  .sidebar__conv:has(> .sidebar__conv-action:focus) .sidebar__conv-pin { visibility: visible; }
 }
 .sidebar__footer {
   display: flex;
@@ -8949,17 +8965,11 @@ button.diff__path {
 .sidebar__conv-status {
   display: inline-flex;
   align-items: center;
-  gap: 4px;
+  justify-content: center;
   flex: none;
+  width: 6px;
+  height: 16px;
   color: var(--echo-text-tertiary);
-  font-size: 0.625rem;
-  white-space: nowrap;
-  min-width: 0;
-  overflow: hidden;
-}
-.sidebar__conv-status-label {
-  overflow: hidden;
-  text-overflow: ellipsis;
 }
 .sidebar__conv-status-dot {
   flex: none;
@@ -8976,7 +8986,7 @@ button.diff__path {
   animation: processStatusPulse 1.4s ease-in-out infinite;
 }
 .sidebar__conv-status--awaiting {
-  color: #b56a00;
+  color: var(--echo-color-text-warning-default);
 }
 .sidebar__conv-status--pending,
 .sidebar__conv-status--paused,

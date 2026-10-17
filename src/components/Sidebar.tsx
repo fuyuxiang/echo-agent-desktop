@@ -48,10 +48,10 @@ const NAV = [
 ];
 
 /** Compact, locale-friendly relative time for the sidebar row tail. */
-function relativeTime(iso: string): string {
+function relativeTime(iso: string, now: number): string {
   const t = new Date(iso).getTime();
   if (Number.isNaN(t)) return "";
-  const sec = Math.floor((Date.now() - t) / 1000);
+  const sec = Math.max(0, Math.floor((now - t) / 1000));
   if (sec < 60) return "刚刚";
   const min = Math.floor(sec / 60);
   if (min < 60) return `${min}分钟前`;
@@ -62,6 +62,23 @@ function relativeTime(iso: string): string {
   if (day < 7) return `${day}天前`;
   const d = new Date(t);
   return `${d.getMonth() + 1}月${d.getDate()}日`;
+}
+
+/** One shared clock keeps visible timestamps current, including after sleep. */
+function useSidebarTime(): number {
+  const [now, setNow] = useState(Date.now);
+  useEffect(() => {
+    const refresh = () => { if (document.visibilityState !== "hidden") setNow(Date.now()); };
+    const timer = window.setInterval(refresh, 60_000);
+    window.addEventListener("focus", refresh);
+    document.addEventListener("visibilitychange", refresh);
+    return () => {
+      window.clearInterval(timer);
+      window.removeEventListener("focus", refresh);
+      document.removeEventListener("visibilitychange", refresh);
+    };
+  }, []);
+  return now;
 }
 
 const ACTIVE_STATUS_META: Partial<Record<SessionStatus, { label: string; className: string }>> = {
@@ -78,14 +95,18 @@ const ACTIVE_STATUS_META: Partial<Record<SessionStatus, { label: string; classNa
   failed: { label: "失败", className: "failed" },
 };
 
-/** Completed is the quiet default; only actionable/live states consume row width. */
-function SessionStatusBadge({ status }: { status?: SessionStatus }) {
+/** Keep rows compact; precise status remains available on hover and to assistive technology. */
+function SessionStatusIndicator({ status }: { status?: SessionStatus }) {
   const meta = status ? ACTIVE_STATUS_META[status] : undefined;
   if (!meta) return null;
   return (
-    <span className={`sidebar__conv-status sidebar__conv-status--${meta.className}`}>
+    <span
+      className={`sidebar__conv-status sidebar__conv-status--${meta.className}`}
+      role="img"
+      aria-label={meta.label}
+      title={meta.label}
+    >
       <span className="sidebar__conv-status-dot" aria-hidden="true" />
-      <span className="sidebar__conv-status-label">{meta.label}</span>
     </span>
   );
 }
@@ -554,6 +575,7 @@ export function Sidebar({
   activeNav: string;
 }) {
   const sidebarLayout = useContext(SidebarLayoutContext);
+  const now = useSidebarTime();
   const independent = useSessionsStore((s) => s.independent);
   const tasksOpen = useSessionsStore((s) => s.tasksOpen);
   const projectsOpen = useSessionsStore((s) => s.projectsOpen);
@@ -820,7 +842,7 @@ export function Sidebar({
     setFocusMovedSessionId(null);
   }, [focusMovedSessionId, moveDialog, projectsOpen, expandedProjects, projects]);
 
-  // Open the row's context menu anchored to its 更多 hover button.
+  // Open the row's context menu anchored to its 更多 button.
   const openMenuFromButton = useCallback((e: React.MouseEvent, sessionId: string, sessionTitle: string, isPinned: boolean, isArchived: boolean, projectId?: string) => {
     e.preventDefault();
     e.stopPropagation();
@@ -841,48 +863,21 @@ export function Sidebar({
   // The selectable surface and action button are siblings. Nesting click-only
   // spans inside a button made pin/archive unreachable to keyboard users and
   // produced invalid interactive markup.
-  const renderConv = (s: SessionSummary, projectId?: string) => (
-    <div
-      key={s.sessionId}
-      data-session-id={s.sessionId}
-      data-project-id={projectId}
-      className={
-        "sidebar__conv" +
-        (s.sessionId === currentSessionId ? " sidebar__conv--active" : "") +
-        (s.pinned ? " sidebar__conv--pinned" : "")
-      }
-      onContextMenu={(e) => handleContextMenu(
-        e,
-        s.sessionId,
-        s.title || "未命名会话",
-        s.pinned || false,
-        s.archived || false,
-        projectId,
-      )}
-    >
-      <button
-        type="button"
-        onClick={() => onSelect(s.sessionId, s.cwd)}
-        title={[
-          s.title || "未命名会话",
-          s.status && ACTIVE_STATUS_META[s.status]?.label,
-          s.updatedAt && relativeTime(s.updatedAt),
-        ].filter(Boolean).join(" · ")}
-        aria-current={s.sessionId === currentSessionId ? "page" : undefined}
-        className="sidebar__conv-select"
-      >
-        <span className="sidebar__conv-title">{s.title || "未命名会话"}</span>
-        {s.pinned && <PinFilledIcon size="sm" className="sidebar__conv-pin" />}
-        <SessionStatusBadge status={s.status} />
-      </button>
-      <button
-        type="button"
-        className="sidebar__conv-action"
-        aria-label={`${s.title || "未命名会话"}的会话操作`}
-        aria-haspopup="menu"
-        aria-expanded={contextMenu?.sessionId === s.sessionId}
-        data-tip="会话操作"
-        onClick={(e) => openMenuFromButton(
+  const renderConv = (s: SessionSummary, projectId?: string) => {
+    const updated = s.updatedAt ? relativeTime(s.updatedAt, now) : "";
+    const sessionTitle = s.title || "未命名会话";
+    const description = [sessionTitle, s.status && ACTIVE_STATUS_META[s.status]?.label].filter(Boolean).join(" · ");
+    return (
+      <div
+        key={s.sessionId}
+        data-session-id={s.sessionId}
+        data-project-id={projectId}
+        className={
+          "sidebar__conv" +
+          (s.sessionId === currentSessionId ? " sidebar__conv--active" : "") +
+          (s.pinned ? " sidebar__conv--pinned" : "")
+        }
+        onContextMenu={(e) => handleContextMenu(
           e,
           s.sessionId,
           s.title || "未命名会话",
@@ -891,10 +886,50 @@ export function Sidebar({
           projectId,
         )}
       >
-        <MoreDotsIcon size="sm" />
-      </button>
-    </div>
-  );
+        <button
+          type="button"
+          onClick={() => onSelect(s.sessionId, s.cwd)}
+          title={description}
+          aria-label={[description, updated].filter(Boolean).join(" · ")}
+          aria-current={s.sessionId === currentSessionId ? "page" : undefined}
+          className="sidebar__conv-select"
+        >
+          <span className="sidebar__conv-line">
+            <span className="sidebar__conv-heading">
+              <span className="sidebar__conv-title">{sessionTitle}</span>
+              {s.pinned && <PinFilledIcon size="sm" className="sidebar__conv-pin" />}
+              <SessionStatusIndicator status={s.status} />
+            </span>
+            {updated && s.updatedAt && (
+              <time
+                className="sidebar__conv-time"
+                dateTime={s.updatedAt}
+                title={`最后更新：${new Date(s.updatedAt).toLocaleString("zh-CN", { hour12: false })}`}
+              >{updated}</time>
+            )}
+          </span>
+        </button>
+        <button
+          type="button"
+          className="sidebar__conv-action"
+          aria-label={`${s.title || "未命名会话"}的会话操作`}
+          aria-haspopup="menu"
+          aria-expanded={contextMenu?.sessionId === s.sessionId}
+          data-tip="会话操作"
+          onClick={(e) => openMenuFromButton(
+            e,
+            s.sessionId,
+            s.title || "未命名会话",
+            s.pinned || false,
+            s.archived || false,
+            projectId,
+          )}
+        >
+          <MoreDotsIcon size="sm" />
+        </button>
+      </div>
+    );
+  };
 
   const projectSessionIds = useMemo(() => {
     const ids = new Set<string>();

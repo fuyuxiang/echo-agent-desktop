@@ -20,9 +20,9 @@ export type ToolRenderer =
   | "send-message" // 发消息/通知(IM/邮件)
   | "image-gen" // 图像生成
   | "visualizer" // 内嵌可视化组件(widget)
-  | "team-create" // 创建任务编组/多 agent
+  | "team-create" // 创建团队/多 agent
   | "team-delete"
-  | "team-status" // 查询任务编组状态
+  | "team-status" // 查询团队状态
   | "agent-mail"
   | "specialist" // 专家列表卡
   | "personal-knowledge" // 本机个人知识搜索/读取
@@ -87,11 +87,11 @@ export function rendererLabel(renderer: ToolRenderer): string {
     case "visualizer":
       return "可视化";
     case "team-create":
-      return "创建任务编组";
+      return "创建团队";
     case "team-delete":
-      return "解散任务编组";
+      return "解散团队";
     case "team-status":
-      return "任务编组状态";
+      return "团队状态";
     case "agent-mail":
       return "邮件";
     case "specialist":
@@ -183,7 +183,7 @@ export function summarizeTool(tc: ToolCallView, renderer: ToolRenderer): string 
     case "team-create": {
       const members = raw?.members;
       const n = Array.isArray(members) ? members.length : raw?.memberCount;
-      return typeof n === "number" ? `创建任务编组(${n} 名成员)` : tc.title;
+      return typeof n === "number" ? `创建团队(${n} 名成员)` : tc.title;
     }
     case "defer-execute": {
       const cmds = raw?.commands ?? raw?.items;

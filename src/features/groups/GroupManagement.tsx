@@ -6,7 +6,7 @@ import { useAppDialog } from "@/components/AppDialog";
 import { groupTemplates, groupDeleteTeam, groupSaveTeam, groupMemberChange, groupDecision, groupDecisionChange, terminalWork, type TeamTemplate, type Group } from "./group-client";
 
 function templateSourceLabel(source: string): string {
-  if (source === "会话团队") return "来自任务编组";
+  if (source === "会话团队") return "来自会话团队";
   if (source === "常用团队") return "专家团模板";
   return source;
 }

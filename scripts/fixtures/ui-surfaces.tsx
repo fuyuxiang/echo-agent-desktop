@@ -162,6 +162,20 @@ if (query.get("surface") === "sidebar-scroll") {
       connectors: [], experts: [], skills: [], plans: [], tasks: [], assets: [], members: [], conversations: [],
     })),
   });
+  if (query.get("sessionTimes") === "1") {
+    const ago = (minutes: number) => new Date(Date.now() - minutes * 60_000).toISOString();
+    useSessionsStore.setState({ independent: [
+      { sessionId: "sidebar-task-0", title: "数字会话标识", cwd: "/review/EchoAgent", status: "completed", updatedAt: ago(5) },
+      { sessionId: "sidebar-task-1", title: "核对很长的会话标题与运行状态，确认时间始终可见且操作按钮不会遮挡文字", cwd: "/review/EchoAgent", pinned: true, status: "awaiting_permission", updatedAt: ago(59) },
+      { sessionId: "sidebar-task-2", title: "北京今天天气怎么样", cwd: "/review/EchoAgent", status: "working", updatedAt: ago(0) },
+      { sessionId: "sidebar-task-3", title: "检查失败的资料整理任务", cwd: "/review/EchoAgent", status: "failed", updatedAt: ago(120) },
+      { sessionId: "sidebar-task-4", title: "", cwd: "/review/EchoAgent", status: "paused" },
+      { sessionId: "sidebar-task-5", title: "历史讨论与交付文件归档", cwd: "/review/EchoAgent", status: "completed", updatedAt: new Date(new Date().getFullYear() - 1, 11, 31).toISOString() },
+      { sessionId: "sidebar-project-session", title: "项目中的方案讨论与细节确认", cwd: "/review/EchoAgent", status: "awaiting_answer", pinned: true, updatedAt: ago(59) },
+    ] });
+    const project = useProjectsStore.getState().projects[0];
+    useProjectsStore.setState({ projects: [{ ...project, name: "产品设计", conversations: [{ sessionId: "sidebar-project-session", title: "项目中的方案讨论与细节确认", createdAt: ago(120) }] }] });
+  }
 }
 const callbacks = new Map();
 let trustResolved = false;
@@ -366,6 +380,7 @@ function Fixture() {
       onPlaceholder={() => {}}
     />
     <main style={{ flex: 1, background: "var(--echo-bg-secondary)" }} />
+    <GlobalTooltip />
   </div>;
   if (surface === "conversation-layout") return <ConversationLayoutFixture />;
   if (surface.startsWith("modal-")) return <ModalReview variant={surface === "modal-short" ? "short" : surface === "modal-error" ? "error" : "long"} />;
