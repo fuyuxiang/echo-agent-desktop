@@ -231,7 +231,7 @@ export default function ExecutionReviewFixture() {
     <div role="status" style={{ padding: "6px 12px", minHeight: 28, boxSizing: "border-box", color: "var(--echo-text-medium)", fontSize: 12 }}>{feedback || "状态由隔离事件驱动；可检查流式更新、完成和部分失败。"}</div>
     {ready && (runtimeOnly ? <div className="chatview" style={{ minHeight: 0, flex: 1 }}><div className="chatview__scroll-shell"><div className="chatview__scroll"><div className="chatview__inner">
       <SubagentPanel messages={messages} cwd={executionReviewCwd} onOpenSession={() => { setFeedback("隔离子代理导航入口已触发；未加载真实工作记录。"); }} />
-      <TeamStatusView messages={messages} />
+      <TeamStatusView sessionId={executionReviewSessionId} messages={messages} />
     </div></div></div></div> : <ChatView
       onSend={(text) => { seedExecutionReview("running", text); setFeedback("隔离发送已接收；未请求真实模型。"); return true; }}
       onCancel={cancel} onToast={setFeedback}

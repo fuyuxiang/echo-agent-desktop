@@ -14,6 +14,7 @@
 //!
 //! 状态：团队数据持久化到 `~/.echo-agent/echoagent-teams.json`，应用/agent 重启
 //! 不丢（旧实现里 TEAMS 在 EchoAgent 进程内存中，agent 崩溃重启即丢）。
+//! Entries are scoped by the Runtime's authoritative ACP session header.
 //!
 //! MCP 协议子集（streamable HTTP, MCP 2025-03-26 / 2025-06-18 兼容）：
 //!   POST /mcp  — JSON-RPC: initialize / ping / tools/list / tools/call；
@@ -38,6 +39,7 @@ use std::io::Read;
 use std::net::{Ipv4Addr, SocketAddr, TcpListener};
 use std::path::{Path, PathBuf};
 use std::sync::{Mutex, OnceLock};
+use tauri::Emitter;
 
 #[cfg(unix)]
 use std::os::unix::fs::OpenOptionsExt;
@@ -50,6 +52,14 @@ pub struct TeamInfo {
     pub team_id: String,
     pub members: Vec<TeamMember>,
     pub created_at: u64,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub session_id: Option<String>,
+    #[serde(default)]
+    pub roles: HashMap<String, String>,
+    #[serde(default)]
+    pub description: Option<String>,
+    #[serde(default)]
+    pub prompt_ids: Vec<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -70,16 +80,22 @@ pub struct TeamSnapshotEntry {
     pub team_id: String,
     pub members: Vec<String>,
     pub created_at: u64,
+    pub session_id: Option<String>,
+    pub roles: HashMap<String, String>,
+    pub description: Option<String>,
+    pub prompt_ids: Vec<String>,
 }
 
 /// Desktop UI snapshot of the authoritative, persisted team registry.
 /// Keeping this command beside the MCP implementation prevents the renderer
 /// from trying to reconstruct durable state from one conversation transcript.
 #[tauri::command]
-pub fn team_snapshot() -> Result<Vec<TeamSnapshotEntry>, String> {
+pub fn team_snapshot(session_id: String) -> Result<Vec<TeamSnapshotEntry>, String> {
+    validate_session_id(&session_id)?;
     let teams = read_teams_from_disk()?;
     let mut result = teams
         .values()
+        .filter(|team| team.session_id.as_deref() == Some(&session_id))
         .map(|team| TeamSnapshotEntry {
             team_id: team.team_id.clone(),
             members: team
@@ -88,6 +104,10 @@ pub fn team_snapshot() -> Result<Vec<TeamSnapshotEntry>, String> {
                 .map(|member| member.name.clone())
                 .collect(),
             created_at: team.created_at,
+            session_id: team.session_id.clone(),
+            roles: team.roles.clone(),
+            description: team.description.clone(),
+            prompt_ids: team.prompt_ids.clone(),
         })
         .collect::<Vec<_>>();
     result.sort_by(|a, b| {
@@ -96,6 +116,158 @@ pub fn team_snapshot() -> Result<Vec<TeamSnapshotEntry>, String> {
             .then_with(|| a.team_id.cmp(&b.team_id))
     });
     Ok(result)
+}
+
+pub const SESSION_HEADER: &str = "X-EchoAgent-Session-Id";
+static EVENT_APP: OnceLock<tauri::AppHandle> = OnceLock::new();
+
+pub fn set_app_handle(app: tauri::AppHandle) {
+    let _ = EVENT_APP.set(app);
+}
+
+fn notify_changed(session_id: &str) {
+    if let Some(app) = EVENT_APP.get() {
+        let _ = app.emit(
+            "agent://teams-changed",
+            serde_json::json!({ "sessionId": session_id }),
+        );
+    }
+}
+
+fn validate_session_id(session_id: &str) -> Result<(), String> {
+    if session_id.trim().is_empty()
+        || session_id.len() > 256
+        || session_id.chars().any(char::is_control)
+    {
+        return Err("团队所属会话无效".into());
+    }
+    Ok(())
+}
+
+fn team_key(session_id: Option<&str>, team_id: &str) -> String {
+    session_id
+        .map(|session| format!("{session}\u{1f}{team_id}"))
+        .unwrap_or_else(|| team_id.to_string())
+}
+
+#[tauri::command]
+pub fn team_create(
+    state: tauri::State<'_, crate::commands::AppState>,
+    session_id: String,
+    input: CreateTeamInput,
+) -> Result<CreateTeamOutput, String> {
+    state.session_workspace(&session_id)?;
+    create_team_for_session(input, Some(&session_id))
+}
+
+#[tauri::command]
+pub fn team_disband(
+    state: tauri::State<'_, crate::commands::AppState>,
+    session_id: String,
+    team_id: String,
+) -> Result<TeamDeleteOutput, String> {
+    state.session_workspace(&session_id)?;
+    team_delete_for_session(
+        TeamDeleteInput {
+            team_id,
+            delete_files: Some(false),
+        },
+        Some(&session_id),
+    )
+}
+
+/// Register unambiguous requests before model execution, then bind the selected
+/// team's tasks to the authoritative prompt id supplied by the desktop.
+pub(crate) fn prepare_prompt(
+    session_id: &str,
+    prompt_id: &str,
+    visible_text: &str,
+) -> Result<String, String> {
+    validate_session_id(session_id)?;
+    validate_session_id(prompt_id)?;
+    let agents = crate::agents_store::team_agents();
+    let names = agents
+        .iter()
+        .map(|agent| agent.name.clone())
+        .collect::<Vec<_>>();
+    let request = crate::team_orchestration::explicit_team_request(visible_text, &names)?;
+    let mut selected_id = None;
+    if let Some(request) = request {
+        selected_id = Some(request.name.clone());
+        create_team_for_session(
+            CreateTeamInput {
+                team_id: request.name,
+                members: request
+                    .members
+                    .into_iter()
+                    .map(|name| CreateTeamMember {
+                        role: agents
+                            .iter()
+                            .find(|agent| agent.name == name)
+                            .and_then(|agent| agent.description.clone())
+                            .unwrap_or_default(),
+                        name,
+                    })
+                    .collect(),
+                description: None,
+            },
+            Some(session_id),
+        )?;
+    }
+    let mut teams = team_snapshot(session_id.to_string())?;
+    if selected_id.is_none() {
+        selected_id = crate::team_orchestration::referenced_team(
+            visible_text,
+            &teams
+                .iter()
+                .map(|team| team.team_id.clone())
+                .collect::<Vec<_>>(),
+        )?;
+    }
+    if let Some(id) = selected_id.as_deref() {
+        if let Some(team) = teams.iter().find(|team| team.team_id == id) {
+            let missing = team
+                .members
+                .iter()
+                .filter(|member| !names.contains(member))
+                .cloned()
+                .collect::<Vec<_>>();
+            if !missing.is_empty() {
+                return Err(format!(
+                    "团队“{id}”的专家已不可用：{}。请在专家页面恢复，或重新创建团队。",
+                    missing.join("、")
+                ));
+            }
+        }
+        update_teams(|all| {
+            let team = all
+                .get_mut(&team_key(Some(session_id), id))
+                .ok_or("团队已被解散，请重新选择团队")?;
+            if !team.prompt_ids.iter().any(|value| value == prompt_id) {
+                if team.prompt_ids.len() == 128 {
+                    team.prompt_ids.remove(0);
+                }
+                team.prompt_ids.push(prompt_id.to_string());
+            }
+            Ok(())
+        })?;
+        teams = team_snapshot(session_id.to_string())?;
+        notify_changed(session_id);
+    }
+    if selected_id.is_none()
+        && !visible_text.contains("团队")
+        && !visible_text.to_lowercase().contains("team")
+    {
+        return Ok(String::new());
+    }
+    let catalog = agents
+        .iter()
+        .map(|agent| serde_json::json!({ "name": agent.name, "role": agent.description }))
+        .collect::<Vec<_>>();
+    Ok(format!(
+        "\n\n<system-reminder>\n<echoagent_team_context>\n{}\nTeams listed here are already registered in this session. Use the selected team description as its goal and its roles as member assignments. Only when the user requests team execution, actually delegate relevant work for the selected team to its exact member names using the task/spawn_subagent tool; respect dependencies, retrieve results, and consolidate the deliverables. Creating a directory or describing roles does not create a team. If the user explicitly asks to create a different team, first discover create_team with search_tool, invoke it with use_tool, and confirm success before dispatching members. Never claim a team or a task exists without a successful tool result. Do not create additional teams unless requested.\n</echoagent_team_context>\n</system-reminder>",
+        serde_json::json!({ "selectedTeam": selected_id, "teams": teams, "availableExperts": catalog })
+    ))
 }
 
 /// `~/.echo-agent/echoagent-teams.json` —— 与 EchoAgent 配置同目录，方便用户备份。
@@ -357,9 +529,31 @@ fn validate_team_store(teams: &HashMap<String, TeamInfo>) -> Result<(), String> 
         return Err(format!("团队数量超过 {MAX_TEAMS} 个上限"));
     }
     for (key, team) in teams {
-        let normalized_id = normalized_team_id(key)?;
-        if normalized_id != *key || team.team_id != *key {
+        let normalized_id = normalized_team_id(&team.team_id)?;
+        if normalized_id != team.team_id
+            || team_key(team.session_id.as_deref(), &team.team_id) != *key
+        {
             return Err("团队状态中的 ID 不一致或含有多余空白".into());
+        }
+        if let Some(session) = &team.session_id {
+            validate_session_id(session)?;
+        }
+        if team.prompt_ids.len() > 128
+            || team
+                .prompt_ids
+                .iter()
+                .any(|id| validate_session_id(id).is_err())
+            || team.roles.len() > MAX_TEAM_MEMBERS
+            || team
+                .roles
+                .values()
+                .any(|role| role.len() > MAX_MEMBER_ROLE_BYTES)
+            || team
+                .description
+                .as_ref()
+                .is_some_and(|text| text.len() > MAX_TEAM_DESCRIPTION_BYTES)
+        {
+            return Err("团队说明或任务关联超过上限".into());
         }
         if team.members.is_empty() || team.members.len() > MAX_TEAM_MEMBERS {
             return Err(format!(
@@ -379,7 +573,6 @@ fn validate_team_store(teams: &HashMap<String, TeamInfo>) -> Result<(), String> 
                     team.team_id, member.name
                 ));
             }
-            let expected_name = format!("{}.md", member.name);
             let stored_path = Path::new(&member.file);
             if member.file.is_empty()
                 || member.file.len() > MAX_MEMBER_FILE_BYTES
@@ -388,8 +581,7 @@ fn validate_team_store(teams: &HashMap<String, TeamInfo>) -> Result<(), String> 
                 || stored_path
                     .components()
                     .any(|component| matches!(component, std::path::Component::ParentDir))
-                || stored_path.file_name().and_then(|value| value.to_str())
-                    != Some(expected_name.as_str())
+                || stored_path.extension().and_then(|value| value.to_str()) != Some("md")
             {
                 return Err(format!(
                     "团队 '{}' 的成员 '{}' 文件路径无效",
@@ -629,7 +821,14 @@ async fn handle_post(
         },
         "ping" => serde_json::json!({}),
         "tools/list" => tools_list_result(),
-        "tools/call" => match tools_call(&req.params).await {
+        "tools/call" => match tools_call_for_session(
+            &req.params,
+            headers
+                .get(SESSION_HEADER)
+                .and_then(|value| value.to_str().ok()),
+        )
+        .await
+        {
             Ok(v) => v,
             Err(user_msg) => return rpc_result(id, tool_error_result(&user_msg)),
         },
@@ -708,7 +907,7 @@ fn tool_def(name: &str, description: &str, schema: serde_json::Value) -> serde_j
     serde_json::json!({ "name": name, "description": description, "inputSchema": schema })
 }
 
-const CREATE_TEAM_DESC: &str = "Create an expert team. Each member's agent .md must already exist in ~/.echo-agent/agents/. After creation, call the task tool with subagent_type set to a member name (exact, case-sensitive).";
+const CREATE_TEAM_DESC: &str = "Create a persistent expert team in the current session using existing local experts. Use their exact, case-sensitive names. A directory or a task prompt does not create a team. After success, delegate actual work with the task tool using each member name as subagent_type.";
 const TEAM_STATUS_DESC: &str =
     "Check the status of agent teams. Returns registered team members and their agent file paths.";
 const TEAM_DELETE_DESC: &str =
@@ -762,7 +961,7 @@ pub struct CreateTeamInput {
 #[serde(deny_unknown_fields)]
 pub struct CreateTeamMember {
     #[schemars(
-        description = "Agent name; must match an existing ~/.echo-agent/agents/<name>.md (case-sensitive)"
+        description = "Exact case-sensitive name of an existing local expert (the name in its agent definition)"
     )]
     pub name: String,
     #[schemars(description = "Member role, e.g. 'code reviewer'")]
@@ -803,7 +1002,12 @@ pub struct TeamDeleteOutput {
     pub message: String,
 }
 
-async fn tools_call(params: &serde_json::Value) -> Result<serde_json::Value, String> {
+async fn tools_call_for_session(
+    params: &serde_json::Value,
+    session_id: Option<&str>,
+) -> Result<serde_json::Value, String> {
+    let session_id = session_id.ok_or("团队工具缺少会话信息，请重新打开当前会话后重试")?;
+    validate_session_id(session_id)?;
     let params = params
         .as_object()
         .ok_or_else(|| "tools/call params 必须是对象".to_string())?;
@@ -830,17 +1034,17 @@ async fn tools_call(params: &serde_json::Value) -> Result<serde_json::Value, Str
     match name {
         "create_team" => {
             let input: CreateTeamInput = parse_args(&args)?;
-            let out = create_team(input)?;
+            let out = create_team_for_session(input, Some(session_id))?;
             Ok(tool_text_result(&out))
         }
         "team_status" => {
             let input: TeamStatusInput = parse_args(&args)?;
-            let out = team_status(input)?;
+            let out = team_status_for_session(input, Some(session_id))?;
             Ok(tool_text_result(&out))
         }
         "team_delete" => {
             let input: TeamDeleteInput = parse_args(&args)?;
-            let out = team_delete(input)?;
+            let out = team_delete_for_session(input, Some(session_id))?;
             Ok(tool_text_result(&out))
         }
         other => Err(format!("unknown tool: {other}")),
@@ -872,7 +1076,18 @@ fn canonical_agents_directory(agents_dir: &Path) -> Result<Option<PathBuf>, Stri
         .map_err(|error| format!("解析 agents 目录失败：{error}"))
 }
 
+#[cfg(test)]
 fn create_team(input: CreateTeamInput) -> Result<CreateTeamOutput, String> {
+    create_team_for_session(input, None)
+}
+
+pub(crate) fn create_team_for_session(
+    input: CreateTeamInput,
+    session_id: Option<&str>,
+) -> Result<CreateTeamOutput, String> {
+    if let Some(session) = session_id {
+        validate_session_id(session)?;
+    }
     let agents_dir = crate::agents_store::user_agents_dir_pub();
     let team_id = normalized_team_id(&input.team_id)?;
     if input.members.is_empty() || input.members.len() > MAX_TEAM_MEMBERS {
@@ -906,14 +1121,33 @@ fn create_team(input: CreateTeamInput) -> Result<CreateTeamOutput, String> {
     }
 
     let canonical_agents_dir = canonical_agents_directory(&agents_dir)?;
+    let definitions = crate::agents_store::team_agents();
     let mut registered = Vec::new();
     let mut team_members = Vec::new();
     for member in &input.members {
         let name = normalized_member_name(&member.name)?;
-        let display_file = agents_dir.join(format!("{}.md", name));
+        let definition = definitions
+            .iter()
+            .find(|agent| agent.name == name)
+            .ok_or_else(|| {
+                format!(
+                    "本地专家“{name}”不存在。可用专家：{}。请使用专家的完整名称（区分大小写）。",
+                    definitions
+                        .iter()
+                        .map(|agent| agent.name.as_str())
+                        .collect::<Vec<_>>()
+                        .join("、")
+                )
+            })?;
+        let filename = Path::new(&definition.path)
+            .file_name()
+            .and_then(|name| name.to_str())
+            .ok_or("专家定义文件名无效")?
+            .to_string();
+        let display_file = agents_dir.join(&filename);
         let agent_file = canonical_agents_dir
             .as_ref()
-            .map(|root| root.join(format!("{}.md", name)));
+            .map(|root| root.join(&filename));
         let metadata = match agent_file.as_ref() {
             Some(path) => match std::fs::symlink_metadata(path) {
                 Ok(metadata) => Some(metadata),
@@ -973,19 +1207,48 @@ fn create_team(input: CreateTeamInput) -> Result<CreateTeamOutput, String> {
         .unwrap_or_default()
         .as_secs();
     update_teams(|teams| {
-        if !teams.contains_key(&team_id) && teams.len() >= MAX_TEAMS {
+        let key = team_key(session_id, &team_id);
+        if let Some(existing) = teams.get(&key) {
+            if existing
+                .members
+                .iter()
+                .map(|member| &member.name)
+                .collect::<Vec<_>>()
+                == team_members
+                    .iter()
+                    .map(|member| &member.name)
+                    .collect::<Vec<_>>()
+            {
+                return Ok(());
+            }
+            return Err(format!(
+                "团队 '{team_id}' 已存在且成员不同，请使用其他名称或先解散原团队"
+            ));
+        }
+        if teams.len() >= MAX_TEAMS {
             return Err(format!("团队数量已达 {MAX_TEAMS} 个上限"));
         }
         teams.insert(
-            team_id.clone(),
+            key,
             TeamInfo {
                 team_id: team_id.clone(),
                 members: team_members,
                 created_at,
+                session_id: session_id.map(str::to_owned),
+                roles: input
+                    .members
+                    .iter()
+                    .map(|member| (member.name.trim().to_string(), member.role.clone()))
+                    .collect(),
+                description: input.description.clone(),
+                prompt_ids: Vec::new(),
             },
         );
         Ok(())
     })?;
+    if let Some(session) = session_id {
+        notify_changed(session);
+    }
     // 成功消息里强调：成员名必须与 task 工具的 subagent_type 完全一致，
     // 否则 EchoAgent 会返回 "Unknown subagent type"。
     Ok(CreateTeamOutput {
@@ -1003,7 +1266,10 @@ fn create_team(input: CreateTeamInput) -> Result<CreateTeamOutput, String> {
     })
 }
 
-fn team_status(input: TeamStatusInput) -> Result<TeamStatusOutput, String> {
+fn team_status_for_session(
+    input: TeamStatusInput,
+    session_id: Option<&str>,
+) -> Result<TeamStatusOutput, String> {
     let requested_id = input
         .team_id
         .as_deref()
@@ -1011,12 +1277,16 @@ fn team_status(input: TeamStatusInput) -> Result<TeamStatusOutput, String> {
         .transpose()?;
     let teams = read_teams_from_disk()?;
     let result = match requested_id {
-        Some(id) => match teams.get(&id) {
+        Some(id) => match teams.get(&team_key(session_id, &id)) {
             Some(t) => vec![t.clone()],
             None => return Err(format!("团队 '{}' 不存在", id)),
         },
         None => {
-            let mut values = teams.values().cloned().collect::<Vec<_>>();
+            let mut values = teams
+                .values()
+                .filter(|team| team.session_id.as_deref() == session_id)
+                .cloned()
+                .collect::<Vec<_>>();
             values.sort_by(|a, b| {
                 b.created_at
                     .cmp(&a.created_at)
@@ -1028,15 +1298,19 @@ fn team_status(input: TeamStatusInput) -> Result<TeamStatusOutput, String> {
     Ok(TeamStatusOutput { teams: result })
 }
 
-fn team_delete(input: TeamDeleteInput) -> Result<TeamDeleteOutput, String> {
+fn team_delete_for_session(
+    input: TeamDeleteInput,
+    session_id: Option<&str>,
+) -> Result<TeamDeleteOutput, String> {
     let team_id = normalized_team_id(&input.team_id)?;
+    let key = team_key(session_id, &team_id);
     let delete_files = input.delete_files.unwrap_or(false);
     // Resolve and validate every stored member path before mutating the team
     // registry. A hand-edited/corrupt team store must never turn this MCP tool
     // into an arbitrary file-delete primitive.
     let files_to_delete = update_teams(|teams| {
         let team = teams
-            .get(&team_id)
+            .get(&key)
             .ok_or_else(|| format!("团队 '{}' 不存在", team_id))?
             .clone();
         let mut files = Vec::new();
@@ -1048,9 +1322,12 @@ fn team_delete(input: TeamDeleteInput) -> Result<TeamDeleteOutput, String> {
                 }
             }
         }
-        teams.remove(&team_id);
+        teams.remove(&key);
         Ok(files)
     })?;
+    if let Some(session) = session_id {
+        notify_changed(session);
+    }
     let mut deleted_count = 0;
     let mut failed_count = 0;
     if delete_files {
@@ -1093,14 +1370,13 @@ fn validated_agent_file_for_delete_at(
     if name != member.name {
         return Err("拒绝删除名称未规范化的 agent 文件".into());
     }
-    let expected_name = format!("{name}.md");
     let path = PathBuf::from(&member.file);
-    if path.file_name().and_then(|value| value.to_str()) != Some(expected_name.as_str()) {
-        return Err(format!(
-            "拒绝删除与成员名不匹配的 agent 文件：{}",
-            path.display()
-        ));
-    }
+    let expected_name = path
+        .file_name()
+        .and_then(|value| value.to_str())
+        .filter(|_| path.extension().and_then(|extension| extension.to_str()) == Some("md"))
+        .ok_or("专家定义文件必须是 Markdown 文件")?
+        .to_string();
     let raw_expected = agents_dir.join(&expected_name);
     let canonical_root = canonical_agents_directory(agents_dir)?;
     let metadata = match std::fs::symlink_metadata(&path) {
@@ -1131,6 +1407,9 @@ fn validated_agent_file_for_delete_at(
             "拒绝删除 agents 目录外的文件：{}",
             canonical.display()
         ));
+    }
+    if crate::agents_store::agent_definition_name(&canonical)? != name {
+        return Err("拒绝删除与成员名称不匹配的专家定义".into());
     }
     #[cfg(unix)]
     {
@@ -1225,7 +1504,7 @@ pub fn persist_registration(tx: &echo_agent_acp::AcpAgentTx, session_id: &str) {
             "session_id": session_id,
             "server_name": MCP_SERVER_NAME,
             "url": url,
-            "headers": { AUTH_HEADER: authorization },
+            "headers": { AUTH_HEADER: authorization, SESSION_HEADER: "${session_id}" },
             "enabled": true,
         });
         match crate::ext::call_ext_value(
@@ -1262,6 +1541,10 @@ mod tests {
                     .to_string(),
             }],
             created_at: 1,
+            session_id: None,
+            roles: HashMap::new(),
+            description: None,
+            prompt_ids: Vec::new(),
         }
     }
 
@@ -1282,6 +1565,142 @@ mod tests {
                 "{name}: schema properties"
             );
         }
+    }
+
+    #[test]
+    fn explicit_team_preflight_persists_scopes_and_prompt_bindings() {
+        if std::env::var_os("ECHOAGENT_TEAM_PREFLIGHT_TEST").is_none() {
+            let home = tempfile::tempdir().unwrap();
+            let status = std::process::Command::new(std::env::current_exe().unwrap())
+                .args([
+                    "--exact",
+                    "team_mcp::tests::explicit_team_preflight_persists_scopes_and_prompt_bindings",
+                    "--nocapture",
+                ])
+                .env("ECHO_AGENT_HOME", home.path())
+                .env("ECHOAGENT_TEAM_PREFLIGHT_TEST", "1")
+                .status()
+                .unwrap();
+            assert!(status.success());
+            return;
+        }
+        let agents = crate::agents_store::user_agents_dir_pub();
+        std::fs::create_dir_all(&agents).unwrap();
+        for name in ["业务分析师", "代码专家", "文档助手"] {
+            std::fs::write(
+                agents.join(format!("{name}.md")),
+                format!("---\nname: {name}\ndescription: 专家分工\n---\n执行任务"),
+            )
+            .unwrap();
+        }
+        let text = "请使用已经有的业务分析师、代码专家、文档助手创建团队123，分别分析需求并生成代码和需求文档";
+        let context = prepare_prompt("session-a", "prompt-a", text).unwrap();
+        assert!(context.contains("<echoagent_team_context>"));
+        let blocks = crate::agent_runtime::build_team_prompt_blocks(
+            "runtime-session",
+            "runtime-prompt",
+            text,
+            &[],
+            Some(text),
+        )
+        .unwrap();
+        let acp_block = &blocks[0];
+        if let agent_client_protocol::ContentBlock::Text(block) = acp_block {
+            assert!(block.text.contains("<echoagent_team_context>"));
+            assert_eq!(block.meta.as_ref().unwrap()["displayText"], text);
+        } else {
+            panic!("expected user text block");
+        }
+        assert_eq!(team_snapshot("runtime-session".into()).unwrap().len(), 1);
+        assert!(crate::agent_runtime::build_team_prompt_blocks(
+            "rejected-session",
+            "rejected-prompt",
+            text,
+            &["/nonexistent/team-image.png".into()],
+            Some(text)
+        )
+        .is_err());
+        assert!(team_snapshot("rejected-session".into()).unwrap().is_empty());
+        let snapshot = team_snapshot("session-a".into()).unwrap();
+        assert_eq!(snapshot.len(), 1);
+        assert_eq!(snapshot[0].members.len(), 3);
+        assert_eq!(snapshot[0].prompt_ids, ["prompt-a"]);
+        assert_eq!(snapshot[0].roles["代码专家"], "专家分工");
+        assert!(team_snapshot("session-b".into()).unwrap().is_empty());
+        prepare_prompt("session-a", "prompt-a", text).unwrap();
+        assert_eq!(
+            team_snapshot("session-a".into()).unwrap()[0]
+                .prompt_ids
+                .len(),
+            1
+        );
+        prepare_prompt("session-b", "prompt-b", text).unwrap();
+        assert_eq!(team_snapshot("session-b".into()).unwrap().len(), 1);
+        team_delete_for_session(
+            TeamDeleteInput {
+                team_id: "123".into(),
+                delete_files: Some(false),
+            },
+            Some("session-a"),
+        )
+        .unwrap();
+        assert!(team_snapshot("session-a".into()).unwrap().is_empty());
+        assert_eq!(team_snapshot("session-b".into()).unwrap().len(), 1);
+        assert!(agents.join("代码专家.md").exists());
+        assert!(prepare_prompt(
+            "session-c",
+            "prompt-c",
+            "请用代码专家、缺失专家创建团队123，完成任务"
+        )
+        .is_err());
+        assert!(team_snapshot("session-c".into()).unwrap().is_empty());
+        std::fs::write(
+            agents.join("code-expert.md"),
+            "---\nname: Code Expert\n---\nWrite code",
+        )
+        .unwrap();
+        create_team_for_session(
+            CreateTeamInput {
+                team_id: "display-name".into(),
+                members: vec![CreateTeamMember {
+                    name: "Code Expert".into(),
+                    role: "实现".into(),
+                }],
+                description: Some("目标".into()),
+            },
+            Some("session-c"),
+        )
+        .unwrap();
+        assert_eq!(
+            team_snapshot("session-c".into()).unwrap()[0]
+                .description
+                .as_deref(),
+            Some("目标")
+        );
+        let runtime = tokio::runtime::Runtime::new().unwrap();
+        runtime.block_on(async {
+            let call = serde_json::json!({ "name": "create_team", "arguments": {
+                "team_id": "mcp-team", "members": [{ "name": "代码专家", "role": "实现代码" }]
+            }});
+            assert!(tools_call_for_session(&call, None).await.is_err());
+            let created = tools_call_for_session(&call, Some("mcp-session"))
+                .await
+                .unwrap();
+            assert_eq!(created["isError"], false);
+            assert_eq!(
+                team_snapshot("mcp-session".into()).unwrap()[0].team_id,
+                "mcp-team"
+            );
+            let other = tools_call_for_session(
+                &serde_json::json!({ "name": "team_status", "arguments": {} }),
+                Some("other-session"),
+            )
+            .await
+            .unwrap();
+            let output: serde_json::Value =
+                serde_json::from_str(other["content"][0]["text"].as_str().unwrap()).unwrap();
+            assert_eq!(output["teams"].as_array().unwrap().len(), 0);
+        });
     }
 
     /// create_team 的成员名校验：路径分隔符 / `..` / `.md` 后缀 / 重复名。

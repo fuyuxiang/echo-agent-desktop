@@ -272,7 +272,7 @@ export function ChatView({
 
   // ---- 消息"编辑重发":把消息文本回填到输入框 ----
   const [resendText, setResendText] = useState<string | undefined>(undefined);
-  const [resendAttachments, setResendAttachments] = useState<string[]>([]);
+  const [resendAttachments, setResendAttachments] = useState<string[] | undefined>(undefined);
   const [resendNonce, setResendNonce] = useState(0);
   const handleEditResend = useCallback((text: string, attachments: string[]) => {
     if (!text.trim() && attachments.length === 0) return;
@@ -905,7 +905,22 @@ export function ChatView({
                 /></>
               )}
               {teamsOpen && (
-                <><div data-runtime-panel-anchor="teams" /><TeamStatusView messages={messages} /></>
+                <><div data-runtime-panel-anchor="teams" /><TeamStatusView key={sessionId} sessionId={sessionId} messages={messages}
+                  onUseTeam={(teamId) => {
+                    if (!sessionId) return;
+                    const next = draft.trim()
+                      ? `${draft}\n\n请使用团队“${teamId}”，按成员职责分工完成以上任务。`
+                      : `请使用团队“${teamId}”，按成员职责分工完成以下任务：\n`;
+                    setResendText(next);
+                    setResendAttachments(undefined);
+                    setResendNonce((nonce) => nonce + 1);
+                    onToast?.("已填入团队指令，请补充任务后发送");
+                  }}
+                  onViewTasks={() => {
+                    setTeamsOpen(false);
+                    toggleRuntimePanel("subagents", false, setSubagentsOpen);
+                  }}
+                /></>
               )}
               {timeline.map((node) => {
                 // 时间线分隔符(对齐 EchoAgent message-timeline):日期/模型切换分隔。

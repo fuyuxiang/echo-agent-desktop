@@ -326,6 +326,22 @@ fn collect_agents(cwd: Option<&str>) -> Vec<AgentEntry> {
     out
 }
 
+pub(crate) fn team_agents() -> Vec<AgentEntry> {
+    collect_agents(None)
+}
+
+pub(crate) fn agent_definition_name(path: &Path) -> Result<String, String> {
+    let raw = read_agent_file(path)?;
+    parse_frontmatter(&raw)
+        .name
+        .or_else(|| {
+            path.file_stem()
+                .and_then(|stem| stem.to_str())
+                .map(str::to_owned)
+        })
+        .ok_or_else(|| "专家定义缺少名称".into())
+}
+
 #[tauri::command]
 pub fn agents_list(
     access: State<'_, crate::shell_fs::FilesystemAccess>,

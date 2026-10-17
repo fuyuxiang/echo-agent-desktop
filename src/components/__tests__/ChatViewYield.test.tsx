@@ -108,6 +108,7 @@ vi.mock("@/lib/agent-client", async () => {
   mod.flattenModels = () => [];
   mod.agentAuthStatus = async () => ({ ready: true, providers: [] });
   mod.subscribeAgentEvents = async () => () => {};
+  mod.onTeamsChanged = async () => () => {};
   mod.permissionModeGet = async () => "ask";
   mod.notificationList = asyncArr;
   mod.agentsList = asyncArr;

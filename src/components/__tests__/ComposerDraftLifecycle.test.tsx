@@ -46,6 +46,15 @@ describe("composer draft lifecycle", () => {
     expect(useSessionsStore.getState().drafts.s1).toBe("新模板");
   });
 
+  it("inserting team instructions preserves the current attachments", () => {
+    saveDraftAttachments("s1", ["/work/requirements.txt"]);
+    render(<Composer {...base} draft="原有需求" draftKey="s1" externalText={"原有需求\n请使用团队“123”完成任务"} externalTextNonce={1}
+      onDraftChange={text => useSessionsStore.getState().setDraft("s1", text)} />);
+    expect(screen.getByRole("textbox")).toHaveValue("原有需求\n请使用团队“123”完成任务");
+    expect(screen.getByText("requirements.txt")).toBeInTheDocument();
+    expect(draftAttachments("s1")).toEqual(["/work/requirements.txt"]);
+  });
+
   it("external reset clears visible text and attachment references in the same scope", async () => {
     useSessionsStore.getState().setDraft("s1", "旧内容");
     saveDraftAttachments("s1", ["/work/report.txt"]);

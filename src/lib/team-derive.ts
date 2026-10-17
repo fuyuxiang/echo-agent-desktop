@@ -24,6 +24,23 @@ export interface TeamInfo {
   status: "in_progress" | "completed" | "failed";
 }
 
+/** Unwrap the MCP dispatcher used by current runtimes. */
+export function teamToolInput(tc: { rawInput?: unknown }): Record<string, unknown> | undefined {
+  let raw = tc.rawInput;
+  if (typeof raw === "string") { try { raw = JSON.parse(raw); } catch { return undefined; } }
+  if (!raw || typeof raw !== "object") return undefined;
+  const object = raw as Record<string, unknown>;
+  const input = object.tool_input ?? object.arguments;
+  if (typeof input === "string") { try { return JSON.parse(input); } catch { return undefined; } }
+  return input && typeof input === "object" ? input as Record<string, unknown> : object;
+}
+
+export function isTeamTool(tc: { kind: string; title: string; rawInput?: unknown; toolCallId: string }): boolean {
+  const raw = tc.rawInput && typeof tc.rawInput === "object" ? tc.rawInput as Record<string, unknown> : undefined;
+  const dispatchedName = typeof raw?.tool_name === "string" ? raw.tool_name : "";
+  return isCreateTeamTool(tc) || /(?:^|__|\s)team_(?:delete|status)(?:$|\s)/i.test(`${tc.kind} ${tc.title} ${dispatchedName}`);
+}
+
 /** 从会话消息派生已创建的团队列表（去重，按首次出现顺序）。 */
 export function deriveTeams(messages: ChatMessage[]): TeamInfo[] {
   const seen = new Set<string>();
@@ -50,12 +67,14 @@ export function isCreateTeamTool(tc: {
   rawInput?: unknown;
 }): boolean {
   const k = (tc.kind || "").toLowerCase();
+  const dispatcher = tc.rawInput && typeof tc.rawInput === "object" ? tc.rawInput as Record<string, unknown> : undefined;
+  if (typeof dispatcher?.tool_name === "string" && /(?:^|__)create_team$/.test(dispatcher.tool_name)) return true;
   // 原生名（旧会话）或 MCP 限定名 echoagent__create_team（现行路径）。
   if (k === "create_team" || k === "team_create" || k === "echoagent__create_team") return true;
   const title = (tc.title || "").toLowerCase();
   if (title.includes("create_team") || title.includes("创建团队")) return true;
-  if (tc.rawInput && typeof tc.rawInput === "object") {
-    const obj = tc.rawInput as Record<string, unknown>;
+  const obj = teamToolInput(tc);
+  if (obj) {
     if ("team_id" in obj && "members" in obj) return true;
   }
   return false;
@@ -67,7 +86,7 @@ function parseTeamFromToolCall(tc: {
   rawInput?: unknown;
   status: "in_progress" | "completed" | "failed";
 }): TeamInfo | null {
-  const raw = tc.rawInput as Record<string, unknown> | undefined;
+  const raw = teamToolInput(tc);
   if (!raw) return null;
   const teamId = typeof raw.team_id === "string" ? raw.team_id : "";
   const membersRaw = raw.members;

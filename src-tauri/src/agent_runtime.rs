@@ -527,6 +527,7 @@ fn authenticated_team_mcp_server(url: String, authorization: String) -> acp::Mcp
     acp::McpServer::Http(
         acp::McpServerHttp::new(crate::team_mcp::MCP_SERVER_NAME, url).headers(vec![
             acp::HttpHeader::new(crate::team_mcp::AUTH_HEADER, authorization),
+            acp::HttpHeader::new(crate::team_mcp::SESSION_HEADER, "${session_id}"),
         ]),
     )
 }
@@ -716,12 +717,9 @@ pub async fn prompt_for_automation(
     text: &str,
 ) -> Result<crate::bridge::CompleteEvent> {
     let prompt_id = uuid::Uuid::now_v7().to_string();
+    let blocks = build_team_prompt_blocks(session_id, &prompt_id, text, &[], None)?;
     let meta = serde_json::Map::from_iter([("promptId".into(), serde_json::json!(prompt_id))]);
-    let req = acp::PromptRequest::new(
-        session_id.to_string(),
-        build_prompt_blocks(text, &[], None)?,
-    )
-    .meta(Some(meta));
+    let req = acp::PromptRequest::new(session_id.to_string(), blocks).meta(Some(meta));
     let response: acp::PromptResponse = acp_send(req, tx)
         .await
         .map_err(|e| anyhow!("prompt: {e:?}"))?;
@@ -760,10 +758,10 @@ pub async fn prompt_with_attachments(
     prompt_id: Option<&str>,
     send_now: bool,
 ) -> Result<()> {
-    let blocks = build_prompt_blocks(text, attachments, display_text)?;
     let prompt_id = prompt_id
         .map(ToOwned::to_owned)
         .unwrap_or_else(|| uuid::Uuid::now_v7().to_string());
+    let blocks = build_team_prompt_blocks(session_id, &prompt_id, text, attachments, display_text)?;
     let mut meta = acp::Meta::new();
     meta.insert(
         "promptId".into(),
@@ -780,6 +778,30 @@ pub async fn prompt_with_attachments(
     })?;
     tracing::info!(session_id, %prompt_id, "echoagent: prompt turn completed");
     Ok(())
+}
+
+pub(crate) fn build_team_prompt_blocks(
+    session_id: &str,
+    prompt_id: &str,
+    text: &str,
+    attachments: &[String],
+    display_text: Option<&str>,
+) -> Result<Vec<acp::ContentBlock>> {
+    // Validate/read attachments before registering a team for a rejected send.
+    let mut blocks = build_prompt_blocks(text, attachments, display_text)?;
+    let visible_text = display_text.unwrap_or(text);
+    let context = crate::team_mcp::prepare_prompt(session_id, prompt_id, visible_text)
+        .map_err(|error| anyhow!(error))?;
+    if !context.is_empty() {
+        if let Some(acp::ContentBlock::Text(block)) = blocks.first_mut() {
+            block.text.push_str(&context);
+            block
+                .meta
+                .get_or_insert_with(Default::default)
+                .insert("displayText".into(), serde_json::json!(visible_text));
+        }
+    }
+    Ok(blocks)
 }
 
 /// Switch the model used by an existing session. Maps to EchoAgent's
@@ -1008,6 +1030,8 @@ mod tests {
         let encoded = value.to_string();
         assert!(encoded.contains(crate::team_mcp::AUTH_HEADER));
         assert!(encoded.contains("Bearer test-token"));
+        assert!(encoded.contains(crate::team_mcp::SESSION_HEADER));
+        assert!(encoded.contains("${session_id}"));
     }
 
     #[test]

@@ -55,6 +55,7 @@ mod skill_installer;
 mod skills;
 mod storage;
 mod team_mcp;
+mod team_orchestration;
 mod theia;
 mod weixin;
 
@@ -749,6 +750,7 @@ pub fn run() {
             // Team MCP server（127.0.0.1 streamable-http）：同步 bind 后台 accept。
             // 必须在任何 new_session 之前 —— 端口即刻写入 BOUND_PORT 供传参。
             team_mcp::serve();
+            team_mcp::set_app_handle(app.handle().clone());
             if let Err(error) = org_mcp::clear_persisted_registration() {
                 tracing::warn!(%error, "failed to remove legacy organization MCP registration");
             }
@@ -1033,6 +1035,8 @@ pub fn run() {
             automation::automation_resolve_approval,
             // authoritative team runtime registry (shared with the MCP tools)
             team_mcp::team_snapshot,
+            team_mcp::team_create,
+            team_mcp::team_disband,
             // notification center
             notifications::notification_append,
             notifications::notification_list,

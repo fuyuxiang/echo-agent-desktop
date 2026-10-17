@@ -44,6 +44,16 @@ describe("isCreateTeamTool", () => {
       }),
     ).toBe(true);
   });
+  it("识别 MCP 调度包装并解析真实成员", () => {
+    const message = teamMsg("wrapped", "a", [], "in_progress");
+    const part = message.parts[0];
+    if (part.kind !== "tool_call") throw new Error("fixture");
+    part.toolCall.kind = "use_tool";
+    part.toolCall.title = "use_tool";
+    part.toolCall.rawInput = { tool_name: "echoagent__create_team", tool_input: { team_id: "123", members: [{ name: "代码专家", role: "实现" }] } };
+    expect(isCreateTeamTool(part.toolCall)).toBe(true);
+    expect(deriveTeams([message])[0]).toMatchObject({ teamId: "123", members: ["代码专家"] });
+  });
   it("普通工具不命中", () => {
     expect(
       isCreateTeamTool({ kind: "edit", title: "Edit", toolCallId: "x" }),

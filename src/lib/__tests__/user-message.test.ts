@@ -197,3 +197,8 @@ describe("user-message attachment compatibility", () => {
     expect(attachmentBasename("/tmp/report.pdf")).toBe("report.pdf");
   });
 });
+
+it("团队运行上下文不会泄漏到会话气泡或重试文本", () => {
+  expect(stripInjectedUserContext('用户任务\n\n<echoagent_team_context>{"teams": []}\n内部指令</echoagent_team_context>')).toBe("用户任务");
+  expect(stripInjectedUserContext("用户任务\n<echoagent_team_context>中断的上下文")).toBe("用户任务");
+});

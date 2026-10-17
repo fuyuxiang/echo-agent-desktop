@@ -239,6 +239,7 @@ export function stripInjectedUserContext(text: string): string {
     visible = visible.slice(0, begin) + visible.slice(end + EXPERT_PERSONA_END.length);
   }
   visible = visible.replace(/<system-reminder>[\s\S]*?<\/system-reminder>/g, "");
+  visible = visible.replace(/<echoagent_team_context>[\s\S]*?(?:<\/echoagent_team_context>|$)/g, "");
   return visible.replace(/^\n+|\n+$/g, "").trim();
 }
 

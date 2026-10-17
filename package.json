@@ -26,7 +26,7 @@
     "test:scripts": "node --test scripts/test-browser-snapshot-labels.mjs scripts/test-macos-test-signatures.mjs scripts/test-theia-dirty-count.mjs scripts/test-theia-parent-guard.mjs scripts/test-native-review-model.mjs scripts/test-native-review-window.mjs",
     "test:ide": "node --test scripts/test-theia-plugin-validation.mjs scripts/test-theia-scm-command.mjs",
     "test:native-guards": "node --test --test-concurrency=2 scripts/native-local-review-guards.mjs scripts/validate-native-browser-guards.mjs scripts/validate-native-coding-continuation.mjs scripts/validate-native-coding-delivery-helper.mjs scripts/validate-native-coding-helper.mjs scripts/validate-native-coding-navigation.mjs scripts/validate-native-core-guards.mjs scripts/validate-native-exit-recovery-guards.mjs scripts/validate-native-ide-git-guards.mjs && node scripts/validate-native-coding-agent-review.mjs --self-test",
-    "test:ui": "node scripts/validate-ui-surfaces.mjs && node scripts/validate-document-reading-ui.mjs",
+    "test:ui": "node scripts/validate-ui-surfaces.mjs && node scripts/validate-document-reading-ui.mjs && node scripts/validate-team-ui.mjs",
     "test:mermaid": "node scripts/validate-mermaid-render.mjs",
     "git:push": "bash scripts/git-push.sh",
     "git:push:tags": "bash scripts/git-push.sh --tags",

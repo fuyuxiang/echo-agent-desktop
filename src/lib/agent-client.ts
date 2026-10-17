@@ -1304,11 +1304,33 @@ export interface RuntimeTeamInfo {
   teamId: string;
   members: string[];
   createdAt: number;
+  sessionId?: string;
+  roles?: Record<string, string>;
+  description?: string;
+  promptIds?: string[];
 }
 
 /** Authoritative teams persisted by the embedded team MCP runtime. */
-export async function teamSnapshot(): Promise<RuntimeTeamInfo[]> {
-  return invoke<RuntimeTeamInfo[]>("team_snapshot");
+export async function teamSnapshot(sessionId: string): Promise<RuntimeTeamInfo[]> {
+  return invoke<RuntimeTeamInfo[]>("team_snapshot", { sessionId });
+}
+
+export interface CreateTeamInput {
+  team_id: string;
+  members: Array<{ name: string; role: string }>;
+  description?: string;
+}
+
+export async function teamCreate(sessionId: string, input: CreateTeamInput): Promise<void> {
+  await invoke("team_create", { sessionId, input });
+}
+
+export async function teamDisband(sessionId: string, teamId: string): Promise<void> {
+  await invoke("team_disband", { sessionId, teamId });
+}
+
+export function onTeamsChanged(callback: (sessionId: string) => void): Promise<UnlistenFn> {
+  return listen<{ sessionId: string }>("agent://teams-changed", (event) => callback(event.payload.sessionId));
 }
 
 // ---------- folder trust ----------
