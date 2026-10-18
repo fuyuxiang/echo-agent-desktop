@@ -1,4 +1,4 @@
-import { useEffect, useId, useRef, useState, type KeyboardEvent, type PointerEvent } from "react";
+import { useEffect, useId, useRef, useState, type KeyboardEvent, type MouseEvent, type PointerEvent } from "react";
 import { SIDEBAR_COLLAPSE_THRESHOLD, SIDEBAR_DEFAULT_WIDTH, SIDEBAR_MIN_WIDTH, type useAppSidebarLayout } from "@/lib/sidebar-layout";
 import { PointerSideHint } from "./PointerSideHint";
 
@@ -105,13 +105,28 @@ export function SidebarResizeHandle({ layout }: { layout: Layout }) {
     layout.setResizing(true);
     try { event.currentTarget.setPointerCapture(event.pointerId); } catch { /* Window listeners also support older webviews. */ }
   };
-  const reset = () => { finishRef.current(false); layout.commitWidth(SIDEBAR_DEFAULT_WIDTH); layout.setCollapsed(false); };
+  // Temporary window/panel constraints must not make a custom width look like
+  // the default preset. Allow a one-pixel drag/rounding difference, but only
+  // offer expansion when the available maximum is meaningfully wider.
+  const canMaximize = !layout.collapsed
+    && Math.abs(layout.preferredWidth - SIDEBAR_DEFAULT_WIDTH) <= 1
+    && layout.maxWidth > SIDEBAR_DEFAULT_WIDTH + 1;
+  const setWidthAndExpand = (width: number) => {
+    finishRef.current(false);
+    layout.commitWidth(width);
+    layout.setCollapsed(false);
+  };
+  const toggleWidth = (event: MouseEvent<HTMLDivElement>) => {
+    if (event.button !== 0) return;
+    event.preventDefault(); event.stopPropagation();
+    setWidthAndExpand(canMaximize ? layout.maxWidth : SIDEBAR_DEFAULT_WIDTH);
+  };
   const keyDown = (event: KeyboardEvent<HTMLDivElement>) => {
     if (dragRef.current || event.altKey || event.ctrlKey || event.metaKey) return;
     const step = event.shiftKey ? 40 : 16;
     if (event.key === "Enter" || event.key === " ") layout.setCollapsed((value) => !value);
-    else if (event.key === "Home") reset();
-    else if (event.key === "End") { layout.commitWidth(layout.collapsed ? layout.restoreMaxWidth : layout.maxWidth); layout.setCollapsed(false); }
+    else if (event.key === "Home") setWidthAndExpand(SIDEBAR_DEFAULT_WIDTH);
+    else if (event.key === "End") setWidthAndExpand(layout.collapsed ? layout.restoreMaxWidth : layout.maxWidth);
     else if (event.key === "ArrowRight") {
       if (layout.collapsed) layout.setCollapsed(false);
       else if (layout.width < layout.maxWidth) layout.commitWidth(Math.min(layout.width + step, layout.maxWidth));
@@ -133,14 +148,15 @@ export function SidebarResizeHandle({ layout }: { layout: Layout }) {
       aria-valuenow={layout.collapsed ? 0 : Math.round(layout.width)}
       aria-valuetext={layout.collapsed ? "侧边栏已收起" : `${Math.round(layout.width)} 像素`}
       tabIndex={0} data-sidebar-resize data-tip-placement="pointer-side"
-      data-tip={layout.collapsed ? "向右拖动展开侧边栏" : "拖动调整宽度，双击恢复默认"}
-      data-tip-focus={layout.collapsed ? "Enter 或 → 展开侧边栏，Home 恢复默认宽度" : "← → 调整宽度，Enter 收起，Home 恢复默认"}
+      data-tip={layout.collapsed ? "向右拖动展开，双击恢复默认宽度"
+        : `拖动调整宽度，${canMaximize ? "双击展开到最大宽度" : "双击恢复默认宽度"}`}
+      data-tip-focus={layout.collapsed ? "Enter 或 → 展开侧边栏，Home 恢复默认宽度，End 调至最宽" : "← → 调整宽度，Enter 收起，Home 恢复默认，End 调至最宽"}
       data-tip-disabled={layout.resizing ? "" : undefined}
       onPointerDown={begin} onLostPointerCapture={(event) => {
         if (event.pointerId === dragRef.current?.pointerId) finishRef.current(false);
-      }} onDoubleClick={reset} onKeyDown={keyDown} />
+      }} onDoubleClick={toggleWidth} onKeyDown={keyDown} />
     {layout.resizing && hint && <PointerSideHint anchorRef={handleRef} pointerY={pointerY}
       text={hint} id={hintId} role="status" />}
-    <span id={helpId} className="sr-only">左右方向键调整宽度，Enter 收起或展开，Home 恢复默认，Escape 取消拖动。</span>
+    <span id={helpId} className="sr-only">左右方向键调整宽度，Enter 收起或展开，Home 恢复默认，End 调至最宽，Escape 取消拖动。</span>
   </>;
 }

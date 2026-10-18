@@ -312,6 +312,106 @@ export async function validateSidebarResizeHint(page, output, { baseURL = 'http:
   return evidence.length;
 }
 
+/** Real double-clicks include pointer capture, click focus and the moving divider. */
+export async function validateSidebarResizeDoubleClick(page, output, { baseURL } = {}) {
+  const evidence = [];
+  const open = async (params = {}, viewportWidth = 1024) => {
+    await page.setViewportSize({ width: viewportWidth, height: 720 });
+    await page.goto(`${baseURL}/__ui-review?${new URLSearchParams(params)}`);
+    await page.locator(separator).waitFor();
+  };
+  const check = async (width, label) => {
+    await page.waitForFunction(({ selector, width }) => document.querySelector(selector)?.getAttribute('aria-valuenow') === String(width), { selector: separator, width });
+    const actual = await page.locator('.sidebar').evaluate(element => element.getBoundingClientRect().width);
+    assert.ok(Math.abs(actual - width) < 1, `${label}: painted sidebar and accessible width differ`);
+    const anchor = await geometry(page, separator);
+    assert.ok(Math.abs(anchor.left + anchor.width / 2 - width) <= 4, `${label}: divider no longer follows the sidebar edge`);
+    assert.equal(await page.evaluate(() => localStorage.getItem('app-sidebar-width')), String(width), `${label}: width was not persisted`);
+    assert.equal(await page.locator('.sidebar-resize--active, .app__body--sidebar-resizing').count(), 0, `${label}: pointer capture left resizing active`);
+    assert.equal(await page.locator(hint).count(), 0, `${label}: stale hover/drag help after double-click`);
+    assert.equal(await page.locator(separator).evaluate(element => element === document.activeElement), true, `${label}: divider lost keyboard focus`);
+    evidence.push({ label, width, anchor });
+  };
+  const hover = async (text, label) => {
+    await page.mouse.move(page.viewportSize().width - 20, 500);
+    await page.locator(separator).evaluate(element => element.blur());
+    await moveToHandle(page);
+    await page.getByRole('tooltip').waitFor();
+    assert.equal(await page.getByRole('tooltip').textContent(), text, label);
+    assert.equal(await page.getByRole('tooltip').count(), 1, `${label}: duplicate help`);
+    assertReadable(await geometry(page, hint), label);
+  };
+  await page.emulateMedia({ reducedMotion: 'no-preference' });
+  try {
+    for (const platform of ['mac', 'other']) for (const theme of ['light', 'dark']) for (const font of [16, 22]) {
+      const suffix = `${platform}-${theme}-${font}`;
+      await open({ platform, theme, font, width: 264 });
+      await hover('拖动调整宽度，双击展开到最大宽度', `${suffix}: default help`);
+      await page.locator(separator).dblclick();
+      await check(400, `${suffix}: default to maximum`);
+      await hover('拖动调整宽度，双击恢复默认宽度', `${suffix}: maximum help`);
+      await page.screenshot({ path: join(output, `sidebar-double-click-${suffix}-maximum.png`) });
+      await page.locator(separator).dblclick();
+      await check(264, `${suffix}: maximum to default`);
+      // Moving the divider must not interfere with subsequent double-clicks.
+      for (const width of [400, 264, 400, 264]) {
+        await page.locator(separator).dblclick();
+        await check(width, `${suffix}: repeated toggle to ${width}`);
+      }
+      // Home remains an unconditional reset even at the default width.
+      await page.keyboard.press('Home');
+      await page.keyboard.press('Home');
+      assert.equal(await page.locator(separator).getAttribute('aria-valuenow'), '264');
+      await page.keyboard.press('End');
+      assert.equal(await page.locator(separator).getAttribute('aria-valuenow'), '400');
+      await page.keyboard.press('Enter');
+      assert.equal(await page.locator(separator).getAttribute('aria-valuenow'), '0');
+      await hover('向右拖动展开，双击恢复默认宽度', `${suffix}: collapsed help`);
+      await page.locator(separator).dblclick();
+      await check(264, `${suffix}: collapsed custom width to default`);
+      await hover('拖动调整宽度，双击展开到最大宽度', `${suffix}: restored help`);
+      await page.screenshot({ path: join(output, `sidebar-double-click-${suffix}-default.png`) });
+    }
+    for (const width of [240, 280, 320, 399]) {
+      await open({ platform: 'mac', width });
+      await hover('拖动调整宽度，双击恢复默认宽度', `${width}: custom width help`);
+      await page.locator(separator).dblclick();
+      await check(264, `${width}: custom/minimum to default`);
+    }
+    await open({ platform: 'mac', width: 264 }, 780);
+    await page.locator(separator).dblclick();
+    await check(300, 'narrow window: maximum preserves main content space');
+    assert.ok(await page.locator('.app__main').evaluate(element => element.getBoundingClientRect().width >= 480), 'maximum must reserve the main content minimum');
+    await page.locator(separator).dblclick();
+    await check(264, 'narrow window: restore default');
+    for (const viewport of [744, 720]) {
+      await open({ platform: 'mac', width: 264 }, viewport);
+      const actual = await page.locator(separator).getAttribute('aria-valuenow');
+      await hover('拖动调整宽度，双击恢复默认宽度', `${viewport}: no room to expand`);
+      await page.locator(separator).dblclick();
+      assert.equal(await page.locator(separator).getAttribute('aria-valuenow'), actual);
+      assert.equal(await page.evaluate(() => localStorage.getItem('app-sidebar-width')), '264', 'temporary constraints must not overwrite the default preference');
+      await page.setViewportSize({ width: 1024, height: 720 });
+      await page.waitForFunction(() => document.querySelector('[data-sidebar-resize]')?.getAttribute('aria-valuenow') === '264');
+      evidence.push({ label: `constrained-${viewport}-restored`, width: 264 });
+    }
+    // A normal drag must still work immediately after a real double-click.
+    await open({ platform: 'mac', width: 264 });
+    await page.locator(separator).dblclick();
+    const start = await moveToHandle(page);
+    await page.mouse.down();
+    await page.mouse.move(336, start.y, { steps: 5 });
+    await page.mouse.up();
+    await check(336, 'drag after double-click');
+    await page.locator(separator).dblclick();
+    await check(264, 'double-click after drag');
+    writeFileSync(join(output, 'sidebar-double-click.json'), JSON.stringify(evidence, null, 2));
+    return evidence.length;
+  } finally {
+    await page.emulateMedia({ reducedMotion: 'reduce' });
+  }
+}
+
 /** Normal motion is the default user path; never freeze away geometry bugs. */
 export async function validateSidebarResizeNaturalMotion(page, output, { baseURL } = {}) {
   const evidence = [];
@@ -389,7 +489,10 @@ async function main() {
     let results = process.env.UI_REVIEW_BASELINE === '1'
       ? await captureSidebarResizeBaseline(page, output, { baseURL })
       : process.argv.includes('--motion-only') ? 0 : await validateSidebarResizeHint(page, output, { baseURL });
-    if (process.env.UI_REVIEW_BASELINE !== '1') results += await validateSidebarResizeNaturalMotion(page, output, { baseURL });
+    if (process.env.UI_REVIEW_BASELINE !== '1') {
+      if (!process.argv.includes('--motion-only')) results += await validateSidebarResizeDoubleClick(page, output, { baseURL });
+      results += await validateSidebarResizeNaturalMotion(page, output, { baseURL });
+    }
     assert.deepEqual(errors, [], 'browser fixture emitted application errors');
     console.log(JSON.stringify({ output, checks: Array.isArray(results) ? results.length : results, baseline: process.env.UI_REVIEW_BASELINE === '1' }));
   } catch (error) {

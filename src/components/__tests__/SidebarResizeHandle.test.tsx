@@ -70,7 +70,7 @@ describe("全局侧栏宽度交互", () => {
     act(() => vi.advanceTimersByTime(1));
 
     const tooltip = screen.getByRole("tooltip");
-    expect(tooltip).toHaveTextContent("拖动调整宽度，双击恢复默认");
+    expect(tooltip).toHaveTextContent("拖动调整宽度，双击展开到最大宽度");
     expect(tooltip.parentElement).toBe(document.body);
     expect(screen.getAllByRole("tooltip")).toHaveLength(1);
     expect(separator.getAttribute("aria-describedby")?.split(/\s+/)).toEqual(expect.arrayContaining([helpId, tooltip.id]));
@@ -107,7 +107,7 @@ describe("全局侧栏宽度交互", () => {
     const focused = focusedControl === "divider" ? separator : button;
     const hovered = focusedControl === "divider" ? button : separator;
     const focusedText = focusedControl === "divider" ? "← → 调整宽度，Enter 收起，Home 恢复默认" : "收起侧边栏";
-    const hoveredText = focusedControl === "divider" ? "收起侧边栏" : "拖动调整宽度，双击恢复默认";
+    const hoveredText = focusedControl === "divider" ? "收起侧边栏" : "拖动调整宽度，双击展开到最大宽度";
 
     act(() => focused.focus());
     fireEvent.pointerOver(hovered, { clientY: 300, pointerType: "mouse" });
@@ -140,7 +140,7 @@ describe("全局侧栏宽度交互", () => {
     act(() => vi.advanceTimersByTime(349));
     expect(screen.queryByRole("tooltip")).not.toBeInTheDocument();
     act(() => vi.advanceTimersByTime(1));
-    expect(screen.getByRole("tooltip")).toHaveTextContent("拖动调整宽度，双击恢复默认");
+    expect(screen.getByRole("tooltip")).toHaveTextContent("拖动调整宽度，双击展开到最大宽度");
   });
 
   it("hovering another control after Escape does not revive the dismissed divider focus hint", () => {
@@ -317,6 +317,130 @@ describe("全局侧栏宽度交互", () => {
     expect(handle()).toHaveAttribute("aria-valuenow", "0");
     fireEvent.keyDown(handle(), { key: "Home" });
     expect(width()).toBe("264px");
+  });
+
+  it("toggles default/maximum widths, persists the choice across remounts and keeps Home a reset", () => {
+    const first = render(<Harness />);
+    expect(handle()).toHaveAttribute("data-tip", "拖动调整宽度，双击展开到最大宽度");
+    fireEvent.doubleClick(handle());
+    expect(width()).toBe("400px");
+    expect(localStorage.getItem(SIDEBAR_WIDTH_KEY)).toBe("400");
+    expect(handle()).toHaveAttribute("data-tip", "拖动调整宽度，双击恢复默认宽度");
+    first.unmount();
+    render(<Harness />);
+    expect(width()).toBe("400px");
+    fireEvent.doubleClick(handle());
+    expect(width()).toBe("264px");
+    expect(localStorage.getItem(SIDEBAR_WIDTH_KEY)).toBe("264");
+    fireEvent.keyDown(handle(), { key: "Home" });
+    expect(width()).toBe("264px");
+    fireEvent.doubleClick(handle());
+    expect(width()).toBe("400px");
+    fireEvent.keyDown(handle(), { key: "Home" });
+    expect(width()).toBe("264px");
+  });
+
+  it.each([240, 280, 320, 399, 400])("restores a manually selected %spx width before offering maximum width", (selected) => {
+    localStorage.setItem(SIDEBAR_WIDTH_KEY, String(selected));
+    render(<Harness />);
+    expect(handle()).toHaveAttribute("data-tip", "拖动调整宽度，双击恢复默认宽度");
+    fireEvent.doubleClick(handle());
+    expect(width()).toBe("264px");
+    expect(localStorage.getItem(SIDEBAR_WIDTH_KEY)).toBe("264");
+    fireEvent.doubleClick(handle());
+    expect(width()).toBe("400px");
+  });
+
+  it.each([263, 265])("treats a one-pixel adjustment around the default (%spx) as the default preset", (selected) => {
+    localStorage.setItem(SIDEBAR_WIDTH_KEY, String(selected));
+    render(<Harness />);
+    fireEvent.doubleClick(handle());
+    expect(width()).toBe("400px");
+    fireEvent.doubleClick(handle());
+    expect(width()).toBe("264px");
+  });
+
+  it("restores a collapsed sidebar to the default rather than its last custom width", () => {
+    localStorage.setItem(SIDEBAR_WIDTH_KEY, "400");
+    render(<Harness />);
+    fireEvent.click(screen.getByRole("button", { name: "收起侧边栏" }));
+    expect(handle()).toHaveAttribute("aria-valuenow", "0");
+    expect(handle()).toHaveAttribute("data-tip", "向右拖动展开，双击恢复默认宽度");
+    fireEvent.doubleClick(handle());
+    expect(handle()).toHaveAttribute("aria-valuenow", "264");
+    expect(screen.getByRole("button", { name: "收起侧边栏" })).toBeVisible();
+    expect(localStorage.getItem(SIDEBAR_WIDTH_KEY)).toBe("264");
+  });
+
+  it.each([264, 320])("cancels a drag from %spx before double-clicking and ignores late pointer events", async (selected) => {
+    localStorage.setItem(SIDEBAR_WIDTH_KEY, String(selected));
+    render(<Harness />);
+    await drag(selected, 350, false);
+    fireEvent.doubleClick(handle());
+    const expected = selected === 264 ? 400 : 264;
+    expect(width()).toBe(`${expected}px`);
+    expect(screen.queryByRole("status")).not.toBeInTheDocument();
+    expect(screen.getByTestId("body")).not.toHaveClass("resizing");
+    pointer(window, "pointermove", 380);
+    pointer(window, "pointerup", 380);
+    await act(async () => { await new Promise(resolve => setTimeout(resolve, 25)); });
+    expect(width()).toBe(`${expected}px`);
+    expect(localStorage.getItem(SIDEBAR_WIDTH_KEY)).toBe(String(expected));
+  });
+
+  it("uses the available maximum and preserves an open workspace panel", () => {
+    Object.defineProperty(window, "innerWidth", { value: 1080 });
+    render(<Harness />);
+    fireEvent.click(screen.getByText("打开面板"));
+    expect(handle()).toHaveAttribute("aria-valuemax", "320");
+    fireEvent.doubleClick(handle());
+    expect(width()).toBe("320px");
+    expect(localStorage.getItem(SIDEBAR_WIDTH_KEY)).toBe("320");
+    expect(screen.getByTestId("panel")).toBeVisible();
+    fireEvent.doubleClick(handle());
+    expect(width()).toBe("264px");
+    expect(screen.getByTestId("panel")).toBeVisible();
+  });
+
+  it("resets a custom preference temporarily constrained to the default width", () => {
+    Object.defineProperty(window, "innerWidth", { value: 1024 });
+    localStorage.setItem(SIDEBAR_WIDTH_KEY, "400");
+    render(<Harness />);
+    fireEvent.click(screen.getByText("打开面板"));
+    expect(width()).toBe("264px");
+    expect(handle()).toHaveAttribute("data-tip", "拖动调整宽度，双击恢复默认宽度");
+    fireEvent.doubleClick(handle());
+    expect(localStorage.getItem(SIDEBAR_WIDTH_KEY)).toBe("264");
+    expect(screen.getByTestId("panel")).toBeVisible();
+    Object.defineProperty(window, "innerWidth", { value: 1440 });
+    fireEvent(window, new Event("resize"));
+    expect(width()).toBe("264px");
+    expect(handle()).toHaveAttribute("data-tip", "拖动调整宽度，双击展开到最大宽度");
+  });
+
+  it.each([720, 744, 745])("keeps the default preference when a %spx window has no room to expand", (viewport) => {
+    Object.defineProperty(window, "innerWidth", { value: viewport });
+    render(<Harness />);
+    const before = width();
+    expect(handle()).toHaveAttribute("data-tip", "拖动调整宽度，双击恢复默认宽度");
+    fireEvent.doubleClick(handle());
+    expect(width()).toBe(before);
+    expect(localStorage.getItem(SIDEBAR_WIDTH_KEY)).toBe("264");
+    Object.defineProperty(window, "innerWidth", { value: 1440 });
+    fireEvent(window, new Event("resize"));
+    expect(width()).toBe("264px");
+  });
+
+  it("restores an automatically collapsed sidebar at the default width", () => {
+    Object.defineProperty(window, "innerWidth", { value: 900 });
+    localStorage.setItem(SIDEBAR_WIDTH_KEY, "400");
+    render(<Harness />);
+    fireEvent.click(screen.getByText("打开面板"));
+    expect(handle()).toHaveAttribute("aria-valuenow", "0");
+    fireEvent.doubleClick(handle());
+    expect(screen.queryByTestId("panel")).not.toBeInTheDocument();
+    expect(handle()).toHaveAttribute("aria-valuenow", "264");
+    expect(localStorage.getItem(SIDEBAR_WIDTH_KEY)).toBe("264");
   });
 
   it("restores from the collapsed edge and keeps cancellation harmless", async () => {
