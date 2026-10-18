@@ -2084,9 +2084,7 @@ function Shell() {
     clearDeletedSessionState(sessionId);
     sessionsStore.getState().remove(sessionId, cwd);
     if (result?.memoryCleanupWarning) {
-      showActionToast(`对话已删除，但自动摘要清理失败：${result.memoryCleanupWarning}`, [
-        { label: "检查会话摘要", onClick: () => openSettings("personal-memory") },
-      ]);
+      showToast(`会话已删除，部分关联数据清理未完成：${result.memoryCleanupWarning}`);
     } else {
       showActionToast("对话与自动摘要已删除，关联的记忆已停用。旧版手动文档可在记忆页检查。", [
         { label: "检查长期记忆", onClick: () => openSettings("personal-memory") },

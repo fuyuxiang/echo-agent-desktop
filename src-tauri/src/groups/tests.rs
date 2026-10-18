@@ -1117,3 +1117,41 @@ fn group_memory_cleanup_removes_only_the_owned_namespace_and_can_be_retried() {
         assert!(other.join("MEMORY.md").exists());
     }
 }
+
+#[test]
+fn template_library_only_contains_explicit_saves_and_is_independent_of_session_teams() {
+    if std::env::var_os("ECHOAGENT_TEMPLATE_LIBRARY_TEST").is_none() {
+        let home = tempfile::tempdir().unwrap();
+        let status = std::process::Command::new(std::env::current_exe().unwrap())
+            .args(["--exact", "groups::tests::template_library_only_contains_explicit_saves_and_is_independent_of_session_teams"])
+            .env("ECHO_AGENT_HOME", home.path())
+            .env("ECHOAGENT_TEMPLATE_LIBRARY_TEST", "1")
+            .status().unwrap();
+        assert!(status.success());
+        return;
+    }
+    let home = crate::paths::echo_agent_home_dir();
+    let store = Store::open(&home.join("collaboration.sqlite")).unwrap();
+    assert!(STORE.set(store.clone()).is_ok());
+    // Unreadable session assignments must not make saved templates unreadable.
+    std::fs::write(
+        home.join("echoagent-teams.json"),
+        "invalid historical teams",
+    )
+    .unwrap();
+    assert!(management::group_team_templates().unwrap().is_empty());
+    let mut original = group();
+    original.members[1].role = "分析与验收".into();
+    original.members[1].model_id = "member-model".into();
+    store.create(&original).unwrap();
+    let saved = management::group_team_save(original.id.clone(), "复用模板".into()).unwrap();
+    assert_eq!(saved.members[1].role, "分析与验收");
+    assert_eq!(saved.members[1].model_id.as_deref(), Some("member-model"));
+    assert_eq!(saved.coordinator_name.as_deref(), Some("协调员"));
+    let updated = management::group_team_save(original.id.clone(), "复用模板".into()).unwrap();
+    assert_eq!(updated.id, saved.id);
+    assert_eq!(management::group_team_templates().unwrap().len(), 1);
+    management::group_team_delete(saved.id).unwrap();
+    assert!(management::group_team_templates().unwrap().is_empty());
+    assert!(store.get(&original.id).is_ok());
+}

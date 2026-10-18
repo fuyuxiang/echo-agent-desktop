@@ -2156,6 +2156,15 @@ pub(crate) async fn forget_deleted_session(
             }
         };
     state.forget_session_workspace(session_id);
+    if let Err(error) = crate::team_mcp::forget_session(session_id) {
+        tracing::warn!(%error, %session_id, "session deleted but team registry cleanup failed");
+        memory_cleanup_warning = Some(match memory_cleanup_warning {
+            Some(previous) => {
+                format!("{previous}；会话团队记录清理失败，下次启动时会重试：{error}")
+            }
+            None => format!("会话团队记录清理失败，下次启动时会重试：{error}"),
+        });
+    }
     crate::automation::forget_session(session_id).await;
     crate::org_mcp::forget_session_selection(session_id).await;
     crate::permission_config::forget_session_permission_mode(session_id);

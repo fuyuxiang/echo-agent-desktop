@@ -865,3 +865,36 @@
   .group-expert-grid,.group-form__row { grid-template-columns:1fr; }
   .groups-page__header { align-items:flex-start; flex-direction:column; gap:12px; }
 }
+
+.group-template-picker {
+  padding:16px;
+  border:1px solid var(--echo-border-default);
+  border-radius:10px;
+}
+
+.group-template-picker__head {
+  display:flex;
+  align-items:center;
+  justify-content:space-between;
+  gap:12px;
+  margin-bottom:8px;
+}
+
+.group-template-picker__head .group-form__label {
+  margin:0;
+}
+
+.group-template-picker p {
+  margin:8px 0 0;
+}
+
+.group-card--template {
+  cursor:default;
+  min-width:0;
+  overflow-wrap:anywhere;
+}
+
+.group-card--template .group-form__actions {
+  flex-wrap:wrap;
+  margin-top:auto;
+}

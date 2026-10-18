@@ -727,7 +727,7 @@ export function Sidebar({
         removeSession(sessionId, cwd);
         useProjectsStore.getState().removeSessionReferences(sessionId);
         if (result?.memoryCleanupWarning) {
-          onToast?.(`会话已删除，但自动摘要清理失败：${result.memoryCleanupWarning}`);
+          onToast?.(`会话已删除，部分关联数据清理未完成：${result.memoryCleanupWarning}`);
         }
       }
     } catch (e) {

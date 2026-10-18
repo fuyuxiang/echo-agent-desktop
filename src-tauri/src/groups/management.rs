@@ -151,32 +151,9 @@ pub struct TemplateMember {
 
 #[tauri::command]
 pub fn group_team_templates() -> Result<Vec<TeamTemplate>, String> {
-    let mut result = db()?.templates()?;
-    for team in crate::team_mcp::team_catalog()? {
-        result.push(TeamTemplate {
-            id: format!(
-                "session:{}:{}",
-                team.session_id.as_deref().unwrap_or("legacy"),
-                team.team_id
-            ),
-            name: team.team_id,
-            description: team.description.unwrap_or_default(),
-            members: team
-                .members
-                .into_iter()
-                .map(|member| TemplateMember {
-                    role: team.roles.get(&member.name).cloned().unwrap_or_default(),
-                    name: member.name,
-                    model_id: None,
-                })
-                .collect(),
-            source: "会话团队".into(),
-            coordinator_name: None,
-            coordinator_role: None,
-            default_model_id: None,
-        });
-    }
-    Ok(result)
+    // Session assignments are not saved templates. They can be reused from
+    // their owning conversation without polluting the template library.
+    db()?.templates()
 }
 #[tauri::command]
 pub fn group_team_save(group_id: String, name: String) -> Result<TeamTemplate, String> {

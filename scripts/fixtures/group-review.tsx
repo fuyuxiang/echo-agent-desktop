@@ -20,7 +20,7 @@ const callbacks = new Map<number, (event: unknown) => void>(), listeners = new M
 let counter = 0;
 const groups: Group[] = JSON.parse(sessionStorage.getItem("group-review") ?? "[]");
 const templates: TeamTemplate[] = JSON.parse(sessionStorage.getItem("group-review-templates") ?? "[]");
-let failNextSend = false, failNextDelete = false;
+let failNextSend = false, failNextDelete = false, failNextTemplates = false;
 const cleanupReceipts = new Map<string, {groupId:string;sessionIds:string[]}>();
 const changed = (group: Group) => {
   group.revision++; group.updatedAt = Date.now();
@@ -39,11 +39,15 @@ Object.assign(window, { __TAURI_EVENT_PLUGIN_INTERNALS__: { unregisterListener: 
     if (command === "group_list") return structuredClone(groups);
     if (command === "group_cleanup_pending") return [...cleanupReceipts.values()];
     if (command === "group_cleanup_ack") { cleanupReceipts.delete(args.groupId); return; }
-    if (command === "group_team_templates") return structuredClone(templates);
+    if (command === "group_team_templates") {
+      if (failNextTemplates) { failNextTemplates = false; throw new Error("隔离验收：模板暂不可读"); }
+      return structuredClone(templates);
+    }
     if (command === "group_team_save") {
       const group = groups.find(group => group.id === args.groupId)!;
-      const template: TeamTemplate = { id: crypto.randomUUID(), name: args.name, description: group.goal, source: "常用团队", members: group.members.filter(member => member.expert && !member.removed).map(member => ({name: member.name, role: member.role, modelId: member.modelId})), coordinatorName: null, coordinatorRole: "组织协作、汇总交付", defaultModelId: "local/mock" };
-      templates.push(template); sessionStorage.setItem("group-review-templates", JSON.stringify(templates)); return template;
+      const previous = templates.find(template => template.name === args.name);
+      const template: TeamTemplate = { id: previous?.id ?? crypto.randomUUID(), name: args.name, description: group.goal, source: "常用团队", members: group.members.filter(member => member.expert && !member.removed).map(member => ({name: member.name, role: member.role, modelId: member.modelId})), coordinatorName: null, coordinatorRole: "组织协作、汇总交付", defaultModelId: "local/mock" };
+      if (previous) templates.splice(templates.indexOf(previous), 1, template); else templates.push(template); sessionStorage.setItem("group-review-templates", JSON.stringify(templates)); return template;
     }
     if (command === "group_team_delete") { const index = templates.findIndex(team => team.id === args.templateId); if (index >= 0) templates.splice(index, 1); sessionStorage.setItem("group-review-templates", JSON.stringify(templates)); return; }
     if (command === "group_member_change") {
@@ -126,6 +130,7 @@ Object.assign(window, { __TAURI_EVENT_PLUGIN_INTERNALS__: { unregisterListener: 
     return {};
   },
 }, groupReview: {
+  failTemplates: () => { failNextTemplates = true; },
   failSend: () => { failNextSend = true; },
   failDelete: () => { failNextDelete = true; },
   seedMany: (count: number) => {

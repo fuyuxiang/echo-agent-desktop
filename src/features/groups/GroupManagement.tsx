@@ -1,54 +1,92 @@
-import { useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { ArrowLeft, Plus, Users } from "lucide-react";
 import { agentsList } from "@/lib/agent-client";
 import type { AgentEntry } from "@/lib/types";
 import { useAppDialog } from "@/components/AppDialog";
 import { groupTemplates, groupDeleteTeam, groupSaveTeam, groupMemberChange, groupDecision, groupDecisionChange, terminalWork, type TeamTemplate, type Group } from "./group-client";
 
-function templateSourceLabel(source: string): string {
-  if (source === "会话团队") return "来自会话团队";
-  if (source === "常用团队") return "专家团模板";
-  return source;
-}
+const readableError = (error: unknown) => String(error).replace(/^Error:\s*/, "");
 
-export function TemplatePicker({ onPick }: { onPick: (team: TeamTemplate) => void }) {
+function useTemplates() {
   const [teams, setTeams] = useState<TeamTemplate[]>([]);
   const [error, setError] = useState<string | null>(null);
-  useEffect(() => { void groupTemplates().then(setTeams).catch(error => setError(String(error))); }, []);
-  if (!teams.length) return error ? <p className="groups-muted">专家团模板暂不可读，仍可直接选择专家创建专家团。</p> : null;
-  return <label>使用专家团模板<select defaultValue="" onChange={event => { const team = teams.find(team => team.id === event.target.value); if (team) onPick(team); }}><option value="">自行选择专家</option>{teams.map(team => <option key={team.id} value={team.id}>{team.name} · {templateSourceLabel(team.source)}</option>)}</select></label>;
-}
-
-export function GroupTeams({ onBack, onUse }: { onBack: () => void; onUse: (team: TeamTemplate) => void }) {
-  const [teams, setTeams] = useState<TeamTemplate[]>([]), [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
   const generation = useRef(0);
-  const dialog = useAppDialog("group-templates");
-  const refresh = async () => {
+  const refresh = useCallback(async () => {
     const request = ++generation.current;
     setLoading(true);
-    try { const teams = await groupTemplates(); if (request === generation.current) { setTeams(teams); setError(null); } }
-    catch (error) { if (request === generation.current) setError(String(error)); }
-    finally { if (request === generation.current) setLoading(false); }
-  };
-  useEffect(() => { void refresh(); return () => { generation.current++; }; }, []);
+    try {
+      const teams = await groupTemplates();
+      if (request === generation.current) { setTeams(teams); setError(null); }
+    } catch (error) {
+      if (request === generation.current) setError(readableError(error));
+    } finally {
+      if (request === generation.current) setLoading(false);
+    }
+  }, []);
+  useEffect(() => { void refresh(); return () => { generation.current++; }; }, [refresh]);
+  return { teams, setTeams, error, loading, refresh };
+}
+
+export function TemplatePicker({ onPick, initialTemplateId = "" }: { onPick: (team: TeamTemplate | null) => void; initialTemplateId?: string }) {
+  const { teams, error, loading, refresh } = useTemplates();
+  const [selectedId, setSelectedId] = useState(initialTemplateId);
+  const [notice, setNotice] = useState<string | null>(null);
+  useEffect(() => {
+    if (!loading && !error && selectedId && !teams.some(team => team.id === selectedId)) {
+      setSelectedId(""); setNotice("所选模板已删除，已保留当前填写的配置，可继续调整并创建专家团。");
+    }
+  }, [teams, loading, error, selectedId]);
+  return <div className="group-template-picker">
+    <div className="group-template-picker__head"><span className="group-form__label">专家团模板（可选）</span><button type="button" className="groups-text-button" disabled={loading} onClick={() => void refresh()}>{loading ? "读取中…" : "刷新模板"}</button></div>
+    {loading && <p role="status" className="groups-muted">正在读取专家团模板…</p>}
+    {error && <p role="alert" className="groups-error">模板读取失败：{error}。{teams.length > 0 ? "当前显示上次读取的模板。" : ""}可刷新重试，或直接选择下方专家创建。</p>}
+    {teams.length > 0 && <label>使用专家团模板<select value={selectedId} disabled={loading} onChange={event => {
+      const team = teams.find(team => team.id === event.target.value) ?? null;
+      setSelectedId(team?.id ?? ""); setNotice(null); onPick(team);
+    }}><option value="">自行选择专家</option>{teams.map(team => <option key={team.id} value={team.id}>{team.name} · {team.members.length} 位专家</option>)}</select></label>}
+    {notice && <p role="status" className="groups-muted">{notice}</p>}
+    {!loading && !error && !teams.length && <p className="groups-muted">还没有保存的专家团模板，可直接选择下方专家创建。</p>}
+    {!loading && !error && teams.length > 0 && <p className="groups-muted">模板只包含已保存的成员、分工与模型。切回“自行选择专家”会清空模板带入的配置。</p>}
+  </div>;
+}
+
+export function GroupTeams({ onBack, onUse, onCreate }: { onBack: () => void; onUse: (team: TeamTemplate) => void; onCreate: () => void }) {
+  const { teams, setTeams, error, loading, refresh } = useTemplates();
+  const [experts, setExperts] = useState<string[] | null>(null);
+  const [expertError, setExpertError] = useState(false);
+  const expertGeneration = useRef(0);
+  const loadExperts = useCallback(async () => {
+    const request = ++expertGeneration.current;
+    try {
+      const entries = await agentsList();
+      if (request === expertGeneration.current) { setExperts(entries.filter(entry => entry.scope === "user").map(entry => entry.name)); setExpertError(false); }
+    } catch { if (request === expertGeneration.current) { setExperts(null); setExpertError(true); } }
+  }, []);
+  useEffect(() => { void loadExperts(); return () => { expertGeneration.current++; }; }, [loadExperts]);
+  const dialog = useAppDialog("group-templates");
   return <div className="groups-page">
     <button className="groups-back" onClick={onBack}><ArrowLeft size={16} />返回专家团</button>
-    <header className="groups-page__header"><div><h1>专家团模板</h1><p>保存成员、分工与模型，用于创建新的专家团。模板不包含聊天记录。</p></div></header>
-    {error && <p role="alert" className="groups-error">{error}</p>}
+    <header className="groups-page__header"><div><h1>专家团模板</h1><p>只展示你明确保存的协作组合，用于创建新的专家团。模板不包含聊天记录。</p></div><button className="btn btn--ghost" disabled={loading} onClick={() => { void refresh(); void loadExperts(); }}>{loading ? "读取中…" : "刷新模板"}</button></header>
+    {error && <p role="alert" className="groups-error">模板读取失败：{error}。请刷新重试。</p>}
     {loading && <p role="status">正在读取专家团模板…</p>}
-    {error && <button className="btn btn--ghost" disabled={loading} onClick={() => void refresh()}>重新读取模板</button>}
-    <div className="groups-grid">{teams.map(team => <section className="group-card" key={team.id}>
-      <span className="group-card__head"><strong>{team.name}</strong><small>{templateSourceLabel(team.source)}</small></span>
-      <p>{team.description || "围绕新目标，复用这组专家。"}</p><span className="group-card__members">{team.members.map(member => member.name).join(" · ")}</span>
-      <div className="group-form__actions">
-        {team.source === "常用团队" && <button className="btn btn--ghost" onClick={() => dialog.requestConfirmation({ title: `删除专家团模板“${team.name}”？`, description: "已经建立的专家团和专家配置会保留。", danger: true, confirmLabel: "删除模板", action: async () => {
-          await groupDeleteTeam(team.id); ++generation.current; setTeams(current => current.filter(item => item.id !== team.id)); await refresh();
-        } })}>删除模板</button>}
-        <button className="btn btn--primary" onClick={() => onUse(team)}>用此模板创建专家团</button>
-      </div>
-    </section>)}</div>
-    {!loading && !teams.length && !error && <div className="groups-empty"><Users size={32} /><h2>把合适的协作组合留下来</h2><p>在专家团的操作菜单或成员页选择“保存为模板”，下次就可以直接复用。</p></div>}
+    {expertError && <p role="status" className="groups-muted">暂时无法检查本地专家，创建时会重新核对。可刷新重试。</p>}
+    <div className="groups-grid">{teams.map(team => {
+      const missing = experts ? team.members.filter(member => !experts.includes(member.name)).map(member => member.name) : [];
+      return <section className="group-card group-card--template" key={team.id}>
+        <span className="group-card__head"><strong>{team.name}</strong><small>{team.members.length} 位专家</small></span>
+        <p>{team.description || "围绕新目标，复用这组专家。"}</p><span className="group-card__members">{team.members.map(member => member.name).join(" · ")}</span>
+        {!!missing.length && <div className="groups-error">缺少本地专家：{missing.join("、")}。创建时可移除失效成员并重新选择。</div>}
+        {!team.members.length && <div className="groups-muted">模板暂无成员，创建时请先选择专家。</div>}
+        <div className="group-form__actions">
+          <button className="btn btn--ghost" onClick={() => dialog.requestConfirmation({ title: `删除专家团模板“${team.name}”？`, description: "已经建立的专家团和专家配置会保留。", danger: true, confirmLabel: "删除模板", action: async () => {
+            await groupDeleteTeam(team.id); setTeams(current => current.filter(item => item.id !== team.id)); await refresh();
+          } })}>删除模板</button>
+          <button className="btn btn--primary" disabled={loading || !!error} onClick={() => onUse(team)}>用此模板创建专家团</button>
+        </div>
+      </section>;
+    })}</div>
+    {!loading && !teams.length && !error && <div className="groups-empty"><Users size={32} /><h2>把合适的协作组合留下来</h2><p>在专家团的操作菜单或成员页选择“保存为模板”，下次就可以直接复用。会话团队可从对应会话创建专家团。</p><button className="btn btn--primary" onClick={onCreate}><Plus size={16} />创建专家团</button></div>}
     {dialog.dialog}
   </div>;
 }

@@ -471,8 +471,57 @@ fn read_teams_from_disk() -> Result<HashMap<String, TeamInfo>, String> {
     let path = teams_file();
     with_team_store_access_at(&path, || load_teams_from_disk_at(&path))
 }
-pub(crate) fn team_catalog() -> Result<Vec<TeamInfo>, String> {
-    Ok(read_teams_from_disk()?.into_values().collect())
+/// Remove registry entries only; expert definitions belong to the user.
+/// Evaluate every predicate before saving, so an unreadable session store
+/// cannot turn a partial scan into permanent data loss.
+fn remove_teams_matching_at(
+    path: &Path,
+    mut should_remove: impl FnMut(&TeamInfo) -> Result<bool, String>,
+) -> Result<usize, String> {
+    if !path.try_exists().map_err(|error| error.to_string())? {
+        return Ok(0);
+    }
+    with_team_store_access_at(path, || {
+        let mut teams = load_teams_from_disk_at(path)?;
+        let mut removed = Vec::new();
+        for (key, team) in &teams {
+            if should_remove(team)? {
+                removed.push(key.clone());
+            }
+        }
+        for key in &removed {
+            teams.remove(key);
+        }
+        if !removed.is_empty() {
+            save_teams_to_disk_at(path, &teams)?;
+        }
+        Ok(removed.len())
+    })
+}
+
+pub(crate) fn forget_session(session_id: &str) -> Result<usize, String> {
+    validate_session_id(session_id)?;
+    let removed = remove_teams_matching_at(&teams_file(), |team| {
+        Ok(team.session_id.as_deref() == Some(session_id))
+    })?;
+    if removed > 0 {
+        notify_changed(session_id);
+    }
+    Ok(removed)
+}
+
+/// Upgrade repair runs before the Runtime accepts sessions. Inspect exact
+/// storage paths instead of the bounded UI catalog: archived sessions and
+/// sessions with damaged summaries must keep their team assignments.
+pub(crate) fn reconcile_orphaned_teams() -> Result<usize, String> {
+    remove_teams_matching_at(&teams_file(), |team| match &team.session_id {
+        Some(session) => {
+            echo_agent_runtime::session::persistence::session_history_paths(session, None)
+                .map(|paths| paths.is_empty())
+                .map_err(|error| format!("核对团队来源会话失败：{error}"))
+        }
+        None => Ok(false),
+    })
 }
 
 fn update_teams_at<T>(
@@ -1603,6 +1652,96 @@ mod tests {
             description: None,
             prompt_ids: Vec::new(),
         }
+    }
+
+    #[test]
+    fn session_cleanup_is_scoped_idempotent_and_keeps_expert_files() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("teams.json");
+        assert_eq!(remove_teams_matching_at(&path, |_| Ok(true)).unwrap(), 0);
+        assert!(!path.exists());
+        let mut teams = HashMap::new();
+        for session in [Some("deleted-session"), Some("other-session"), None] {
+            let mut team = test_team(&path, "same-name");
+            team.session_id = session.map(str::to_string);
+            std::fs::write(&team.members[0].file, "expert definition").unwrap();
+            teams.insert(team_key(session, &team.team_id), team);
+        }
+        save_teams_to_disk_at(&path, &teams).unwrap();
+        let remove = || {
+            remove_teams_matching_at(&path, |team| {
+                Ok(team.session_id.as_deref() == Some("deleted-session"))
+            })
+            .unwrap()
+        };
+        assert_eq!(remove(), 1);
+        assert_eq!(remove(), 0);
+        let remaining = load_teams_from_disk_at(&path).unwrap();
+        assert_eq!(remaining.len(), 2);
+        assert!(remaining.contains_key(&team_key(Some("other-session"), "same-name")));
+        assert!(remaining.contains_key("same-name"));
+        assert_eq!(
+            std::fs::read_to_string(dir.path().join("same-name.md")).unwrap(),
+            "expert definition"
+        );
+    }
+
+    #[test]
+    fn failed_team_reconciliation_preserves_the_entire_registry() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("teams.json");
+        let team = test_team(&path, "saved");
+        save_teams_to_disk_at(&path, &HashMap::from([("saved".into(), team)])).unwrap();
+        let before = std::fs::read(&path).unwrap();
+        assert!(
+            remove_teams_matching_at(&path, |_| Err("session storage unavailable".into())).is_err()
+        );
+        assert_eq!(std::fs::read(&path).unwrap(), before);
+    }
+
+    #[test]
+    fn upgrade_repair_uses_exact_history_and_preserves_legacy_teams() {
+        if std::env::var_os("ECHOAGENT_TEAM_REPAIR_TEST").is_none() {
+            let home = tempfile::tempdir().unwrap();
+            let status = std::process::Command::new(std::env::current_exe().unwrap())
+                .args([
+                    "--exact",
+                    "team_mcp::tests::upgrade_repair_uses_exact_history_and_preserves_legacy_teams",
+                ])
+                .env("ECHO_AGENT_HOME", home.path())
+                .env("ECHOAGENT_TEAM_REPAIR_TEST", "1")
+                .status()
+                .unwrap();
+            assert!(status.success());
+            return;
+        }
+        crate::paths::initialize_runtime_home().unwrap();
+        let path = teams_file();
+        let mut teams = HashMap::new();
+        for session in [
+            Some("gone"),
+            Some("damaged-summary"),
+            Some("archived"),
+            None,
+        ] {
+            let mut team = test_team(&path, "same-name");
+            team.session_id = session.map(str::to_string);
+            teams.insert(team_key(session, &team.team_id), team);
+        }
+        for session in ["damaged-summary", "archived"] {
+            let dir = crate::paths::echo_agent_home_dir()
+                .join("sessions/old-workspace")
+                .join(session);
+            std::fs::create_dir_all(&dir).unwrap();
+            std::fs::write(dir.join("summary.json"), "unreadable legacy summary").unwrap();
+        }
+        save_teams_to_disk_at(&path, &teams).unwrap();
+        assert_eq!(reconcile_orphaned_teams().unwrap(), 1);
+        assert_eq!(reconcile_orphaned_teams().unwrap(), 0);
+        assert_eq!(read_teams_from_disk().unwrap().len(), 3);
+        assert_eq!(forget_session("archived").unwrap(), 1);
+        assert_eq!(forget_session("archived").unwrap(), 0);
+        assert_eq!(read_teams_from_disk().unwrap().len(), 2);
     }
 
     /// JSON Schema 健全性：三个工具的 inputSchema 都必须是 object 类型且

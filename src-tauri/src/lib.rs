@@ -756,6 +756,9 @@ pub fn run() {
 
             // Team MCP server（127.0.0.1 streamable-http）：同步 bind 后台 accept。
             // 必须在任何 new_session 之前 —— 端口即刻写入 BOUND_PORT 供传参。
+            if let Err(error) = team_mcp::reconcile_orphaned_teams() {
+                tracing::warn!(%error, "session team repair failed; retry on next startup");
+            }
             team_mcp::serve();
             team_mcp::set_app_handle(app.handle().clone());
             if let Err(error)=groups::initialize(app.handle().clone()) {tracing::error!(%error,"group service initialization failed; existing data retained");}

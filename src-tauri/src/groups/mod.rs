@@ -695,7 +695,7 @@ pub(super) async fn delete_group_data(
         }
         if let Some(error) = result.memory_cleanup_warning {
             return Err(format!(
-                "内部摘要清理未完成，专家团记录已保留，可重试删除：{error}"
+                "内部会话关联数据清理未完成，专家团记录已保留，可重试删除：{error}"
             ));
         }
     }
