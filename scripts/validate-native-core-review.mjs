@@ -1,3 +1,4 @@
+import { cleanNativeReviewEnvironment } from "./lib/native-review-isolation.mjs";
 import { DEFAULT_REVIEW_MODEL_ID, PRIVATE_REVIEW_MODEL_ID, seedReviewModel, redactReviewModelSecrets, captureReviewModelLogs } from './lib/native-review-model.mjs';
 import { nativeReviewOutput } from './lib/native-review-output.mjs';
 import { activateNativeReviewWindow, assertNativeReviewSessionUnlocked } from './lib/native-review-window.mjs';
@@ -214,9 +215,8 @@ export function physical(home, expected, fixtures, first) {
     projectFork: { sessionId: expected.projectForkedSessionId, historySha256: projectFork.historySha256, currentProjectContractInActualHistory: true },
     deletedSessionAbsent: true, projectSha256: sha(ordinary(join(home, 'echoagent-projects.json'), home)), fixtures: fixtureFiles };
 }
-const foreignSnapshot = () => ['.claude/settings.json', '.claude/settings.local.json', '.claude/plugins/known_marketplaces.json', '.echo-agent/config.toml']
-  .map((name) => { const path = join(homedir(), name); return { name, exists: existsSync(path),
-    ...(existsSync(path) ? { sha256: sha(readFileSync(path)) } : {}) }; });
+// Isolation is established by controlled marker tests, never by reading private files.
+const foreignSnapshot = () => [];
 const managed = (child) => { const s = { child, ended: false, error: null }; s.exit = new Promise((accept) => {
   child.once('error', (e) => { s.error = e; s.ended = true; accept(); }); child.once('exit', () => { s.ended = true; accept(); });
 }); return s; };
@@ -246,7 +246,7 @@ export async function runNativeCoreReview({ executable, resourceOnly = false } =
   if (!resourceOnly) { process.once('SIGINT', stop); process.once('SIGTERM', stop); }
   try {
     if (resourceOnly) { result.resourcesPrepared = true; return result; }
-    const env = { ...process.env, GROK_HOME: legacy, ECHO_DESKTOP_REVIEW: '1', ECHO_DESKTOP_REVIEW_CORE: '1' };
+    const env = { ...cleanNativeReviewEnvironment(process.env), GROK_HOME: legacy, ECHO_DESKTOP_REVIEW: '1', ECHO_DESKTOP_REVIEW_CORE: '1' };
     delete env.ECHO_AGENT_HOME;
     for (const key of Object.keys(env)) if (key.startsWith('ECHO_DESKTOP_REVIEW_') && key !== 'ECHO_DESKTOP_REVIEW_CORE') delete env[key];
     for (const phase of ['first-launch', 'restart']) {

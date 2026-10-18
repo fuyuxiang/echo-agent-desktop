@@ -105,8 +105,8 @@ export function registerDocumentArtifact(
   if (typeof window !== "undefined") {
     try {
       window.localStorage.setItem(STORAGE_KEY, JSON.stringify(next));
-      window.dispatchEvent(new CustomEvent(ARTIFACT_CATALOG_EVENT));
-    } catch { /* Export succeeded; local catalog persistence is optional. */ }
+    } catch { /* The native session history already owns this receipt. */ }
+    window.dispatchEvent(new CustomEvent(ARTIFACT_CATALOG_EVENT, { detail: { sessionId, source: "document-export" } }));
   }
   return artifact;
 }
@@ -153,9 +153,39 @@ async function resolveArtifactPaths(sessionId: string, items: TaskArtifact[]): P
     } catch { resolved.push(item); } // Deleted/offline outputs retain their original identity.
   }
   if (identityGeneration.get(sessionId) !== generation) return;
-  const next = mergeTaskArtifacts(resolved, loadTaskArtifacts().filter((item) => item.sessionId !== sessionId));
+  // An async identity response must not replace a newer session snapshot or
+  // resurrect outputs removed by rewind. Enrich only rows that still match.
+  const current = loadTaskArtifacts();
+  const next = mergeTaskArtifacts(current.map(item => {
+    if (item.sessionId !== sessionId) return item;
+    return resolved.find(old => old.id === item.id && old.path === item.path && old.updatedAt === item.updatedAt) ?? item;
+  }));
   try {
     window.localStorage.setItem(STORAGE_KEY, JSON.stringify(next));
     window.dispatchEvent(new CustomEvent(ARTIFACT_CATALOG_EVENT));
   } catch { /* The live transcript remains available. */ }
+}
+
+export interface DurableSessionExport {
+  receipt: DocumentExportReceipt;
+  title: string;
+  createdAt: number;
+}
+
+/** Read the native session history; the local catalog is a search cache only. */
+export async function loadSessionDocumentArtifacts(sessionId: string): Promise<SessionArtifact[]> {
+  const entries = await invoke<DurableSessionExport[]>("session_exports_list", { sessionId });
+  return (entries ?? []).map(({ receipt, title }) => ({
+    id: `document-export:${receipt.sha256}:${receipt.path}`,
+    path: receipt.path, kind: "document_export", title: `${title} · ${receipt.format.toUpperCase()}`,
+    toolCallId: `document-export:${receipt.sha256}`, status: "completed", verifiedOutput: true,
+  }));
+}
+
+/** Restore only the clicked manual export's exact-file capability after restart. */
+export async function authorizeDocumentArtifact(sessionId: string, artifact: SessionArtifact): Promise<void> {
+  if (artifact.kind !== "document_export" || !artifact.toolCallId.startsWith("document-export:")) return;
+  await invoke("session_export_authorize", {
+    sessionId, path: artifact.path, sha256: artifact.toolCallId.slice("document-export:".length),
+  });
 }

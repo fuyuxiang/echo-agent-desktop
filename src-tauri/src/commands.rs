@@ -2159,6 +2159,12 @@ pub(crate) async fn forget_deleted_session(
     crate::automation::forget_session(session_id).await;
     crate::org_mcp::forget_session_selection(session_id).await;
     crate::permission_config::forget_session_permission_mode(session_id);
+    if let Err(error) = crate::knowledge_traces::forget_session(session_id) {
+        memory_cleanup_warning = Some(format!("{}知识来源记录清理失败：{error}", memory_cleanup_warning.map(|e| format!("{e}；")).unwrap_or_default()));
+    }
+    if let Err(error) = crate::session_artifacts::forget_session(session_id) {
+        memory_cleanup_warning = Some(format!("{}会话交付物记录清理失败：{error}", memory_cleanup_warning.map(|e| format!("{e}；")).unwrap_or_default()));
+    }
     if let Err(error) = crate::meta::clear_session_metadata(session_id) {
         tracing::warn!(%error, %session_id, "session deleted but sidecar metadata cleanup failed");
         memory_cleanup_warning = Some(match memory_cleanup_warning {
@@ -2284,6 +2290,8 @@ pub fn agent_set_session_status(
 
 /// Bind an expert to a session (EchoAgent-only state). Returns `true` on success.
 #[tauri::command]
+// Flat arguments preserve the existing Tauri IPC contract.
+#[allow(clippy::too_many_arguments)]
 pub fn agent_set_session_expert(
     state: State<'_, AppState>,
     session_id: String,
@@ -2291,6 +2299,8 @@ pub fn agent_set_session_expert(
     expert_name: String,
     source: String,
     avatar_local: Option<String>,
+    expert_path: Option<String>,
+    expected_raw: Option<String>,
 ) -> Result<bool, String> {
     // Requiring a live backend binding prevents a forged renderer payload from
     // attaching metadata to arbitrary historical session ids. Expert fields,
@@ -2299,7 +2309,8 @@ pub fn agent_set_session_expert(
     if !valid_session_id(&session_id) {
         return Err("会话 ID 无效或过长".into());
     }
-    state.session_workspace(&session_id)?;
+    let cwd = state.session_workspace(&session_id)?;
+    crate::agents_store::require_expert_snapshot(&cwd, &expert_name, expert_path.as_deref().ok_or("请选择有效的本地专家")?, expected_raw.as_deref().ok_or("专家定义版本缺失，请重新选择")?)?;
     let binding = match source.as_str() {
         "local" => crate::agents_store::require_listed_local_expert(
             &expert_id,

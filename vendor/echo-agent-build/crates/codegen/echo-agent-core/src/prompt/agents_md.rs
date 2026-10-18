@@ -167,7 +167,7 @@ async fn read_agents_config_with_options(
         workspace_user_dir,
         compat,
         echo_agent_tools::util::echo_agent_home::echo_agent_home(),
-        dirs::home_dir(),
+        echo_agent_config::discovery_home_dir(),
     )
     .await
 }

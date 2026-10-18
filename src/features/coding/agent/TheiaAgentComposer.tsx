@@ -162,7 +162,7 @@ export function TheiaAgentComposer({
             <button type="button" onClick={onOpenSettings}>前往设置</button>
           </div>
         )}
-        {!task && startError && (
+        {startError && (
           <div className="coding-agent__warning" role="alert"><AlertTriangle size={13} />{startError}</div>
         )}
         <div className="coding-agent__composer-tools">

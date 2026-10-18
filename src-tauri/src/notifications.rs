@@ -76,6 +76,9 @@ impl NotificationKind {
 pub struct NotificationEntry {
     /// Monotonic id (timestamp-based).
     pub id: u64,
+    /// Stable producer identity for crash-safe local append-once (old JSON omits it).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub dedupe_key: Option<String>,
     pub kind: NotificationKind,
     /// ISO timestamp.
     pub at: String,
@@ -333,6 +336,7 @@ fn validate_entry(entry: &NotificationEntry) -> Result<(), String> {
                 || id.chars().count() > MAX_REQUEST_ID_CHARS
                 || id.chars().any(char::is_control)
         })
+        || entry.dedupe_key.as_deref().is_some_and(|key| key.is_empty() || key.len() > 512)
         || !valid_severity(&entry.severity)
     {
         return Err("通知记录包含超限或非法字段".into());
@@ -418,8 +422,68 @@ pub fn append_with_target(
     automation_id: Option<&str>,
     severity: &str,
 ) -> Result<u64, String> {
-    let path = store_path();
-    update_store_at(&path, |store| {
+    append_once_at(
+        &store_path(),
+        kind,
+        title,
+        body,
+        session_id,
+        request_id,
+        automation_id,
+        severity,
+        None,
+    )
+}
+
+/// Automation record identity is distinct from permission/request navigation.
+pub(crate) fn append_automation_once(
+    record_id: &str,
+    kind: NotificationKind,
+    title: &str,
+    body: Option<&str>,
+    session_id: Option<&str>,
+    automation_id: &str,
+    severity: &str,
+) -> Result<u64, String> {
+    let key = format!("automation-terminal:{record_id}");
+    append_once_at(
+        &store_path(),
+        kind,
+        title,
+        body,
+        session_id,
+        None,
+        Some(automation_id),
+        severity,
+        Some(&key),
+    )
+}
+
+#[allow(clippy::too_many_arguments)]
+fn append_once_at(
+    path: &Path,
+    kind: NotificationKind,
+    title: &str,
+    body: Option<&str>,
+    session_id: Option<&str>,
+    request_id: Option<&str>,
+    automation_id: Option<&str>,
+    severity: &str,
+    dedupe_key: Option<&str>,
+) -> Result<u64, String> {
+    if dedupe_key.is_some_and(|key| key.is_empty() || key.len() > 512) {
+        return Err("通知幂等标识无效".into());
+    }
+    update_store_at(path, |store| {
+        if let Some(key) = dedupe_key {
+            if let Some(entry) = store
+                .entries
+                .iter()
+                .find(|entry| entry.dedupe_key.as_deref() == Some(key))
+            {
+                return Ok(entry.id);
+            }
+        }
         let id = match store.entries.iter().map(|entry| entry.id).max() {
             Some(u64::MAX) => return Err("通知记录 id 已耗尽，请清空通知后重试".into()),
             Some(last_id) => last_id + 1,
@@ -430,6 +494,7 @@ pub fn append_with_target(
         };
         store.entries.push(NotificationEntry {
             id,
+            dedupe_key: dedupe_key.map(str::to_string),
             kind,
             at: chrono::Local::now().to_rfc3339(),
             title: normalize_title(title),
@@ -461,7 +526,6 @@ pub fn append_with_target(
         Ok(id)
     })
 }
-
 // ---------- Tauri commands ----------
 
 /// Append a notification (frontend calls this when it receives a EchoAgent event).
@@ -1380,6 +1444,7 @@ mod tests {
     #[test]
     fn entry_serde_roundtrip() {
         let entry = NotificationEntry {
+            dedupe_key: None,
             id: 42,
             kind: NotificationKind::Permission,
             at: "2026-07-01T10:00:00+08:00".into(),
@@ -1744,5 +1809,55 @@ mod tests {
             &message,
         );
         assert_eq!(discord["allowed_mentions"]["parse"], serde_json::json!([]));
+    }
+    #[test]
+    fn automation_inbox_append_once_survives_reload_and_keeps_normal_notifications() {
+        let home = tempfile::tempdir().unwrap();
+        let path = home.path().join("notifications.json");
+        let first = append_once_at(
+            &path,
+            NotificationKind::SessionComplete,
+            "done",
+            Some("result"),
+            Some("session"),
+            None,
+            Some("automation"),
+            "info",
+            Some("automation-terminal:record"),
+        )
+        .unwrap();
+        // A restart loses all process state; only the file is used for the next claim.
+        let second = append_once_at(
+            &path,
+            NotificationKind::SessionComplete,
+            "done",
+            Some("result"),
+            Some("session"),
+            None,
+            Some("automation"),
+            "info",
+            Some("automation-terminal:record"),
+        )
+        .unwrap();
+        assert_eq!(first, second);
+        append_once_at(
+            &path,
+            NotificationKind::SessionComplete,
+            "ordinary followup",
+            None,
+            Some("session"),
+            None,
+            None,
+            "info",
+            None,
+        )
+        .unwrap();
+        let store = read_store_at(&path).unwrap();
+        assert_eq!(store.entries.len(), 2);
+        assert_eq!(store.entries[0].request_id, None);
+        assert_eq!(
+            store.entries[0].dedupe_key.as_deref(),
+            Some("automation-terminal:record")
+        );
     }
 }

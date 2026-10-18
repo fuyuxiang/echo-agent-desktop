@@ -9,6 +9,7 @@ import { usePermissionStore } from "@/stores/permission-store";
 import { useQuestionStore } from "@/stores/question-store";
 
 import { useTaskStore } from "../store/task-store";
+import { prepareWorkspaceEditor } from "./workspace-editor";
 import { isBusyPhase } from "./phase";
 import { useTaskLifecycle } from "./task-lifecycle";
 import { codingApi, onPhaseChanged } from "./tauri-api";
@@ -25,6 +26,11 @@ interface RuntimeState {
   settling: Record<string, boolean>;
   activeRunIds: Record<string, string>;
   verificationBatches: Record<string, string>;
+  editorBlocks: Record<string, string>;
+  stopping: Record<string, boolean>;
+  actionEpochs: Record<string, number>;
+  setStopping: (root: string, taskId: string, value: boolean) => void;
+  setEditorBlock: (root: string, taskId: string, message: string | null) => void;
   claimVerificationBatch: (root: string, taskId: string) => string | null;
   releaseVerificationBatch: (root: string, taskId: string, owner: string) => void;
   track: (root: string, taskId: string) => void;
@@ -42,6 +48,21 @@ export const useCodingRuntimeStore = create<RuntimeState>((set, get) => ({
   settling: {},
   activeRunIds: {},
   verificationBatches: {},
+  editorBlocks: {},
+  stopping: {},
+  actionEpochs: {},
+  setStopping: (root, taskId, value) => set(state => ({
+    stopping: { ...state.stopping, [codingRuntimeKey(root, taskId)]: value },
+    actionEpochs: value && !state.stopping[codingRuntimeKey(root, taskId)]
+      ? { ...state.actionEpochs, [codingRuntimeKey(root, taskId)]: (state.actionEpochs[codingRuntimeKey(root, taskId)] ?? 0) + 1 }
+      : state.actionEpochs,
+  })),
+  setEditorBlock: (root, taskId, message) => set((state) => {
+    const editorBlocks = { ...state.editorBlocks };
+    const key = codingRuntimeKey(root, taskId);
+    if (message) editorBlocks[key] = message; else delete editorBlocks[key];
+    return { editorBlocks };
+  }),
   claimVerificationBatch: (root, taskId) => {
     const key = codingRuntimeKey(root, taskId);
     if (get().verificationBatches[key]) return null;
@@ -115,14 +136,21 @@ function CodingTaskRuntime({ root, taskId }: TrackedTask) {
   const [restoring, setRestoring] = useState(false);
   const refreshGeneration = useRef(0);
   const verificationKey = useRef<string | null>(null);
-  const followupKey = useRef<string | null>(null);
-  const repairKey = useRef<string | null>(null);
+  const agentActionKey = useRef<string | null>(null);
+  const mounted = useRef(true);
+  const latestTask = useRef(task);
+  latestTask.current = task;
+  const stopping = useCodingRuntimeStore(state => Boolean(state.stopping[codingRuntimeKey(root, taskId)]));
+  const canAct = () => mounted.current && !useCodingRuntimeStore.getState().stopping[codingRuntimeKey(root, taskId)];
+  useEffect(() => { mounted.current = true; return () => { mounted.current = false; }; }, []);
   const verificationClaimed = useCodingRuntimeStore((state) => Boolean(state.verificationBatches[codingRuntimeKey(root, taskId)]));
   const refresh = useCallback(async () => {
     const generation = ++refreshGeneration.current;
     const result = await codingApi.orchestratorState(root, taskId);
     if (generation !== refreshGeneration.current) return;
+    latestTask.current = result.task;
     setTask(result.task);
+    if (!isBusyPhase(result.task.phase)) useCodingRuntimeStore.getState().setStopping(root, taskId, false);
     setProblems(result.problems);
     const selected = useTaskStore.getState();
     if (selected.root === root && selected.task?.id === taskId) {
@@ -137,6 +165,7 @@ function CodingTaskRuntime({ root, taskId }: TrackedTask) {
     let unlisten: (() => void) | undefined;
     void onPhaseChanged((event) => {
       if (!disposed && event.root === root && event.taskId === taskId) {
+        latestTask.current = null; // Invalidate pending admissions before asynchronous refresh.
         void refresh().catch(() => undefined);
       }
     }).then((fn) => { if (disposed) fn(); else unlisten = fn; });
@@ -181,22 +210,48 @@ function CodingTaskRuntime({ root, taskId }: TrackedTask) {
   }, [refresh, root, sessionId, taskId]);
 
   useEffect(() => {
-    if (!task || task.phase !== "verifying" || settling || verificationClaimed) return;
+    if (!task || task.phase !== "verifying" || settling || verificationClaimed || stopping || streaming || transcript?.pendingSendNowPromptId) return;
     const key = `${root}:${taskId}:${task.updatedAt}`;
     if (verificationKey.current === key) return;
     const owner = useCodingRuntimeStore.getState().claimVerificationBatch(root, taskId);
     if (!owner) return;
     verificationKey.current = key;
+    let batchKey = key;
+    const epoch = useCodingRuntimeStore.getState().actionEpochs[codingRuntimeKey(root, taskId)] ?? 0;
+    const allowed = () => {
+      const live = task.sessionId ? useSessionStore.getState().transcripts[task.sessionId] : undefined;
+      return canAct() && !live?.streamingMessageId && !live?.pendingSendNowPromptId
+        && epoch === (useCodingRuntimeStore.getState().actionEpochs[codingRuntimeKey(root, taskId)] ?? 0);
+    };
     void (async () => {
       try {
+        try {
+          await prepareWorkspaceEditor(root);
+          if (!allowed() || latestTask.current?.phase !== "verifying") return;
+          useCodingRuntimeStore.getState().setEditorBlock(root, taskId, null);
+        } catch (error) {
+          if (!allowed() || latestTask.current?.phase !== "verifying") return;
+          useCodingRuntimeStore.getState().setEditorBlock(root, taskId, `等待保存后验证：${String(error).replace(/^Error:\s*/, "")}`);
+          // Let the editor's normal phase guard accept the user's save. No
+          // command or verification evidence is created by this interruption.
+          await codingApi.reportInterrupted(root, taskId, "paused");
+          await refresh();
+          return;
+        }
         const detected = await codingApi.detectCommands(root);
         const commands = mergeTaskVerificationCommands(detected, task);
+        if (!allowed() || latestTask.current?.phase !== "verifying") return;
+        const current = await codingApi.orchestratorState(root, taskId);
+        if (!allowed()) return;
+        if (current.task.phase !== "verifying" || current.task.updatedAt !== task.updatedAt) { await refresh(); return; }
         // Plan-declared commands require the foreground confirmation dialog.
         if (commands.some((command) => command.requiresApproval)) return;
-        const started = await codingApi.beginVerification(root, taskId);
-        verificationKey.current = `${root}:${taskId}:${started.updatedAt}`;
+        const started = await codingApi.beginVerification(root, taskId, task.updatedAt);
+        batchKey = `${root}:${taskId}:${started.updatedAt}`;
+        verificationKey.current = batchKey;
         await refresh();
         for (const command of commands) {
+          if (!allowed() || latestTask.current?.phase !== "verifying") return;
           const runId = crypto.randomUUID();
           useCodingRuntimeStore.getState().setActiveRunId(root, taskId, runId);
           const record = await codingApi.runVerification(root, taskId, command.kind, command.command, undefined, runId);
@@ -204,48 +259,89 @@ function CodingTaskRuntime({ root, taskId }: TrackedTask) {
           if (record.status === "cancelled") return;
           if (record.status !== "passed") break;
         }
+        if (!allowed() || latestTask.current?.phase !== "verifying") return;
         await codingApi.reportVerification(root, taskId);
         await refresh();
       } catch (error) {
+        if (!allowed() || latestTask.current?.phase !== "verifying") return;
         await codingApi.reportStartFailed(root, taskId, `自动验证未能完成：${String(error).replace(/^Error:\s*/, "")}`).catch(() => undefined);
         await refresh().catch(() => undefined);
       } finally {
+        if (!allowed() && verificationKey.current === batchKey) verificationKey.current = null;
         useCodingRuntimeStore.getState().setActiveRunId(root, taskId, null);
         useCodingRuntimeStore.getState().releaseVerificationBatch(root, taskId, owner);
       }
     })();
-  }, [refresh, root, settling, task, taskId, verificationClaimed]);
+  }, [refresh, root, settling, task, taskId, verificationClaimed, stopping, streaming, transcript?.pendingSendNowPromptId]);
 
   useEffect(() => {
-    if (!task?.nextAction || !sessionId || !transcript || restoring || streaming || settling || awaitingPermission || awaitingQuestion) return;
-    const key = `${task.id}:${task.updatedAt}:${task.nextAction}`;
-    if (followupKey.current === key) return;
-    const activeNode = task.taskNodes.find((node) => node.status === "running");
-    if (task.nextAction === "continue_node" && !activeNode) {
-      followupKey.current = key;
-      void codingApi.reportStartFailed(root, taskId, "调度器要求继续执行，但没有运行中的节点").then(refresh);
-      return;
-    }
-    followupKey.current = key;
-    const text = task.nextAction === "revise_plan"
-      ? "正在修订执行计划" : `继续执行 ${activeNode?.planKey ?? "下一节点"}`;
-    const prompt = task.nextAction === "revise_plan"
-      ? buildPlanRevisionInstruction(task) : buildNodeContinuationInstruction(task, activeNode!);
-    if (!beginAgentTurn({ sessionId, promptText: prompt, displayText: text, allowBackgroundSession: true })) {
-      void codingApi.reportStartFailed(root, taskId, "Agent 未能接收自动续跑指令").then(refresh);
-    }
-  }, [awaitingPermission, awaitingQuestion, refresh, restoring, root, sessionId, settling, streaming, task, taskId, transcript]);
-
-  useEffect(() => {
-    if (task?.phase !== "repairing" || !sessionId || !transcript || restoring || streaming || settling || awaitingPermission || awaitingQuestion) return;
-    const key = `${task.id}:${task.updatedAt}`;
-    if (repairKey.current === key) return;
-    repairKey.current = key;
-    const prompt = repairInstruction(problems);
-    if (!beginAgentTurn({ sessionId, promptText: prompt, displayText: prompt, allowBackgroundSession: true })) {
-      void codingApi.reportStartFailed(root, taskId, "Agent 未能接收修复指令").then(refresh);
-    }
-  }, [awaitingPermission, awaitingQuestion, problems, refresh, restoring, root, sessionId, settling, streaming, task, taskId, transcript]);
+    if (!task || !["discovering", "implementing", "repairing"].includes(task.phase) || (!task.nextAction && task.phase !== "repairing") || !sessionId || !transcript
+      || restoring || streaming || transcript.pendingSendNowPromptId || settling || awaitingPermission || awaitingQuestion || stopping) return;
+    const key = JSON.stringify([task.id, task.updatedAt, task.phase, task.nextAction]);
+    if (agentActionKey.current === key) return;
+    let cancelled = false;
+    let dispatched = false;
+    const epoch = useCodingRuntimeStore.getState().actionEpochs[codingRuntimeKey(root, taskId)] ?? 0;
+    const current = () => {
+      const live = latestTask.current;
+      const state = useSessionStore.getState().transcripts[sessionId];
+      return !cancelled && canAct() && epoch === (useCodingRuntimeStore.getState().actionEpochs[codingRuntimeKey(root, taskId)] ?? 0) && live?.updatedAt === task.updatedAt && live.phase === task.phase
+        && live.nextAction === task.nextAction && live.sessionId === sessionId
+        && Boolean(state) && !state.streamingMessageId && !state.pendingSendNowPromptId && !(usePermissionStore.getState().queues[sessionId]?.length)
+        && !(useQuestionStore.getState().queues[sessionId]?.length);
+    };
+    const confirmCurrent = async () => {
+      if (!current()) return false;
+      const native = await codingApi.orchestratorState(root, taskId);
+      if (!current()) return false;
+      if (native.task.updatedAt !== task.updatedAt || native.task.phase !== task.phase
+        || native.task.nextAction !== task.nextAction || native.task.sessionId !== sessionId) {
+        await refresh();
+        return false;
+      }
+      return true;
+    };
+    agentActionKey.current = key;
+    void (async () => {
+      try {
+        const activeNode = task.taskNodes.find(node => node.status === "running");
+        if (task.nextAction === "continue_node" && !activeNode) {
+          if (await confirmCurrent()) await codingApi.reportStartFailed(root, taskId, "调度器要求继续执行，但没有运行中的节点");
+          await refresh();
+          return;
+        }
+        try { await prepareWorkspaceEditor(root); }
+        catch (error) {
+          if (!(await confirmCurrent())) return;
+          useCodingRuntimeStore.getState().setEditorBlock(root, taskId, `等待保存后继续：${String(error).replace(/^Error:\s*/, "")}`);
+          await codingApi.reportInterrupted(root, taskId, "paused");
+          await refresh();
+          return;
+        }
+        if (!(await confirmCurrent())) return;
+        const text = task.nextAction === "revise_plan" ? "正在修订执行计划"
+          : task.nextAction === "continue_node" ? `继续执行 ${activeNode?.planKey ?? "下一节点"}` : repairInstruction(problems);
+        const prompt = task.nextAction === "revise_plan" ? buildPlanRevisionInstruction(task)
+          : task.nextAction === "continue_node" ? buildNodeContinuationInstruction(task, activeNode!) : text;
+        useCodingRuntimeStore.getState().setEditorBlock(root, taskId, null);
+        dispatched = true;
+        if (!beginAgentTurn({ sessionId, promptText: prompt, displayText: text, allowBackgroundSession: true })) {
+          if (current()) await codingApi.reportStartFailed(root, taskId, "Agent 未能接收自动续跑指令");
+          await refresh();
+        }
+      } catch (error) {
+        if (current()) {
+          useCodingRuntimeStore.getState().setEditorBlock(root, taskId, `自动续跑尚未启动，请重试：${String(error).replace(/^Error:\s*/, "")}`);
+          await codingApi.reportStartFailed(root, taskId, "自动续跑准备失败").catch(() => undefined);
+          await refresh().catch(() => undefined);
+        }
+      }
+    })();
+    return () => {
+      cancelled = true;
+      if (!dispatched && agentActionKey.current === key) agentActionKey.current = null;
+    };
+  }, [awaitingPermission, awaitingQuestion, problems, refresh, restoring, root, sessionId, settling, stopping, streaming, task, taskId, transcript]);
 
   return null;
 }

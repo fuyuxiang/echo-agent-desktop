@@ -2605,7 +2605,7 @@ mod tests {
     }
     /// Project dir under $HOME so `is_project_dir` passes; None in sandboxes or git-repo homes.
     fn home_project_dir() -> Option<tempfile::TempDir> {
-        let home = dirs::home_dir()?;
+        let home = echo_agent_config::discovery_home_dir()?;
         if home.ancestors().any(|p| p.join(".git").exists()) {
             return None;
         }

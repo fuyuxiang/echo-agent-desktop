@@ -7,7 +7,7 @@ import { PluginsPanel } from "../PluginsPanel";
 import { useSessionStore } from "@/stores/session-store";
 
 const api = vi.hoisted(() => ({
-  agentsList: vi.fn(), skillsList: vi.fn(), pluginsList: vi.fn(), pluginsAction: vi.fn(),
+  agentsList: vi.fn(), skillsList: vi.fn(), internalReload: vi.fn(), pluginsList: vi.fn(), pluginsAction: vi.fn(),
   mcpList: vi.fn(), mcpToggle: vi.fn(), mcpConfigPath: vi.fn(), mcpConfigRead: vi.fn(), mcpConfigSave: vi.fn(),
   onMcpStatusEvent: vi.fn(),
   listenOrgSkillsChanged: vi.fn(),
@@ -31,6 +31,7 @@ describe("统一扩展管理的真实页面交互", () => {
     useSessionStore.getState().setSession(null);
     api.agentsList.mockResolvedValue([expert]);
     api.skillsList.mockResolvedValue([skill]);
+    api.internalReload.mockResolvedValue(undefined);
     api.pluginsList.mockResolvedValue({ plugins: [plugin] });
     api.pluginsAction.mockResolvedValue({ status: "success" });
     api.mcpList.mockResolvedValue([connector]);
@@ -75,11 +76,19 @@ describe("统一扩展管理的真实页面交互", () => {
     api.skillsList.mockResolvedValueOnce([skill]).mockRejectedValueOnce(new Error("目录暂不可用")).mockResolvedValueOnce([skill]);
     render(<SkillsTab pills={null} />);
     await screen.findByText("测试技能");
-    fireEvent.click(screen.getByRole("button", { name: "刷新" }));
-    expect(await screen.findByRole("alert")).toHaveTextContent("下方保留上次加载的结果");
+    const refresh = screen.getByRole("button", { name: "刷新" });
+    await waitFor(() => expect(refresh).toBeEnabled());
+    fireEvent.click(refresh);
+    expect(await screen.findByRole("alert")).toHaveTextContent("目录暂不可用");
+    expect(screen.getByRole("alert")).toHaveTextContent("下方保留上次加载的结果");
     expect(screen.getByText("测试技能")).toBeInTheDocument();
-    fireEvent.click(screen.getByRole("button", { name: "重试" }));
+    const retry = screen.getByRole("button", { name: "重试" });
+    await waitFor(() => expect(retry).toBeEnabled());
+    fireEvent.click(retry);
     await waitFor(() => expect(screen.queryByRole("alert")).toBeNull());
+    expect(api.internalReload).toHaveBeenCalledTimes(2);
+    expect(api.internalReload).toHaveBeenLastCalledWith("skills");
+    expect(api.skillsList).toHaveBeenCalledTimes(3);
   });
 
   it("连接器页面支持无会话启停，继续调用原持久化接口", async () => {

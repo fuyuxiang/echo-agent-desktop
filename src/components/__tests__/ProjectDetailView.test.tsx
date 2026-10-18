@@ -1,10 +1,13 @@
 import { describe, expect, it, vi } from "vitest";
-import { act, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { act, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { ProjectDetailView } from "../ProjectDetailView";
 import { useProjectsStore, type ProjectMeta } from "@/stores/projects-store";
 import { useSessionsStore } from "@/stores/sessions-store";
+import { projectAssetsUse } from "@/lib/agent-client";
 
 vi.mock("@/lib/agent-client", () => ({
+  projectAssetsUse: vi.fn().mockResolvedValue(["/private-project/A.md"]),
+  filesystemAttachmentStats: vi.fn().mockResolvedValue({files:[{inputPath:"/private-project/A.md",path:"/private-project/A.md",sizeBytes:12}],rejected:[]}),
   projectsSave: vi.fn().mockResolvedValue(undefined),
   filesystemPickFiles: vi.fn().mockResolvedValue([]),
   openLocalPath: vi.fn(),
@@ -42,10 +45,43 @@ const picker = {
 
 function resetStores(project: ProjectMeta = baseProject) {
   useProjectsStore.setState({ projects: [structuredClone(project)] });
-  useSessionsStore.setState({ independent: [] });
+  useSessionsStore.setState({ independent: [], drafts: {} });
 }
 
 describe("ProjectDetailView 项目 composer 接入首页 Composer", () => {
+  it("only explicitly selected project assets are granted and forwarded, then consumed", async () => {
+    const project = { ...baseProject, assets: [
+      { id: "a", name: "A.md", path: "/private-project/A.md", kind: "file" as const },
+      { id: "b", name: "B.md", path: "/private-project/B.md", kind: "file" as const },
+    ] };
+    resetStores(project);
+    vi.mocked(projectAssetsUse).mockResolvedValue(["/private-project/A.md"]);
+    const start = vi.fn().mockResolvedValue("s-asset");
+    render(<ProjectDetailView project={project} onBack={vi.fn()} onStartConversation={start} models={models} defaultModelId="model-a" picker={picker} />);
+    fireEvent.click(screen.getByRole("button", { name: "项目资料" }));
+    const row = screen.getByRole("row", { name: /A.md/ });
+    fireEvent.click(within(row).getByRole("button", { name: "用于本次任务" }));
+    expect(screen.getByRole("button", { name: "移除本次资料 A.md" })).toBeInTheDocument();
+    fireEvent.change(screen.getByPlaceholderText(/Shift\+Enter/), { target: { value: "use chosen evidence" } });
+    fireEvent.click(screen.getByRole("button", { name: "发送" }));
+    await waitFor(() => expect(start).toHaveBeenCalledWith("p1", "use chosen evidence", "model-a", ["/private-project/A.md"]));
+    expect(projectAssetsUse).toHaveBeenLastCalledWith("p1", ["/private-project/A.md"]);
+    await waitFor(() => expect(screen.queryByRole("button", { name: "移除本次资料 A.md" })).toBeNull());
+  });
+
+  it("native project-asset rejection preserves both selection and task draft", async () => {
+    const project = { ...baseProject, assets: [{ id: "a", name: "A.md", path: "/private-project/A.md", kind: "file" as const }] };
+    resetStores(project); useSessionsStore.getState().setDraft("project-assets:p1", '["a"]');
+    vi.mocked(projectAssetsUse).mockRejectedValueOnce(new Error("所选项目资料已更改"));
+    const start = vi.fn();
+    render(<ProjectDetailView project={project} onBack={vi.fn()} onStartConversation={start} models={models} defaultModelId="model-a" picker={picker} />);
+    const input = screen.getByPlaceholderText(/Shift\+Enter/);
+    fireEvent.change(input, { target: { value: "retry me" } }); fireEvent.click(screen.getByRole("button", { name: "发送" }));
+    expect(await screen.findByRole("alert")).toHaveTextContent("所选项目资料已更改");
+    expect(start).not.toHaveBeenCalled(); expect(input).toHaveValue("retry me");
+    expect(screen.getByRole("button", { name: "移除本次资料 A.md" })).toBeInTheDocument();
+  });
+
   it("header chip 显示项目名与 0 项降级文案", () => {
     resetStores();
     render(

@@ -1,3 +1,4 @@
+import { cleanNativeReviewEnvironment } from "./lib/native-review-isolation.mjs";
 import { nativeReviewOutput } from './lib/native-review-output.mjs';
 // Dedicated actual native notifications and meeting-error acceptance. This
 // driver owns a new home and a standard HTTP receiver; it never uses user keys.
@@ -247,7 +248,7 @@ export async function runNativeLocalReview({ executable, resourceOnly = false } 
       const binaryHash = createHash('sha256');
       for await (const bytes of createReadStream(executable)) binaryHash.update(bytes);
       result.binarySha256 = binaryHash.digest('hex');
-      const launchEnv = { ...process.env };
+      const launchEnv = { ...cleanNativeReviewEnvironment(process.env) };
       for (const name of Object.keys(launchEnv)) if (name.startsWith('ECHO_DESKTOP_REVIEW') || name.startsWith('ECHO_LOCAL_REVIEW')
         || name.startsWith('ECHO_WEBDAV_REVIEW') || ['ECHO_AGENT_HOME', 'ECHO_DESKTOP_VALIDATION', 'ECHO_THEIA_NODE', 'NATIVE_REVIEW_SEED_CONFIG', 'NATIVE_REVIEW_AUDIO'].includes(name)) delete launchEnv[name];
       Object.assign(launchEnv, { GROK_HOME: legacy, ECHO_DESKTOP_REVIEW: '1', ECHO_DESKTOP_REVIEW_LOCAL: '1',

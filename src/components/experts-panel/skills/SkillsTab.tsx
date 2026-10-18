@@ -4,7 +4,7 @@ import {
   AddCircleIcon, RefreshCwIcon, PuzzlePieceIcon, DeleteIcon,
 } from "@/foundation/components/Icon/icons";
 import {
-  skillsList, skillsRemove, skillsToggle, skillsUninstallPackage,
+  skillsList, skillsRemove, skillsToggle, skillsUninstallPackage, internalReload,
 } from "@/lib/agent-client";
 import type { SkillInfo } from "@/lib/types";
 import { ImportSkillModal } from "./ImportSkillModal";
@@ -16,6 +16,7 @@ import { useOrgSessionStore } from "@/stores/org-session-store";
 import { CapabilityEmptyState, CapabilityError, CapabilityPage } from "../shared/CapabilityPage";
 
 interface Props {
+  cwd?: string;
   pills: React.ReactNode;
   onToast?: (m: string) => void;
 }
@@ -111,7 +112,7 @@ function RuntimeSkillRow({
  * 内置和插件技能。组织 Skill 也安装在该全局目录下，因此这里不再维护
  * 另一套“来源目录”或市场目录选择状态。
  */
-export function SkillsTab({ pills, onToast }: Props) {
+export function SkillsTab({ pills, onToast, cwd }: Props) {
   const [search, setSearch] = useState("");
   const [skills, setSkills] = useState<SkillInfo[]>([]);
   const [loading, setLoading] = useState(true);
@@ -119,15 +120,18 @@ export function SkillsTab({ pills, onToast }: Props) {
   const [importOpen, setImportOpen] = useState(false);
   const [uploadSkill, setUploadSkill] = useState<SkillInfo | null>(null);
   const reloadGeneration = useRef(0);
+  const currentCwd = useRef(cwd);
+  currentCwd.current = cwd;
   const { requestConfirmation, dialog } = useAppDialog();
 
   const reloadSkills = useCallback(async (silent = false) => {
+    if (currentCwd.current !== cwd) return;
     const generation = ++reloadGeneration.current;
     setLoading(true);
     setError("");
     try {
-      const next = await skillsList();
-      if (reloadGeneration.current === generation) setSkills(next);
+      const next = await skillsList(cwd);
+      if (reloadGeneration.current === generation && currentCwd.current === cwd) setSkills(next);
     } catch (e) {
       if (reloadGeneration.current !== generation) return;
       const message = String(e).replace(/^Error:\s*/, "");
@@ -136,7 +140,7 @@ export function SkillsTab({ pills, onToast }: Props) {
     } finally {
       if (reloadGeneration.current === generation) setLoading(false);
     }
-  }, [onToast]);
+  }, [onToast, cwd]);
 
   useEffect(() => {
     void reloadSkills(true);
@@ -176,6 +180,21 @@ export function SkillsTab({ pills, onToast }: Props) {
     ));
   }, [search, skills]);
 
+  const refreshAndReload = useCallback(async () => {
+    if (currentCwd.current !== cwd) return;
+    setLoading(true);
+    try {
+      await internalReload("skills");
+      await reloadSkills();
+      if (currentCwd.current === cwd) onToast?.("技能已刷新，现有会话将在后续轮次使用最新配置");
+    } catch (error) {
+      if (currentCwd.current === cwd) {
+        setError(String(error).replace(/^Error:\s*/, ""));
+        setLoading(false);
+      }
+    }
+  }, [cwd, onToast, reloadSkills]);
+
   const handleToggle = useCallback(async (skill: SkillInfo, enabled: boolean) => {
     if (skill.orgMandatory) return;
     try {
@@ -183,13 +202,15 @@ export function SkillsTab({ pills, onToast }: Props) {
         await orgSetSkillPreference(skill.orgSkillId, enabled);
         onToast?.(enabled ? "组织 Skill 已安装" : "组织 Skill 已卸载");
       } else {
-        await skillsToggle(skill.name, enabled);
+        await skillsToggle(skill.name, enabled, cwd);
       }
       await reloadSkills();
     } catch (e) {
-      onToast?.(`切换失败：${String(e).replace(/^Error:\s*/, "")}`);
+      const message = String(e).replace(/^Error:\s*/, "");
+      if (currentCwd.current === cwd) setError(message);
+      onToast?.(`切换失败：${message}`);
     }
-  }, [onToast, reloadSkills]);
+  }, [onToast, reloadSkills, cwd]);
 
   const handleRemove = useCallback((skill: SkillInfo) => {
     const removablePath = skill.managed ? skill.path : skill.configuredPath;
@@ -212,13 +233,13 @@ export function SkillsTab({ pills, onToast }: Props) {
       danger: true,
       action: async () => {
         if (skill.managed) await skillsUninstallPackage(removablePath);
-        else await skillsRemove(removablePath);
+        else await skillsRemove(removablePath, cwd);
         await reloadSkills();
         onToast?.(skill.managed ? "已安全卸载" : "已从技能路径中移除");
       },
       onError: (error) => onToast?.(`移除失败：${String(error).replace(/^Error:\s*/, "")}`),
     });
-  }, [skills, onToast, reloadSkills, requestConfirmation]);
+  }, [skills, onToast, reloadSkills, requestConfirmation, cwd]);
 
   return (
     <div className="capability-tab">
@@ -226,7 +247,7 @@ export function SkillsTab({ pills, onToast }: Props) {
       <CapabilityPage title="已安装技能" className="capability-page--skills"
         search={{ value: search, onChange: setSearch, label: "搜索已安装技能", placeholder: "搜索技能…" }}
         actions={<>
-          <button type="button" className="capability-button" onClick={() => void reloadSkills()}
+          <button type="button" className="capability-button" onClick={() => void refreshAndReload()}
             disabled={loading} title="重新扫描全局和当前工作区技能">
             <RefreshCwIcon size="sm" /><span>刷新</span>
           </button>
@@ -237,7 +258,7 @@ export function SkillsTab({ pills, onToast }: Props) {
         summary={loading && skills.length === 0 ? "正在读取技能…" : error && skills.length === 0 ? "技能列表未加载" : `${skills.length} 个技能 · ${skills.filter(skill => skill.enabled).length} 个已启用`}>
 
         {error && (
-          <CapabilityError onRetry={() => void reloadSkills()} retrying={loading}>
+          <CapabilityError onRetry={() => void refreshAndReload()} retrying={loading}>
             技能列表加载失败：{error}{skills.length > 0 ? "。下方保留上次加载的结果。" : ""}
           </CapabilityError>
         )}

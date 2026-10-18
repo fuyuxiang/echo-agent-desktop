@@ -377,18 +377,17 @@ pub fn find_claude_settings_paths(cwd: &Path) -> Vec<PathBuf> {
 /// out of [`find_claude_settings_paths`] so [`claude_settings_paths_for_trust`]
 /// can load ONLY the user tier when a folder is untrusted.
 ///
-/// Use `dirs::home_dir()` to match the home-resolution strategy used by
+/// Use `echo_agent_config::discovery_home_dir()` to match the home-resolution strategy used by
 /// `claude_import.rs::scan_importable_settings` and `claude_import_state.rs`,
 /// so a path returned here reliably tests as global in the import scanner's
 /// `is_global` check.
 fn global_claude_settings_paths() -> Vec<PathBuf> {
-    let mut paths = Vec::new();
-    if let Some(home) = dirs::home_dir() {
-        let global = home.join(".claude");
-        paths.push(global.join("settings.local.json"));
-        paths.push(global.join("settings.json"));
-    }
-    paths
+    global_claude_settings_paths_from(echo_agent_config::discovery_home_dir())
+}
+
+fn global_claude_settings_paths_from(home: Option<PathBuf>) -> Vec<PathBuf> {
+    home.map(|home| vec![home.join(".claude/settings.local.json"), home.join(".claude/settings.json")])
+        .unwrap_or_default()
 }
 
 /// Claude settings files to load under the folder-trust gate.
@@ -573,4 +572,28 @@ pub(crate) fn is_claude_import_marked_with_log(gate_name: &'static str) -> bool 
         });
     }
     marked
+}
+
+#[cfg(test)]
+mod review_env_discovery_tests {
+    use super::*;
+    #[test]
+    fn session_claude_env_reads_only_controlled_markers_and_keeps_normal_fallback() {
+        let temp = tempfile::tempdir().unwrap();
+        let owned = temp.path().join("review/compat-home");
+        let foreign = temp.path().join("synthetic-normal-home");
+        for (home, marker) in [(&owned, "owned"), (&foreign, "foreign")] {
+            std::fs::create_dir_all(home.join(".claude")).unwrap();
+            std::fs::write(home.join(".claude/settings.json"),
+                format!(r#"{{"env":{{"CONTROLLED_MARKER":"{marker}"}}}}"#)).unwrap();
+        }
+        let selected = echo_agent_config::resolve_discovery_home_with(Some(owned),
+            || panic!("review session consulted normal HOME"));
+        let paths = global_claude_settings_paths_from(selected);
+        let settings = paths.iter().find_map(|p| load_claude_settings(p)).unwrap();
+        assert_eq!(settings.env.unwrap()["CONTROLLED_MARKER"], "owned");
+        let normal = echo_agent_config::resolve_discovery_home_with(None, || Some(foreign));
+        let settings = global_claude_settings_paths_from(normal).iter().find_map(|p| load_claude_settings(p)).unwrap();
+        assert_eq!(settings.env.unwrap()["CONTROLLED_MARKER"], "foreign");
+    }
 }

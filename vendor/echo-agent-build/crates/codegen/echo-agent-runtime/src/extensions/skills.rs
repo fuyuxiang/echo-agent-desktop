@@ -151,13 +151,11 @@ fn resolve_skill_path(raw: &str, cwd: &str) -> String {
 
     // Expand ~ to $HOME
     let expanded = if let Some(rest) = raw.strip_prefix("~/") {
-        std::env::var_os("HOME")
-            .or_else(|| std::env::var_os("USERPROFILE"))
+        echo_agent_config::discovery_home_dir()
             .map(|home| PathBuf::from(home).join(rest))
             .unwrap_or_else(|| PathBuf::from(raw))
     } else if raw == "~" {
-        std::env::var_os("HOME")
-            .or_else(|| std::env::var_os("USERPROFILE"))
+        echo_agent_config::discovery_home_dir()
             .map(PathBuf::from)
             .unwrap_or_else(|| PathBuf::from(raw))
     } else {
@@ -231,7 +229,7 @@ fn discover_auto_sources(cwd: &str, skills: &[SkillInfo]) -> Vec<(String, usize)
         try_add_source(echo_agent_home.join(subdir), None);
     }
 
-    let home = std::env::var_os("HOME").or_else(|| std::env::var_os("USERPROFILE"));
+    let home = echo_agent_config::discovery_home_dir();
     if let Some(ref h) = home {
         let home_path = std::path::PathBuf::from(h);
         for subdir in &subdirs {

@@ -52,7 +52,7 @@ pub(crate) fn discover_hook_source_paths(
     compat: &echo_agent_tools::types::compat::CompatConfig,
 ) -> HookSourcePaths {
     let echoagent = echo_agent_config::user_echo_agent_home();
-    let home = dirs::home_dir();
+    let home = echo_agent_config::discovery_home_dir();
     let include_claude = include_claude_hooks(compat);
     let include_cursor = include_cursor_hooks(compat);
 

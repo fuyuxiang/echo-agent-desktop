@@ -239,13 +239,15 @@ function ExpertChip({
   experts,
   selectedId,
   selectedName,
+  selectedPath,
   onChange,
   disabled,
 }: {
   experts: AgentEntry[];
   selectedId?: string;
   selectedName?: string;
-  onChange: (id?: string, name?: string) => void;
+  selectedPath?: string;
+  onChange: (id?: string, name?: string, path?: string) => void;
   disabled?: boolean;
 }) {
   return (
@@ -254,23 +256,24 @@ function ExpertChip({
       trigger={
         <>
           <ExpertIcon size="sm" />
-          <span className="atm-prompt-chip-label">{selectedId ? selectedName || selectedId : "召唤专家"}</span>
+          <span className="atm-prompt-chip-label">{selectedId ? `${selectedName || selectedId}${selectedPath ? "" : " · 需重新选择"}` : "召唤专家"}</span>
           <ChevronDownIcon size="sm" className="atm-prompt-chip-caret" />
         </>
       }
     >
-      <button type="button" className={`atm-chip-option${!selectedId ? " active" : ""}`} onClick={() => onChange(undefined, undefined)}>
+      <button type="button" className={`atm-chip-option${!selectedId ? " active" : ""}`} onClick={() => onChange(undefined, undefined, undefined)}>
         <span className="atm-chip-option-check">{!selectedId && <CheckIcon size="sm" />}</span>
         <span>不使用专家</span>
       </button>
       {experts.map((e) => (
         <button
-          key={e.name}
+          key={e.path}
           type="button"
-          className={`atm-chip-option${selectedId === e.name ? " active" : ""}`}
-          onClick={() => onChange(e.name, e.name)}
+          title={e.path}
+          className={`atm-chip-option${selectedId === e.name && selectedPath === e.path ? " active" : ""}`}
+          onClick={() => onChange(e.name, e.name, e.path)}
         >
-          <span className="atm-chip-option-check">{selectedId === e.name && <CheckIcon size="sm" />}</span>
+          <span className="atm-chip-option-check">{selectedId === e.name && selectedPath === e.path && <CheckIcon size="sm" />}</span>
           <span>{e.name}</span>
         </button>
       ))}
@@ -850,8 +853,9 @@ export function AutomationEditPage({
                 experts={experts}
                 selectedId={draft.expertId}
                 selectedName={draft.expertName}
+                selectedPath={draft.expertPath}
                 disabled={saving}
-                onChange={(id, name) => set({ expertId: id, expertName: name })}
+                onChange={(id, name, path) => set({ expertId: id, expertName: name, expertPath: path })}
               />
               <AutomationPermissionPicker
                 value={draft.permissionMode as AutomationPermissionMode}

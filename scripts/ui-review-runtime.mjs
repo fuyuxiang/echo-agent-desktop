@@ -32,7 +32,10 @@ export async function createUiReviewServer(port = 1439, {
     ...(original ? { cacheDir: join(original.directory, ".vite") } : {}),
     // A fresh baseline cache must publish optimized React dependencies before
     // the fixture's import crawl finishes; otherwise each can wait on the other.
-    optimizeDeps: { holdUntilCrawlEnd: false },
+    // The dependency scanner reads raw working-tree files without Vite's
+    // baseline load hook. Let actual HEAD requests discover dependencies so
+    // newly added imports cannot contaminate the baseline's source graph.
+    optimizeDeps: { holdUntilCrawlEnd: false, ...(original ? { entries: [] } : {}) },
     // Review pages navigate rapidly and deliberately abort some entry scripts.
     // Only transform requested modules: speculative warmups can outlive the
     // browser and leave Vite 5 waiting indefinitely during server.close().

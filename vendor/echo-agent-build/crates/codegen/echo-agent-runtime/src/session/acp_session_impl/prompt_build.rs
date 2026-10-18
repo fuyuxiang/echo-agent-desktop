@@ -620,7 +620,7 @@ impl SessionActor {
     ) {
         let files = self.agent.borrow().prompt_context().agents_md_files.clone();
         let echo_agent_home = echo_agent_config::echo_agent_home();
-        let vendor_homes = dirs::home_dir()
+        let vendor_homes = echo_agent_config::discovery_home_dir()
             .map(|home_dir| {
                 vec![
                     (

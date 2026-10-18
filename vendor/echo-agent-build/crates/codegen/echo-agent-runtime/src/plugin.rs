@@ -159,7 +159,7 @@ pub fn uninstall_plugin(
 
     if !keep_data {
         // Plugins under $HOME are user-scope; everything else is config-path scope.
-        let scope = match dirs::home_dir() {
+        let scope = match echo_agent_config::discovery_home_dir() {
             Some(home) if repo.path.starts_with(&home) => PluginScope::User,
             _ => PluginScope::ConfigPath,
         };
@@ -507,7 +507,7 @@ pub fn classify_marketplace_add_input(input: &str, cwd: &Path) -> MarketplaceAdd
 /// marketplace loader applies to `path =` config entries.
 fn expand_tilde(input: &str) -> PathBuf {
     match input.strip_prefix('~') {
-        Some(rest) => dirs::home_dir()
+        Some(rest) => echo_agent_config::discovery_home_dir()
             .map(|h| h.join(rest.strip_prefix('/').unwrap_or(rest)))
             .unwrap_or_else(|| PathBuf::from(input)),
         None => PathBuf::from(input),
@@ -2130,7 +2130,7 @@ mod tests {
             MarketplaceAddInput::LocalPath(PathBuf::from("/work/../plugins"))
         );
         // Tilde expands to home.
-        if let Some(home) = dirs::home_dir() {
+        if let Some(home) = echo_agent_config::discovery_home_dir() {
             assert_eq!(
                 classify_marketplace_add_input("~/plugins", cwd),
                 MarketplaceAddInput::LocalPath(home.join("plugins"))
@@ -2255,7 +2255,7 @@ mod tests {
     fn remove_toml_matches_tilde_path_entry_by_expanded_identity() {
         // Loaded sources carry expanded paths, so removal by identity must
         // still find a hand-written `path = "~/x"` entry.
-        let Some(home) = dirs::home_dir() else {
+        let Some(home) = echo_agent_config::discovery_home_dir() else {
             return;
         };
         let content = "[[marketplace.sources]]\nname = \"dev\"\npath = \"~/dev/plugins\"\n";

@@ -305,10 +305,10 @@ export const MessageItem = memo(function MessageItem({
       const title = markdownText.match(/^#\s+(.+)$/m)?.[1]?.trim()
         || markdownText.split("\n").find((line) => line.trim())?.replace(/^#+\s*/, "").slice(0, 80)
         || "EchoAgent 报告";
-      const receipt = await exportOfficeDocument(title, markdownText, format);
+      const receipt = await exportOfficeDocument(title, markdownText, format, sessionId ?? undefined);
       if (receipt) {
         if (sessionId) registerDocumentArtifact(receipt, sessionId, title, cwd ?? "");
-        onToast?.(`已导出到 ${receipt.path}`);
+        onToast?.(`已导出到 ${receipt.path}${sessionId ? "，可在本任务的产物中查看" : ""}`);
       }
     } catch (error) {
       onToast?.(`导出失败：${String(error).replace(/^Error:\s*/, "")}`);

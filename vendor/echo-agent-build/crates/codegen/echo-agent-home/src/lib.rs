@@ -123,3 +123,9 @@ mod tests {
         );
     }
 }
+
+/// OS home lookup for compatibility discovery. Callers that isolate acceptance
+/// profiles must apply their controlled-root gate before invoking this fallback.
+pub fn os_home_dir() -> Option<PathBuf> {
+    dirs::home_dir()
+}

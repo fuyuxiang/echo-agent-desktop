@@ -33,7 +33,7 @@ interface TaskState {
   setRoot: (root: string) => void;
   refreshSummaries: () => Promise<void>;
   selectTask: (taskId: string) => Promise<void>;
-  createTask: (name: string, requirement: string) => Promise<CodingTask | null>;
+  createTask: (name: string, requirement: string, root?: string) => Promise<CodingTask | null>;
   renameTask: (taskId: string, name: string) => Promise<void>;
   deleteTask: (taskId: string) => Promise<void>;
   refreshTaskState: () => Promise<void>;
@@ -120,17 +120,17 @@ export const useTaskStore = create<TaskState>((set, get) => ({
     }
   },
 
-  createTask: async (name, requirement) => {
-    const { root } = get();
+  createTask: async (name, requirement, explicitRoot) => {
+    const root = explicitRoot ?? get().root;
     if (!root) return null;
     const workspace = workspaceGeneration;
-    const generation = ++selectionGeneration;
-    selectionTarget = null;
-    stateGeneration += 1;
+    const ownsWorkspace = get().root === root;
+    const generation = ownsWorkspace ? ++selectionGeneration : selectionGeneration;
+    if (ownsWorkspace) { selectionTarget = null; stateGeneration += 1; }
     const isCurrent = () => get().root === root && workspace === workspaceGeneration && generation === selectionGeneration;
     try {
       const task = await codingApi.createTask(root, name, requirement);
-      if (!isCurrent()) return null;
+      if (!isCurrent()) return explicitRoot ? task : null;
       selectionTarget = task.id;
       set({
         task,

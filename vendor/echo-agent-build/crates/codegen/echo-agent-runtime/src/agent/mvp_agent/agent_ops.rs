@@ -66,6 +66,24 @@ impl MvpAgent {
         }
         session_ids.len()
     }
+    pub async fn reload_skills_all_sessions_checked(&self) -> Result<usize, String> {
+        let mut acknowledgements = Vec::new();
+        for sid in self.resident_ids() {
+            if let Some(handle) = self.resident_handle(&sid) {
+                let (respond_to, receive) = tokio::sync::oneshot::channel();
+                handle.cmd_tx.send(SessionCommand::ReloadSkillsChecked { respond_to })
+                    .map_err(|_| format!("session {sid}: skill reload actor unavailable"))?;
+                acknowledgements.push((sid, receive));
+            }
+        }
+        let count = acknowledgements.len();
+        for (sid, receive) in acknowledgements {
+            tokio::time::timeout(std::time::Duration::from_secs(30), receive).await
+                .map_err(|_| format!("session {sid}: skill reload acknowledgement timed out"))?
+                .map_err(|_| format!("session {sid}: skill reload actor closed"))?;
+        }
+        Ok(count)
+    }
     pub fn advertise_commands_all_sessions(&self) -> usize {
         let session_ids = self.resident_ids();
         for session_id in &session_ids {

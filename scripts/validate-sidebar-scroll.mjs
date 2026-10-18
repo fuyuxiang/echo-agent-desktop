@@ -19,7 +19,7 @@ export async function validateSidebarScroll(page, output) {
         typography: [style.fontFamily, style.fontSize, style.fontWeight, style.color, style.padding, box.height],
       };
     }));
-    assert.deepEqual(headings.map(heading => heading.name), ["任务", "项目", "群聊"], "sidebar lists should appear in task, project, chat order");
+    assert.deepEqual(headings.map(heading => heading.name), ["任务", "项目", "专家团"], "sidebar lists should appear in task, project, chat order");
     for (const heading of headings) {
       assert.deepEqual(heading.typography, headings[0].typography, `${heading.name}: list heading style should match tasks`);
       assert.equal(heading.left, headings[0].left, `${heading.name}: list headings should align`);
@@ -105,7 +105,7 @@ export async function validateSidebarScroll(page, output) {
   for (const height of [600, 720]) {
     await page.setViewportSize({width:1024,height});
     await page.goto("http://127.0.0.1:1439/__ui-review?surface=sidebar-scroll&variant=both&groups=12");
-    const groupList = page.getByRole("region",{name:"最近群聊"});
+    const groupList = page.getByRole("region",{name:"最近专家团"});
     await groupList.waitFor();
     await validateHeadings();
     const before = await snapshot();
@@ -118,18 +118,18 @@ export async function validateSidebarScroll(page, output) {
     assert.equal(after.tasks.top,before.tasks.top,"scrolling groups must not move tasks");
     assert.equal(after.projects.top,before.projects.top,"scrolling groups must not move projects");
     await page.screenshot({path:join(output,`sidebar-three-lists-${height}.png`)});
-    await page.getByRole("button",{name:/^群聊 \(/}).click();
+    await page.getByRole("button",{name:/^专家团 \(/}).click();
     assert.equal(await groupList.count(),0);
     const collapsed = await snapshot();
     assert.ok(collapsed.tasks.clientHeight > before.tasks.clientHeight,"collapsing groups must free room for tasks");
-    await page.getByRole("button",{name:"查看全部群聊"}).waitFor();
+    await page.getByRole("button",{name:"查看全部专家团"}).waitFor();
     layouts++;
   }
 
   for (const theme of ["light", "dark"]) {
     await page.setViewportSize({ width: 1024, height: 720 });
     await page.goto(`http://127.0.0.1:1439/__ui-review?surface=sidebar-scroll&variant=short&groups=1&theme=${theme}`);
-    await page.getByRole("region", { name: "最近群聊" }).waitFor();
+    await page.getByRole("region", { name: "最近专家团" }).waitFor();
     await validateHeadings();
     await page.locator(".sidebar").screenshot({ path: join(output, `sidebar-short-chats-${theme}.png`) });
     layouts++;

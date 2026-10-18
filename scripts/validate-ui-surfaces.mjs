@@ -210,7 +210,7 @@ page.setDefaultNavigationTimeout(60000);
         await page.getByRole("img", { name: "微信绑定二维码" }).waitFor();
       }
       if (surface === "capabilities") {
-        assert.equal(await page.getByRole("navigation", { name: "专家·技能·连接器管理" }).count(), 1);
+        assert.equal(await page.getByRole("navigation", { name: "专家与扩展管理" }).count(), 1);
         assert.equal(await page.getByRole("tablist", { name: "扩展分类" }).count(), 0);
         const template = await page.getByText("推荐模板", { exact: true }).boundingBox();
         assert.ok(template && template.y < height - 100, "templates pushed below first screen");
@@ -297,7 +297,7 @@ page.setDefaultNavigationTimeout(60000);
   await page.getByRole("dialog", { name: "创建专家" }).getByRole("button", { name: "创建", exact: true }).click();
   await page.getByRole("button", { name: "查看专家 评审专家 详情" }).waitFor();
   for (const label of ["技能", "连接器", "插件", "专家"]) {
-    await page.getByRole("navigation", { name: "专家·技能·连接器管理" }).getByRole("button", { name: label, exact: true }).click();
+    await page.getByRole("navigation", { name: "专家与扩展管理" }).getByRole("button", { name: label, exact: true }).click();
     await page.waitForFunction(() => !document.querySelector(".placeholder-page[role='status']"));
 
   }
@@ -315,7 +315,7 @@ page.setDefaultNavigationTimeout(60000);
   await page.getByRole("button", { name: "创建专家" }).click();
   const createDialog = page.getByRole("dialog", { name: "创建专家" });
   await createDialog.waitFor();
-  assert.equal(await page.getByRole("navigation", { name: "专家·技能·连接器管理" }).count(), 1);
+  assert.equal(await page.getByRole("navigation", { name: "专家与扩展管理" }).count(), 1);
   await createDialog.getByRole("textbox", { name: "专家名称" }).fill("入口验证专家");
   await createDialog.getByRole("textbox", { name: "专家指令" }).fill("帮助验证专家创建入口。");
   await createDialog.getByRole("button", { name: "创建", exact: true }).click();

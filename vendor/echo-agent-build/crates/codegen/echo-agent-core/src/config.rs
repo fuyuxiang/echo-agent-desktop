@@ -1384,7 +1384,7 @@ impl AgentDefinition {
     fn scope_from_path(path: &Path) -> AgentScope {
         let path_str = path.to_string_lossy();
         let echoagent = echo_agent_config::user_echo_agent_home();
-        let home = dirs::home_dir();
+        let home = echo_agent_config::discovery_home_dir();
         for (dir, scope) in crate::discovery::user_agent_dirs(home.as_deref(), echoagent.as_deref())
         {
             if path.starts_with(&dir) {

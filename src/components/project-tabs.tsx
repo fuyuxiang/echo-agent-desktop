@@ -820,7 +820,7 @@ function usedBytes(assets: AssetItem[]): number {
   return assets.reduce((sum, asset) => sum + (asset.sizeBytes ?? 0), 0);
 }
 
-export function AssetsTab({ projectId, onToast }: { projectId: string; onToast?: (message: string) => void }) {
+export function AssetsTab({ projectId, onToast, onUseAsset, selectedAssetIds = [] }: { projectId: string; onToast?: (message: string) => void; onUseAsset?: (asset: AssetItem) => void; selectedAssetIds?: string[] }) {
   const assets = useProjectsStore((s) => s.projects.find((p) => p.id === projectId)?.assets ?? []);
   const addAsset = useProjectsStore((s) => s.addAsset);
   const addAssets = useProjectsStore((s) => s.addAssets);
@@ -898,6 +898,8 @@ export function AssetsTab({ projectId, onToast }: { projectId: string; onToast?:
         </div>
       </div>
 
+      <p className="project-assets-context-hint">导入的副本会保存在本项目中。选择“用于本次任务”后才会作为附件发送；每个文件最多20MB。</p>
+
       <table className="pd-asset-table">
         <thead>
           <tr>
@@ -934,6 +936,7 @@ export function AssetsTab({ projectId, onToast }: { projectId: string; onToast?:
                 <td>{a.updatedAt ? relTime(a.updatedAt) : "-"}</td>
                 <td>{a.kind === "folder" ? "-" : a.sizeBytes !== undefined ? formatFileSize(a.sizeBytes) : a.sizeLabel ?? "-"}</td>
                 <td>
+                  {onUseAsset && a.kind === "file" && a.path && <button type="button" className="pd-btn pd-btn--small" disabled={selectedAssetIds.includes(a.id)} onClick={() => onUseAsset(a)}>{selectedAssetIds.includes(a.id) ? "已选入本次任务" : "用于本次任务"}</button>}
                   <button className="pd-asset-del" aria-label={`删除资产 ${a.name}`} onClick={() => void remove(a)}>×</button>
                 </td>
               </tr>

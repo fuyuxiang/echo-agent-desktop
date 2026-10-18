@@ -28,6 +28,7 @@ vi.mock("../lib/task-lifecycle", () => ({
 vi.mock("@/lib/agent-turn", () => ({ beginAgentTurn }));
 vi.mock("@/lib/agent-client", () => ({ agentLoadSession }));
 
+import { registerWorkspaceEditor } from "../lib/workspace-editor";
 import { useSessionStore } from "@/stores/session-store";
 import { CodingTaskRuntimeManager, useCodingRuntimeStore } from "../lib/coding-task-runtime";
 
@@ -72,7 +73,7 @@ describe("CodingTaskRuntimeManager", () => {
     phaseChanged.mockClear();
     agentLoadSession.mockReset();
     agentLoadSession.mockResolvedValue(null);
-    useCodingRuntimeStore.setState({ tasks: {}, settling: {}, activeRunIds: {}, verificationBatches: {} });
+    useCodingRuntimeStore.setState({ tasks: {}, settling: {}, activeRunIds: {}, verificationBatches: {}, stopping: {}, actionEpochs: {}, editorBlocks: {} });
     useSessionStore.setState({
       sessionId: "/other-session",
       transcripts: {
@@ -199,4 +200,132 @@ describe("CodingTaskRuntimeManager", () => {
     expect(api.runVerification).toHaveBeenCalledTimes(1);
     expect(useSessionStore.getState().sessionId).toBe("/other-session");
   });
+  it("pauses automatic verification on dirty A without asking visible B to save", async () => {
+    const other = vi.fn(async () => 0);
+    const removeA = registerWorkspaceEditor("/a", {getDirtyCount: async () => 1, saveAll: vi.fn()});
+    const removeB = registerWorkspaceEditor("/b", {getDirtyCount: other, saveAll: vi.fn()});
+    api.orchestratorState.mockImplementation(async (root: string) => ({task: {...task(root), phase: "verifying", nextAction: null}, problems: []}));
+    const view = render(<CodingTaskRuntimeManager roots={["/a"]} />);
+    try {
+      await waitFor(() => expect(useCodingRuntimeStore.getState().editorBlocks[JSON.stringify(["/a", "/a-task"])]).toContain("等待保存"));
+      expect(api.beginVerification).not.toHaveBeenCalled(); expect(api.runVerification).not.toHaveBeenCalled(); expect(other).not.toHaveBeenCalled();
+      await waitFor(() => expect(api.reportInterrupted).toHaveBeenCalledWith("/a", "/a-task", "paused"));
+    } finally { view.unmount(); removeA(); removeB(); }
+  });
+
+  it.each(["discovering", "implementing", "repairing", "verifying"] as const)(
+    "does not dispatch %s work when stopped during the editor acknowledgment", async phase => {
+      let resolve!: (count: number) => void;
+      const getDirtyCount = vi.fn(() => new Promise<number>(accept => { resolve = accept; }));
+      const remove = registerWorkspaceEditor("/a", { getDirtyCount, saveAll: vi.fn() });
+      let native: CodingTask = { ...task("/a"), phase, nextAction: ["discovering", "implementing"].includes(phase) ? "revise_plan" : null };
+      api.orchestratorState.mockImplementation(async () => ({task: native, problems: []}));
+      const view = render(<CodingTaskRuntimeManager roots={["/a"]} />);
+      try {
+        await waitFor(() => expect(getDirtyCount).toHaveBeenCalledOnce());
+        native = { ...native, phase: "stopped", updatedAt: "2026-09-24T00:00:02Z", nextAction: null };
+        await act(async () => { await phaseChanged.mock.calls[0][0]({root: "/a", taskId: "/a-task"}); });
+        await act(async () => { resolve(0); });
+        expect(beginAgentTurn).not.toHaveBeenCalled();
+        expect(api.beginVerification).not.toHaveBeenCalled();
+        expect(api.runVerification).not.toHaveBeenCalled();
+        expect(api.reportStartFailed).not.toHaveBeenCalled();
+      } finally { view.unmount(); remove(); }
+    },
+  );
+
+  it("fences an immediate stop before its native event or IPC response arrives", async () => {
+    let resolve!: (count: number) => void;
+    const getDirtyCount = vi.fn(() => new Promise<number>(accept => { resolve = accept; }));
+    const remove = registerWorkspaceEditor("/a", {getDirtyCount, saveAll: vi.fn()});
+    const view = render(<CodingTaskRuntimeManager roots={["/a"]} />);
+    try {
+      await waitFor(() => expect(getDirtyCount).toHaveBeenCalledOnce());
+      await act(async () => { useCodingRuntimeStore.getState().setStopping("/a", "/a-task", true); resolve(0); });
+      expect(beginAgentTurn).not.toHaveBeenCalled();
+      expect(api.reportStartFailed).not.toHaveBeenCalled();
+    } finally { view.unmount(); remove(); }
+  });
+
+  it("rejects a stale continuation even if the native phase event was missed", async () => {
+    let native = task("/a");
+    const remove = registerWorkspaceEditor("/a", {getDirtyCount: async () => {
+      native = {...native, phase: "stopped", nextAction: null}; return 0;
+    }, saveAll: vi.fn()});
+    api.orchestratorState.mockImplementation(async () => ({task: native, problems: []}));
+    const view = render(<CodingTaskRuntimeManager roots={["/a"]} />);
+    try {
+      await waitFor(() => expect(api.orchestratorState.mock.calls.length).toBeGreaterThanOrEqual(3));
+      expect(beginAgentTurn).not.toHaveBeenCalled();
+    } finally { view.unmount(); remove(); }
+  });
+
+  it("does not dispatch a continuation after its runtime is unmounted", async () => {
+    let resolve!: (count: number) => void;
+    const getDirtyCount = vi.fn(() => new Promise<number>(accept => { resolve = accept; }));
+    const remove = registerWorkspaceEditor("/a", {getDirtyCount, saveAll: vi.fn()});
+    const view = render(<CodingTaskRuntimeManager roots={["/a"]} />);
+    try {
+      await waitFor(() => expect(getDirtyCount).toHaveBeenCalledOnce());
+      view.unmount();
+      await act(async () => { resolve(0); });
+      expect(beginAgentTurn).not.toHaveBeenCalled();
+    } finally { remove(); }
+  });
+
+  it.each(["repairing", "verifying"] as const)("does not dispatch %s work during a send-now handoff", async phase => {
+    useSessionStore.setState({transcripts: {"/a-session": {...transcript, pendingSendNowPromptId: "replacement"}}});
+    api.orchestratorState.mockImplementation(async () => ({task: {...task("/a"), phase, nextAction: null}, problems: []}));
+    const view = render(<CodingTaskRuntimeManager roots={["/a"]} />);
+    try {
+      await waitFor(() => expect(api.orchestratorState).toHaveBeenCalled());
+      expect(beginAgentTurn).not.toHaveBeenCalled();
+      expect(api.beginVerification).not.toHaveBeenCalled();
+      await act(async () => {useSessionStore.setState({transcripts: {"/a-session": {...transcript}}});});
+      await waitFor(() => phase === "repairing"
+        ? expect(beginAgentTurn).toHaveBeenCalledOnce() : expect(api.beginVerification).toHaveBeenCalledOnce());
+    } finally {view.unmount();}
+  });
+
+  it("retries an unstarted verification after an intervening send-now handoff clears", async () => {
+    let ready!: (value: number) => void;
+    const getDirtyCount = vi.fn().mockImplementationOnce(() => new Promise<number>(resolve => {ready = resolve;})).mockResolvedValue(0);
+    const remove = registerWorkspaceEditor("/a", {getDirtyCount, saveAll: vi.fn()});
+    api.orchestratorState.mockImplementation(async () => ({task: {...task("/a"), phase: "verifying", nextAction: null}, problems: []}));
+    const view = render(<CodingTaskRuntimeManager roots={["/a"]} />);
+    try {
+      await waitFor(() => expect(getDirtyCount).toHaveBeenCalledOnce());
+      await act(async () => {
+        useSessionStore.setState({transcripts: {"/a-session": {...transcript, pendingSendNowPromptId: "replacement"}}});
+        ready(0);
+      });
+      expect(api.beginVerification).not.toHaveBeenCalled();
+      await act(async () => {useSessionStore.setState({transcripts: {"/a-session": {...transcript}}});});
+      await waitFor(() => expect(api.beginVerification).toHaveBeenCalledOnce());
+    } finally {view.unmount(); remove();}
+  });
+
+  it("restarts a fresh verification batch after a mid-command handoff without reporting stale evidence", async () => {
+    let finish!: (value: {status: string}) => void;
+    let native: CodingTask = {...task("/a"), phase: "verifying", nextAction: null};
+    api.orchestratorState.mockImplementation(async () => ({task: native, problems: []}));
+    api.detectCommands.mockResolvedValue([{kind: "test", command: "pnpm test", label: "test"}]);
+    api.beginVerification.mockImplementation(async () => {native = {...native, updatedAt: `${native.updatedAt}-next`}; return native;});
+    api.runVerification.mockImplementationOnce(() => new Promise(resolve => {finish = resolve;})).mockResolvedValue({status: "passed"});
+    api.reportVerification.mockImplementation(async () => {native = {...native, phase: "delivered"};});
+    const view = render(<CodingTaskRuntimeManager roots={["/a"]} />);
+    try {
+      await waitFor(() => expect(api.runVerification).toHaveBeenCalledOnce());
+      await act(async () => {
+        useSessionStore.setState({transcripts: {"/a-session": {...transcript, pendingSendNowPromptId: "replacement"}}});
+        finish({status: "passed"});
+      });
+      expect(api.reportVerification).not.toHaveBeenCalled();
+      await act(async () => {useSessionStore.setState({transcripts: {"/a-session": {...transcript}}});});
+      await waitFor(() => expect(api.reportVerification).toHaveBeenCalledOnce());
+      expect(api.beginVerification).toHaveBeenCalledTimes(2);
+      expect(api.runVerification).toHaveBeenCalledTimes(2);
+    } finally {view.unmount();}
+  });
+
 });

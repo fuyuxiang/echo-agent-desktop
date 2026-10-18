@@ -114,6 +114,7 @@ export function buildDraft(template?: AutomationTemplate, initialCwd = ""): Auto
     skills: [],
     expertId: undefined,
     expertName: undefined,
+    expertPath: undefined,
     connectorIds: [],
     permissionMode: "default",
     scheduleType: template?.scheduleType ?? "recurring",
@@ -138,6 +139,7 @@ export function draftFromAutomation(a: Automation): AutomationDraft {
     skills: [...(a.skills ?? [])],
     expertId: a.expertId,
     expertName: a.expertName,
+    expertPath: a.expertPath,
     connectorIds: [...(a.connectorIds ?? [])],
     permissionMode: a.permissionMode ?? "default",
     scheduleType: a.scheduleType ?? "recurring",
@@ -250,6 +252,9 @@ export function scheduledAtIso(draft: Pick<AutomationDraft, "scheduledDate" | "s
 }
 
 export function validateDraft(draft: AutomationDraft, opts: ValidateOptions): string | null {
+  if ((draft.expertId || draft.expertName || draft.expertPath) && (!draft.expertPath || !(draft.expertName || draft.expertId))) {
+    return "专家引用缺少稳定定义路径，请重新选择专家后保存";
+  }
   if (!draft.name.trim()) return "请填写自动化任务名称";
   if (!draft.prompt.trim()) return "请填写提示词";
   if (draft.schedule.byhour < 0 || draft.schedule.byhour > 23 || draft.schedule.byminute < 0 || draft.schedule.byminute > 59) {

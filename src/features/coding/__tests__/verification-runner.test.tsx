@@ -26,7 +26,7 @@ describe("verification runner task scope", () => {
     api.beginVerification.mockImplementation(async (_root: string, id: string) => task(id));
     api.reportVerification.mockResolvedValue(undefined);
     api.reportStartFailed.mockResolvedValue(undefined);
-    useCodingRuntimeStore.setState({ tasks: {}, settling: {}, activeRunIds: {}, verificationBatches: {} });
+    useCodingRuntimeStore.setState({ tasks: {}, settling: {}, activeRunIds: {}, verificationBatches: {}, stopping: {}, actionEpochs: {} });
     useTaskStore.setState({ root: "", task: null });
   });
 
@@ -79,4 +79,44 @@ describe("verification runner task scope", () => {
     await act(async () => { finishNew({ status: "passed" }); });
     await waitFor(() => expect(result.current.runningVerification).toBe(false));
   });
+  it("停止后迟到的编辑器确认不会重新启动验证", async () => {
+    let ready!: () => void;
+    const prepareEditor = vi.fn(() => new Promise<void>(resolve => {ready = resolve;}));
+    const {result} = renderHook(() => useVerificationRunner({
+      cwd: "/a", task: task("t1"), commands, detectedReady: true,
+      setCommandOutput: vi.fn(), requestConfirmation: vi.fn(), prepareEditor,
+    }));
+    act(() => {result.current.runVerifications(commands);});
+    await waitFor(() => expect(prepareEditor).toHaveBeenCalledOnce());
+    await act(async () => {
+      useCodingRuntimeStore.getState().setStopping("/a", "t1", true);
+      ready();
+    });
+    expect(api.beginVerification).not.toHaveBeenCalled();
+    expect(api.runVerification).not.toHaveBeenCalled();
+    expect(result.current.runningVerification).toBe(false);
+  });
+
+  it("停止使旧批次失效，迟到的命令失败不能改写停止结果", async () => {
+    let reject!: (error: Error) => void;
+    api.runVerification.mockReturnValue(new Promise((_resolve, fail) => {reject = fail;}));
+    const onToast = vi.fn();
+    const {result} = renderHook(() => useVerificationRunner({
+      cwd: "/a", task: task("t1"), commands, detectedReady: true,
+      setCommandOutput: vi.fn(), requestConfirmation: vi.fn(), onToast,
+    }));
+    act(() => {result.current.runVerifications(commands);});
+    await waitFor(() => expect(api.runVerification).toHaveBeenCalledOnce());
+    expect(api.beginVerification).toHaveBeenCalledWith("/a", "t1", "1");
+    await act(async () => {
+      useCodingRuntimeStore.getState().setStopping("/a", "t1", true);
+      useCodingRuntimeStore.getState().setStopping("/a", "t1", false);
+      reject(new Error("late failure"));
+    });
+    expect(api.reportStartFailed).not.toHaveBeenCalled();
+    expect(api.reportVerification).not.toHaveBeenCalled();
+    expect(onToast).not.toHaveBeenCalled();
+    expect(result.current.runningVerification).toBe(false);
+  });
+
 });

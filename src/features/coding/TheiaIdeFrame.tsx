@@ -2,6 +2,7 @@ import { forwardRef, useCallback, useEffect, useImperativeHandle, useLayoutEffec
 import { invoke } from "@tauri-apps/api/core";
 import { Code2, LoaderCircle, RotateCw } from "lucide-react";
 import { useAppDialog } from "@/components/AppDialog";
+import { registerWorkspaceEditor } from "./lib/workspace-editor";
 import { idePath, relativeToWorkspace } from "./lib/windows-path";
 
 export interface TheiaMutationTicket {
@@ -95,8 +96,8 @@ export const TheiaIdeFrame = forwardRef<TheiaIdeFrameHandle, TheiaIdeFrameProps>
     });
   };
 
-  const requestCount = useCallback((type: "echo/save-all" | "echo/get-dirty") => {
-    if (type === "echo/get-dirty" && status !== "ready") {
+  const requestCount = useCallback((type: "echo/save-all" | "echo/get-dirty" | "echo/reload-clean", requireAck = false) => {
+    if (!requireAck && type === "echo/get-dirty" && status !== "ready") {
       if (lastKnownDirtyCount.current !== null) return Promise.resolve(lastKnownDirtyCount.current);
       if (!hasBeenReady.current) return Promise.resolve(0);
       return Promise.reject(new Error("IDE 已断开，无法确认未保存文件"));
@@ -114,6 +115,18 @@ export const TheiaIdeFrame = forwardRef<TheiaIdeFrameHandle, TheiaIdeFrameProps>
       frameRef.current?.contentWindow?.postMessage({ type, token, id }, new URL(baseUrl).origin);
     });
   }, [baseUrl, status, token]);
+
+  useLayoutEffect(() => registerWorkspaceEditor(root, {
+    getDirtyCount: () => requestCount("echo/get-dirty", true),
+    saveAll: async () => (await requestCount("echo/save-all", true)) === 0,
+    refreshFromDisk: async () => { await requestCount("echo/reload-clean", true); },
+    lockEditing: (locked) => {
+      if (frameRef.current) {
+        if (locked) frameRef.current.blur();
+        frameRef.current.inert = locked;
+      }
+    },
+  }), [root, requestCount]);
 
   useImperativeHandle(ref, () => ({
     getDirtyCount: () => requestCount("echo/get-dirty"),

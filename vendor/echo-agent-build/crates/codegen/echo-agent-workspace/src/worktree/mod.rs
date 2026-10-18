@@ -739,7 +739,7 @@ pub fn resolve_label_collision(base_dir: &Path, label: &str) -> String {
 /// so worktree paths also agree with trust/hooks and other echo-agent-home paths.
 fn echo_agent_home() -> std::path::PathBuf {
     echo_agent_fast_worktree::resolve_echo_agent_home().unwrap_or_else(|_| {
-        dirs::home_dir()
+        echo_agent_config::discovery_home_dir()
             .unwrap_or_else(|| std::path::PathBuf::from("/tmp"))
             .join(".echo-agent")
     })

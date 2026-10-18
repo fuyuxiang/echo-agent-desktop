@@ -50,6 +50,7 @@ import type { QuestionRequest } from "@/stores/question-store";
 import type { PlanApprovalRequest } from "@/stores/session-store";
 import { isUpstreamBrandedModelId } from "@/lib/model-branding";
 import { preparePromptWithPersonalKnowledge } from "@/lib/knowledge-context";
+import { hydrateKnowledgeTraces, persistKnowledgeTrace } from "@/lib/knowledge-traces-client";
 import {
   organizationScopeIdsForSession,
   useKnowledgeStore,
@@ -168,7 +169,14 @@ export async function agentLoadSession(sessionId: string, cwd: string): Promise<
   // A load can recreate the resident Runtime session, so any renderer-side MCP
   // acknowledgement for the previous resident instance is stale.
   invalidateAgentKnowledgeSourceSync(sessionId);
-  return invoke<string | null>("agent_load_session", { sessionId, cwd });
+  const model = await invoke<string | null>("agent_load_session", { sessionId, cwd });
+  try {
+    await hydrateKnowledgeTraces(sessionId);
+    useKnowledgeStore.getState().setTraceLoadError(sessionId);
+  } catch (error) {
+    useKnowledgeStore.getState().setTraceLoadError(sessionId, `历史知识来源恢复失败：${String(error).replace(/^Error:\s*/, "")}。对话仍可继续；原记录已保留，可重试加载。`);
+  }
+  return model;
 }
 
 export async function agentListSessions(
@@ -454,6 +462,7 @@ export async function agentSend(
     displayText,
     promptId,
   );
+  await persistKnowledgeTrace(sessionId, promptId);
   await invoke<void>("agent_send", {
     sessionId,
     text: prepared.promptText,
@@ -479,6 +488,7 @@ export async function agentSendNow(
     displayText,
     promptId,
   );
+  await persistKnowledgeTrace(sessionId, promptId);
   await invoke<void>("agent_send", {
     sessionId,
     text: prepared.promptText,
@@ -883,8 +893,8 @@ export async function skillsRemove(path: string, cwd?: string): Promise<void> {
 }
 
 /** Enable or disable a skill by name (writes `[skills] disabled`). */
-export async function skillsToggle(name: string, enabled: boolean): Promise<void> {
-  await invoke<void>("skills_toggle", { name, enabled });
+export async function skillsToggle(name: string, enabled: boolean, cwd?: string): Promise<void> {
+  await invoke<void>("skills_toggle", { name, enabled, cwd: cwd ?? null });
 }
 
 /** Validate a folder, Markdown file, or ZIP without installing it. */
@@ -1024,8 +1034,10 @@ export async function agentSetSessionExpert(
   expertName: string,
   source: string,
   avatarLocal?: string,
+  expertPath?: string,
+  expectedRaw?: string,
 ): Promise<boolean> {
-  return invoke<boolean>("agent_set_session_expert", { sessionId, expertId, expertName, source, avatarLocal: avatarLocal ?? null });
+  return invoke<boolean>("agent_set_session_expert", { sessionId, expertId, expertName, source, avatarLocal: avatarLocal ?? null, expertPath: expertPath ?? null, expectedRaw: expectedRaw ?? null });
 }
 
 /** Remove the expert binding from a session. */
@@ -1036,6 +1048,10 @@ export async function agentClearSessionExpert(sessionId: string): Promise<boolea
 // ---------- experts / assistants (~/.echo-agent/agents/*.md) ----------
 
 /** List all agent definitions visible to EchoAgent. */
+export async function agentsValidateReferences(cwd: string, references: Array<{ id: string; name: string }>): Promise<void> {
+  if (references.length) await invoke("agents_validate_references", { cwd, references });
+}
+
 export async function agentsList(cwd?: string): Promise<AgentEntry[]> {
   return invoke<AgentEntry[]>("agents_list", { cwd: cwd ?? null });
 }
@@ -1048,6 +1064,15 @@ export async function agentsGet(path: string): Promise<string> {
 /** Save an agent file (create or overwrite) to ~/.echo-agent/agents/<name>.md. */
 export async function agentsSave(name: string, raw: string): Promise<AgentEntry> {
   return invoke<AgentEntry>("agents_save", { name, raw });
+}
+
+export async function projectAssetsUse(projectId: string, paths: string[]): Promise<string[]> {
+  return invoke<string[]>("project_assets_use", { projectId, paths });
+}
+
+/** Update one existing file; rejects stale contents and name collisions. */
+export async function agentsUpdate(path: string, expectedRaw: string, raw: string): Promise<AgentEntry> {
+  return invoke<AgentEntry>("agents_update", { path, expectedRaw, raw });
 }
 
 /** Delete an agent file by path. */

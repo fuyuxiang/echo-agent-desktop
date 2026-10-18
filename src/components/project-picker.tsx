@@ -32,7 +32,7 @@ export function useProjectPickerOptions(cwd?: string): {
           connectors: connectors
             .filter((item) => item.enabled)
             .map((item) => ({ id: item.name, name: item.name })),
-          experts: experts.map((item) => ({ id: item.path, name: item.name })),
+          experts: experts.map((item) => ({ id: item.path, name: item.name, scope: item.scope })),
           skills: skills
             .filter((item) => item.enabled)
             .map((item) => ({ id: item.path ?? item.name, name: item.displayName ?? item.name })),
@@ -226,7 +226,7 @@ export function RefPickerDialog({
                 <span className={`proj-picker-check${on ? " proj-picker-check--on" : ""}`}>
                   {on && <CheckIcon size="sm" />}
                 </span>
-                <span>{o.name}</span>
+                <span>{o.name}{o.scope && <small> · {o.scope === "project" ? "当前项目" : o.scope === "user" ? "用户专家" : "内置来源"}</small>}</span>
               </button>
             );
           })}

@@ -41,6 +41,7 @@ pub struct ResolvedOverlay {
 }
 
 fn env_overlay_inputs() -> (Option<String>, Option<PathBuf>) {
+    if crate::paths::controlled_discovery_home().is_some() { return (None, None); }
     let inline = match std::env::var_os(ECHO_AGENT_CONFIG_ENV) {
         Some(raw) => match raw.into_string() {
             Ok(s) => Some(s),

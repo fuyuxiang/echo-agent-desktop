@@ -96,8 +96,8 @@ export const codingApi = {
     invoke<CodingTask>("coding_task_report_interrupted", { root, taskId, interruption }),
   resumeTask: (root: string, taskId: string) =>
     invoke<CodingTask>("coding_task_resume", { root, taskId }),
-  beginVerification: (root: string, taskId: string) =>
-    invoke<CodingTask>("coding_task_begin_verification", { root, taskId }),
+  beginVerification: (root: string, taskId: string, expectedUpdatedAt?: string) =>
+    invoke<CodingTask>("coding_task_begin_verification", { root, taskId, expectedUpdatedAt }),
   rollbackTask: (root: string, taskId: string) =>
     invoke<string[]>("coding_task_rollback", { root, taskId }),
 

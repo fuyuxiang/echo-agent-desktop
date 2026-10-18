@@ -1,3 +1,4 @@
+import { cleanNativeReviewEnvironment } from "./lib/native-review-isolation.mjs";
 // Full host tests with isolated state. macOS preparation adds only local test
 // signatures; it never changes operating-system checks or release identities.
 import assert from 'node:assert/strict';
@@ -9,7 +10,7 @@ import { prepareMacosTestSignatures } from './prepare-macos-test-signatures.mjs'
 assert.equal(process.argv.length, 2, 'This entry runs all host tests; arbitrary filters are not accepted');
 const home = realpathSync(mkdtempSync(join(tmpdir(), 'echo-host-tests-')));
 const legacy = join(home, 'empty-legacy'); mkdirSync(legacy, { mode: 0o700 });
-const env = { ...process.env, ECHO_AGENT_HOME: home, GROK_HOME: legacy };
+const env = { ...cleanNativeReviewEnvironment(process.env), ECHO_AGENT_HOME: home, GROK_HOME: legacy };
 console.log(`Isolated host test data: ${home}`);
 const preparation = prepareMacosTestSignatures(env);
 if (process.platform === 'darwin') {

@@ -6,6 +6,7 @@ import { teamProgress, teamTasks } from "@/lib/team-progress";
 import { useSubagentStore, type SubagentRuntime } from "@/stores/subagent-store";
 import type { AgentEntry } from "@/lib/types";
 import { useGroupStore } from "@/features/groups/group-store";
+import { useSessionsStore } from "@/stores/sessions-store";
 import type { ChatMessage } from "@/stores/session-store";
 
 interface TeamStatusViewProps {
@@ -20,6 +21,7 @@ const EMPTY_MESSAGES: ChatMessage[] = [];
 const readableError = (error: unknown) => String(error).replace(/^Error:\s*/, "");
 
 export function TeamStatusView({ sessionId, messages = EMPTY_MESSAGES, onUseTeam, onViewTasks, onOpenGroup }: TeamStatusViewProps) {
+  const sessionCwd = useSessionsStore(state => state.independent.find(item => item.sessionId === sessionId)?.cwd);
   const linkedGroups = useGroupStore(state => state.groups);
   const [snapshot, setSnapshot] = useState<{ sessionId: string; teams: RuntimeTeamInfo[] } | null>(null);
   const [loading, setLoading] = useState(false);
@@ -96,7 +98,7 @@ export function TeamStatusView({ sessionId, messages = EMPTY_MESSAGES, onUseTeam
     setFormOpen(true); setFormBusy(true); setFormError(null); setNotice(null);
     setName(recover && recovery ? recovery.name : ""); setDescription(""); setSelected({});
     try {
-      const entries = (await agentsList()).filter((agent) => agent.scope === "user");
+      const entries = (await agentsList(sessionCwd)).filter((agent) => agent.scope === "user");
       if (activeSession.current !== target) return;
       setExperts(entries);
       if (recover && recovery) setSelected(Object.fromEntries(entries.filter((agent) => recovery.text.includes(agent.name)).map((agent) => [agent.name, agent.description ?? ""])));
@@ -143,7 +145,7 @@ export function TeamStatusView({ sessionId, messages = EMPTY_MESSAGES, onUseTeam
     {formOpen && <form className="team-status-view__form" aria-label="创建团队" onSubmit={(event) => void create(event)}>
       <label>团队名称<input value={name} onChange={(event) => setName(event.target.value)} maxLength={80} required disabled={formBusy} placeholder="例如：需求交付团队" /></label>
       <label>团队目标（选填）<textarea value={description} onChange={(event) => setDescription(event.target.value)} maxLength={4096} rows={2} disabled={formBusy} /></label>
-      <fieldset disabled={formBusy}><legend>选择本地专家，并设置团队分工</legend>
+      <fieldset disabled={formBusy}><legend>选择本地专家，并设置团队分工</legend><p>仅显示当前工作区实际生效的用户专家。同名项目定义会优先生效，请先解决名称冲突。</p>
         {experts.map((expert) => <div className="team-status-view__expert" key={expert.name}>
           <label className="team-status-view__check"><input type="checkbox" checked={Object.prototype.hasOwnProperty.call(selected, expert.name)} onChange={(event) => setSelected((previous) => {
             if (event.target.checked) return { ...previous, [expert.name]: expert.description ?? "" }; const next = { ...previous }; delete next[expert.name]; return next;

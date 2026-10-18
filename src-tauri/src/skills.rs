@@ -9,10 +9,11 @@
 //! state in `~/.echo-agent/config.toml` (`[skills] disabled`, `[skills] paths`) and
 //! reloads on file changes.
 
-use agent_client_protocol as acp;
 use echo_agent_tools::implementations::skills::capability::{
     ConnectorState, SkillCapabilityReport,
 };
+#[cfg(test)]
+use agent_client_protocol as acp;
 use serde::Deserialize;
 use serde_json::value::RawValue;
 use std::collections::HashMap;
@@ -21,7 +22,23 @@ use std::sync::Arc;
 use tauri::State;
 
 use crate::commands::AppState;
-use crate::ext::{call_ext, call_ext_value, raw_params};
+use crate::ext::{call_ext, raw_params};
+
+/// Disk transactions are successful only after each resident actor has applied
+/// the change. With no initialized runtime, the next session reads it from disk.
+pub(crate) async fn refresh_live_skills(state: &AppState) -> Result<(), String> {
+    let tx = state.tx.lock().unwrap().clone();
+    if let Some(tx) = tx { refresh_skills_with_tx(&tx).await?; }
+    Ok(())
+}
+
+async fn refresh_skills_with_tx(tx: &echo_agent_acp::AcpAgentTx) -> Result<(), String> {
+    let response = tokio::time::timeout(std::time::Duration::from_secs(60),
+        call_ext::<serde_json::Value>(tx, "echo.agent/internal/reload_skills", raw_params(&serde_json::json!({}))))
+        .await.map_err(|_| "技能配置已保存，但现有会话刷新超时；请重试刷新".to_string())?;
+    response.map_err(|error| format!("技能配置已保存，但现有会话刷新失败；请重试刷新：{error}"))?;
+    Ok(())
+}
 
 fn process_cwd() -> String {
     std::env::current_dir()
@@ -325,11 +342,11 @@ pub async fn skills_add(
         .ok_or("agent not initialized")?;
     let cwd = command_cwd(&state, &access, cwd)?;
     let params = raw_params(&serde_json::json!({ "path": path, "cwd": cwd }));
-    let _: acp::ExtResponse = call_ext_value(&tx, "echo.agent/skills/add", params)
+    let _: serde_json::Value = call_ext(&tx, "echo.agent/skills/add", params)
         .await
         .map_err(|e| e.to_string())?;
     access.record_configured_skill_source(&path)?;
-    Ok(())
+    refresh_live_skills(&state).await
 }
 
 /// Remove a skill path from `[skills].paths`.
@@ -349,18 +366,20 @@ pub async fn skills_remove(
     let path = access.require_configured_skill_source(&path)?;
     let cwd = command_cwd(&state, &access, cwd)?;
     let params = raw_params(&serde_json::json!({ "path": path, "cwd": cwd }));
-    let _: acp::ExtResponse = call_ext_value(&tx, "echo.agent/skills/remove", params)
+    let _: serde_json::Value = call_ext(&tx, "echo.agent/skills/remove", params)
         .await
         .map_err(|e| e.to_string())?;
-    Ok(())
+    refresh_live_skills(&state).await
 }
 
 /// Enable or disable a skill by name (writes `[skills] disabled`).
 #[tauri::command]
 pub async fn skills_toggle(
     state: State<'_, AppState>,
+    access: State<'_, crate::shell_fs::FilesystemAccess>,
     name: String,
     enabled: bool,
+    cwd: Option<String>,
 ) -> Result<(), String> {
     let tx = state
         .tx
@@ -368,11 +387,12 @@ pub async fn skills_toggle(
         .unwrap()
         .clone()
         .ok_or("agent not initialized")?;
-    let params = raw_params(&serde_json::json!({ "name": name, "enabled": enabled }));
-    let _: acp::ExtResponse = call_ext_value(&tx, "echo.agent/skills/toggle", params)
+    let cwd = command_cwd(&state, &access, cwd)?;
+    let params = raw_params(&serde_json::json!({ "name": name, "enabled": enabled, "cwd": cwd }));
+    let _: serde_json::Value = call_ext(&tx, "echo.agent/skills/toggle", params)
         .await
         .map_err(|e| e.to_string())?;
-    Ok(())
+    refresh_live_skills(&state).await
 }
 
 #[cfg(test)]
@@ -484,3 +504,7 @@ mod tests {
         assert!(paths.is_empty());
     }
 }
+
+#[cfg(test)]
+#[path = "skills_runtime_test.rs"]
+mod runtime_tests;

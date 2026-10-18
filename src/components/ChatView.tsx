@@ -3,6 +3,8 @@ import { History } from "lucide-react";
 import { PauseIcon } from "@/foundation/components/Icon/icons";
 import { useSessionStore, type ToolCallView } from "@/stores/session-store";
 import { useSessionsStore } from "@/stores/sessions-store";
+import { useKnowledgeStore } from "@/stores/knowledge-store";
+import { hydrateKnowledgeTraces } from "@/lib/knowledge-traces-client";
 import { createMarkdownHostConfig } from "@/lib/markdown-host";
 import { rewindExecute, rewindPoints, setCodingMode } from "@/lib/agent-client";
 import {
@@ -10,6 +12,7 @@ import {
   findToolCall,
   type SessionArtifact,
 } from "@/lib/session-artifacts";
+import { ARTIFACT_CATALOG_EVENT, loadSessionDocumentArtifacts } from "@/lib/artifact-catalog";
 import { MessageItem } from "./MessageItem";
 import { Composer } from "./Composer";
 import { PlanPanel } from "./PlanPanel";
@@ -144,6 +147,7 @@ export function ChatView({
   const planRevisionDirty = useSessionStore((s) => s.planRevisionDirty);
   const hasVisiblePlan = Boolean(plan && (plan.entries.length > 0 || planRevisionDirty));
   const sessionId = useSessionStore((s) => s.sessionId);
+  const traceLoadError = useKnowledgeStore(state => sessionId ? state.traceLoadErrors[sessionId] : undefined);
   const agentMode = useSessionStore((s) => s.agentMode);
   const control = useSessionStore((s) => s.control);
   const resumeSession = useSessionStore((s) => s.resumeSession);
@@ -429,7 +433,32 @@ export function ChatView({
   const [activeTool, setActiveTool] = useState<ToolCallView | null>(null);
   const [previewPath, setPreviewPath] = useState<string | null>(null);
 
-  const artifacts = useMemo(() => collectSessionArtifacts(messages), [messages]);
+  const [exportArtifacts, setExportArtifacts] = useState<{ sessionId: string; items: SessionArtifact[] } | null>(null);
+  useEffect(() => {
+    let active = true;
+    let generation = 0;
+    const load = (event?: Event) => {
+      // History focus changes before agent_load_session binds the native cwd.
+      // The existing model/loading guard turns false only after load settles.
+      if (!sessionId || modelLoading) return;
+      if (event && ((event as CustomEvent).detail?.source !== "document-export"
+        || (event as CustomEvent).detail?.sessionId !== sessionId)) return;
+      const request = ++generation;
+      void loadSessionDocumentArtifacts(sessionId).then(items => {
+        if (active && request === generation) setExportArtifacts({ sessionId, items });
+      }).catch(error => {
+        if (active) onToast?.(`无法加载会话成果：${String(error).replace(/^Error:\s*/, "")}`);
+      });
+    };
+    load();
+    window.addEventListener(ARTIFACT_CATALOG_EVENT, load);
+    return () => { active = false; window.removeEventListener(ARTIFACT_CATALOG_EVENT, load); };
+  }, [sessionId, modelLoading, onToast]);
+  const artifacts = useMemo(() => {
+    const combined = new Map(collectSessionArtifacts(messages).map(item => [item.path, item]));
+    if (exportArtifacts?.sessionId === sessionId) for (const item of exportArtifacts.items) combined.set(item.path, item);
+    return [...combined.values()];
+  }, [messages, exportArtifacts, sessionId]);
 
   // Keep active tool fresh when streaming updates status/content.
   useEffect(() => {
@@ -657,6 +686,10 @@ export function ChatView({
   return (
     <div className={"chatview" + (panelOpen ? " chatview--with-panel" : "")}>
       <div className="chatview__main">
+        {traceLoadError && <div className="chatview__error-banner" role="alert">
+          <span>{traceLoadError}</span>
+          <button type="button" onClick={() => { if (sessionId) void hydrateKnowledgeTraces(sessionId).then(() => useKnowledgeStore.getState().setTraceLoadError(sessionId)).catch(error => onToast?.(`恢复来源失败：${friendlyError(error)}`)); }}>重试恢复知识来源</button>
+        </div>}
         {error && (
           <div className="chatview__error-banner" role="alert">
             <span className="chatview__error-text" style={{ whiteSpace: "pre-wrap" }}>

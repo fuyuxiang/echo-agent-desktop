@@ -1,3 +1,4 @@
+import { cleanNativeReviewEnvironment } from "./lib/native-review-isolation.mjs";
 import { nativeReviewOutput } from './lib/native-review-output.mjs';
 // Real packaged application lifecycle review; no default profile or OS item.
 import assert from 'node:assert/strict';
@@ -129,7 +130,7 @@ export async function runNativeExitReview(executableArgument) {
       if (phase === 'flush-failure') writeFileSync(join(home, 'config.toml'), '', { mode: 0o600 });
       const reportPath = join(home, 'native-review.json');
       const beforeHash = existsSync(reportPath) ? hash(readFileSync(reportPath)) : null;
-      const env = { ...process.env };
+      const env = { ...cleanNativeReviewEnvironment(process.env) };
       for (const key of Object.keys(env)) if (key.startsWith('ECHO_DESKTOP_REVIEW') || key.startsWith('ECHO_EXIT_REVIEW') || ['ECHO_AGENT_HOME', 'ECHO_DESKTOP_VALIDATION', 'ECHO_THEIA_NODE', 'GROK_AUTH', 'GROK_AUTH_PATH'].includes(key)) delete env[key];
       Object.assign(env, { GROK_HOME: legacy, ECHO_DESKTOP_REVIEW: '1', ECHO_DESKTOP_REVIEW_EXIT: '1', ECHO_EXIT_REVIEW_PHASE: phase, ECHO_EXIT_REVIEW_MANIFEST: manifest });
       const startedAt = Date.now();

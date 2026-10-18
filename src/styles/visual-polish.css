@@ -3194,15 +3194,13 @@ button,
 }
 
 .settings-modal__close {
-  top: 14px;
-  right: 16px;
   width: 36px;
   height: 36px;
   border-radius: 10px;
 }
 
 .settings-modal__panel {
-  padding: 40px 42px 36px;
+  padding: 24px 42px 32px;
 }
 
 .settings-modal__panel > * {
@@ -3235,7 +3233,7 @@ button,
   align-items: flex-start;
   justify-content: space-between;
   gap: 24px;
-  padding: 0 48px 24px 0;
+  padding: 0 0 24px;
   border-bottom: 1px solid var(--ui-line);
 }
 
@@ -4470,7 +4468,7 @@ a.help-card:hover {
   }
 
   .settings-modal__panel {
-    padding: 34px 28px 28px;
+    padding: 24px 28px 28px;
   }
 
   .settings-section__body {
@@ -4540,13 +4538,8 @@ a.help-card:hover {
     white-space: nowrap;
   }
 
-  .settings-modal__close {
-    top: 10px;
-    right: 10px;
-  }
-
   .settings-modal__panel {
-    padding: 30px 20px 24px;
+    padding: 20px 20px 24px;
   }
 
   .settings-section__header,
@@ -4554,7 +4547,7 @@ a.help-card:hover {
     align-items: stretch;
     flex-direction: column;
     gap: 14px;
-    padding-right: 42px;
+    padding-right: 0;
   }
 
   .settings-section__actions {

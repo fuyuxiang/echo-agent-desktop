@@ -28,10 +28,72 @@ function segmentKeys(segments: TranscriptSegment[]): string[] {
   });
 }
 
-/** Process-lifetime drafts, rebased against each authoritative content snapshot. */
-export function createMeetingDraftStore() {
-  const transcripts = new Map<string, Draft<TranscriptSegment[]>>();
-  const minutes = new Map<string, Draft<string> & { transcriptBase: string }>();
+export const MEETING_DRAFTS_KEY = "echo.meeting-drafts.v1";
+type DraftStorage = Pick<Storage, "getItem" | "setItem">;
+
+class DraftMap<T> extends Map<string, T> {
+  constructor(private changed: () => void) { super(); }
+  set(key: string, value: T) { super.set(key, value); this.changed(); return this; }
+  delete(key: string) { const removed = super.delete(key); if (removed) this.changed(); return removed; }
+  clear() { super.clear(); this.changed(); }
+}
+
+/** Device-local drafts survive restart and rebase against authoritative content. */
+export function createMeetingDraftStore(storage?: DraftStorage) {
+  let ready = false;
+  let persistenceError: string | null = null;
+  let unreadable = false;
+  let originalBytes: string | null = null;
+  let exitWithoutSaving = false;
+  const snapshot = () => JSON.stringify({ version: 1, transcripts: [...transcripts], minutes: [...minutes] });
+  const ensureDurable = () => {
+    if (!storage || exitWithoutSaving) return;
+    if (unreadable) throw new Error(persistenceError ?? "会议草稿无法读取，请先恢复本地存储");
+    try {
+      const content = snapshot();
+      storage.setItem(MEETING_DRAFTS_KEY, content);
+      if (storage.getItem(MEETING_DRAFTS_KEY) !== content) throw new Error("写入校验失败");
+      persistenceError = null;
+    } catch (error) {
+      persistenceError = `会议草稿尚未保存在此设备，请重试保存后再退出：${String(error)}`;
+      throw new Error(persistenceError);
+    }
+  };
+  const changed = () => { exitWithoutSaving = false; if (ready) { try { ensureDurable(); } catch { /* visible error + exit veto */ } } };
+  const transcripts = new DraftMap<Draft<TranscriptSegment[]>>(changed);
+  const minutes = new DraftMap<Draft<string> & { transcriptBase: string }>(changed);
+  if (storage) {
+    try {
+      const content = storage.getItem(MEETING_DRAFTS_KEY);
+      originalBytes = content;
+      if (content) {
+        const data = JSON.parse(content);
+        const validSegments = (value: unknown): value is TranscriptSegment[] => Array.isArray(value) && value.every(segment =>
+          segment && typeof segment.text === "string" && typeof segment.speaker === "string" &&
+          [segment.id, segment.start, segment.end].every(Number.isFinite));
+        const validConflict = (conflict: unknown) => conflict === undefined || (!!conflict && typeof conflict === "object"
+          && typeof (conflict as MeetingDraftConflict).original === "string" && typeof (conflict as MeetingDraftConflict).canKeep === "boolean");
+        if (data?.version !== 1 || !Array.isArray(data.transcripts) || !Array.isArray(data.minutes)) throw new Error("草稿格式不受支持");
+        for (const entry of data.transcripts) {
+          if (!Array.isArray(entry) || typeof entry[0] !== "string" || !validSegments(entry[1]?.base)
+            || !validSegments(entry[1]?.value) || !validConflict(entry[1]?.conflict)) throw new Error("校对草稿格式损坏");
+          transcripts.set(entry[0], entry[1]);
+        }
+        for (const entry of data.minutes) {
+          if (!Array.isArray(entry) || typeof entry[0] !== "string" || typeof entry[1]?.base !== "string"
+            || typeof entry[1]?.value !== "string" || typeof entry[1]?.transcriptBase !== "string"
+            || !validConflict(entry[1]?.conflict)) throw new Error("纪要草稿格式损坏");
+          minutes.set(entry[0], entry[1]);
+        }
+      }
+    } catch (error) {
+      // Preserve the original bytes. Never replace unreadable drafts with an
+      // empty map; the UI and exit guard surface the recovery requirement.
+      unreadable = true;
+      persistenceError = `本地会议草稿读取失败，原数据已保留：${String(error)}`;
+    }
+  }
+  ready = true;
 
   const transcript = (record: MeetingRecord): Draft<TranscriptSegment[]> => {
     const draft = transcripts.get(record.id);
@@ -87,6 +149,21 @@ export function createMeetingDraftStore() {
   };
 
   return {
+    ensureDurable,
+    allowExitWithoutSaving: () => { exitWithoutSaving = true; },
+    cancelExitDiscard: () => { exitWithoutSaving = false; },
+    recoveryBytes: () => unreadable ? originalBytes : null,
+    resetUnreadable() {
+      if (!unreadable || !storage) return;
+      // Retain an exportable copy before resetting; failed writes leave the
+      // original key untouched and continue to veto automatic exit.
+      storage.setItem(`${MEETING_DRAFTS_KEY}.recovery`, originalBytes ?? "");
+      storage.setItem(MEETING_DRAFTS_KEY, JSON.stringify({ version: 1, transcripts: [], minutes: [] }));
+      unreadable = false;
+      transcripts.clear(); minutes.clear();
+      persistenceError = null;
+    },
+    persistenceError: () => persistenceError,
     transcript,
     minutes: minute,
     editTranscript(record: MeetingRecord, value: TranscriptSegment[]) {
@@ -128,4 +205,10 @@ export function createMeetingDraftStore() {
   };
 }
 
-export const meetingDrafts = createMeetingDraftStore();
+function deviceDraftStorage(): DraftStorage {
+  return {
+    getItem: key => globalThis.localStorage.getItem(key),
+    setItem: (key, value) => globalThis.localStorage.setItem(key, value),
+  };
+}
+export const meetingDrafts = createMeetingDraftStore(deviceDraftStorage());

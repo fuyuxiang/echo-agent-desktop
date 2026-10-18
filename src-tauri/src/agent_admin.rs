@@ -1416,6 +1416,8 @@ pub async fn session_fork(
         .await
         .map_err(|e| e.to_string())?;
     let forked_id = parse_session_fork_response(v, &session_id, &trusted_cwd)?;
+    crate::knowledge_traces::clone_session(&session_id, &forked_id)
+        .map_err(|error| format!("分叉会话 {forked_id} 已创建，但历史知识来源复制失败：{error}。原会话记录已保留，请在历史列表中打开分叉或重试。"))?;
     // A fork is a continuation of the same task context, so it inherits the
     // source task's permission mode without affecting either task afterwards.
     if crate::policy::locked_permission_mode().is_none() {

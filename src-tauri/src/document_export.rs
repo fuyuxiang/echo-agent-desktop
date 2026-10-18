@@ -21,13 +21,13 @@ pub struct DocumentExportRequest {
     pub(crate) format: String,
 }
 
-#[derive(Debug, Serialize)]
+#[derive(Debug, Clone, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct DocumentExportReceipt {
     pub(crate) path: String,
-    format: String,
-    byte_size: u64,
-    sha256: String,
+    pub(crate) format: String,
+    pub(crate) byte_size: u64,
+    pub(crate) sha256: String,
 }
 
 fn valid_format(format: &str) -> bool {
@@ -101,7 +101,7 @@ fn office_resource(app: &AppHandle, relative: &str) -> Result<PathBuf, String> {
     }
 }
 
-fn validate_output(path: &Path, format: &str) -> Result<(u64, String), String> {
+pub(crate) fn validate_output(path: &Path, format: &str) -> Result<(u64, String), String> {
     let metadata =
         std::fs::symlink_metadata(path).map_err(|error| format!("文档未生成：{error}"))?;
     if !metadata.is_file() || metadata.file_type().is_symlink() {
@@ -235,6 +235,14 @@ pub async fn export(
     app: &AppHandle,
     request: DocumentExportRequest,
 ) -> Result<Option<DocumentExportReceipt>, String> {
+    export_for_session(app, request, None).await
+}
+
+async fn export_for_session(
+    app: &AppHandle,
+    request: DocumentExportRequest,
+    session_id: Option<&str>,
+) -> Result<Option<DocumentExportReceipt>, String> {
     validate_request(&request)?;
     let filename = format!("{}.{}", safe_file_title(&request.title), request.format);
     let Some(mut destination) =
@@ -246,7 +254,7 @@ pub async fn export(
     if destination.extension().is_none() {
         destination.set_extension(&request.format);
     }
-    export_to_path(app, request, &destination).await.map(Some)
+    export_to_path_for_session(app, request, &destination, session_id).await.map(Some)
 }
 
 pub(crate) fn validate_request(request: &DocumentExportRequest) -> Result<(), String> {
@@ -267,6 +275,15 @@ pub(crate) async fn export_to_path(
     request: DocumentExportRequest,
     destination: &Path,
 ) -> Result<DocumentExportReceipt, String> {
+    export_to_path_for_session(app, request, destination, None).await
+}
+
+async fn export_to_path_for_session(
+    app: &AppHandle,
+    request: DocumentExportRequest,
+    destination: &Path,
+    session_id: Option<&str>,
+) -> Result<DocumentExportReceipt, String> {
     validate_request(&request)?;
     if !destination
         .extension()
@@ -275,28 +292,51 @@ pub(crate) async fn export_to_path(
     {
         return Err("保存路径的扩展名与文档格式不一致".into());
     }
+    let canonical_destination;
+    let destination = if session_id.is_some() {
+        let parent = destination.parent().ok_or("无效的保存目录")?;
+        let name = destination.file_name().ok_or("无效的保存文件名")?;
+        canonical_destination = dunce::canonicalize(parent).map_err(|error| format!("无法确认保存目录：{error}"))?.join(name);
+        canonical_destination.as_path()
+    } else { destination };
     let temp = tempfile::tempdir().map_err(|error| format!("无法创建文档临时目录：{error}"))?;
     let output = temp.path().join(format!("output.{}", request.format));
     generate(app, &request, &output).await?;
     let (byte_size, sha256) = validate_output(&output, &request.format)?;
-    install_output(&output, destination)?;
-    Ok(DocumentExportReceipt {
+    let receipt = DocumentExportReceipt {
         path: destination.to_string_lossy().into_owned(),
         format: request.format,
         byte_size,
         sha256,
-    })
+    };
+    // Persist the expected verified receipt before publishing the output. If
+    // the final index promotion fails, history can recover the staged receipt
+    // by verifying its hash against the installed file after restart.
+    if let Some(session) = session_id {
+        crate::session_artifacts::stage(session, receipt.clone(), &request.title)?;
+    }
+    install_output(&output, destination)?;
+    if let Some(session) = session_id {
+        if let Err(error) = crate::session_artifacts::record(session, receipt.clone(), &request.title) {
+            tracing::warn!(%error, "export receipt staged; history will verify published output");
+        }
+    }
+    Ok(receipt)
 }
 
 #[tauri::command]
 pub async fn document_export(
     app: AppHandle,
     access: tauri::State<'_, crate::shell_fs::FilesystemAccess>,
+    state: tauri::State<'_, crate::commands::AppState>,
+    session_id: Option<String>,
     request: DocumentExportRequest,
 ) -> Result<Option<DocumentExportReceipt>, String> {
-    let result = export(&app, request).await?;
+    if let Some(session) = &session_id { state.session_workspace(session)?; }
+    let result = export_for_session(&app, request, session_id.as_deref()).await?;
     if let Some(receipt) = &result {
-        access.authorize_file(Path::new(&receipt.path))?;
+        access.authorize_file(Path::new(&receipt.path))
+            .map_err(|error| format!("文件已保存到 {}，成果回执已保留；打开前需要重新授权：{error}", receipt.path))?;
     }
     Ok(result)
 }

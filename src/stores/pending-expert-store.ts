@@ -17,6 +17,9 @@ export interface PendingExpert {
   description: string;
   /** Default init prompt to pre-fill in the composer. */
   quickPrompt?: string;
+  /** Exact selected file/version, revalidated before creating a task. */
+  definitionPath?: string;
+  definitionRaw?: string;
   /** Expert id for persistence. */
   expertId: string;
   /** Source of the local expert definition. */
@@ -36,6 +39,7 @@ interface PendingExpertState {
 
 export const usePendingExpertStore = create<PendingExpertState>((set) => ({
   expert: null,
-  set: (expert) => set({ expert }),
+  // Scope (user/project) describes discovery, not the native source contract.
+  set: (expert) => set({ expert: { ...expert, source: "local" } }),
   clear: () => set({ expert: null }),
 }));

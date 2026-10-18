@@ -1,3 +1,6 @@
+import { invoke } from "@tauri-apps/api/core";
+import { registerDocumentArtifact } from "@/lib/artifact-catalog";
+vi.mock("@tauri-apps/api/core", () => ({invoke: vi.fn()}));
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { act, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import "@testing-library/jest-dom/vitest";
@@ -22,6 +25,7 @@ const file = (name: string, root: string): DirEntry => ({
 });
 
 beforeEach(() => {
+  localStorage.clear(); vi.mocked(invoke).mockReset().mockResolvedValue(undefined);
   vi.mocked(listDir).mockReset().mockResolvedValue([]);
   vi.mocked(openLocalPath).mockClear();
 });
@@ -51,6 +55,22 @@ describe("MyFilesPanel", () => {
     const row = screen.getByRole("button", { name: "打开文件 new.txt" });
     fireEvent.keyDown(row, { key: "Enter" });
     expect(openLocalPath).toHaveBeenCalledWith("/work/two/new.txt", "/work/two");
+  });
+
+  it("历史任务成果在核验原生回执后才交给系统打开", async () => {
+    const receipt = {path: "/outside/report.docx", format: "docx" as const, byteSize: 10, sha256: "b".repeat(64)};
+    registerDocumentArtifact(receipt, "historical-session", "历史报告", "/old-workspace");
+    let ready!: () => void;
+    vi.mocked(invoke).mockImplementation(async command => {
+      if (command === "session_export_authorize") return new Promise<void>(resolve => {ready = resolve;});
+      return undefined;
+    });
+    render(<MyFilesPanel cwd="/new-workspace" />);
+    fireEvent.click(await screen.findByRole("button", {name: "打开成果 /outside/report.docx"}));
+    expect(invoke).toHaveBeenCalledWith("session_export_authorize", {sessionId: "historical-session", path: receipt.path, sha256: receipt.sha256});
+    expect(openLocalPath).not.toHaveBeenCalled();
+    await act(async () => {ready();});
+    expect(openLocalPath).toHaveBeenCalledWith(receipt.path, "/old-workspace");
   });
 
   it("目录加载失败显示错误与重试，不误报暂无文件", async () => {

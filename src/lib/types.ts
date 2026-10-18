@@ -882,6 +882,8 @@ export interface Automation {
   skills: string[];
   expertId?: string;
   expertName?: string;
+  /** Absolute stable definition path captured when selecting the expert. */
+  expertPath?: string;
   connectorIds: string[];
   permissionMode: AutomationPermissionMode;
   scheduleType: AutomationScheduleType;
@@ -901,10 +903,12 @@ export interface Automation {
 
 /** A single run-history entry (运行记录). */
 export interface AutomationRunRecord {
+  completionPending?: boolean;
+  notificationDelivery?: string;
   id: string;
   automationId: string;
   automationName: string;
-  status: "queued" | "running" | "success" | "failed" | string;
+  status: "queued" | "running" | "success" | "failed" | "interrupted" | string;
   startedAt: string;
   finishedAt?: string;
   sessionId?: string;

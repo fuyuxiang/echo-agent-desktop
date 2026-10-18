@@ -4,7 +4,7 @@ import { useSessionsStore, selectHasFilter } from "@/stores/sessions-store";
 import { useProjectsStore } from "@/stores/projects-store";
 import { useOrgSessionStore } from "@/stores/org-session-store";
 import { IS_MACOS } from "@/lib/platform";
-import { isCapabilityView } from "@/lib/capability-navigation";
+import { CAPABILITY_SECTION_LABEL, isCapabilityView } from "@/lib/capability-navigation";
 import {
   agentRenameSession,
   agentDeleteSession,
@@ -1019,7 +1019,7 @@ export function Sidebar({
             onClick={() => onNavigate(label)}
           >
             <Icon size="md" />
-            <span>{label}</span>
+            <span>{label === "专家·技能·连接器" ? CAPABILITY_SECTION_LABEL : label}</span>
           </button>
         ))}
         <MoreDropdown onNavigate={onNavigate} activeNav={activeNav} />

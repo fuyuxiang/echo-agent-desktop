@@ -484,7 +484,7 @@ pub fn resolve_model_path(
     input: &str,
 ) -> PathBuf {
     let input = sanitize_model_path_arg(input);
-    let expanded = shellexpand::tilde(input);
+    let expanded = shellexpand::tilde_with_context(input, || echo_agent_config::discovery_home_dir().map(|home| home.to_string_lossy().into_owned()));
     let input_path = std::path::Path::new(expanded.as_ref());
     if let Some(display) = display_cwd
         && input_path.is_absolute()
@@ -1534,20 +1534,20 @@ mod tests {
     }
     #[test]
     fn resolve_model_path_tilde_expands_to_home() {
-        let home = dirs::home_dir().expect("test requires home_dir");
+        let home = echo_agent_config::discovery_home_dir().expect("test requires home_dir");
         let cwd = std::path::Path::new("/worktree/abc");
         let result = super::resolve_model_path(cwd, None, "~/foo/bar.rs");
         assert_eq!(result, home.join("foo/bar.rs"));
     }
     #[test]
     fn resolve_model_path_tilde_alone() {
-        let Some(home) = dirs::home_dir() else { return };
+        let Some(home) = echo_agent_config::discovery_home_dir() else { return };
         let cwd = std::path::Path::new("/worktree/abc");
         assert_eq!(super::resolve_model_path(cwd, None, "~"), home);
     }
     #[test]
     fn resolve_model_path_tilde_slash_only() {
-        let Some(home) = dirs::home_dir() else { return };
+        let Some(home) = echo_agent_config::discovery_home_dir() else { return };
         let cwd = std::path::Path::new("/worktree/abc");
         assert_eq!(super::resolve_model_path(cwd, None, "~/"), home);
     }
@@ -1574,7 +1574,7 @@ mod tests {
     }
     #[test]
     fn resolve_model_path_tilde_with_display_cwd() {
-        let Some(home) = dirs::home_dir() else { return };
+        let Some(home) = echo_agent_config::discovery_home_dir() else { return };
         let cwd = std::path::Path::new("/worktree/abc");
         let display = home.join("project");
         let result = super::resolve_model_path(cwd, Some(&display), "~/project/src/main.rs");

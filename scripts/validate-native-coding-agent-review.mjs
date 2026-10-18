@@ -1,3 +1,4 @@
+import { cleanNativeReviewEnvironment } from "./lib/native-review-isolation.mjs";
 import { nativeReviewOutput } from './lib/native-review-output.mjs';
 // Actual isolated native Code Agent acceptance. The --self-test mode exercises
 // only synthetic driver guards and local Node fixtures; it is not Native QA.
@@ -30,7 +31,7 @@ const seed = (cwd) => {
 };
 const nodeTest = (cwd) => {
   const child = spawnSync(process.execPath, ['--test'], { cwd, encoding: 'utf8', timeout: 15000,
-    env: { ...process.env, NODE_OPTIONS: '', NODE_PATH: '' }, maxBuffer: 1024 * 1024 });
+    env: { ...cleanNativeReviewEnvironment(process.env), NODE_OPTIONS: '', NODE_PATH: '' }, maxBuffer: 1024 * 1024 });
   assert(!child.error && child.signal === null, `Node acceptance execution failed: ${child.error ?? child.signal}`);
   return { command: 'node --test', exitCode: child.status, stdout: child.stdout, stderr: child.stderr,
     environment: 'actual isolated local Node subprocess, not a model response' };
@@ -310,7 +311,7 @@ const physicalEvidence = (report) => {
     contentRevision: expected.contentRevision, verificationId: expected.verificationId,
     completedWriteToolIds: writes.map(([id]) => id), actualToolsRecorded: tools.size };
 };
-const launchEnv = { ...process.env, GROK_HOME: legacy, ECHO_DESKTOP_REVIEW: '1', ECHO_DESKTOP_REVIEW_CODE_AGENT: '1',
+const launchEnv = { ...cleanNativeReviewEnvironment(process.env), GROK_HOME: legacy, ECHO_DESKTOP_REVIEW: '1', ECHO_DESKTOP_REVIEW_CODE_AGENT: '1',
   npm_config_cache: join(home, 'npm-cache'), npm_config_update_notifier: 'false', npm_config_audit: 'false', npm_config_fund: 'false',
   ECHO_DESKTOP_REVIEW_CODE: '0', ECHO_DESKTOP_REVIEW_WEBDAV: '0', ECHO_DESKTOP_REVIEW_MEDIA: '0', ECHO_DESKTOP_REVIEW_EXTENDED: '0' };
 for (const name of ['ECHO_AGENT_HOME', 'ECHO_DESKTOP_VALIDATION', 'ECHO_THEIA_NODE', 'NODE_OPTIONS', 'NODE_PATH']) delete launchEnv[name];

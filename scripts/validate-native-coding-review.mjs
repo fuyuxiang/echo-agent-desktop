@@ -1,3 +1,4 @@
+import { cleanNativeReviewEnvironment } from "./lib/native-review-isolation.mjs";
 import { nativeReviewOutput } from './lib/native-review-output.mjs';
 // Actual native Code acceptance, continuing only an existing isolated review
 // home. Run after all prior apps, Cargo, and staging have finished.
@@ -80,7 +81,7 @@ const legacy = join(home, 'empty-legacy');
 assert(lstatSync(legacy).isDirectory() && !lstatSync(legacy).isSymbolicLink(), 'Expected the original isolated empty legacy directory');
 const lock = openSync(lockPath, 'wx', 0o600);
 writeFileSync(lock, `${process.pid}\n`);
-const launchEnv = { ...process.env, GROK_HOME: legacy, ECHO_DESKTOP_REVIEW: '1', ECHO_DESKTOP_REVIEW_CODE: '1',
+const launchEnv = { ...cleanNativeReviewEnvironment(process.env), GROK_HOME: legacy, ECHO_DESKTOP_REVIEW: '1', ECHO_DESKTOP_REVIEW_CODE: '1',
   ECHO_DESKTOP_REVIEW_CODE_CONTINUE: continueExistingTask ? '1' : '0',
   ECHO_DESKTOP_REVIEW_CODE_DELIVERY_CONTINUE: continueDeliveryReview ? '1' : '0',
   ECHO_DESKTOP_REVIEW_MEDIA: '0', ECHO_DESKTOP_REVIEW_EXTENDED: '0' };

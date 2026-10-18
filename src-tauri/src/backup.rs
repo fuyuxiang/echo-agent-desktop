@@ -28,6 +28,9 @@ const FILES: &[&str] = &[
     "desktop/desktop-preferences.json",
 ];
 const DIRS: &[&str] = &[
+    "knowledge-traces",
+    "automation-terminal-outbox",
+    "session-artifacts",
     "sessions",
     "memory",
     "group-memory",
@@ -44,7 +47,7 @@ pub const UI_KEYS: &[&str] = &[
     "echoagent.group-outbox.v1",
     "echoagent.outbox.v1",
     "echoagent.draft-attachments.v1",
-    "echoagent.task-artifacts.v1",
+    "echoagent.task-artifacts.v1", "echo.meeting-drafts.v1", "echo.meeting-drafts.v1.recovery",
     "echoagent.usage",
     "echoagent.quota",
     "echoagent.usage-snapshots.v1",

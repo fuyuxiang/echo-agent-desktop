@@ -1,3 +1,4 @@
+import { cleanNativeReviewEnvironment } from "./lib/native-review-isolation.mjs";
 import { isReviewModelId, reviewModelId, seedReviewModel, redactReviewModelSecrets, captureReviewModelLogs } from './lib/native-review-model.mjs';
 import { nativeReviewOutput } from './lib/native-review-output.mjs';
 // Parent accepts only real native reports, Chrome requests and physical bytes.
@@ -84,7 +85,7 @@ export async function runNativeBrowserReview(executable, modelId = 'echoagent-oj
         expected: phase === 'restart' ? expected : null };
       writeFileSync(join(home, 'native-browser-manifest.private.json'), JSON.stringify(manifest), { mode: 0o600 });
       const reportPath = join(home, 'native-review.json'); if (existsSync(reportPath)) unlinkSync(reportPath);
-      const env = { ...process.env, ECHO_DESKTOP_REVIEW: '1', ECHO_DESKTOP_REVIEW_BROWSER: '1',
+      const env = { ...cleanNativeReviewEnvironment(process.env), ECHO_DESKTOP_REVIEW: '1', ECHO_DESKTOP_REVIEW_BROWSER: '1',
         ECHO_DESKTOP_REVIEW_PHASE: phase, GROK_HOME: legacy };
       for (const key of Object.keys(env)) if ((key.startsWith('ECHO_DESKTOP_REVIEW_')
         && !['ECHO_DESKTOP_REVIEW_BROWSER', 'ECHO_DESKTOP_REVIEW_PHASE'].includes(key))

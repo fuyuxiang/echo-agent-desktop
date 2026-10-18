@@ -1,3 +1,4 @@
+import { cleanNativeReviewEnvironment } from "./lib/native-review-isolation.mjs";
 import assert from 'node:assert/strict';
 import { spawn } from 'node:child_process';
 import { createHash } from 'node:crypto';
@@ -59,7 +60,7 @@ try {
     entry.hidden = true;
     writeFileSync(join(output, 'package-resource-review.json'), JSON.stringify(result, null, 2));
   }
-  const env = { ...process.env };
+  const env = { ...cleanNativeReviewEnvironment(process.env) };
   delete env.ECHO_THEIA_NODE;
   const nativeCode = await run(process.execPath, [join(repository, 'scripts/validate-native-review.mjs'), executable], {
     ...env, UI_REVIEW_OUTPUT: join(output, 'native'),

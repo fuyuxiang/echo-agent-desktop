@@ -1,6 +1,8 @@
 import { describe, it, expect } from "vitest";
 import {
   buildDraft,
+  draftFromAutomation,
+  automationFromDraft,
   defaultSchedule,
   describeSchedule,
   describeValidity,
@@ -191,4 +193,15 @@ describe("schedule-utils", () => {
     expect(draft.scheduleType).toBe("recurring");
     expect(draft.pushToWeChat).toBe(true);
   });
+});
+
+
+it("专家稳定定义路径在Automation与编辑草稿往返时保留，旧JSON不自动猜路径", () => {
+  const draft = {...buildDraft(), name: "task", prompt: "run", expertId: "Expert", expertName: "Expert", expertPath: "/stable/expert.md"};
+  const automation = automationFromDraft(draft);
+  expect(draftFromAutomation(automation).expertPath).toBe("/stable/expert.md");
+  const legacy = {...automation, expertPath: undefined};
+  const loaded = draftFromAutomation(JSON.parse(JSON.stringify(legacy)));
+  expect(loaded.expertPath).toBeUndefined();
+  expect(validateDraft(loaded, {isCreating: false})).toContain("重新选择专家");
 });

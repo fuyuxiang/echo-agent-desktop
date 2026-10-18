@@ -186,7 +186,7 @@ fn discover_servers(cwd: &Path) -> (Vec<ConfigSourceStatus>, Vec<DiscoveredServe
                 reason: "claude_compat imported = true".to_string(),
             },
         });
-    } else if let Some(home) = dirs::home_dir() {
+    } else if let Some(home) = echo_agent_config::discovery_home_dir() {
         let claude_path = home.join(".claude.json");
         if claude_path.is_file() {
             sources.push(ConfigSourceStatus {

@@ -414,7 +414,7 @@ fn git_derived_workspace_key(cwd: &Path) -> PathBuf {
 
 /// Whether `path` resolves to the user's home directory.
 pub fn is_home_dir(path: &Path) -> bool {
-    let Some(home) = dirs::home_dir() else {
+    let Some(home) = echo_agent_config::discovery_home_dir() else {
         return false;
     };
     canonicalize_or_owned(path) == canonicalize_or_owned(&home)
@@ -953,7 +953,7 @@ mod tests {
             .unwrap_or_else(|e| e.into_inner());
         let tmp = tempfile::tempdir().unwrap();
         let store_path = tmp.path().join(TRUST_FILE_NAME);
-        let Some(home) = dirs::home_dir() else {
+        let Some(home) = echo_agent_config::discovery_home_dir() else {
             return; // no home dir in this environment; nothing to assert
         };
 
@@ -1111,7 +1111,7 @@ mod tests {
             .unwrap_or_else(|e| e.into_inner());
         // A hand-edited / migrated `[folders."<home>"]` record must not trust
         // repos under $HOME — the read side ignores it, matching set_trusted.
-        let Some(home) = dirs::home_dir() else {
+        let Some(home) = echo_agent_config::discovery_home_dir() else {
             return; // no home dir in this environment; nothing to assert
         };
         let canonical_home = canonicalize_or_owned(&home);

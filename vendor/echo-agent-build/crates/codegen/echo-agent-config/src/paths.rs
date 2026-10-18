@@ -4,6 +4,37 @@ use std::path::PathBuf;
 
 pub use echo_agent_home::{default_echo_agent_home, echo_agent_home, user_echo_agent_home};
 
+/// Acceptance profiles isolate compatibility discovery as well as native data.
+/// Never change OS HOME: normal launches retain their existing user discovery.
+pub fn controlled_discovery_home() -> Option<PathBuf> {
+    let isolated = std::env::var("ECHO_AGENT_REVIEW_ISOLATED").as_deref() == Ok("1")
+        || std::env::var("ECHO_DESKTOP_REVIEW").as_deref() == Ok("1")
+        || std::env::var("ECHO_DESKTOP_VALIDATION").as_deref() == Ok("1");
+    if !isolated { return None; }
+    // Fail closed rather than discovering real HOME when a validation launch
+    // is malformed. Native entrypoints separately validate the private root.
+    Some(review_discovery_root(std::env::var_os("ECHO_AGENT_HOME").map(PathBuf::from)))
+}
+
+fn review_discovery_root(root: Option<PathBuf>) -> PathBuf {
+    root.filter(|root| root.is_absolute())
+        .unwrap_or_else(|| std::env::temp_dir().join("echo-invalid-review-profile"))
+        .join("compat-home")
+}
+
+pub fn resolve_discovery_home_with(
+    controlled_home: Option<PathBuf>,
+    normal_home: impl FnOnce() -> Option<PathBuf>,
+) -> Option<PathBuf> {
+    // Keep the fallback lazy: review launches never even invoke an OS HOME
+    // resolver, much less inspect its .agents/.claude compatibility trees.
+    controlled_home.or_else(normal_home)
+}
+
+pub fn discovery_home_dir() -> Option<PathBuf> {
+    resolve_discovery_home_with(controlled_discovery_home(), echo_agent_home::os_home_dir)
+}
+
 #[cfg(target_os = "macos")]
 const CLAUDE_MANAGED_SETTINGS_PATH: &str =
     "/Library/Application Support/ClaudeCode/managed-settings.json";
@@ -37,7 +68,7 @@ pub fn system_config_dir() -> Option<PathBuf> {
 /// System path for the managed-settings.json used for settings compat, if it exists.
 #[cfg(any(target_os = "macos", target_os = "linux"))]
 pub fn claude_managed_settings_path() -> Option<PathBuf> {
-    let path = PathBuf::from(CLAUDE_MANAGED_SETTINGS_PATH);
+    let path = claude_managed_settings_probe_path()?;
     path.exists().then_some(path)
 }
 
@@ -50,7 +81,9 @@ pub fn claude_managed_settings_path() -> Option<PathBuf> {
 /// compat, whether or not it exists. `None` on unsupported platforms.
 #[cfg(any(target_os = "macos", target_os = "linux"))]
 pub fn claude_managed_settings_probe_path() -> Option<PathBuf> {
-    Some(PathBuf::from(CLAUDE_MANAGED_SETTINGS_PATH))
+    Some(controlled_discovery_home()
+        .map(|home| home.join("system/claude/managed-settings.json"))
+        .unwrap_or_else(|| PathBuf::from(CLAUDE_MANAGED_SETTINGS_PATH)))
 }
 
 #[cfg(not(any(target_os = "macos", target_os = "linux")))]
@@ -427,5 +460,30 @@ mod tests {
     #[test]
     fn slugify_truncates() {
         assert_eq!(slugify(&"a".repeat(100), 10).len(), 10);
+    }
+}
+
+#[cfg(test)]
+mod review_isolation_tests {
+    use super::*;
+
+    #[test]
+    fn controlled_marker_discovery_stays_in_owned_profile() {
+        let root = tempfile::tempdir().unwrap();
+        let foreign = root.path().join("synthetic-foreign-home");
+        let profile = root.path().join("review-profile");
+        for (home, marker) in [(&foreign, "foreign-secret-marker"),
+            (&review_discovery_root(Some(profile.clone())), "owned-review-marker")] {
+            std::fs::create_dir_all(home.join(".agents/skills/marker")).unwrap();
+            std::fs::write(home.join(".agents/skills/marker/SKILL.md"), marker).unwrap();
+        }
+        let selected = resolve_discovery_home_with(Some(review_discovery_root(Some(profile.clone()))),
+            || panic!("isolated discovery invoked normal HOME resolver")).unwrap();
+        let normal = resolve_discovery_home_with(None, || Some(foreign.clone())).unwrap();
+        assert_eq!(std::fs::read_to_string(normal.join(".agents/skills/marker/SKILL.md")).unwrap(), "foreign-secret-marker");
+        assert!(selected.starts_with(&profile));
+        assert!(!selected.starts_with(&foreign));
+        assert_eq!(std::fs::read_to_string(selected.join(".agents/skills/marker/SKILL.md")).unwrap(), "owned-review-marker");
+        assert!(review_discovery_root(Some(PathBuf::from("relative"))).is_absolute());
     }
 }

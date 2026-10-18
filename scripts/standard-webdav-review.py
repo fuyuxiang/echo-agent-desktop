@@ -230,7 +230,8 @@ def main() -> int:
             for phase in ["first", "restart"]:
                 rust_output = output.with_name(output.stem + f"-{phase}-rust.json")
                 log = output.with_name(output.stem + f"-{phase}-rust.log")
-                env = {**os.environ, "ECHO_AGENT_HOME": str(home),
+                clean_env = {k: v for k, v in os.environ.items() if not k.startswith(("ECHO_AGENT_", "GROK_", "OTEL_", "CLAUDE_", "CURSOR_", "OPENAI_", "ANTHROPIC_"))}
+                env = {**clean_env, "ECHO_AGENT_REVIEW_ISOLATED": "1", "ECHO_AGENT_TELEMETRY_ENABLED": "false", "ECHO_AGENT_TELEMETRY_TRACE_UPLOAD": "false", "ECHO_AGENT_HOME": str(home),
                        "ECHO_WEBDAV_REVIEW_MANIFEST": str(manifest),
                        "ECHO_WEBDAV_REVIEW_OUTPUT": str(rust_output),
                        "ECHO_WEBDAV_REVIEW_PHASE": phase,

@@ -66,6 +66,7 @@ export function exportOfficeDocument(
   title: string,
   markdown: string,
   format: OfficeFormat,
+  sessionId?: string,
 ): Promise<DocumentExportReceipt | null> {
-  return invoke("document_export", { request: { title, markdown, format } });
+  return invoke("document_export", { request: { title, markdown, format }, sessionId: sessionId ?? null });
 }

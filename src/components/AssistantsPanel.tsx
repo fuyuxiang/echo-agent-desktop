@@ -30,12 +30,14 @@ import {
   agentsDelete,
   agentsList,
   agentsSave,
+  agentsUpdate,
   agentsTemplate,
 } from "@/lib/agent-client";
 import type { AgentEntry } from "@/lib/types";
 import { useModalFocus } from "@/lib/use-modal-focus";
 import { useUnsavedClose } from "@/lib/use-unsaved-close";
 import { useAppDialog } from "./AppDialog";
+import { mergeExpertDefinition } from "@/lib/expert-definition";
 import { CapabilityEmptyState, CapabilityError, CapabilityPage } from "./experts-panel/shared/CapabilityPage";
 
 const AVATAR_PRESETS: { bg: string; emoji: string }[] = [
@@ -199,26 +201,22 @@ export function AssistantsPanel({ onUseAssistant, onToast, embedded = false, cre
       systemPrompt: extractBody(a.raw),
       avatar: a.avatar, modelTags: a.modelTags ? [...a.modelTags] : [],
       isNew: false,
+      originalRaw: a.raw,
     });
   }, []);
 
   const handleSave = useCallback(async (draft: EditorDraft) => {
     if (!draft.name.trim()) { onToast?.("名称不能为空"); return; }
     try {
-      const raw = await agentsTemplate(draft.name, draft.description, draft.systemPrompt, draft.avatar, draft.modelTags.length > 0 ? draft.modelTags : undefined);
-      const saved = await agentsSave(draft.name, raw);
-      let cleanupWarning: string | null = null;
-      if (!draft.isNew && draft.path && draft.path !== saved.path) {
-        try {
-          await agentsDelete(draft.path);
-        } catch (cleanupError) {
-          cleanupWarning = String(cleanupError).replace(/^Error:\s*/, "");
-        }
+      if (userAssistants.some(agent => agent.path !== draft.path && agent.name.trim().toLocaleLowerCase() === draft.name.trim().toLocaleLowerCase())) {
+        throw new Error("已有同名专家，请使用其他名称；原配置不会被覆盖");
       }
+      const generated = await agentsTemplate(draft.name, draft.description, draft.systemPrompt, draft.avatar, draft.modelTags.length > 0 ? draft.modelTags : undefined);
+      const raw = draft.isNew ? generated : await mergeExpertDefinition(draft.originalRaw ?? "", generated);
+      const saved = draft.isNew ? await agentsSave(draft.name, raw)
+        : await agentsUpdate(draft.path, draft.originalRaw ?? "", raw);
       onToast?.(
-        cleanupWarning
-          ? `新名称已保存，但旧文件移除失败：${cleanupWarning}`
-          : draft.isNew
+        draft.isNew
             ? `已创建专家「${saved.name}」`
             : "已保存",
       );
@@ -227,7 +225,7 @@ export function AssistantsPanel({ onUseAssistant, onToast, embedded = false, cre
     } catch (e) {
       onToast?.(`保存失败：${String(e).replace(/^Error:\s*/, "")}`);
     }
-  }, [onToast, reload]);
+  }, [onToast, reload, userAssistants]);
 
   const handleDelete = useCallback((agent: AgentEntry) => {
     requestConfirmation({
@@ -526,6 +524,7 @@ interface EditorDraft {
   avatar?: number;
   modelTags: string[];
   isNew: boolean;
+  originalRaw?: string;
 }
 
 function CreateColleagueDialog({

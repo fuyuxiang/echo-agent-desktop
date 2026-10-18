@@ -51,11 +51,14 @@ import {
   onVerificationUpdated,
 } from "./lib/tauri-api";
 import {
+  type DeliveryReport,
   type DetectedCommand,
   type IsolatedWorkspace,
   type TddEvidence,
 } from "./lib/types";
 import { codingRuntimeKey, useCodingRuntimeStore } from "./lib/coding-task-runtime";
+import { useCodingActionScope } from "./hooks/useCodingActionScope";
+import { EditorPreparationCancelled, prepareWorkspaceEditor, withWorkspaceDiskMutation } from "./lib/workspace-editor";
 import { useVerificationRunner } from "./lib/use-verification-runner";
 import { DeliveryReportTab } from "./main/docs/DeliveryReportTab";
 import { FindReferencesView } from "./main/FindReferencesView";
@@ -152,6 +155,33 @@ export function CodingWorkbench({
     requestInput: requestTaskInput,
     dialog: taskDialog,
   } = useAppDialog(cwd);
+  const isWorkspaceCurrent = useCodingActionScope(cwd);
+  const startGeneration = useRef(0);
+  useEffect(() => { startGeneration.current += 1; setStarting(false); setSending(false); setStartError(null); }, [cwd]);
+  const prepareEditor = useCallback(async () => {
+    await prepareWorkspaceEditor(cwd, async (count) => {
+      const confirmed = await confirmTaskAction({
+        title: `保存 ${count} 个文件后继续？`,
+        description: "任务、验证和回滚将使用已保存的磁盘内容。取消会保留编辑内容；保存失败时不会继续。",
+        confirmLabel: "保存并继续",
+      });
+      if (!confirmed || !isWorkspaceCurrent()) return false;
+      const selected = useTaskStore.getState();
+      // A queued verification phase forbids manual file writes. Pause the
+      // scheduler before saving, while retaining the foreground batch claim.
+      if (selected.root === cwd && selected.task?.phase === "verifying") {
+        const key = codingRuntimeKey(cwd, selected.task.id);
+        if (useCodingRuntimeStore.getState().activeRunIds[key]) throw new Error("验证命令仍在运行，请停止后保存");
+        await codingApi.reportInterrupted(cwd, selected.task.id, "paused");
+        await selected.refreshTaskState();
+      }
+      return true;
+    });
+    if (isWorkspaceCurrent()) {
+      const selected = useTaskStore.getState();
+      if (selected.root === cwd && selected.task) useCodingRuntimeStore.getState().setEditorBlock(cwd, selected.task.id, null);
+    }
+  }, [cwd, confirmTaskAction, isWorkspaceCurrent]);
   const taskSessionId = useTaskStore((state) => state.task?.sessionId);
   // Never fall back to an unrelated current chat when a coding task has no
   // bound session. An explicit recovery state prevents cross-task sends.
@@ -223,6 +253,7 @@ export function CodingWorkbench({
   const [detectedReady, setDetectedReady] = useState(false);
   const [commandOutput, setCommandOutput] = useState("");
   const [reportRevision, setReportRevision] = useState(0);
+  const [deliveryReport, setDeliveryReport] = useState<DeliveryReport | null>(null);
   const { prepareManualMutation, finishManualMutation, blockInterruptedManualMutation } =
     useCodingMutationLifecycle(cwd, onToast, setReportRevision);
   const contextSaveQueueRef = useRef<Promise<void>>(Promise.resolve());
@@ -230,6 +261,8 @@ export function CodingWorkbench({
 
   const task = useTaskStore((state) => state.task);
   const lifecycleSettling = useCodingRuntimeStore((state) => task ? Boolean(state.settling[codingRuntimeKey(cwd, task.id)]) : false);
+  const stopping = useCodingRuntimeStore(state => task ? Boolean(state.stopping[codingRuntimeKey(cwd, task.id)]) : false);
+  const editorBlock = useCodingRuntimeStore((state) => task ? state.editorBlocks[codingRuntimeKey(cwd, task.id)] : undefined);
   const backgroundRunId = useCodingRuntimeStore((state) => task ? state.activeRunIds[codingRuntimeKey(cwd, task.id)] : undefined);
   const summaries = useTaskStore((state) => state.summaries);
   useEffect(() => {
@@ -305,6 +338,7 @@ export function CodingWorkbench({
     detectedReady,
     setCommandOutput,
     requestConfirmation: requestTaskConfirmation,
+    prepareEditor,
     onToast,
   });
 
@@ -611,16 +645,22 @@ export function CodingWorkbench({
         setStartError("请输入任务目标后再开始");
         return;
       }
+      const generation = ++startGeneration.current;
+      const isCurrent = () => isWorkspaceCurrent() && generation === startGeneration.current && useTaskStore.getState().root === cwd;
+      const assertCurrent = () => { if (!isCurrent()) throw new EditorPreparationCancelled("项目已切换，启动已取消"); };
       setStarting(true);
       setStartError(null);
       let createdId: string | undefined;
       try {
+        await prepareEditor();
+        assertCurrent();
         // Summaries and isolation details load asynchronously. Check the host
         // at submit time so an early click cannot start work in a busy tree.
         const [latestTasks, latestIsolation] = await Promise.all([
           codingApi.listTasks(cwd),
           codingApi.isolatedWorkspaceInfo(cwd),
         ]);
+        assertCurrent();
         if (latestTasks.some((item) => isBusyPhase(item.phase)) || latestIsolation) {
           await openParallelWorkspace(trimmedRequirement);
           return;
@@ -632,23 +672,28 @@ export function CodingWorkbench({
         const created = await useTaskStore.getState().createTask(
           deriveName(trimmedRequirement),
           trimmedRequirement,
+          cwd,
         );
         if (!created) {
-          setStartError(useTaskStore.getState().error ?? "创建任务失败");
+          if (isCurrent()) setStartError(useTaskStore.getState().error ?? "创建任务失败");
           return;
         }
         createdId = created.id;
+        assertCurrent();
         try {
           localStorage.removeItem(codingTaskDraftKey(cwd));
         } catch {
           // Task creation succeeded; draft cleanup is best-effort.
         }
         await codingApi.setTaskContext(cwd, created.id, effectiveContextPaths);
+        assertCurrent();
         // Persist a task-start checkpoint before the Agent can touch the
         // workspace. Git repositories get HEAD protection; ordinary folders
         // get an application-owned filesystem checkpoint.
         await codingApi.captureBaseline(cwd, created.id, []);
+        assertCurrent();
         await codingApi.submitRequirement(cwd, created.id);
+        assertCurrent();
         let boundSession: string | undefined;
         const bindSession = async (sessionId: string) => {
           if (boundSession && boundSession !== sessionId) {
@@ -656,7 +701,7 @@ export function CodingWorkbench({
           }
           await codingApi.bindTaskRuntime(cwd, created.id, sessionId, modelId ?? "");
           useCodingRuntimeStore.getState().track(cwd, created.id);
-          await useTaskStore.getState().selectTask(created.id);
+          if (isCurrent() && useTaskStore.getState().task?.id === created.id) await useTaskStore.getState().selectTask(created.id);
           boundSession = sessionId;
         };
         const session = await onStartRun(
@@ -670,8 +715,7 @@ export function CodingWorkbench({
         if (!session) {
           const reason = "未能启动 Agent 会话，任务已停止且不会继续执行";
           await codingApi.reportStartFailed(cwd, created.id, reason).catch(() => undefined);
-          setStartError(reason);
-          await useTaskStore.getState().refreshTaskState();
+          if (isCurrent()) { setStartError(reason); await useTaskStore.getState().refreshTaskState(); }
           return;
         }
         if (boundSession !== session) {
@@ -681,14 +725,14 @@ export function CodingWorkbench({
         const reason = String(error).replace(/^Error:\s*/, "");
         if (createdId) {
           await codingApi.reportStartFailed(cwd, createdId, reason).catch(() => undefined);
-          await useTaskStore.getState().refreshTaskState().catch(() => undefined);
+          if (isCurrent()) await useTaskStore.getState().refreshTaskState().catch(() => undefined);
         }
-        setStartError(reason);
+        if (isCurrent() && !(error instanceof EditorPreparationCancelled)) setStartError(reason);
       } finally {
-        setStarting(false);
+        if (isCurrent()) setStarting(false);
       }
     },
-    [contextPaths, cwd, deriveName, modelId, onStartRun, openParallelWorkspace],
+    [contextPaths, cwd, deriveName, isWorkspaceCurrent, modelId, onStartRun, openParallelWorkspace, prepareEditor],
   );
 
   const sendFollowup = useCallback(
@@ -705,6 +749,7 @@ export function CodingWorkbench({
       setSending(true);
       let reopened = false;
       try {
+        if (mutating) { await prepareEditor(); if (!isWorkspaceCurrent()) return false; }
         if (mutating && task) {
           if (["paused", "stopped", "blocked", "delivered"].includes(task.phase)) {
             if (!cwd) return false;
@@ -758,6 +803,8 @@ export function CodingWorkbench({
       hostSessionId,
       onSendMessage,
       onToast,
+      prepareEditor,
+      isWorkspaceCurrent,
       task,
     ],
   );
@@ -917,9 +964,13 @@ export function CodingWorkbench({
     let resumed = false;
     setSending(true);
     try {
+      await prepareEditor();
+      if (!isWorkspaceCurrent()) return;
       const resumedTask = await codingApi.resumeTask(cwd, task.id);
       resumed = true;
+      if (!isWorkspaceCurrent()) throw new EditorPreparationCancelled("项目已切换，继续执行已取消");
       await useTaskStore.getState().refreshTaskState();
+      if (!isWorkspaceCurrent()) throw new EditorPreparationCancelled("项目已切换，继续执行已取消");
       const activeNode = resumedTask.taskNodes.find((node) => node.status === "running");
       const basePrompt = activeNode
         ? buildNodeContinuationInstruction(resumedTask, activeNode)
@@ -930,6 +981,7 @@ export function CodingWorkbench({
         : red?.waiverReason
           ? `${basePrompt}\n\n本轮已记录测试先行不适用原因：${red.waiverReason}。按原始需求完成实现并运行适用验证，不要伪称已观察 RED。`
           : basePrompt;
+      if (!isWorkspaceCurrent()) throw new EditorPreparationCancelled("项目已切换，继续执行已取消");
       const accepted = await onSendMessage("继续执行当前开发任务", prompt);
       if (accepted === false) throw new Error("Agent 未接收继续执行请求");
     } catch (error) {
@@ -937,11 +989,11 @@ export function CodingWorkbench({
         await codingApi
           .reportInterrupted(cwd, task.id, interruptedAs)
           .catch(() => undefined);
-        await useTaskStore.getState().refreshTaskState().catch(() => undefined);
+        if (isWorkspaceCurrent()) await useTaskStore.getState().refreshTaskState().catch(() => undefined);
       }
-      onToast?.(`无法继续当前任务：${String(error).replace(/^Error:\s*/, "")}`);
+      if (isWorkspaceCurrent()) onToast?.(`无法继续当前任务：${String(error).replace(/^Error:\s*/, "")}`);
     } finally {
-      setSending(false);
+      if (isWorkspaceCurrent()) setSending(false);
     }
   }, [
     activeSessionId,
@@ -950,6 +1002,8 @@ export function CodingWorkbench({
     hostSessionId,
     lifecycleSettling,
     onSendMessage,
+    prepareEditor,
+    isWorkspaceCurrent,
     onToast,
     sending,
     streaming,
@@ -957,11 +1011,14 @@ export function CodingWorkbench({
   ]);
 
   const stopActiveTask = useCallback(async () => {
-    if (!cwd || !task || !isBusyPhase(task.phase)) return;
+    if (!cwd || !task || !isBusyPhase(task.phase) || useCodingRuntimeStore.getState().stopping[codingRuntimeKey(cwd, task.id)]) return;
+    useCodingRuntimeStore.getState().setStopping(cwd, task.id, true);
+    let awaitingSettlement = false;
     try {
       if (activeRunId || backgroundRunId) await codingApi.cancelVerification(activeRunId ?? backgroundRunId!);
       const cancelled = await onCancelRun?.();
       if (streaming && cancelled === false) return;
+      awaitingSettlement = streaming && Boolean(onCancelRun);
       // A streaming turn is finalized by useTaskLifecycle when its stream
       // falls. Scheduler/verification phases without a stream need an explicit
       // persisted interruption so the stop control always has an effect.
@@ -971,6 +1028,8 @@ export function CodingWorkbench({
       }
     } catch (error) {
       onToast?.(`停止任务失败：${String(error).replace(/^Error:\s*/, "")}`);
+    } finally {
+      if (!awaitingSettlement) useCodingRuntimeStore.getState().setStopping(cwd, task.id, false);
     }
   }, [activeRunId, backgroundRunId, cwd, onCancelRun, onToast, streaming, task]);
 
@@ -985,13 +1044,15 @@ export function CodingWorkbench({
     });
     if (!confirmed) return;
     try {
-      const restored = await codingApi.rollbackTask(cwd, task.id);
+      await prepareEditor();
+      if (!isWorkspaceCurrent()) return;
+      const restored = await withWorkspaceDiskMutation(cwd, () => codingApi.rollbackTask(cwd, task.id));
       await useTaskStore.getState().refreshTaskState();
       onToast?.(`已回滚 ${restored.length} 个文件`);
     } catch (error) {
       onToast?.(`回滚失败：${String(error).replace(/^Error:\s*/, "")}`);
     }
-  }, [changeSet?.changes.length, confirmTaskAction, cwd, onToast, task]);
+  }, [changeSet?.changes.length, confirmTaskAction, cwd, isWorkspaceCurrent, onToast, prepareEditor, task]);
 
   const discardChange = useCallback(
     async (path: string) => {
@@ -1003,11 +1064,13 @@ export function CodingWorkbench({
         danger: true,
       });
       if (!confirmed) return;
+      try { await prepareEditor(); } catch (error) { onToast?.(String(error).replace(/^Error:\s*/, "")); return; }
+      if (!isWorkspaceCurrent()) return;
       const mutation = await prepareManualMutation();
       if (!mutation) return;
       setBusyPath(path);
       try {
-        await codingApi.discardFile(cwd, task.id, path);
+        await withWorkspaceDiskMutation(cwd, () => codingApi.discardFile(cwd, task.id, path));
         await finishManualMutation(mutation);
       } catch (error) {
         const message = String(error).replace(/^Error:\s*/, "");
@@ -1024,6 +1087,8 @@ export function CodingWorkbench({
       finishManualMutation,
       onToast,
       prepareManualMutation,
+      prepareEditor,
+      isWorkspaceCurrent,
       task,
     ],
   );
@@ -1071,6 +1136,8 @@ export function CodingWorkbench({
       const runId = crypto.randomUUID();
       setRedRunId(runId);
       try {
+        await prepareEditor();
+        if (!isWorkspaceCurrent()) return;
         const token = command.requiresApproval
           ? await codingApi.approvePlanCommand(cwd, taskId, command.command)
           : undefined;
@@ -1102,7 +1169,7 @@ export function CodingWorkbench({
     } else {
       void execute();
     }
-  }, [cwd, onToast, redRunning, requestTaskConfirmation, task]);
+  }, [cwd, isWorkspaceCurrent, onToast, prepareEditor, redRunning, requestTaskConfirmation, task]);
 
   const integrateTask = useCallback(async () => {
     if (!cwd || !task || !isolatedWorkspace || integrating) return;
@@ -1285,7 +1352,10 @@ export function CodingWorkbench({
           onToast={onToast}
           previewRequest={theiaPreviewRequest}
           openFileRequest={theiaOpenFileRequest}
-          onDirtyChange={setTheiaDirtyCount}
+          onDirtyChange={(count) => {
+              if (count !== theiaDirtyCount) { setDeliveryReport(null); setReportRevision((value) => value + 1); }
+              setTheiaDirtyCount(count);
+            }}
         />
         {theiaReviewPath && task && (
           <TheiaTaskReview
@@ -1415,7 +1485,7 @@ export function CodingWorkbench({
           />
           {task && theiaPhase?.active && (
             <div className="echo-theia-agent__task-status">
-                <button type="button" className="echo-theia-agent__stop" onClick={() => void stopActiveTask()} disabled={sending || lifecycleSettling} title="停止当前任务" aria-label="停止当前任务">
+                <button type="button" className="echo-theia-agent__stop" onClick={() => void stopActiveTask()} disabled={sending || lifecycleSettling || stopping} title={stopping ? "正在停止当前任务" : "停止当前任务"} aria-label="停止当前任务">
                   <Square size={12} />
                 </button>
             </div>
@@ -1436,6 +1506,10 @@ export function CodingWorkbench({
           root={cwd}
           task={task}
           revision={reportRevision}
+          onReportChange={setDeliveryReport}
+          dirtyCount={theiaDirtyCount}
+          editorBlock={editorBlock}
+          onOpenVerification={() => setTheiaPanel("verification")}
           needsInput={awaitingPermission || awaitingQuestion || Boolean(task.blocker)}
           onOpenPlan={() => { setTheiaReportOpen(false); setTheiaReviewPath(null); setTheiaPlanOpen(true); }}
           onOpenReport={() => { setTheiaPlanOpen(false); setTheiaReviewPath(null); setTheiaReportOpen(true); }}
@@ -1467,6 +1541,7 @@ export function CodingWorkbench({
         <div className="echo-theia-agent__content">
           {theiaDisplayPanel === "agent" && (task ? (
             <AgentPane
+              deliveryReport={visibleDirtyCount > 0 || deliveryReport?.task?.id !== task.id ? null : deliveryReport}
               task={task}
               changeSet={changeSet}
               verifications={verifications}

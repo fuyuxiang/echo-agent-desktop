@@ -182,6 +182,7 @@ pub async fn skills_inspect_packages(
 
 #[tauri::command]
 pub async fn skills_install_package(
+    state: State<'_, crate::commands::AppState>,
     access: State<'_, crate::shell_fs::FilesystemAccess>,
     path: String,
     expected_source_hash: String,
@@ -191,7 +192,7 @@ pub async fn skills_install_package(
     crate::policy::require_feature("skills")?;
     crate::policy::require_skill_upload()?;
     let path = require_authorized_package(&access, &path)?;
-    tauri::async_runtime::spawn_blocking(move || {
+    let installed = tauri::async_runtime::spawn_blocking(move || {
         install_path(
             &path,
             package_root.as_deref(),
@@ -200,14 +201,17 @@ pub async fn skills_install_package(
         )
     })
     .await
-    .map_err(|error| format!("安装技能包失败：{error}"))?
+    .map_err(|error| format!("安装技能包失败：{error}"))??;
+    crate::skills::refresh_live_skills(&state).await?;
+    Ok(installed)
 }
 
 #[tauri::command]
-pub async fn skills_uninstall_package(path: String) -> Result<(), String> {
+pub async fn skills_uninstall_package(state: State<'_, crate::commands::AppState>, path: String) -> Result<(), String> {
     tauri::async_runtime::spawn_blocking(move || uninstall_path(&path))
         .await
-        .map_err(|error| format!("卸载技能包失败：{error}"))?
+        .map_err(|error| format!("卸载技能包失败：{error}"))??;
+    crate::skills::refresh_live_skills(&state).await
 }
 
 /// Build the ZIP accepted by echo-agent-server from any local Skill path.

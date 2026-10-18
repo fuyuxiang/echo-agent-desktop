@@ -3,6 +3,7 @@ import { writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { createUiReviewServer, reviewChromium, reviewOutput } from "./ui-review-runtime.mjs";
 import { inspectButtonBackgrounds, assertButtonBackgrounds } from "./ui-button-audit.mjs";
+import { assertSettingsActionsSeparated } from "./ui-settings-audit.mjs";
 
 // Read the working tree, never HEAD: this is post-change acceptance evidence.
 assert.notEqual(process.env.UI_REVIEW_BASELINE, "1", "Post-change validation must use the working tree");
@@ -145,6 +146,7 @@ try {
         assert.ok(toggles.length>0 && toggles.every(toggle=>toggle.track!==toggle.thumb),"Checked switch thumb disappears into its track");
       }
       await inspect(page,spec,scenario,["capabilities","page:项目","general","modal-long","coding","meeting"].includes(spec));
+      if(surface === "model") await assertSettingsActionsSeparated(page);
       if(surface==="organization") for(const tab of ["经验","文档","Skills"]) {
         await page.locator(".org-memory__nav button").filter({hasText:tab}).click();
         await inspect(page,`organization-${tab}`,scenario,true);

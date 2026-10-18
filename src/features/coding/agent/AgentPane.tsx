@@ -15,10 +15,11 @@ import { partitionAssistantParts } from "@/lib/execution-process";
 import type { ChatMessage } from "@/stores/session-store";
 
 import { describeTaskProgress } from "../lib/phase";
-import type { ChangeSet, CodingTask, VerificationRecord } from "../lib/types";
+import type { ChangeSet, CodingTask, DeliveryReport, VerificationRecord } from "../lib/types";
 
 interface AgentPaneProps {
   task: CodingTask;
+  deliveryReport?: DeliveryReport | null;
   changeSet: ChangeSet | null;
   verifications: VerificationRecord[];
   sessionId: string | null;
@@ -42,6 +43,7 @@ interface AgentPaneProps {
 /** Agent activity, interaction requests and delivery summary for one task. */
 export function AgentPane({
   task,
+  deliveryReport,
   changeSet,
   verifications,
   sessionId,
@@ -68,7 +70,7 @@ export function AgentPane({
     },
   } : undefined, [onOpenFile]);
 
-  const phase = describeTaskProgress(task.phase);
+  const phase = describeTaskProgress(task.phase, deliveryReport);
   const sessionUnavailable = !sessionId;
   const changes = changeSet?.changes ?? [];
   const latestChecks = new Map<string, VerificationRecord>();
@@ -180,11 +182,11 @@ export function AgentPane({
         )}
 
         {task.phase === "delivered" && (
-          <div className="coding-agent__decision is-good">
+          <div className={`coding-agent__decision ${deliveryReport?.deliverable ? "is-good" : "is-interrupted"}`}>
             <CheckCircle2 size={13} />
             <div className="coding-agent__decision-copy">
-              <strong>任务已完成</strong>
-              <span>{verificationSummary}，共修改 {changes.length} 个文件。</span>
+              <strong>{phase.label}</strong>
+              <span>{verificationSummary}，共修改 {changes.length} 个文件。{deliveryReport?.deliverable ? "请确认交付范围后提交。" : "请完成交付报告中尚未满足的验收与检查。"}</span>
             </div>
             <div className="coding-agent__decision-actions">
               <button type="button" onClick={onOpenChanges}>查看变更</button>

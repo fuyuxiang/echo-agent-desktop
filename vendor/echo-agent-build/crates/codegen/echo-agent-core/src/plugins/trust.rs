@@ -167,7 +167,7 @@ impl TrustStore {
     /// is under the user's home directory.  Otherwise it requires explicit
     /// trust via `~/.echo-agent/trusted-plugins`.
     pub fn is_config_path_auto_trusted(plugin_root: &Path) -> bool {
-        let Some(home) = dirs::home_dir() else {
+        let Some(home) = echo_agent_config::discovery_home_dir() else {
             return false;
         };
         match dunce::canonicalize(plugin_root) {

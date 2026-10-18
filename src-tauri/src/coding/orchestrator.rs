@@ -533,9 +533,10 @@ fn apply_unlocked(
             if !matches!(
                 task.phase,
                 TaskPhase::Discovering | TaskPhase::Implementing | TaskPhase::Repairing
+                    | TaskPhase::Verifying | TaskPhase::Diagnosing
             ) && !legacy_stop_misclassification
             {
-                return Err("只有正在实现的任务可以报告暂停或停止".into());
+                return Err("只有正在执行的任务可以报告暂停或停止".into());
             }
             for node in &mut task.task_nodes {
                 if node.status == TaskNodeStatus::Running {
@@ -1040,19 +1041,37 @@ pub fn apply(
     task_id: &str,
     event: OrchestratorEvent,
 ) -> Result<(CodingTask, PhaseDecision), String> {
-    store::with_task_transaction(root, task_id, || apply_unlocked(root, task_id, event))
+    apply_at_revision(root, task_id, event, None)
 }
 
-async fn apply_and_emit(
+fn apply_at_revision(root: &Path, task_id: &str, event: OrchestratorEvent, expected: Option<&str>) -> Result<(CodingTask, PhaseDecision), String> {
+    store::with_task_transaction(root, task_id, || {
+        if let Some(expected) = expected {
+            let current = task::load(root, task_id).ok_or("任务不存在")?;
+            if current.updated_at != expected { return Err("任务状态已变化，本次验证未启动，请确认当前状态后重试".into()); }
+        }
+        apply_unlocked(root, task_id, event)
+    })
+}
+
+async fn apply_and_emit(app: AppHandle, root: PathBuf, task_id: String, event: OrchestratorEvent) -> Result<CodingTask, String> {
+    apply_and_emit_at_revision(app, root, task_id, event, None).await
+}
+
+async fn apply_and_emit_at_revision(
     app: AppHandle,
     root: PathBuf,
     task_id: String,
     event: OrchestratorEvent,
+    expected: Option<String>,
 ) -> Result<CodingTask, String> {
     let (task, decision) = tokio::task::spawn_blocking({
         let root = root.clone();
         let task_id = task_id.clone();
-        move || apply(&root, &task_id, event)
+        move || match expected {
+            Some(expected) => apply_at_revision(&root, &task_id, event, Some(&expected)),
+            None => apply(&root, &task_id, event),
+        }
     })
     .await
     .map_err(|error| format!("推进任务阶段失败：{error}"))??;
@@ -1215,10 +1234,11 @@ pub async fn coding_task_begin_verification(
     access: State<'_, FilesystemAccess>,
     root: String,
     task_id: String,
+    expected_updated_at: Option<String>,
 ) -> Result<CodingTask, String> {
     let root = access.require_workspace(&root)?;
     changeset::sync_changes(&root, &task_id).await?;
-    apply_and_emit(app, root, task_id, OrchestratorEvent::VerificationStarted).await
+    apply_and_emit_at_revision(app, root, task_id, OrchestratorEvent::VerificationStarted, expected_updated_at).await
 }
 
 #[tauri::command]
@@ -1839,6 +1859,34 @@ mod tests_v2 {
     }
 
     #[test]
+    fn delayed_verification_admission_cannot_reopen_a_stopped_task() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut current = task::create_task(dir.path(), "task", "verify it").unwrap();
+        current.phase = TaskPhase::Verifying;
+        current.updated_at = "original-revision".into();
+        task::save(dir.path(), &current).unwrap();
+        apply(dir.path(), &current.id, OrchestratorEvent::ImplementationInterrupted { interruption: TaskInterruption::Stopped }).unwrap();
+        assert!(apply_at_revision(dir.path(), &current.id, OrchestratorEvent::VerificationStarted, Some(&current.updated_at)).is_err());
+        assert_eq!(task::load(dir.path(), &current.id).unwrap().phase, TaskPhase::Stopped);
+    }
+
+    #[test]
+    fn verification_and_diagnosis_can_be_stopped_without_becoming_start_failures() {
+        for phase in [TaskPhase::Verifying, TaskPhase::Diagnosing] {
+            let dir = tempfile::tempdir().unwrap();
+            let mut current = task::create_task(dir.path(), "task", "verify it").unwrap();
+            current.phase = phase;
+            task::save(dir.path(), &current).unwrap();
+            let (stopped, _) = apply(dir.path(), &current.id,
+                OrchestratorEvent::ImplementationInterrupted { interruption: TaskInterruption::Stopped }).unwrap();
+            assert_eq!(stopped.phase, TaskPhase::Stopped);
+            assert!(stopped.next_action.is_none());
+            assert!(apply(dir.path(), &current.id, OrchestratorEvent::StartFailed { reason: "late verification error".into() }).is_err());
+            assert_eq!(task::load(dir.path(), &current.id).unwrap().phase, TaskPhase::Stopped);
+        }
+    }
+
+    #[test]
     fn user_stop_is_recoverable_and_resume_preserves_the_round() {
         let dir = tempfile::tempdir().unwrap();
         let task = task::create_task(dir.path(), "task", "implement it").unwrap();
@@ -1914,7 +1962,10 @@ mod tests_v2 {
             },
         )
         .unwrap_err();
-        assert!(error.contains("正在实现"));
+        assert!(error.contains("正在执行"));
+        let unchanged = task::load(dir.path(), &task.id).unwrap();
+        assert_eq!(unchanged.phase, TaskPhase::Blocked);
+        assert_eq!(unchanged.blocker.as_deref(), Some("循环依赖"));
     }
 
     #[test]

@@ -17,7 +17,8 @@ const expected = { version: 1, home, cwd, nonce, modelId: 'echoagent-ojlab/chat-
   markers: { recovery: `CORE-RECOVER-${nonce}`, queued: `CORE-QUEUED-${nonce}`, project: `CORE-PROJECT-${nonce}` },
   child: { sessionId: 'synthetic-child', marker: `CORE-CHILD-${nonce}` },
   customModel: { providerId: 'custom-1', modelId: 'custom-1/chat-qwen', label: `隔离个人Qwen-${nonce}`, marker: `CORE-CUSTOM-${nonce}` } };
-const projectExpression = readFileSync('scripts/fixtures/native-core-review.js', 'utf8').match(/const name = ([^\n;]+);/)?.[1];
+const fixtureSource = readFileSync('scripts/fixtures/native-core-review.js', 'utf8');
+const projectExpression = fixtureSource.match(/const name = ([^\n;]+);/)?.[1];
 assert(projectExpression, 'Actual fixed project fixture expression missing');
 assert.equal(vm.runInNewContext(projectExpression, { nonce }), expected.project.name,
   'Actual native project name and parent admission contract differ');
@@ -50,6 +51,62 @@ const report = (phase) => {
 const args = (phase = 'first-launch') => ({ report: report(phase), manifest: manifest(phase), pid: 12345, startedAt: Date.now() - 1000,
   exitCode: 0, signal: null, previousExpected: expected });
 const cases = [];
+{
+  // Run the actual fixed fixture predicate against production display names.
+  // A stale route/display name must fail offline before a real draft guard can
+  // retain the app during an expensive native/model acceptance run.
+  const navigation = readFileSync('src/lib/capability-navigation.ts', 'utf8');
+  const labelLiteral = navigation.match(/CAPABILITY_SECTION_LABEL\s*=\s*("[^"\n]+")/)?.[1];
+  assert(labelLiteral, 'Production capability navigation display label missing');
+  const label = JSON.parse(labelLiteral);
+  const sidebar = readFileSync('src/components/Sidebar.tsx', 'utf8');
+  assert(/label === "专家·技能·连接器" \? CAPABILITY_SECTION_LABEL : label/.test(sidebar),
+    'Production Sidebar no longer renders the contracted capability display name');
+  const predicate = fixtureSource.match(/\.find\((node => visible\(node\) && node\.textContent\.trim\(\) === '[^']+')\), 'leave automation via actual navigation'/)?.[1];
+  assert(predicate, 'Actual automation-draft leave navigation predicate missing');
+  const matches = vm.runInNewContext(`(${predicate})`, { visible: node => node.visible });
+  const nodes = [{ visible: false, textContent: label }, { visible: true, textContent: '扩展' },
+    { visible: true, textContent: `  ${label}  ` }];
+  assert.equal(nodes.find(matches), nodes[2], 'Actual draft leave selector differs from the production visible Sidebar label');
+  cases.push({ name: 'draft navigation uses current production capability display label', passed: true,
+    label, actualNative: false });
+}
+{
+  const continuationExpression = fixtureSource.match(/const canContinueAfterFailure = ([^\n;]+);/)?.[1];
+  assert(continuationExpression, 'Actual failed-stage continuation predicate missing');
+  const mayContinue = vm.runInNewContext(`(${continuationExpression})`);
+  for (const status of ['completed', 'streaming', 'failed', 'stopped', 'paused', undefined]) {
+    for (const queueEmpty of [true, false]) {
+      assert.equal(mayContinue(status, queueEmpty), status === 'completed' && queueEmpty);
+    }
+  }
+  cases.push({ name: 'failed model stages continue only from completed session and empty queue', passed: true, actualNative: false });
+
+  const recordAndStage = fixtureSource.slice(fixtureSource.indexOf('  const record ='), fixtureSource.indexOf('  const set ='));
+  const overallExpression = fixtureSource.match(/report\.passed = ([\s\S]*?);\s*\n\s*report\.finishedAt/)?.[1];
+  assert(recordAndStage.includes('report.errors.push') && overallExpression, 'Actual failure recorder or final admission expression missing');
+  const failed = await vm.runInNewContext(`(async () => {
+    const report = { checks: [], errors: [] }, approved = true;
+    const required = ['core-qwen-initial-response', 'synthetic-local-continuation'];
+    ${recordAndStage}
+    await stage(required[0], async () => { throw new Error('Exact model marker mismatch'); });
+    if ((${continuationExpression})('completed', true)) await stage(required[1], async () => ({ localCoverage: true }));
+    report.passed = ${overallExpression};
+    return report;
+  })()`);
+  assert.equal(failed.checks.length, 2);
+  assert.equal(failed.checks[0].result, 'failed');
+  assert.equal(failed.checks[1].result, 'passed');
+  assert.equal(failed.errors.length, 1);
+  assert.equal(failed.passed, false, 'Continuing local coverage must never promote a bad model marker to overall pass');
+  cases.push({ name: 'bad model marker stays failed with error after later local coverage succeeds', passed: true, actualNative: false });
+
+  const markerAssertion = fixtureSource.match(/assert\(reply\(\)\.includes\(m\.queued\), 'Queued Qwen reply missing exact marker'\);/)?.[0];
+  assert(markerAssertion, 'Strict queued reply marker assertion was removed');
+  assert.throws(() => vm.runInNewContext(markerAssertion, { assert, reply: () => 'wrong nonce', m: { queued: 'required-exact-nonce' } }));
+  vm.runInNewContext(markerAssertion, { assert, reply: () => 'required-exact-nonce', m: { queued: 'required-exact-nonce' } });
+  cases.push({ name: 'completed empty queue does not bypass exact queued reply marker assertion', passed: true, actualNative: false });
+}
 function rejects(name, change) { const value = args(); change(value); assert.throws(() => verifyNativeCoreReport(value)); cases.push({ name, passed: true }); }
 rejects('wrong process PID', (v) => { v.report.nativeContext.pid++; });
 rejects('stale prior report', (v) => { v.report.finishedAt = '2000-01-01T00:00:00Z'; });

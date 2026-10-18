@@ -1135,7 +1135,7 @@ pub async fn run_leader(
             let mut watch_paths = crate::config::find_project_configs(&cwd_for_watcher);
             watch_paths
                 .extend(crate::util::config::mcp_json_candidate_paths(&cwd_for_watcher));
-            if let Some(home) = dirs::home_dir() {
+            if let Some(home) = echo_agent_config::discovery_home_dir() {
                 watch_paths.push(home.join(".claude.json"));
             }
             let auth_scope = agent_config.echo_agent_com_config.auth_scope();

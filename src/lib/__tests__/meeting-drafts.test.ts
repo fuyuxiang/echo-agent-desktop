@@ -82,3 +82,61 @@ describe("versioned meeting drafts", () => {
     expect(store.minutes({ ...saved, minutes: "第一次纪要" }).conflict).toBeUndefined();
   });
 });
+
+it("restores corrections and minutes after restart without changing the authoritative record", () => {
+  const data = new Map<string, string>();
+  const storage = { getItem: (key: string) => data.get(key) ?? null, setItem: (key: string, value: string) => { data.set(key, value); } };
+  const source = record([segment(0, "原始转写")]);
+  const first = createMeetingDraftStore(storage);
+  first.editTranscript(source, [segment(0, "重启后保留的校对")]);
+  first.editMinutes(source, "重启后保留的纪要");
+  first.ensureDurable();
+  const restored = createMeetingDraftStore(storage);
+  expect(restored.transcript(source).value[0].text).toBe("重启后保留的校对");
+  expect(restored.minutes(source).value).toBe("重启后保留的纪要");
+  expect(source.transcript[0].text).toBe("原始转写");
+  restored.remove(source.id);
+  expect(createMeetingDraftStore(storage).hasMinutes(source.id)).toBe(false);
+});
+
+it("keeps failed writes in memory and vetoes exit until durable storage recovers", () => {
+  const data = new Map<string, string>();
+  let failed = true;
+  const storage = { getItem: (key: string) => data.get(key) ?? null, setItem: (key: string, value: string) => {
+    if (failed) throw new Error("quota exceeded"); data.set(key, value);
+  } };
+  const source = record([segment(0, "原始转写")]);
+  const store = createMeetingDraftStore(storage);
+  store.editMinutes(source, "不能丢失");
+  expect(store.minutes(source).value).toBe("不能丢失");
+  expect(store.persistenceError()).toContain("尚未保存");
+  expect(() => store.ensureDurable()).toThrow("quota exceeded");
+  failed = false;
+  store.ensureDurable();
+  expect(store.persistenceError()).toBeNull();
+  expect(createMeetingDraftStore(storage).minutes(source).value).toBe("不能丢失");
+});
+
+it("preserves corrupt bytes for recovery and requires an explicit reset", () => {
+  const data = new Map<string, string>([["echo.meeting-drafts.v1", "corrupt-original-marker"]]);
+  const storage = { getItem: (key: string) => data.get(key) ?? null, setItem: (key: string, value: string) => { data.set(key, value); } };
+  const store = createMeetingDraftStore(storage);
+  expect(store.recoveryBytes()).toBe("corrupt-original-marker");
+  expect(() => store.ensureDurable()).toThrow("读取失败");
+  expect(data.get("echo.meeting-drafts.v1")).toBe("corrupt-original-marker");
+  store.resetUnreadable();
+  expect(data.get("echo.meeting-drafts.v1.recovery")).toBe("corrupt-original-marker");
+  expect(() => store.ensureDurable()).not.toThrow();
+});
+
+it("allows only explicitly authorized exit without saving, and revokes that on a new edit", () => {
+  const storage = { getItem: () => null, setItem: () => { throw new Error("storage blocked"); } };
+  const store = createMeetingDraftStore(storage);
+  const source = record([segment(0, "原始转写")]);
+  store.editMinutes(source, "当前输入");
+  expect(() => store.ensureDurable()).toThrow();
+  store.allowExitWithoutSaving();
+  expect(() => store.ensureDurable()).not.toThrow();
+  store.editMinutes(source, "继续编辑");
+  expect(() => store.ensureDurable()).toThrow();
+});

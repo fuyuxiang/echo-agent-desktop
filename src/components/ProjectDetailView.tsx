@@ -1,4 +1,5 @@
 import { useSessionsStore } from "@/stores/sessions-store";
+import { useKnowledgeStore } from "@/stores/knowledge-store";
 /**
  * 项目详情页 — 对齐目标截图（图3-6）。
  *
@@ -27,6 +28,9 @@ import { useAppDialog } from "./AppDialog";
 import type { AgentEntry } from "@/lib/types";
 import type { SlashCommandInvocation } from "@/lib/slash-commands";
 import { useWorkspaceMentions } from "@/lib/use-workspace-mentions";
+import { projectAssetsUse, filesystemAttachmentStats } from "@/lib/agent-client";
+import { flushProjectPersistence } from "@/stores/projects-store";
+import "@/styles/project-context.css";
 
 type TabKey = "activity" | "task" | "asset";
 type DrawerKey = "instruction" | "model" | "connectors" | "experts" | "skills" | "automation";
@@ -97,7 +101,31 @@ export function ProjectDetailView({
   const updateConfig = useProjectsStore((s) => s.updateConfig);
   const addMember = useProjectsStore((s) => s.addMember);
 
+  const selectedKnowledge = useKnowledgeStore(state => state.defaultSources);
   const projectDraft = useSessionsStore((state) => state.drafts[`project:${project.id}`] ?? "");
+  const selectedAssetDraft = useSessionsStore(state => state.drafts[`project-assets:${project.id}`] ?? "[]");
+  let selectedAssetIds: string[] = [];
+  try { const parsed: unknown = JSON.parse(selectedAssetDraft); if (Array.isArray(parsed)) selectedAssetIds = parsed.filter((id): id is string => typeof id === "string"); } catch { /* An invalid optional selection never changes the text draft. */ }
+  const selectedAssets = live.assets.filter(asset => selectedAssetIds.includes(asset.id) && asset.kind === "file" && asset.path);
+  const selectAssets = (ids: string[]) => useSessionsStore.getState().setDraft(`project-assets:${project.id}`, JSON.stringify(ids));
+  // A pending send must not consume a selection made while it was awaiting I/O.
+  const consumeSelectedAssets = () => {
+    if ((useSessionsStore.getState().drafts[`project-assets:${project.id}`] ?? "[]") === selectedAssetDraft) selectAssets([]);
+  };
+  const selectAsset = (id: string) => selectAssets([...new Set([...selectedAssetIds, id])]);
+  const prepareProjectAttachments = async (attachments: string[] = []) => {
+    if (selectedAssetIds.some(id => !selectedAssets.some(asset => asset.id === id))) throw new Error("部分已选项目资料已删除或没有文件，请移除失效选择后重试");
+    await flushProjectPersistence();
+    const granted = selectedAssets.length ? await projectAssetsUse(live.id, selectedAssets.map(asset => asset.path!)) : [];
+    const all = [...new Set([...attachments, ...granted])];
+    if (all.length > 20) throw new Error("本次附件与项目资料合计不能超过20个文件");
+    if (granted.length) {
+      const stats = await filesystemAttachmentStats(all);
+      if (stats.rejected.length) throw new Error(stats.rejected.map(file => file.reason).join("；"));
+      if (stats.files.length !== all.length || stats.files.reduce((bytes, file) => bytes + file.sizeBytes, 0) > 64 * 1024 * 1024) throw new Error("本次附件与项目资料总大小不能超过64MB");
+    }
+    return all;
+  };
   const [tab, setTab] = useState<TabKey>("activity");
   const [drawer, setDrawer] = useState<DrawerKey | null>(null);
   const [membersOpen, setMembersOpen] = useState(false);
@@ -124,6 +152,7 @@ export function ProjectDetailView({
     const item: RefItem = {
       id: agent.path || agent.name,
       name: agent.name,
+      scope: agent.scope,
     };
     if (!live.experts.some((expert) => expert.id === item.id || expert.name === item.name)) {
       updateConfig(live.id, { experts: [...live.experts, item] });
@@ -171,8 +200,9 @@ export function ProjectDetailView({
     if (live.defaultModelId !== modelId) setProjectModel(modelId);
     setSendError(null);
     try {
-      const sessionId = await onStartConversation(live.id, text, modelId, attachments);
-      if (sessionId) return true;
+      const selected = await prepareProjectAttachments(attachments);
+      const sessionId = await onStartConversation(live.id, text, modelId, selected);
+      if (sessionId) { consumeSelectedAssets(); return true; }
       setSendError("消息尚未发送，请完成模型配置或检查当前配额后重试。");
       return false;
     } catch (error) {
@@ -258,7 +288,14 @@ export function ProjectDetailView({
                 models={models}
                 defaultModelId={projectModelId}
                 onRun={onStartConversation
-                  ? (message, modelId) => onStartConversation(live.id, message, modelId, [])
+                  ? async (message, modelId) => {
+                    try {
+                      const attachments = await prepareProjectAttachments();
+                      const sessionId = await onStartConversation(live.id, message, modelId, attachments);
+                      if (sessionId) consumeSelectedAssets();
+                      return sessionId;
+                    } catch (error) { setSendError(`项目资料尚未加入任务：${String(error).replace(/^Error:\s*/, "")}`); throw error; }
+                  }
                   : undefined}
                 onOpenSession={onOpenSession ? (sessionId) => onOpenSession(sessionId, live.cwd) : undefined}
                 onRestoreSession={onArchiveSession
@@ -267,10 +304,17 @@ export function ProjectDetailView({
                 onToast={onToast}
               />
             )}
-            {tab === "asset" && <AssetsTab projectId={live.id} onToast={onToast} />}
+            {tab === "asset" && <AssetsTab projectId={live.id} onToast={onToast} onUseAsset={asset => { selectAsset(asset.id); onToast?.(`已将「${asset.name}」选入本次任务上下文`); }} selectedAssetIds={selectedAssetIds} />}
           </div>
 
           <div className="pd-composer-shell">
+            <section className="project-task-context" aria-label="本次任务上下文">
+              <div><strong>本次任务上下文</strong><span>只使用下方选中的项目资料；项目默认偏好会同时提供。</span></div>
+              <div className="project-task-context__chips">{selectedAssets.map(asset => <button type="button" className="project-context-chip" key={asset.id} onClick={() => selectAssets(selectedAssetIds.filter(id => id !== asset.id))} aria-label={`移除本次资料 ${asset.name}`}>{asset.name}<span aria-hidden="true"> ×</span></button>)}</div>
+              {selectedAssetIds.length !== selectedAssets.length && <p role="alert">部分资料已失效。<button type="button" onClick={() => selectAssets(selectedAssets.map(asset => asset.id))}>移除失效选择</button></p>}
+              {!selectedAssets.length && <p>本次未选用项目资料。<button type="button" onClick={() => setTab("asset")}>从项目资料中选择</button></p>}
+              {selectedAssets.length > 0 && <button type="button" onClick={() => selectAssets([])}>清除本次资料选择</button>}
+            </section>
             <div
               className="pd-composer-header"
               role="status"
@@ -282,7 +326,7 @@ export function ProjectDetailView({
               </span>
               <span className="pd-composer-header__name">{live.name}</span>
               <span className="pd-composer-header__sep" aria-hidden="true">·</span>
-              <span className="pd-composer-header__label">项目配置：</span>
+              <span className="pd-composer-header__label">项目默认偏好：</span>
               {hasInstructionsOnly ? (
                 <span className="pd-composer-header__count pd-composer-header__count--active">项目指令</span>
               ) : hasNoContract ? (
@@ -353,17 +397,18 @@ export function ProjectDetailView({
           </div>
         </div>
 
-        <aside className="pd-side">
-          <h3 className="pd-side__title">项目配置</h3>
-          {CONFIG_CARDS.map((c) => (
-            <button key={c.key} className="pd-config-card" onClick={() => setDrawer(c.key)}>
-              <div className="pd-config-card__head">
-                <span className="pd-config-card__title">{c.title}</span>
-                <span className="pd-config-card__plus">+</span>
-              </div>
-              <div className="pd-config-card__desc">{c.desc}</div>
-            </button>
-          ))}
+        <aside className="pd-side project-context-sidebar">
+          <section aria-label="本次能力与知识范围" className="project-context-summary">
+            <h3 className="pd-side__title">本次能力与知识范围</h3>
+            <p>知识来源：{selectedKnowledge.length ? selectedKnowledge.map(source => source === "personal" ? "个人知识" : "组织授权知识").join("、") : "未选用"}</p>
+            <p className="project-context-summary__hint">在输入框下方调整知识来源；发送前会检查可用性和授权。</p>
+            {live.experts.length > 0 && <div><strong>偏好专家</strong>{live.experts.map(expert => <p key={expert.id}>{expert.name}<span className="project-context-scope">{expert.scope === "project" ? "当前项目" : expert.scope === "user" ? "用户专家" : "发送前校验来源"}</span></p>)}</div>}
+          </section>
+          <details className="project-default-preferences">
+            <summary>项目默认偏好<span>指令、模型与能力</span></summary>
+            <p>这些偏好会提供给新任务。资料仍需为每次任务单独选择。</p>
+            {CONFIG_CARDS.map(c => <button type="button" key={c.key} className="project-default-preference" aria-label={`配置项目默认${c.title}`} onClick={() => setDrawer(c.key)} title={c.desc}><span>{c.title}</span><span>{c.key === "model" ? models.find(model => model.id === projectModelId)?.label ?? "待选择" : c.key === "instruction" ? live.instructions?.trim() ? "已配置" : "未配置" : c.key === "experts" ? `${live.experts.length} 个` : c.key === "skills" ? `${live.skills.length} 个` : c.key === "connectors" ? `${live.connectors.length} 个` : "管理"}</span><span aria-hidden="true">›</span></button>)}
+          </details>
         </aside>
       </div>
 

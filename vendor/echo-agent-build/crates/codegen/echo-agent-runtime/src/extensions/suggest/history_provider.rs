@@ -239,7 +239,8 @@ fn load_shell_history() -> Vec<String> {
     };
 
     // Respect HISTFILE if set, otherwise use shell-specific defaults.
-    let histfile = std::env::var("HISTFILE").ok().map(PathBuf::from);
+    let histfile = echo_agent_config::controlled_discovery_home().is_none()
+        .then(|| std::env::var("HISTFILE").ok()).flatten().map(PathBuf::from);
 
     match shell_name {
         "zsh" => {
@@ -256,7 +257,7 @@ fn load_shell_history() -> Vec<String> {
 }
 
 fn home_dir() -> Option<PathBuf> {
-    std::env::var_os("HOME").map(PathBuf::from)
+    echo_agent_config::discovery_home_dir()
 }
 
 /// Keep only the most recent `max` entries, reverse to most-recent-first, and

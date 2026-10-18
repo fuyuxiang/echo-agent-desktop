@@ -3367,3 +3367,8 @@
   display: flex;
   gap: 4px;
 }
+
+.echo-theia-agent__evidence-workspace,
+.echo-theia-agent__evidence-basis { flex-basis: 100%; min-width: 0; display: block; margin: 4px 0; color: var(--echo-text-muted); font-size: 11px; overflow-wrap: anywhere; }
+.echo-theia-agent__evidence { flex-wrap: wrap; }
+.echo-theia-agent__evidence-actions .is-primary { border-color: var(--echo-accent); }

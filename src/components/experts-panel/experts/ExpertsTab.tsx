@@ -33,6 +33,8 @@ export function ExpertsTab({ pills, onGoHome, onToast, createExpertRequested, on
       prompt: body,
       description: a.description || a.name,
       expertId: a.name,
+      definitionPath: a.path,
+      definitionRaw: a.raw,
       source: "local",
     });
     onGoHome?.();

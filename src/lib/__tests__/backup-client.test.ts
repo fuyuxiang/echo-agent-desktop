@@ -26,7 +26,7 @@ it("Rust and renderer serialize the same backup UI allowlist", async () => {
   const { readFileSync } = await import("node:fs");
   const source = readFileSync("src-tauri/src/backup.rs", "utf8");
   const section = source.slice(source.indexOf("pub const UI_KEYS"), source.indexOf("#[derive", source.indexOf("pub const UI_KEYS")));
-  expect([...section.matchAll(/"(echoagent\.[^"]+)"/g)].map((match) => match[1])).toEqual([...BACKUP_UI_KEYS]);
+  expect([...section.matchAll(/"([^"]+)"/g)].map((match) => match[1])).toEqual([...BACKUP_UI_KEYS]);
 });
 
 it("replaces the full restored snapshot and clears drafts absent from the backup", async () => {

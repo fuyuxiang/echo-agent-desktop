@@ -24,6 +24,7 @@ mod document_export;
 mod expert_avatar;
 mod ext;
 mod groups;
+mod knowledge_traces;
 mod live_info_mcp;
 mod logging;
 mod mcp;
@@ -49,6 +50,7 @@ mod process_supervisor;
 mod projects;
 mod providers;
 mod resource_identity;
+mod session_artifacts;
 mod session_title;
 mod sessions;
 mod shell_fs;
@@ -202,7 +204,7 @@ async fn prepare_recording_for_exit(app: &tauri::AppHandle) -> Result<(), String
             match tokio::time::timeout(Duration::from_secs(30), response).await {
                 Ok(Ok(result)) => result,
                 Ok(Err(_)) => Err("录音保存确认已中断，请重试退出".into()),
-                Err(_) => Err("录音保存确认超时，应用已保留，请检查录音并重试退出".into()),
+                Err(_) => Err("退出准备确认超时，应用已保留。请完成草稿或录音的保存确认后重试退出。".into()),
             }
         };
         {
@@ -967,8 +969,15 @@ pub fn run() {
             agents_store::agents_list,
             agents_store::agents_get,
             agents_store::agents_save,
+            agents_store::agents_update,
+            agents_store::agents_merge_definition,
+            agents_store::agents_validate_references,
             agents_store::agents_delete,
             agents_store::agents_template,
+            knowledge_traces::knowledge_traces_load,
+            knowledge_traces::knowledge_trace_save,
+            session_artifacts::session_exports_list,
+            session_artifacts::session_export_authorize,
             expert_avatar::expert_avatar,
             // Safe, bounded previews for local chat image attachments.
             attachment_preview::attachment_thumbnail,
@@ -1173,6 +1182,7 @@ pub fn run() {
             projects::projects_load,
             projects::projects_save,
             projects::project_assets_import,
+            projects::project_assets_use,
             projects::project_asset_make_dir,
             projects::project_asset_remove,
             projects::project_assets_remove_all,

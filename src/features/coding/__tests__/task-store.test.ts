@@ -288,3 +288,34 @@ describe("task store", () => {
     expect(useTaskStore.getState().loading).toBe(false);
   });
 });
+
+
+describe("explicit task creation ownership", () => {
+  it("returns created A identity for recovery without selecting it in B", async () => {
+    useTaskStore.getState().setRoot("/a");
+    const pending = deferred<CodingTask>();
+    api.createTask.mockReturnValueOnce(pending.promise);
+    const creating = useTaskStore.getState().createTask("A", "Only A", "/a");
+    useTaskStore.getState().setRoot("/b");
+    pending.resolve(task({id: "created-a"}));
+    expect((await creating)?.id).toBe("created-a");
+    expect(api.createTask).toHaveBeenCalledWith("/a", "A", "Only A");
+    expect(useTaskStore.getState().root).toBe("/b");
+    expect(useTaskStore.getState().task).toBeNull();
+  });
+  it("creating explicitly in A does not invalidate B's pending selection", async () => {
+    useTaskStore.getState().setRoot("/b-select");
+    const pendingB = deferred<CodingTask>();
+    const selectedB = task({id: "selected-b"});
+    api.getTask.mockReturnValueOnce(pendingB.promise);
+    api.createTask.mockResolvedValueOnce(task({id: "created-a"}));
+    api.orchestratorState.mockResolvedValueOnce({task: selectedB, problems: []});
+    const selecting = useTaskStore.getState().selectTask("selected-b");
+    await useTaskStore.getState().createTask("A", "Only A", "/a-other");
+    pendingB.resolve(selectedB);
+    await selecting;
+    expect(useTaskStore.getState().root).toBe("/b-select");
+    expect(useTaskStore.getState().task?.id).toBe("selected-b");
+  });
+
+});

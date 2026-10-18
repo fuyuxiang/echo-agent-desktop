@@ -69,7 +69,15 @@ export class EchoFrontendContribution implements FrontendApplicationContribution
                 }).catch(error => {
                     echoHostBridge.notify('echo/response', { id: message.id, ok: false, error: String(error) });
                 });
-            } else if (message.type === 'echo/get-dirty' && typeof message.id === 'string') {
+            } else if (message.type === 'echo/reload-clean' && typeof message.id === 'string') {
+                void (async () => {
+                    if (this.dirtyCount() !== 0) { throw new Error('IDE 有未保存内容，未覆盖编辑缓冲'); }
+                    const documents = new Set(this.editors.all.map(editor => editor.editor.document));
+                    await Promise.all(Array.from(documents, document => document.revert?.()));
+                    this.reportDirtyState();
+                    echoHostBridge.notify('echo/response', { id: message.id, ok: true, value: this.dirtyCount() });
+                })().catch(error => echoHostBridge.notify('echo/response', { id: message.id, ok: false, error: String(error) }));
+            } else if (message.type === 'echo/get-dirty'  && typeof message.id === 'string') {
                 echoHostBridge.notify('echo/response', { id: message.id, ok: true, value: this.dirtyCount() });
             }
         });

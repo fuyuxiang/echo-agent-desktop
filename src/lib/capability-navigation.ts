@@ -9,3 +9,5 @@ export const CAPABILITY_NAV_ITEMS = [
 export function isCapabilityView(route: string): boolean {
   return CAPABILITY_NAV_ITEMS.some(item => item.route === route);
 }
+// Persisted navigation keys stay compatible; display names describe the whole section.
+export const CAPABILITY_SECTION_LABEL = "专家与扩展";

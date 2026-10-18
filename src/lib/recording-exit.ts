@@ -1,3 +1,4 @@
+import { meetingDrafts } from "./meeting-drafts";
 import { meetingRecorder } from "./meeting-minutes";
 import { invoke } from "@tauri-apps/api/core";
 
@@ -6,6 +7,7 @@ export interface DesktopExitFailure { requestId?: string | null; message: string
 
 /** A stopped empty recording has no buffered data to lose. A failed save does. */
 export async function saveRecordingBeforeExit(): Promise<void> {
+  meetingDrafts.ensureDurable();
   await meetingRecorder.prepareForExit();
   const snapshot = meetingRecorder.current();
   if (!snapshot.active && !snapshot.pendingSave) return;
@@ -40,6 +42,7 @@ export function createExitPreparationController(callbacks: {
     if (active) rememberClosed(active);
     active = null;
     callbacks.cancelPrepare?.();
+    meetingDrafts.cancelExitDiscard();
     meetingRecorder.resumeAfterExitFailure();
     callbacks.preparing(false);
     callbacks.failed(notice.message);
@@ -77,6 +80,6 @@ export function createExitPreparationController(callbacks: {
   return {
     prepare,
     fail,
-    dispose: () => { disposed = true; active = null; meetingRecorder.resumeAfterExitFailure(); },
+    dispose: () => { disposed = true; active = null; meetingDrafts.cancelExitDiscard(); meetingRecorder.resumeAfterExitFailure(); },
   };
 }

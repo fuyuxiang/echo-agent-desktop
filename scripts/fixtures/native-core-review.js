@@ -8,6 +8,7 @@ window.__echoNativeCoreReview = async function ({ home, nonce } = {}) {
   const deadline = Date.now() + 780000, stops = [], completions = [], toolUpdates = [], subagents = [];
   let invoke, scope, approved = false, activeSessionId;
   const assert = (value, message) => { if (!value) throw new Error(message); };
+  const canContinueAfterFailure = (status, queueEmpty) => status === 'completed' && queueEmpty;
   const delay = (ms) => new Promise((accept) => setTimeout(accept, ms));
   const visible = (element) => !!element && !element.closest('[hidden]') && element.getClientRects().length > 0;
   const button = (root, text) => [...(root?.querySelectorAll('button') ?? [])]
@@ -51,6 +52,13 @@ window.__echoNativeCoreReview = async function ({ home, nonce } = {}) {
     const entry = (await catalog()).find((item) => item.sessionId === sessionId);
     assert(entry && entry.cwd === scope.cwd, 'Session lost its exact private workspace');
     return entry;
+  };
+  const requireSettledAfterFailedStage = async (id, sessionId) => {
+    const state = await ownSession(sessionId);
+    const queueEmpty = !document.querySelector('.queue-panel');
+    const continuing = canContinueAfterFailure(state.status, queueEmpty);
+    (report.stageContinuations ??= []).push({ id, sessionId, status: state.status, queueEmpty, continuing });
+    assert(continuing, `${id} failed with unfinished session/queue; abort further work`);
   };
   const select = async (sessionId) => {
     await ownSession(sessionId);
@@ -289,7 +297,8 @@ window.__echoNativeCoreReview = async function ({ home, nonce } = {}) {
       const first = await wait(async () => (await catalog()).find((item) => item.cwd === scope.cwd && !item.hidden), 'actual new session');
       assert(first.permissionMode === 'ask', 'Model session must retain actual Ask permission mode');
       e.sessionId = first.sessionId; e.ownedSessionIds.push(first.sessionId); activeSessionId = first.sessionId;
-      assert(await stage('core-qwen-initial-response', () => finish(initial, m.initial, start)), 'Initial Qwen response failed');
+      const initialResponse = await stage('core-qwen-initial-response', () => finish(initial, m.initial, start));
+      if (!initialResponse) await requireSettledAfterFailedStage('core-qwen-initial-response', e.sessionId);
       const control = await stage('core-queue-and-send-now', async () => {
         const slow = `隔离排队验收 ${nonce}：请直接连续撰写五千字中文说明，不调用工具。`;
         const before = completions.length; await send(slow);
@@ -299,8 +308,9 @@ window.__echoNativeCoreReview = async function ({ home, nonce } = {}) {
         await wait(() => document.querySelector('.queue-row__text')?.textContent === queued, 'durable queue visible');
         await send(immediate, '中断当前回复并立即发送');
         await wait(async () => { await service(null); return completions.slice(before).find((item) => item.sessionId === e.sessionId && item.cancelTrigger === 'send_now'); }, 'actual send_now cancellation', 30000);
-        await wait(async () => { await service(null); return (await ownSession(e.sessionId)).status === 'completed'
-          && reply().includes(m.queued) && !document.querySelector('.queue-panel') ? true : null; }, 'actual queue auto-drain and Qwen response', 120000);
+        await wait(async () => { await service(null); return canContinueAfterFailure((await ownSession(e.sessionId)).status,
+          !document.querySelector('.queue-panel')) ? true : null; }, 'actual queue auto-drain completed and empty', 120000);
+        assert(reply().includes(m.queued), 'Queued Qwen reply missing exact marker');
         const lines = users(), nowIndex = lines.findIndex((line) => line.includes(immediate)), queuedIndex = lines.findIndex((line) => line.includes(queued));
         assert(nowIndex >= 0 && queuedIndex > nowIndex && lines.filter((line) => line.includes(queued)).length === 1
           && lines.filter((line) => line.includes(immediate)).length === 1, 'Immediate/queued messages lost, duplicated or reordered');
@@ -309,7 +319,7 @@ window.__echoNativeCoreReview = async function ({ home, nonce } = {}) {
         assert([...document.querySelectorAll('.msg--assistant')].some((item) => item.textContent.includes(m.immediate)), 'Immediate Qwen reply missing');
         return { sessionId: e.sessionId, admittedViaUi: true, immediateBeforeQueued: true, noDuplicate: true, completions: turns };
       });
-      if (!control) throw new Error('Failed real queue control; stop further model work');
+      if (!control) await requireSettledAfterFailedStage('core-queue-and-send-now', e.sessionId);
       await stage('core-stop-and-resend', async () => {
         const slow = `隔离停止验收 ${nonce}：请直接连续撰写五千字中文说明，不调用工具。`, before = completions.length;
         await send(slow); (await wait(() => { const b = document.querySelector('.echo-composer button[aria-label="停止生成"]'); return visible(b) && !b.disabled ? b : null; }, 'actual stop button')).click();
@@ -501,7 +511,7 @@ window.__echoNativeCoreReview = async function ({ home, nonce } = {}) {
         (await wait(() => button(document, '+ 添加自动化'), 'actual new automation form')).click();
         const name = await wait(() => document.querySelector('.atm-modal-input'), 'actual automation name');
         set(name, marker);
-        (await wait(() => [...document.querySelectorAll('.sidebar__nav-item')].find(node => visible(node) && node.textContent.trim() === '扩展'), 'leave automation via actual navigation')).click();
+        (await wait(() => [...document.querySelectorAll('.sidebar__nav-item')].find(node => visible(node) && node.textContent.trim() === '专家与扩展'), 'leave automation via actual navigation')).click();
         await wait(() => !document.contains(name), 'automation editor genuinely unmounted');
         await openAutomation();
         await wait(() => document.querySelector('.atm-modal-input')?.value === marker, 'actual draft restored after navigation');

@@ -42,7 +42,7 @@ describe("phase presentation", () => {
     for (const phase of ["discovering", "implementing", "verifying", "diagnosing", "repairing"] as const) {
       expect(describePhase(phase).active).toBe(true);
     }
-    expect(describePhase("delivered")).toMatchObject({ tone: "good", active: false });
+    expect(describePhase("delivered")).toMatchObject({ label: "执行完成", tone: "waiting", active: false });
     expect(describePhase("blocked")).toMatchObject({ tone: "bad", active: false });
     expect(describePhase("paused")).toMatchObject({ label: "已暂停", active: false });
     expect(describePhase("stopped")).toMatchObject({ label: "已停止", active: false });
@@ -70,11 +70,11 @@ describe("AgentPane", () => {
     expect(screen.getByRole("alert")).toHaveTextContent("执行计划需要修正");
   });
 
-  it("delivers after verification without another acceptance click", async () => {
+  it("keeps execution completion neutral until delivery evidence is available", async () => {
     const user = userEvent.setup();
     const props = paneProps({ task: task({ phase: "delivered" }) });
     render(<AgentPane {...props} />);
-    expect(screen.getByText("任务已完成")).toBeInTheDocument();
+    expect(screen.getByText("执行完成 · 待检查交付条件")).toBeInTheDocument();
     expect(screen.queryByRole("button", { name: /确认验收/ })).not.toBeInTheDocument();
     await user.click(screen.getByRole("button", { name: "交付报告" }));
     expect(props.onOpenReport).toHaveBeenCalled();

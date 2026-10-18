@@ -277,7 +277,7 @@ impl Default for EchoAgentComConfig {
             token_header: "echo-agent-cli".to_owned(),
             oidc,
             oauth2,
-            auth_provider_command: std::env::var("ECHO_AGENT_AUTH_PROVIDER_COMMAND").ok(),
+            auth_provider_command: if echo_agent_config::controlled_discovery_home().is_some() { None } else { std::env::var("ECHO_AGENT_AUTH_PROVIDER_COMMAND").ok() },
             auth_provider_label: std::env::var("ECHO_AGENT_AUTH_PROVIDER_LABEL").ok(),
             auth_token_ttl: std::env::var("ECHO_AGENT_AUTH_TOKEN_TTL")
                 .ok()

@@ -15,6 +15,7 @@ import { useCallback, useContext, useEffect, useLayoutEffect, useMemo, useRef, u
 import { SidebarLayoutContext } from "@/lib/sidebar-layout";
 import type { ToolCallView } from "@/stores/session-store";
 import type { SessionArtifact } from "@/lib/session-artifacts";
+import { authorizeDocumentArtifact } from "@/lib/artifact-catalog";
 import type { FileChange } from "@/lib/file-changes";
 import { aggregateFileChanges } from "@/lib/file-changes";
 import type { ChatMessage } from "@/stores/session-store";
@@ -427,6 +428,7 @@ export function ToolSidePanel({
             <MainContent
               view={view}
               artifacts={artifacts}
+              sessionId={sessionId}
               cwd={cwd}
               previewPath={previewPath}
               selectedArtifactId={selectedArtifactId}
@@ -599,6 +601,7 @@ function ChangesNavList({
 function MainContent({
   view,
   artifacts,
+  sessionId,
   cwd,
   previewPath,
   selectedArtifactId,
@@ -611,6 +614,7 @@ function MainContent({
 }: {
   view: WorkspaceView;
   artifacts: SessionArtifact[];
+  sessionId?: string;
   cwd?: string;
   previewPath?: string | null;
   selectedArtifactId?: string;
@@ -635,7 +639,8 @@ function MainContent({
       return <p className="tool-side-panel__empty">选择文件查看内容</p>;
     }
     return (
-      <ArtifactFilePreview path={path} cwd={cwd} onToast={onToast} onOpenOs={() => onOpenOs(path)} />
+      <ArtifactFilePreview path={path} cwd={cwd} sessionId={sessionId}
+          artifact={artifacts.find(item => item.path === path)} onToast={onToast} onOpenOs={() => onOpenOs(path)} />
     );
   }
   if (view === "changes") {
@@ -644,7 +649,8 @@ function MainContent({
       return <p className="tool-side-panel__empty">在左侧选择文件查看变更</p>;
     }
     return (
-      <ArtifactFilePreview path={path} cwd={cwd} onToast={onToast} onOpenOs={() => onOpenOs(path)} />
+      <ArtifactFilePreview path={path} cwd={cwd} sessionId={sessionId}
+          artifact={artifacts.find(item => item.path === path)} onToast={onToast} onOpenOs={() => onOpenOs(path)} />
     );
   }
   // artifacts：选中产物时预览其文件。
@@ -670,7 +676,8 @@ function MainContent({
             查看关联工具
           </button>
         )}
-        <ArtifactFilePreview path={path} cwd={cwd} onToast={onToast} onOpenOs={() => onOpenOs(path)} />
+        <ArtifactFilePreview path={path} cwd={cwd} sessionId={sessionId}
+          artifact={artifacts.find(item => item.path === path)} onToast={onToast} onOpenOs={() => onOpenOs(path)} />
       </div>
     );
   }
@@ -688,11 +695,15 @@ type PreviewState =
 function ArtifactFilePreview({
   path,
   cwd,
+  sessionId,
+  artifact,
   onToast,
   onOpenOs,
 }: {
   path: string;
   cwd?: string;
+  sessionId?: string;
+  artifact?: SessionArtifact;
   onToast?: (msg: string) => void;
   onOpenOs: () => Promise<boolean>;
 }) {
@@ -706,22 +717,29 @@ function ArtifactFilePreview({
     let cancelled = false;
     setState({ type: "loading" });
     (async () => {
+      let authorized = false;
       try {
+        if (artifact) {
+          if (!sessionId && artifact.kind === "document_export") throw new Error("会话信息不可用，请重新打开原会话");
+          if (sessionId) await authorizeDocumentArtifact(sessionId, artifact);
+        }
+        authorized = true;
+        if (cancelled) return;
         const content = await loadPreviewContent(path, cwd, kind);
         if (!cancelled) setState({ type: "ready", content });
       } catch (e) {
         if (!cancelled) {
           const message = errorMessage(e);
-          setState(isUnauthorizedPathError(e)
+          setState(authorized && isUnauthorizedPathError(e)
             ? { type: "unauthorized", message }
-            : { type: "error", message, canOpen: !isMissingPathError(message) });
+            : { type: "error", message, canOpen: authorized && !isMissingPathError(message) });
         }
       }
     })();
     return () => {
       cancelled = true;
     };
-  }, [path, cwd, kind, retry]);
+  }, [path, cwd, kind, retry, sessionId, artifact?.kind, artifact?.toolCallId]);
 
   const authorize = async () => {
     setAuthorizing(true);

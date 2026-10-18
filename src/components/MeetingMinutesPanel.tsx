@@ -126,6 +126,7 @@ export function MeetingMinutesPanel({
   const [tab, setTab] = useState<DetailTab>("minutes");
   const [busy, setBusy] = useState<string | null>(null);
   const [loadError, setLoadError] = useState<string | null>(null);
+  const [, setDraftRevision] = useState(0);
   const [draftTranscript, setDraftTranscript] = useState<TranscriptSegment[]>([]);
   const [recorder, setRecorder] = useState(meetingRecorder.current());
   const [activeJobs, setActiveJobs] = useState<Record<string, boolean | undefined>>({});
@@ -572,6 +573,25 @@ export function MeetingMinutesPanel({
         </aside>
 
         <main className="meeting-detail">
+          {meetingDrafts.persistenceError() && <div className="meeting-error" role="alert">
+            {meetingDrafts.persistenceError()}
+            <button type="button" onClick={() => {
+              try { meetingDrafts.ensureDurable(); onToast?.("会议草稿已保存在此设备"); }
+              catch (error) { onToast?.(String(error).replace(/^Error:\s*/, "")); }
+              if (selected) applyRecord(selected);
+              setDraftRevision(value => value + 1);
+            }}>重试保存草稿</button>
+            {meetingDrafts.recoveryBytes() !== null && <details>
+              <summary>恢复原始草稿数据</summary>
+              <p>可复制原始数据自行恢复；重新开始前会保留本地恢复副本。</p>
+              <textarea readOnly aria-label="原始会议草稿数据" value={meetingDrafts.recoveryBytes() ?? ""} />
+              <button type="button" onClick={() => {
+                if (!window.confirm("已确认保留原始数据后，重新开始会议草稿？本地将保留恢复副本。")) return;
+                try { meetingDrafts.resetUnreadable(); if (selected) applyRecord(selected); setDraftRevision(value => value + 1); }
+                catch (error) { onToast?.(`无法重新开始：${String(error)}`); }
+              }}>保留恢复副本并重新开始</button>
+            </details>}
+          </div>}
           {!selected && <div className="meeting-detail__empty"><Mic size={42} /><h2>记录每一次重要讨论</h2><p>开始录音或导入已有音频。两小时以上会议会在本地自动分段处理。</p></div>}
           {selected && (
             <>
@@ -681,7 +701,7 @@ export function MeetingMinutesPanel({
                         <button type="button" onClick={() => void regenerate()} disabled={busy !== null || editingMinutes || hasTranscriptDraft}><RefreshCw size={14} />重新生成</button>
                       </div>
                       {hasTranscriptDraft && <p className="meeting-draft-hint" role="status">转写校对尚未保存；请先保存并重新生成纪要，再导出最新内容。</p>}
-                      {hasMinutesDraft && !minutesConflict && <p className="meeting-draft-hint" role="status">有未保存的纪要草稿，请保存后再导出；{editingMinutes ? "正在编辑草稿。" : "预览显示已保存内容。"}</p>}
+                      {hasMinutesDraft && !minutesConflict && <p className="meeting-draft-hint" role="status">{meetingDrafts.persistenceError() ? "纪要草稿尚未保存在此设备。" : "纪要草稿已保存在此设备，重启后可继续。"}请保存后再导出；{editingMinutes ? "正在编辑草稿。" : "预览显示已保存内容。"}</p>}
                       {editingMinutes ? (
                         <div className="meeting-minutes__editor">
                           <textarea aria-label="编辑会议纪要" rows={18} value={draftMinutes} disabled={busy !== null || selectedJobActive !== false || hasTranscriptDraft} onChange={(event) => {
@@ -708,7 +728,7 @@ export function MeetingMinutesPanel({
                         <button type="button" disabled={hasTranscriptDraft || busy !== null} onClick={() => void doExport("srt")}><Download size={14} />SRT</button>
                         <button className="meeting-primary" type="button" onClick={() => void saveTranscript()} disabled={busy !== null || !!transcriptConflict || selectedJobActive !== false}>保存校对</button>
                       </div>
-                      {hasTranscriptDraft && !transcriptConflict && <p className="meeting-draft-hint" role="status">校对草稿已保留，保存后即可导出最新转写。</p>}
+                      {hasTranscriptDraft && !transcriptConflict && <p className="meeting-draft-hint" role="status">{meetingDrafts.persistenceError() ? "校对草稿尚未保存在此设备。" : "校对草稿已保存在此设备，重启后可继续。"}保存后即可导出最新转写。</p>}
                       <div className="meeting-transcript__rows">
                         {draftTranscript.map((segment, index) => (
                           <div className="meeting-transcript__row" key={`${segment.id}-${index}`}>

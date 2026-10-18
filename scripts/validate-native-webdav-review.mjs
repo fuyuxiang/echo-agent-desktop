@@ -1,3 +1,4 @@
+import { cleanNativeReviewEnvironment } from "./lib/native-review-isolation.mjs";
 import { nativeReviewOutput } from './lib/native-review-output.mjs';
 // Dedicated actual macOS CloudStorage UI acceptance. No Cargo, staging, model,
 // existing profile, OS login mutation, or transfer-dialog bypass is performed.
@@ -188,7 +189,7 @@ export async function runNativeWebDavReview({ executable, resourceOnly = false }
     resourceOnly, nativeVerified: false, phases: [], errors: [], passed: false };
   const python = process.env.WEBDAV_REVIEW_PYTHON || 'python3';
   const serviceScript = fileURLToPath(new URL('./standard-webdav-review.py', import.meta.url));
-  const serviceEnv = { ...process.env };
+  const serviceEnv = { ...cleanNativeReviewEnvironment(process.env) };
   if (process.env.WEBDAV_REVIEW_PYTHONPATH) serviceEnv.PYTHONPATH = process.env.WEBDAV_REVIEW_PYTHONPATH;
   const serviceLog = join(output, 'standard-server.log');
   const service = managed(spawn(python, [serviceScript, '--serve', '--home', home, '--manifest', manifest, '--output', serviceEvidence],
@@ -221,7 +222,7 @@ export async function runNativeWebDavReview({ executable, resourceOnly = false }
       for await (const chunk of createReadStream(executable)) executableHash.update(chunk);
       result.executable = executable;
       result.binarySha256 = executableHash.digest('hex');
-      const launchEnv = { ...process.env, GROK_HOME: legacy, ECHO_DESKTOP_REVIEW: '1',
+      const launchEnv = { ...cleanNativeReviewEnvironment(process.env), GROK_HOME: legacy, ECHO_DESKTOP_REVIEW: '1',
         ECHO_DESKTOP_REVIEW_WEBDAV: '1', ECHO_DESKTOP_REVIEW_MEDIA: '0', ECHO_DESKTOP_REVIEW_EXTENDED: '0',
         ECHO_WEBDAV_REVIEW_MANIFEST: manifest, NO_PROXY: '127.0.0.1,localhost,::1', no_proxy: '127.0.0.1,localhost,::1' };
       for (const name of ['ECHO_AGENT_HOME', 'ECHO_DESKTOP_VALIDATION', 'ECHO_DESKTOP_REVIEW_CODE',

@@ -60,6 +60,22 @@ pub(crate) fn apply_startup_data_home() -> Result<(), String> {
         // Called before logging, Runtime initialization or background threads.
         std::env::set_var(HOME_ENV, home);
     }
+    let review = std::env::var("ECHO_DESKTOP_REVIEW").as_deref() == Ok("1")
+        || std::env::var("ECHO_DESKTOP_VALIDATION").as_deref() == Ok("1");
+    if review {
+        // Review mode never inherits an inline token, arbitrary config file,
+        // auth command, or telemetry destination from its launching shell.
+        for (name, _) in std::env::vars_os() {
+            let key = name.to_string_lossy();
+            if key.starts_with("ECHO_AGENT_AUTH") || key.starts_with("ECHO_AGENT_CONFIG")
+                || key.starts_with("OTEL_") || key.starts_with("GROK_AUTH") {
+                std::env::remove_var(name);
+            }
+        }
+        std::env::set_var("ECHO_AGENT_REVIEW_ISOLATED", "1");
+        std::env::set_var("ECHO_AGENT_TELEMETRY_ENABLED", "false");
+        std::env::set_var("ECHO_AGENT_TELEMETRY_TRACE_UPLOAD", "false");
+    }
     Ok(())
 }
 

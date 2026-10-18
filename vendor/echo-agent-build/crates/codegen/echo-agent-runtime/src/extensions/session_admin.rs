@@ -66,7 +66,7 @@ async fn handle_internal(
         InternalMethod::ReloadProjectMcpServers => {
             handle_reload_project_mcp_servers(agent, args).await
         }
-        InternalMethod::ReloadSkills => handle_reload_skills(agent),
+        InternalMethod::ReloadSkills => handle_reload_skills(agent).await,
         InternalMethod::ReloadWorkflows => handle_reload_workflows(agent),
         InternalMethod::ReloadModels => handle_reload_models(agent),
         InternalMethod::ReloadModelsCache => handle_reload_models_cache(agent),
@@ -630,8 +630,9 @@ async fn handle_add_local_workspace(agent: &MvpAgent, args: &acp::ExtRequest) ->
 // internal/reload_skills
 
 /// Reload skills for ALL active sessions. Called by the skills file watcher
-fn handle_reload_skills(agent: &MvpAgent) -> ExtResult {
-    let reloaded = agent.reload_skills_all_sessions();
+async fn handle_reload_skills(agent: &MvpAgent) -> ExtResult {
+    let reloaded = agent.reload_skills_all_sessions_checked().await
+        .map_err(|error| acp::Error::internal_error().data(error))?;
     ExtMethodResult::success(serde_json::json!({ "reloaded": reloaded }))
         .to_ext_response()
         .map_err(|e| acp::Error::internal_error().data(e.to_string()))

@@ -17,6 +17,8 @@ import {
 import { formatFileSize, inferFileTypeFromExt, relativeTime, type FileType, type LocalFileItem } from "@/lib/file-utils";
 import {
   ARTIFACT_CATALOG_EVENT,
+  authorizeDocumentArtifact,
+  type TaskArtifact,
   artifactsFromTranscripts,
   loadTaskArtifacts,
   mergeTaskArtifacts,
@@ -217,14 +219,14 @@ function ArtifactsTab({
             key={`${entry.sessionId}/${entry.path}`}
             className="myfiles-row myfiles-row--artifact"
             title={entry.path}
-            onClick={() => void openCatalogArtifact(entry.path, entry.cwd || cwd, onToast)}
+            onClick={() => void openCatalogArtifact(entry.path, entry.cwd || cwd, onToast, entry)}
             role="button"
             tabIndex={0}
             aria-label={`打开成果 ${entry.path}`}
             onKeyDown={(event) => {
               if (event.key !== "Enter" && event.key !== " ") return;
               event.preventDefault();
-              void openCatalogArtifact(entry.path, entry.cwd || cwd, onToast);
+              void openCatalogArtifact(entry.path, entry.cwd || cwd, onToast, entry);
             }}
           >
             <span className="myfiles-col-name">
@@ -247,8 +249,10 @@ async function openCatalogArtifact(
   path: string,
   cwd: string | undefined,
   onToast?: (message: string) => void,
+  artifact?: TaskArtifact,
 ): Promise<void> {
   try {
+    if (artifact) await authorizeDocumentArtifact(artifact.sessionId, artifact);
     await openLocalPath(path, cwd);
     return;
   } catch (error) {

@@ -287,7 +287,7 @@ pub fn discover_plugins(
         config,
         trust_store,
         project_trusted,
-        dirs::home_dir().as_deref(),
+        echo_agent_config::discovery_home_dir().as_deref(),
     )
 }
 

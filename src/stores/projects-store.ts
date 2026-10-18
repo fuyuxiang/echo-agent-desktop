@@ -11,6 +11,7 @@ export interface RefItem {
   id: string;
   name: string;
   iconUrl?: string;
+  scope?: string;
 }
 
 /** 项目下的真实对话（EchoAgent 会话）。 */
@@ -102,6 +103,9 @@ const STORAGE_KEY = "echoagent.projects";
 const DIRTY_KEY = "echoagent.projects.pending-backend-sync";
 let persistChain: Promise<void> = Promise.resolve();
 let persistRevision = 0;
+
+/** Await the current native catalogue before granting newly imported assets. */
+export function flushProjectPersistence(): Promise<void> { return persistChain; }
 
 /** Deterministic, lossless migration: identical ids in the two old lists stay distinct. */
 export function migrateProjectWorkItems(project: Pick<ProjectMeta, "tasks" | "plans">): TaskItem[] {

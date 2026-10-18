@@ -443,7 +443,7 @@ fn collect_repo_config_kinds(cwd: &Path, first_only: bool) -> Vec<&'static str> 
 /// [`claude_project_mcp_present`] (existence) and the shell's
 /// `project_scoped_mcp_names` (the names) derive from, so the two never drift.
 pub fn claude_project_mcp_names(cwd: &Path) -> Option<Vec<String>> {
-    let home = dirs::home_dir()?;
+    let home = echo_agent_config::discovery_home_dir()?;
     let content = std::fs::read_to_string(home.join(".claude.json")).ok()?;
     let value = serde_json::from_str::<serde_json::Value>(&content).ok()?;
     let cwd_key = cwd.to_string_lossy();
@@ -1151,7 +1151,7 @@ mod tests {
         // Case-2 wiring: with cwd == $HOME (git-init'd so workspace_key discovers
         // it as the home git root), the gather flags key_recordable=false and
         // decide() trusts it despite configs + interactive. $HOME is overridden so
-        // dirs::home_dir()/workspace_key see the tempdir as home.
+        // echo_agent_config::discovery_home_dir()/workspace_key see the tempdir as home.
         let _lock = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         let home = tempfile::tempdir().unwrap();
         let _home = EnvVarGuard::set("HOME", home.path());

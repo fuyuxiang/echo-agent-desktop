@@ -4795,15 +4795,42 @@ button.diff__path {
 /* ---- right content column ---- */
 .settings-modal__content {
   flex: 1;
+  min-width: 0;
+  min-height: 0;
   position: relative;
   overflow: hidden;
   display: flex;
   flex-direction: column;
 }
+.settings-modal__toolbar {
+  flex: 0 0 auto;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  min-height: 56px;
+  padding: 10px 20px;
+  border-bottom: 1px solid var(--echo-border-subtle);
+}
+.settings-modal__location {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+  color: var(--echo-text-weak);
+  font-size: 0.8125rem;
+}
+.settings-modal__location strong {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--echo-text-strong);
+  font-weight: 550;
+}
 .settings-modal__close {
-  position: absolute;
-  top: 7px;
-  right: 7px;
+  position: static;
+  flex-shrink: 0;
   width: 34px;
   height: 34px;
   border: none;
@@ -4814,7 +4841,6 @@ button.diff__path {
   align-items: center;
   justify-content: center;
   color: var(--echo-text-medium);
-  z-index: 2;
   transition: background 0.12s ease;
 }
 .settings-modal__close:hover {
@@ -4823,6 +4849,7 @@ button.diff__path {
 }
 .settings-modal__panel {
   flex: 1;
+  min-height: 0;
   overflow: hidden;
   /* EchoAgent: 20px 16px */
   padding: 20px 16px;

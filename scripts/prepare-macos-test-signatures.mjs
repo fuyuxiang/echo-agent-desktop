@@ -44,6 +44,16 @@ export function prepareMacosTestSignatures(env = process.env) {
   // Keep artifact JSON private to this parser while showing compilation and
   // lock-wait progress immediately, including during long cold builds.
   { env, encoding: 'utf8', maxBuffer: 32 * 1024 * 1024, stdio: ['ignore', 'pipe', 'inherit'] });
+  if (build.status !== 0) {
+    for (const line of (build.stdout ?? '').split('\n').filter(Boolean)) {
+      try {
+        const message = JSON.parse(line);
+        if (message.reason === 'compiler-message' && message.message?.rendered) {
+          process.stderr.write(message.message.rendered);
+        }
+      } catch { /* Cargo may emit an unstructured diagnostic on failure. */ }
+    }
+  }
   assert.equal(build.status, 0, 'Test compilation failed; no signing performed');
   // A fresh checkout has no target directory until Cargo creates it.
   const target = realpathSync(targetPath);

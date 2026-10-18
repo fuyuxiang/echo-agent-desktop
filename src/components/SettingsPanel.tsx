@@ -156,6 +156,13 @@ const NAV_GROUPS: NavGroup[] = [
   },
 ];
 
+function settingsSectionTitle(section: SettingsSectionId): string {
+  const subview = [...NOTIFICATION_VIEWS, ...MEMORY_VIEWS, ...DATA_VIEWS]
+    .find(([id]) => id === section);
+  return subview?.[1] ?? NAV_GROUPS.flatMap(group => group.items)
+    .find(item => item.id === section)?.label ?? "设置";
+}
+
 export function SettingsPanel({
   open,
   onClose,
@@ -265,15 +272,22 @@ export function SettingsPanel({
         </nav>
 
         <div className="settings-modal__content">
-          <button
-            className="settings-modal__close"
-            onClick={requestClose}
-            aria-label="关闭设置"
-            title="关闭 (Esc)"
-            data-modal-initial-focus
-          >
-            <X size={16} strokeWidth={1.75} />
-          </button>
+          <div className="settings-modal__toolbar">
+            <div className="settings-modal__location" aria-label="当前设置页">
+              <span>设置</span><span aria-hidden="true">/</span>
+              <strong>{settingsSectionTitle(active)}</strong>
+            </div>
+            <button
+              type="button"
+              className="settings-modal__close"
+              onClick={requestClose}
+              aria-label="关闭设置"
+              title="关闭 (Esc)"
+              data-modal-initial-focus
+            >
+              <X size={16} strokeWidth={1.75} />
+            </button>
+          </div>
           <div className="settings-modal__panel">
             {active === "model" ? (
               <ModelConnectionsPanel onModelsChanged={onModelsChanged} />

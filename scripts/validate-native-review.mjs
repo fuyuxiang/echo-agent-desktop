@@ -1,3 +1,4 @@
+import { cleanNativeReviewEnvironment } from "./lib/native-review-isolation.mjs";
 import { nativeReviewOutput } from './lib/native-review-output.mjs';
 import { spawn, spawnSync } from "node:child_process";
 import { createHash } from 'node:crypto';
@@ -41,7 +42,7 @@ const stopOwnedApp = () => {
 };
 process.once('SIGINT', stopOwnedApp);
 process.once('SIGTERM', stopOwnedApp);
-const launchEnv = { ...process.env, GROK_HOME: legacy, ECHO_DESKTOP_REVIEW: "1" };
+const launchEnv = { ...cleanNativeReviewEnvironment(process.env), GROK_HOME: legacy, ECHO_DESKTOP_REVIEW: "1" };
 launchEnv.ECHO_DESKTOP_REVIEW_MEDIA = mediaRequested ? '1' : '0';
 launchEnv.ECHO_DESKTOP_REVIEW_EXTENDED = extendedRequested ? '1' : '0';
 // Exercise the production login/relaunch path, where a parent environment is

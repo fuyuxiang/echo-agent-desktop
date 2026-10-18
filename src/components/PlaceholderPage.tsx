@@ -211,7 +211,7 @@ export function PlaceholderPage({
     const initialTab = label === "技能" ? "skills" : label === "连接器" ? "connectors" : "experts";
     return (
       <DeferredPanel>
-        <CapabilitySection active={label} onNavigate={onNavigate}><ExpertsPanel onGoHome={onGoHome} onToast={onToast} initialTab={initialTab} hideNavigation createExpertRequested={createExpertRequested} onCreateExpertRequestHandled={onCreateExpertRequestHandled} /></CapabilitySection>
+        <CapabilitySection active={label} onNavigate={onNavigate}><ExpertsPanel cwd={cwd} onGoHome={onGoHome} onToast={onToast} initialTab={initialTab} hideNavigation createExpertRequested={createExpertRequested} onCreateExpertRequestHandled={onCreateExpertRequestHandled} /></CapabilitySection>
       </DeferredPanel>
     );
   }

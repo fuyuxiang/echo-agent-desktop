@@ -22,6 +22,7 @@ interface VerificationRunnerOptions {
   detectedReady: boolean;
   setCommandOutput: Dispatch<SetStateAction<string>>;
   requestConfirmation: (options: ConfirmationOptions) => void;
+  prepareEditor?: () => Promise<void>;
   onToast?: (message: string) => void;
 }
 
@@ -38,6 +39,7 @@ export function useVerificationRunner({
   setCommandOutput,
   requestConfirmation,
   onToast,
+  prepareEditor,
 }: VerificationRunnerOptions) {
   const runningVerification = useCodingRuntimeStore((state) => task
     ? Boolean(state.verificationBatches[codingRuntimeKey(cwd, task.id)]) : false);
@@ -57,6 +59,11 @@ export function useVerificationRunner({
     async (batch: DetectedCommand[]) => {
       if (!isCurrent() || !cwd || !task || runningVerification) return;
       const taskId = task.id;
+      const key = codingRuntimeKey(cwd, taskId);
+      const epoch = useCodingRuntimeStore.getState().actionEpochs[key] ?? 0;
+      const allowed = () => !useCodingRuntimeStore.getState().stopping[key]
+        && epoch === (useCodingRuntimeStore.getState().actionEpochs[key] ?? 0);
+      if (!allowed()) return;
       if (!["verifying", "paused", "stopped", "blocked", "delivered"].includes(task.phase)) {
         onToast?.("当前任务正在执行，暂不能启动新的验证批次");
         return;
@@ -70,11 +77,15 @@ export function useVerificationRunner({
         if (selected.root === cwd && selected.task?.id === taskId) await selected.refreshTaskState();
       };
       try {
-        const startedTask = await codingApi.beginVerification(cwd, taskId);
+        await prepareEditor?.();
+        if (!isCurrent() || !allowed()) { useCodingRuntimeStore.getState().releaseVerificationBatch(cwd, taskId, owner); return; }
+        useCodingRuntimeStore.getState().setEditorBlock(cwd, taskId, null);
+        const startedTask = await codingApi.beginVerification(cwd, taskId, task.updatedAt);
         if (isCurrent()) autoVerificationRef.current = `${cwd}:${taskId}:${startedTask.updatedAt}`;
         await refreshCurrent();
       } catch (error) {
-        if (isCurrent()) onToast?.(`无法启动验证：${String(error).replace(/^Error:\s*/, "")}`);
+        if (isCurrent() && allowed()) onToast?.(`无法启动验证：${String(error).replace(/^Error:\s*/, "")}`);
+        await refreshCurrent().catch(() => undefined);
         useCodingRuntimeStore.getState().releaseVerificationBatch(cwd, taskId, owner);
         return;
       }
@@ -82,6 +93,7 @@ export function useVerificationRunner({
       let mayReport = batch.length === 0;
       try {
         for (const command of batch) {
+          if (!allowed()) { mayReport = false; break; }
           const runId = crypto.randomUUID();
           useCodingRuntimeStore.getState().setActiveRunId(cwd, taskId, runId);
           if (isCurrent()) {
@@ -92,6 +104,7 @@ export function useVerificationRunner({
             const approvalToken = command.requiresApproval
               ? await codingApi.approvePlanCommand(cwd, taskId, command.command)
               : undefined;
+            if (!allowed()) { mayReport = false; break; }
             const record = await codingApi.runVerification(
               cwd,
               taskId,
@@ -104,6 +117,7 @@ export function useVerificationRunner({
             mayReport = record.status !== "cancelled";
             if (record.status !== "passed") break;
           } catch (error) {
+            if (!allowed()) { mayReport = false; break; }
             const detail = String(error).replace(/^Error:\s*/, "");
             if (isCurrent()) onToast?.(`执行 ${command.command} 失败：${detail}`);
             await codingApi.reportStartFailed(
@@ -116,11 +130,12 @@ export function useVerificationRunner({
             break;
           }
         }
-        if (mayReport) {
+        if (mayReport && allowed()) {
           await codingApi.reportVerification(cwd, taskId);
           await refreshCurrent();
         }
       } catch (error) {
+        if (!allowed()) return;
         const detail = String(error).replace(/^Error:\s*/, "");
         if (isCurrent()) onToast?.(`无法更新验证结果：${detail}`);
         await codingApi.reportStartFailed(
@@ -138,7 +153,7 @@ export function useVerificationRunner({
         }
       }
     },
-    [cwd, isCurrent, onToast, runningVerification, setCommandOutput, task],
+    [cwd, isCurrent, onToast, prepareEditor, runningVerification, setCommandOutput, task],
   );
 
   const runVerifications = useCallback((batch: DetectedCommand[]) => {

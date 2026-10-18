@@ -39,7 +39,7 @@ use std::io::Read;
 use std::net::{Ipv4Addr, SocketAddr, TcpListener};
 use std::path::{Path, PathBuf};
 use std::sync::{Mutex, OnceLock};
-use tauri::Emitter;
+use tauri::{Emitter, Manager};
 
 #[cfg(unix)]
 use std::os::unix::fs::OpenOptionsExt;
@@ -134,6 +134,13 @@ fn notify_changed(session_id: &str) {
     }
 }
 
+fn team_workspace(session_id: Option<&str>) -> Result<Option<PathBuf>, String> {
+    match (EVENT_APP.get(), session_id) {
+        (Some(app), Some(session)) => app.state::<crate::commands::AppState>().session_workspace(session).map(Some),
+        _ => Ok(None),
+    }
+}
+
 fn validate_session_id(session_id: &str) -> Result<(), String> {
     if session_id.trim().is_empty()
         || session_id.len() > 256
@@ -225,6 +232,13 @@ pub(crate) fn prepare_prompt(
         )?;
     }
     if let Some(id) = selected_id.as_deref() {
+        if let Some(cwd) = team_workspace(Some(session_id))? {
+            let all = read_teams_from_disk()?;
+            let team = all.get(&team_key(Some(session_id), id)).ok_or("团队已失效，请重新选择")?;
+            for member in &team.members {
+                crate::agents_store::require_runtime_identity(&member.name, Path::new(&member.file), &cwd)?;
+            }
+        }
         if let Some(team) = teams.iter().find(|team| team.team_id == id) {
             let missing = team
                 .members
@@ -1151,6 +1165,7 @@ pub(crate) fn create_team_for_session(
     }
 
     let canonical_agents_dir = canonical_agents_directory(&agents_dir)?;
+    let workspace = team_workspace(session_id)?;
     let definitions = crate::agents_store::team_agents();
     let mut registered = Vec::new();
     let mut team_members = Vec::new();
@@ -1193,6 +1208,9 @@ pub(crate) fn create_team_for_session(
             .is_some_and(|metadata| !metadata.file_type().is_symlink() && metadata.is_file())
         {
             let agent_file = agent_file.expect("checked above");
+            if let Some(cwd) = workspace.as_deref() {
+                crate::agents_store::require_runtime_identity(&name, &agent_file, cwd)?;
+            }
             registered.push(name.clone());
             team_members.push(TeamMember {
                 name,

@@ -13,6 +13,12 @@ import { afterEach, describe, it, expect, vi, beforeEach } from "vitest";
 import { render, screen, fireEvent, waitFor, act, within } from "@testing-library/react";
 import type { Plan } from "@/lib/types";
 
+const artifactMocks = vi.hoisted(() => ({ load: vi.fn(async () => [] as import("@/lib/session-artifacts").SessionArtifact[]) }));
+vi.mock("@/lib/artifact-catalog", async (importOriginal) => ({
+  ...await importOriginal<typeof import("@/lib/artifact-catalog")>(),
+  loadSessionDocumentArtifacts: artifactMocks.load,
+}));
+
 // session-store mock:可控的 streaming / sessionId / messages。
 let storeState: {
   messages: unknown[];
@@ -150,6 +156,7 @@ function setStore(patch: Partial<typeof storeState>) {
 
 describe("ChatView pause/yield/resume 闭环", () => {
   beforeEach(() => {
+    artifactMocks.load.mockReset().mockResolvedValue([]);
     useSubagentStore.setState({ bySession: {} });
     Object.defineProperty(HTMLElement.prototype, "scrollIntoView", {
       configurable: true,
@@ -651,4 +658,18 @@ describe("ChatView pause/yield/resume 闭环", () => {
       kind: "reexecute",
     });
   });
+});
+
+it("restored native export receipts become reachable after history loading binds the session", async () => {
+  storeState = { ...storeState, sessionId: "export-history", messages: [], streaming: false, error: null, plan: null };
+  artifactMocks.load.mockReset().mockResolvedValue([{ id: "manual", path: "/synthetic/report.docx", kind: "document_export",
+    title: "报告 · DOCX", toolCallId: "document-export:receipt", status: "completed", verifiedOutput: true }]);
+  localStorage.clear();
+  const { rerender } = render(<ThemeProvider><ChatView {...baseProps} modelLoading /></ThemeProvider>);
+  expect(artifactMocks.load).not.toHaveBeenCalled();
+  rerender(<ThemeProvider><ChatView {...baseProps} modelLoading={false} /></ThemeProvider>);
+  const button = await screen.findByRole("button", { name: /产物 1/ });
+  expect(artifactMocks.load).toHaveBeenCalledWith("export-history");
+  fireEvent.click(button);
+  expect(await screen.findByText("report.docx")).toBeInTheDocument();
 });

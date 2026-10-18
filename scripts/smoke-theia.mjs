@@ -121,6 +121,18 @@ browser = await chromium.launch({
     throw error;
   }
   const ide = page.frameLocator("#ide");
+  const bridgeRequest = type => page.evaluate(({ type, origin }) => new Promise((resolve, reject) => {
+    const frame = document.querySelector('#ide').contentWindow;
+    const id = `smoke-${Date.now()}-${Math.random()}`;
+    const timeout = setTimeout(() => { window.removeEventListener('message', receive); reject(new Error(`${type} ACK timed out`)); }, 15000);
+    function receive(event) {
+      if (event.origin !== origin || event.source !== frame || event.data?.token !== 'smoke-bridge-token'
+          || event.data?.type !== 'echo/response' || event.data.id !== id) return;
+      clearTimeout(timeout); window.removeEventListener('message', receive); resolve(event.data);
+    }
+    window.addEventListener('message', receive);
+    frame.postMessage({ type, id, token: 'smoke-bridge-token' }, origin);
+  }), { type, origin: new URL(backend).origin });
   const iframeSearch = await ide.locator("body").evaluate(() => window.location.search);
   if (iframeSearch.includes("echoEmbedToken") || iframeSearch.includes("echoBridgeToken")) {
     throw new Error(`Theia kept bootstrap credentials in its URL: ${iframeSearch}`);
@@ -186,6 +198,26 @@ browser = await chromium.launch({
       })}`);
     }
     console.log("Editor save passed through Echo preflight and postflight messages.");
+    const clean = await bridgeRequest('echo/get-dirty');
+    if (!clean.ok || clean.value !== 0) throw new Error('Saved editor did not ACK a clean buffer');
+    await editor.click();
+    await page.keyboard.press('ControlOrMeta+End');
+    await page.keyboard.type('\nexport const unsavedProtectionMarker = true;');
+    const dirty = await bridgeRequest('echo/get-dirty');
+    if (!dirty.ok || dirty.value < 1) throw new Error('Live dirty query missed unsaved editor content');
+    const refused = await bridgeRequest('echo/reload-clean');
+    if (refused.ok || !refused.error?.includes('未保存')) throw new Error('Reload must refuse to discard dirty buffers');
+    if (!(await editor.innerText()).includes('unsavedProtectionMarker')) throw new Error('Refused reload discarded the edit');
+    const saved = await bridgeRequest('echo/save-all');
+    if (!saved.ok || saved.value !== 0 || !readFileSync(testFile, 'utf8').includes('unsavedProtectionMarker')) {
+      throw new Error('Save-all ACK did not include the actual dirty buffer on disk');
+    }
+    writeFileSync(testFile, 'export const rollbackDiskMarker = true;\n');
+    const reloaded = await bridgeRequest('echo/reload-clean');
+    if (!reloaded.ok || reloaded.value !== 0) throw new Error('Clean disk mutation did not reload with ACK');
+    await editor.getByText('rollbackDiskMarker', { exact: false }).first().waitFor({ timeout: 15000 });
+    if ((await editor.innerText()).includes('unsavedProtectionMarker')) throw new Error('Rollback left a stale saved buffer');
+    console.log('Live dirty query, dirty reload refusal, save-all ACK, and clean disk rollback reload passed.');
   }
   if (process.env.ECHO_SMOKE_LANGUAGES === "1") {
     const ideFrame = page.frames().find(frame => frame.url().startsWith(new URL(backend).origin));

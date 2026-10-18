@@ -5,6 +5,7 @@ import { SkillsTab } from "./skills/SkillsTab";
 import { ConnectorsTab } from "./connectors/ConnectorsTab";
 
 interface Props {
+  cwd?: string;
   /** Navigate to the home page (after summoning an expert). */
   onGoHome?: () => void;
   onToast?: (message: string) => void;
@@ -17,7 +18,7 @@ interface Props {
 }
 
 /** 专家、技能与连接器的本地管理页面。 */
-export function ExpertsPanel({ onGoHome, onToast, initialTab = "experts", hideNavigation = false, createExpertRequested, onCreateExpertRequestHandled }: Props) {
+export function ExpertsPanel({ cwd, onGoHome, onToast, initialTab = "experts", hideNavigation = false, createExpertRequested, onCreateExpertRequestHandled }: Props) {
   const [tab, setTab] = useState<CapabilityTab>(initialTab);
 
   useEffect(() => setTab(initialTab), [initialTab]);
@@ -29,7 +30,7 @@ export function ExpertsPanel({ onGoHome, onToast, initialTab = "experts", hideNa
       {tab === "experts" && (
         <ExpertsTab pills={pills} onGoHome={onGoHome} onToast={onToast} createExpertRequested={createExpertRequested} onCreateExpertRequestHandled={onCreateExpertRequestHandled} />
       )}
-      {tab === "skills" && <SkillsTab pills={pills} onToast={onToast} />}
+      {tab === "skills" && <SkillsTab cwd={cwd} pills={pills} onToast={onToast} />}
       {tab === "connectors" && <ConnectorsTab pills={pills} onToast={onToast} />}
     </div>
   );

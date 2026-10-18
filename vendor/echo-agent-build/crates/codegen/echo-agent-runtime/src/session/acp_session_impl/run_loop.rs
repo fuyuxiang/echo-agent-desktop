@@ -2128,10 +2128,11 @@ pub(super) async fn run_session(
                             });
                         }
                         SessionCommand::ReloadSkills => {
-                            let s = session.clone();
-                            tokio::task::spawn_local(async move {
-                                s.reload_skills_from_disk().await;
-                            });
+                            session.reload_skills_from_disk().await;
+                        }
+                        SessionCommand::ReloadSkillsChecked { respond_to } => {
+                            let count = session.reload_skills_from_disk().await;
+                            let _ = respond_to.send(count);
                         }
                         SessionCommand::DispatchSessionStartHook { source } => {
                             let envelope = session.fire_hook(

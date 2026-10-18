@@ -26,6 +26,7 @@ import {
 import { useSessionStore } from "./stores/session-store";
 import { useSessionsStore } from "./stores/sessions-store";
 import { reconcileSessionCatalog } from "./lib/session-catalog";
+import { meetingDrafts } from "./lib/meeting-drafts";
 import { createExitPreparationController, type DesktopExitNotice, type DesktopExitFailure } from "./lib/recording-exit";
 import { usePermissionStore } from "./stores/permission-store";
 import {
@@ -114,6 +115,7 @@ import {
   permissionModeStatusFromEvent,
   usePermissionModeStore,
 } from "./stores/permission-mode-store";
+import { agentsValidateReferences } from "./lib/agent-client";
 import { buildProjectPrompt, projectPromptForTurn } from "./lib/project-context";
 import { migrateCatalogRootStorage } from "./lib/catalog-root-storage";
 import { parseRememberArguments, type SlashCommandInvocation } from "./lib/slash-commands";
@@ -1149,13 +1151,27 @@ function Shell() {
     const exit = createExitPreparationController({
       preparing: setExitPreparing,
       failed: (message) => showToast(message, 8000),
-      beforePrepare: () => confirmAutomationEditorExit(() => confirmAutomationExit({
+      beforePrepare: async () => {
+        await confirmAutomationEditorExit(() => confirmAutomationExit({
         title: "退出前舍弃自动化草稿？",
         description: "自动化任务还有未保存的输入。继续编辑会保留草稿；确认退出后，这些输入将被舍弃。",
         cancelLabel: "继续编辑",
         confirmLabel: "舍弃修改并退出",
         danger: true,
-      })),
+        }));
+        try { meetingDrafts.ensureDurable(); }
+        catch (error) {
+          const discard = await confirmAutomationExit({
+            title: "会议草稿尚未保存",
+            description: `${String(error).replace(/^Error:\s*/, "")}。可以取消退出并重试保存，或退出且不保存本次校对和纪要修改。`,
+            cancelLabel: "取消退出，继续编辑",
+            confirmLabel: "不保存本次修改并退出",
+            danger: true,
+          });
+          if (!discard) throw new Error("已取消退出，会议草稿仍保留在当前窗口");
+          meetingDrafts.allowExitWithoutSaving();
+        }
+      },
       cancelPrepare: dismissAutomationExit,
     });
     void Promise.allSettled([
@@ -1330,6 +1346,7 @@ function Shell() {
     newSessionPendingRef.current = true;
     const requestedMode = newTaskMode;
     const cwd = newSessionTargetCwd;
+    const pendingExpert = usePendingExpertStore.getState().expert;
     let createdSessionId: string | null = null;
     setCreatingSession(true);
     setHomeSendError(null);
@@ -1342,6 +1359,10 @@ function Shell() {
       createdSessionId = sessionId;
       if (requestedMode !== "default") {
         await setCodingMode(sessionId, requestedMode);
+      }
+      if (pendingExpert) {
+        const saved = await agentSetSessionExpert(sessionId, pendingExpert.expertId, pendingExpert.name, "local", pendingExpert.avatarLocal, pendingExpert.definitionPath, pendingExpert.definitionRaw);
+        if (!saved) throw new Error("专家身份未能保存，请重试；本次消息尚未发送");
       }
       useKnowledgeStore.getState().bindSessionSources(sessionId, true);
       setCurrentModelId(modelId);
@@ -1359,17 +1380,14 @@ function Shell() {
       sessionStore.getState().setSession(sessionId);
 
       // Check for pending expert — inject persona invisibly.
-      const pending = usePendingExpertStore.getState().expert;
+      const pending = pendingExpert;
       let textForAgent = text;
       if (pending && pending.prompt) {
         // Wrap persona in hidden markers. EchoAgent sees it as instructions;
         // MessageItem strips it from display on history replay.
         textForAgent = `${EXPERT_PERSONA_BEGIN}\n${pending.prompt}\n${EXPERT_PERSONA_END}\n\n${text}`;
         // Bind expert to session for persistence + UI badge.
-        agentSetSessionExpert(sessionId, pending.expertId, pending.name, pending.source, pending.avatarLocal)
-          .catch(() => {});
         sessionsStore.getState().upsert({ sessionId, expertId: pending.expertId, expertName: pending.name, expertAvatar: pending.avatarLocal });
-        usePendingExpertStore.getState().clear();
       }
 
       const accepted = beginAgentTurn({
@@ -1379,6 +1397,7 @@ function Shell() {
         attachments,
       });
       if (!accepted) return false;
+      if (pending && usePendingExpertStore.getState().expert === pending) usePendingExpertStore.getState().clear();
       setNewTaskMode("default");
       setHomeSendError(null);
       return true;
@@ -1457,6 +1476,9 @@ function Shell() {
       const isFirstUserTurn = !sessionStore.getState().messages.some(
         (message) => message.role === "user",
       );
+      if (project && (isFirstUserTurn || projectConversation?.pendingProjectContext)) {
+        await agentsValidateReferences(project.cwd || newSessionTargetCwd, project.experts);
+      }
       const promptBody = promptTextOverride ?? sendText;
       const { promptText: textForAgent, consumedPendingContext } = projectPromptForTurn(
         project, projectConversation, isFirstUserTurn, promptBody,
@@ -2590,7 +2612,9 @@ function Shell() {
       prompt: promptBody,
       description: agent.description ?? agent.name,
       expertId: _meta?.expertId ?? agent.name,
-      source: _meta?.source ?? agent.scope ?? "local",
+      definitionPath: agent.path,
+      definitionRaw: agent.raw,
+      source: "local",
     });
     handleGoHome();
   };
@@ -2606,6 +2630,7 @@ function Shell() {
     try {
       setPlaceholderView(null);
       const cwd = project.cwd || newSessionTargetCwd;
+      await agentsValidateReferences(cwd, project.experts);
       const sessionId = await agentNewSession(cwd, modelId);
       startedSessionId = sessionId;
       useKnowledgeStore.getState().bindSessionSources(sessionId, true);
@@ -2673,6 +2698,7 @@ function Shell() {
     let startedSessionId: string | undefined;
     try {
       const cwd = project.cwd || newSessionTargetCwd;
+      await agentsValidateReferences(cwd, project.experts);
       const sessionId = await agentNewSession(cwd, modelId);
       startedSessionId = sessionId;
       useKnowledgeStore.getState().bindSessionSources(sessionId, true);

@@ -76,7 +76,7 @@ pub fn all_subagents(cwd: &Path, toggle: &HashMap<String, bool>) -> Vec<Subagent
     all_subagents_with_home(
         cwd,
         toggle,
-        dirs::home_dir().as_deref(),
+        echo_agent_config::discovery_home_dir().as_deref(),
         echoagent.as_deref(),
     )
 }
@@ -230,7 +230,7 @@ pub(crate) fn user_agent_dirs(
 
 pub fn discover(cwd: &Path) -> Vec<AgentDefinition> {
     let echoagent = echo_agent_config::user_echo_agent_home();
-    discover_with_home(cwd, dirs::home_dir().as_deref(), echoagent.as_deref())
+    discover_with_home(cwd, echo_agent_config::discovery_home_dir().as_deref(), echoagent.as_deref())
 }
 
 fn discover_with_home(
@@ -257,7 +257,7 @@ fn discover_with_home(
 /// Checks built-ins first, then user-level dirs, then bundled.
 pub fn by_name(name: &str) -> Option<AgentDefinition> {
     let echoagent = echo_agent_config::user_echo_agent_home();
-    by_name_with_home(name, dirs::home_dir().as_deref(), echoagent.as_deref())
+    by_name_with_home(name, echo_agent_config::discovery_home_dir().as_deref(), echoagent.as_deref())
 }
 
 fn by_name_with_home(
@@ -279,8 +279,11 @@ fn by_name_with_home(
                 "Failed to parse agent definition",
                 Some(scope),
             ) {
-                return Some(def);
+                if def.name == name { return Some(def); }
             }
+            let mut definitions = Vec::new();
+            load_definitions_from_dir(&agents_dir, scope, &mut definitions, &mut Default::default());
+            if let Some(def) = definitions.into_iter().find(|def| def.name == name) { return Some(def); }
         }
     }
 
@@ -293,7 +296,7 @@ fn by_name_with_home(
 /// to built-ins, user-level, and finally bundled definitions.
 pub fn by_name_in_cwd(name: &str, cwd: &Path) -> Option<AgentDefinition> {
     let echoagent = echo_agent_config::user_echo_agent_home();
-    by_name_in_cwd_with_home(name, cwd, dirs::home_dir().as_deref(), echoagent.as_deref())
+    by_name_in_cwd_with_home(name, cwd, echo_agent_config::discovery_home_dir().as_deref(), echoagent.as_deref())
 }
 
 fn by_name_in_cwd_with_home(
@@ -418,7 +421,7 @@ pub fn all_subagents_with_plugins(
         cwd,
         toggle,
         plugins,
-        dirs::home_dir().as_deref(),
+        echo_agent_config::discovery_home_dir().as_deref(),
         echoagent.as_deref(),
     )
 }
@@ -477,7 +480,7 @@ pub fn by_name_in_cwd_with_plugins(
         name,
         cwd,
         plugins,
-        dirs::home_dir().as_deref(),
+        echo_agent_config::discovery_home_dir().as_deref(),
         echoagent.as_deref(),
     )
 }
@@ -621,8 +624,11 @@ fn load_project_definition_by_name(name: &str, cwd: &Path) -> Option<AgentDefini
             "Failed to parse project agent definition",
             Some(AgentScope::Project),
         ) {
-            return Some(def);
+            if def.name == name { return Some(def); }
         }
+        let mut definitions = Vec::new();
+        load_definitions_from_dir(&agents_dir, AgentScope::Project, &mut definitions, &mut Default::default());
+        if let Some(def) = definitions.into_iter().find(|def| def.name == name) { return Some(def); }
     }
     None
 }
@@ -998,6 +1004,26 @@ mod tests {
         .unwrap();
         assert_eq!(def.scope, AgentScope::User);
         assert_eq!(def.description, "User reviewer");
+    }
+
+    #[test]
+    fn stable_filename_display_name_rename_is_callable_without_old_alias() {
+        let tmp = tempfile::tempdir().unwrap();
+        let cwd = tmp.path().join("workspace");
+        let home = tmp.path().join("home");
+        let user = home.join(".echo-agent/agents");
+        fs::create_dir_all(&cwd).unwrap();
+        fs::create_dir_all(&user).unwrap();
+        write_agent_file(&user, "old-name.md", "New Display Name", "Renamed user expert");
+        let found = by_name_in_cwd_with_home("New Display Name", &cwd, Some(&home), Some(&home.join(".echo-agent"))).unwrap();
+        assert_eq!(found.source_path.as_deref(), Some(user.join("old-name.md").as_path()));
+        assert!(by_name_in_cwd_with_home("old-name", &cwd, Some(&home), Some(&home.join(".echo-agent"))).is_none());
+        let project = cwd.join(".echo-agent/agents");
+        fs::create_dir_all(&project).unwrap();
+        write_agent_file(&project, "stable.md", "New Display Name", "Project takes precedence");
+        let found = by_name_in_cwd_with_home("New Display Name", &cwd, Some(&home), Some(&home.join(".echo-agent"))).unwrap();
+        assert_eq!(found.scope, AgentScope::Project);
+        assert_eq!(found.description, "Project takes precedence");
     }
 
     #[test]

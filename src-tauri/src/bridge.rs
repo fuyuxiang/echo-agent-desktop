@@ -1844,6 +1844,27 @@ pub(crate) fn parse_complete_event(params: &Value) -> CompleteEvent {
     }
 }
 
+fn claim_public_completion(complete: &CompleteEvent) -> bool {
+    if complete.prompt_id.is_empty() {
+        return true;
+    }
+    static SEEN: std::sync::OnceLock<
+        std::sync::Mutex<std::collections::VecDeque<(String, String)>>,
+    > = std::sync::OnceLock::new();
+    let mut seen = SEEN
+        .get_or_init(|| std::sync::Mutex::new(std::collections::VecDeque::new()))
+        .lock()
+        .unwrap();
+    let key = (complete.session_id.clone(), complete.prompt_id.clone());
+    if seen.contains(&key) {
+        return false;
+    }
+    seen.push_back(key);
+    if seen.len() > 4096 {
+        seen.pop_front();
+    }
+    true
+}
 /// Both ACP response and notification enter here. The durable automation record
 /// claims finalization, so channel order cannot change status or duplicate delivery.
 pub(crate) fn handle_prompt_complete(app: &AppHandle, complete: CompleteEvent) {
@@ -1853,26 +1874,24 @@ pub(crate) fn handle_prompt_complete(app: &AppHandle, complete: CompleteEvent) {
     let session_id = complete.session_id.clone();
     let stop_reason = complete.stop_reason.clone();
     let disposition = completion_disposition(&complete);
-    let automation_notification = if disposition != CompletionDisposition::Superseded {
-        crate::automations::complete_run_for_session(
-            &session_id,
+    let automation = if disposition != CompletionDisposition::Superseded {
+        crate::automations::complete_run_for_session(&session_id, &complete.prompt_id,
             disposition == CompletionDisposition::Success,
-            (disposition != CompletionDisposition::Success).then_some(
-                complete
-                    .cancellation_category
-                    .as_deref()
-                    .unwrap_or(&stop_reason),
-            ),
-        )
-    } else {
-        None
-    };
-    if disposition != CompletionDisposition::Superseded
-        && automation_notification.is_none()
-        && crate::automations::has_run_for_session(&session_id)
-    {
-        return;
+            (disposition != CompletionDisposition::Success).then_some(complete.cancellation_category.as_deref().unwrap_or(&stop_reason)))
+    } else { crate::automations::interrupt_run_for_session(&session_id, &complete.prompt_id) };
+    let automation_handled = !matches!(&automation, crate::automations::AutomationCompletionOutcome::NotAutomation);
+    match automation {
+        crate::automations::AutomationCompletionOutcome::Persisted(completion) => crate::automations::publish_automation_completion(app, *completion),
+        crate::automations::AutomationCompletionOutcome::PersistencePending(error) => {
+            tracing::error!(%error, %session_id, "automation finished but history persistence is pending retry");
+            let _ = app.emit("automation://persistence-error", serde_json::json!({"sessionId": session_id, "error": error, "retrying": true}));
+        }
+        _ => {}
     }
+    // Public turn settlement is independent of automation history I/O and
+    // applies to ordinary follow-ups in a historical automation session too.
+    if !claim_public_completion(&complete) { return; }
+    let automation_notification: Option<crate::automations::AutomationCompletion> = None;
 
     let failed = disposition == CompletionDisposition::Failed;
     let stopped = disposition == CompletionDisposition::Stopped;
@@ -1904,9 +1923,9 @@ pub(crate) fn handle_prompt_complete(app: &AppHandle, complete: CompleteEvent) {
         );
     }
     // `send_now` ends the old turn only so a replacement prompt can
-    // take over. It must not finish an automation or notify the user
-    // that the whole session stopped.
-    if disposition != CompletionDisposition::Superseded {
+    // take over. Its automation occurrence is closed as manually interrupted,
+    // while public settlement must not stop the replacement conversation.
+    if disposition != CompletionDisposition::Superseded && !automation_handled {
         if let Some(completion) = automation_notification.as_ref() {
             crate::automations::emit_automation_update(app, completion.event.clone());
         }
@@ -2919,5 +2938,26 @@ mod tests {
             })
         )
         .is_none());
+    }
+    #[test]
+    fn public_completion_deduplication_is_per_prompt_not_historical_session() {
+        let session = uuid::Uuid::now_v7().to_string();
+        let first = CompleteEvent {
+            session_id: session.clone(),
+            prompt_id: "first".into(),
+            turn_id: None,
+            stop_reason: "end_turn".into(),
+            cancel_trigger: None,
+            cancellation_category: None,
+            agent_result: None,
+        };
+        assert!(claim_public_completion(&first));
+        assert!(!claim_public_completion(&first));
+        let followup = CompleteEvent {
+            prompt_id: "followup".into(),
+            ..first
+        };
+        assert!(claim_public_completion(&followup));
+        assert!(!claim_public_completion(&followup));
     }
 }

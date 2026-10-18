@@ -755,6 +755,7 @@ pub(crate) fn meeting_provider_access(
     model_id: &str,
     expected_provider_id: &str,
 ) -> Result<MeetingProviderAccess, String> {
+    crate::policy::require_model(model_id)?;
     meeting_provider_access_from_config(&read_config(), model_id, expected_provider_id)
 }
 

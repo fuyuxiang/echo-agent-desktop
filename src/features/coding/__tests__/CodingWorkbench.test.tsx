@@ -273,7 +273,16 @@ describe("Theia workbench", () => {
       onStartRun={onStartRun}
       onSelectWorkspace={onSelectWorkspace}
     />);
-    await screen.findByTitle("Echo Code IDE");
+    const frame = await screen.findByTitle("Echo Code IDE") as HTMLIFrameElement;
+    const origin = new URL(frame.src).origin;
+    const token = JSON.parse(frame.name.slice("echo-embed:".length)).bridgeToken;
+    const send = (data: object) => act(() => window.dispatchEvent(new MessageEvent("message", {origin, source: frame.contentWindow, data: {...data, token}})));
+    vi.spyOn(frame.contentWindow!, "postMessage").mockImplementation((data: unknown) => {
+      const message = data as {type: string; id: string};
+      if (message.type === "echo/get-dirty") queueMicrotask(() => send({type: "echo/response", id: message.id, ok: true, value: 0}));
+    });
+    send({type: "echo/ready"});
+    send({type: "echo/dirty-state", count: 0});
     expect(await screen.findByText("当前项目有任务正在执行；提交新任务时会创建隔离工作树。")).toBeInTheDocument();
     act(() => useAiDraftStore.getState().setDraft({ prompt: "", contextPaths: ["src/orders.ts"], source: "context-menu" }));
     expect(await screen.findByText("orders.ts")).toBeInTheDocument();

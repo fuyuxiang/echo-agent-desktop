@@ -354,12 +354,13 @@ impl AuthManager {
         // also honor it: their later refresh persistence (`update()`) writes to
         // this path, and previously the inline branch hardcoded the default —
         // silently splitting reads (inline) from writes (default path).
-        let path = std::env::var("ECHO_AGENT_AUTH_PATH")
+        let isolated = echo_agent_config::controlled_discovery_home().is_some();
+        let path = (!isolated).then(|| std::env::var("ECHO_AGENT_AUTH_PATH").ok()).flatten()
             .map(PathBuf::from)
-            .unwrap_or_else(|_| echo_agent_home.join("auth.json"));
+            .unwrap_or_else(|| echo_agent_home.join("auth.json"));
 
         // ECHO_AGENT_AUTH: inline JSON credentials (highest priority, read-only).
-        if let Ok(inline_json) = std::env::var("ECHO_AGENT_AUTH") {
+        if let Some(inline_json) = (!isolated).then(|| std::env::var("ECHO_AGENT_AUTH").ok()).flatten() {
             if let Ok(auth) = serde_json::from_str::<EchoAgentAuth>(&inline_json) {
                 return Self::assemble(
                     Some(auth),

@@ -3,6 +3,8 @@ import { act, fireEvent, render, screen, waitFor } from "@testing-library/react"
 
 const mocks = vi.hoisted(() => ({
   skillsList: vi.fn(),
+  skillsToggle: vi.fn(),
+  internalReload: vi.fn(),
   orgSetSkillPreference: vi.fn(),
   listenOrgSkillsChanged: vi.fn(),
   orgSession: vi.fn(),
@@ -13,7 +15,8 @@ const mocks = vi.hoisted(() => ({
 vi.mock("@/lib/agent-client", () => ({
   skillsList: mocks.skillsList,
   skillsRemove: vi.fn(),
-  skillsToggle: vi.fn(),
+  skillsToggle: mocks.skillsToggle,
+  internalReload: mocks.internalReload,
   skillsUninstallPackage: vi.fn(),
 }));
 vi.mock("@/lib/org-client", () => ({
@@ -48,6 +51,8 @@ function organizationSkill(mandatory: boolean) {
 describe("专家技能页的组织 Skill 集成", () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    mocks.skillsToggle.mockReset().mockResolvedValue(undefined);
+    mocks.internalReload.mockReset().mockResolvedValue(undefined);
     localStorage.clear();
     mocks.skillsList.mockResolvedValue([
       organizationSkill(true),
@@ -131,4 +136,38 @@ describe("专家技能页的组织 Skill 集成", () => {
       "team-1",
     ));
   });
+});
+
+it("workspace changes keep skill list and toggle on the same cwd, including a late mutation ACK", async () => {
+  let finish!: () => void;
+  mocks.skillsToggle.mockImplementation(() => new Promise<void>(resolve => { finish = resolve; }));
+  mocks.skillsList.mockImplementation(async (cwd: string) => [{ name: cwd === "/synthetic/A" ? "skill-A" : "skill-B", enabled: true, scope: "local" }]);
+  const { rerender } = render(<SkillsTab cwd="/synthetic/A" pills={null} />);
+  await screen.findByText("skill-A");
+  fireEvent.click(screen.getByRole("checkbox", { name: "停用skill-A" }));
+  expect(mocks.skillsToggle).toHaveBeenCalledWith("skill-A", false, "/synthetic/A");
+  rerender(<SkillsTab cwd="/synthetic/B" pills={null} />);
+  await screen.findByText("skill-B");
+  await act(async () => { finish(); });
+  expect(mocks.skillsList).toHaveBeenLastCalledWith("/synthetic/B");
+  expect(screen.queryByText("skill-A")).not.toBeInTheDocument();
+});
+
+it("explicit refresh waits for the runtime ACK before publishing the refreshed skill list", async () => {
+  let finish!: () => void;
+  mocks.internalReload.mockImplementation(() => new Promise<void>(resolve => { finish = resolve; }));
+  mocks.skillsList.mockResolvedValue([{ name: "refresh-marker", enabled: true }]);
+  render(<SkillsTab cwd="/synthetic" pills={null} />);
+  await screen.findByText("refresh-marker");
+  const refresh = screen.getByRole("button", { name: "刷新" });
+  // Rendering the list precedes the async scan's finally block. Wait for the
+  // real enabled state before clicking, especially under the full suite load.
+  await waitFor(() => expect(refresh).toBeEnabled());
+  const before = mocks.skillsList.mock.calls.length;
+  fireEvent.click(refresh);
+  expect(mocks.internalReload).toHaveBeenCalledWith("skills");
+  expect(mocks.skillsList).toHaveBeenCalledTimes(before);
+  expect(screen.getByRole("button", { name: "刷新" })).toBeDisabled();
+  await act(async () => { finish(); });
+  await waitFor(() => expect(mocks.skillsList).toHaveBeenCalledTimes(before + 1));
 });

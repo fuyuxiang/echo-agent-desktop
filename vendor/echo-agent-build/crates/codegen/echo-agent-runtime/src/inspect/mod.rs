@@ -520,7 +520,7 @@ async fn list_instructions(cwd: &Path) -> Vec<InstructionFile> {
     .await;
 
     let echo_agent_home = crate::util::echo_agent_home::echo_agent_home();
-    let vendor_homes = dirs::home_dir()
+    let vendor_homes = echo_agent_config::discovery_home_dir()
         .map(|home_dir| {
             vec![
                 (home_dir.join(".claude"), true),

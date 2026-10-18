@@ -862,16 +862,16 @@ fn build_prompt_blocks(
 pub async fn prompt_for_automation(
     tx: &AcpAgentTx,
     session_id: &str,
+    prompt_id: &str,
     text: &str,
 ) -> Result<crate::bridge::CompleteEvent> {
-    let prompt_id = uuid::Uuid::now_v7().to_string();
-    let blocks = build_team_prompt_blocks(session_id, &prompt_id, text, &[], None)?;
+    let blocks = build_team_prompt_blocks(session_id, prompt_id, text, &[], None)?;
     let meta = serde_json::Map::from_iter([("promptId".into(), serde_json::json!(prompt_id))]);
     let req = acp::PromptRequest::new(session_id.to_string(), blocks).meta(Some(meta));
     let response: acp::PromptResponse = acp_send(req, tx)
         .await
         .map_err(|e| anyhow!("prompt: {e:?}"))?;
-    completion_from_prompt_response(response, session_id, &prompt_id)
+    completion_from_prompt_response(response, session_id, prompt_id)
 }
 
 pub(crate) fn completion_from_prompt_response(

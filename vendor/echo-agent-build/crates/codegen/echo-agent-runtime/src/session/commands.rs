@@ -800,6 +800,8 @@ pub enum SessionCommand {
     /// Re-discover skills from disk, update the SkillManager baseline,
     /// and re-advertise slash commands to the client.
     ReloadSkills,
+    /// Acknowledge only after the actor applied its refreshed skill baseline.
+    ReloadSkillsChecked { respond_to: oneshot::Sender<usize> },
     /// Dispatch session_start hook using the actor's loaded HookRegistry.
     DispatchSessionStartHook {
         /// "new" for brand new sessions, "load" for sessions loaded from disk.

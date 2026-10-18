@@ -677,6 +677,24 @@ describe("AutomationPanel（有任务/有记录）", () => {
     expect(onOpenSession).toHaveBeenCalledWith("session-123", "/workspace/project");
   });
 
+  it("人工接管的运行可筛选、归档并打开会话，不显示失败重试", async () => {
+    snapshot = {automations: [baseAutomation], records: [{
+      id: "r-interrupted", automationId: "a1", automationName: "人工继续的任务", status: "interrupted",
+      startedAt: new Date().toISOString(), finishedAt: new Date().toISOString(),
+      sessionId: "manual-session", archived: false,
+    }]};
+    const onOpenSession = vi.fn();
+    render(<AutomationPanel onOpenSession={onOpenSession} />);
+    fireEvent.click(screen.getByText("运行记录"));
+    expect(await screen.findByText("已人工接管")).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", {name: "筛选运行记录"}));
+    fireEvent.click(screen.getByRole("button", {name: "人工接管"}));
+    fireEvent.click(screen.getByRole("button", {name: /人工继续的任务/}));
+    expect(onOpenSession).toHaveBeenCalledWith("manual-session", undefined);
+    expect(screen.queryByRole("button", {name: /重新运行/})).not.toBeInTheDocument();
+    expect(screen.getByTitle("归档")).toBeEnabled();
+  });
+
   it("失败记录可使用当前自动化配置重新运行", async () => {
     snapshot = {
       automations: [baseAutomation],
@@ -770,5 +788,33 @@ describe("AutomationPanel（有任务/有记录）", () => {
 
     expect(await screen.findByText("运行中")).toBeInTheDocument();
     expect(automationsSnapshot).toHaveBeenCalledTimes(2);
+  });
+});
+
+
+describe("自动化专家稳定引用", () => {
+  const ready = () => waitFor(() => expect(screen.queryByText("正在加载工作空间、模型与运行时能力…")).toBeNull());
+  it("新选择保存稳定定义路径，并在编辑草稿中保留", async () => {
+    beginRunnableEditor();
+    vi.mocked(agentsList).mockResolvedValue([{name: "Identity Expert", scope: "project", path: "/tmp/.echo-agent/agents/stable.md", raw: "---\nname: Identity Expert\n---\nRole"}]);
+    render(<AutomationPanel />); await ready();
+    fireEvent.click(screen.getByRole("button", {name: "召唤专家"}));
+    fireEvent.click(screen.getByRole("button", {name: "Identity Expert"}));
+    expect(useAutomationEditorStore.getState().draft?.expertPath).toBe("/tmp/.echo-agent/agents/stable.md");
+    fireEvent.click(screen.getByRole("button", {name: "保存"}));
+    await waitFor(() => expect(automationsSave).toHaveBeenCalledWith(expect.objectContaining({expertId: "Identity Expert", expertName: "Identity Expert", expertPath: "/tmp/.echo-agent/agents/stable.md"})));
+  });
+  it("旧专家引用缺少路径时清楚提示重新选择，不因目录里存在同名专家而默默保存", async () => {
+    beginRunnableEditor();
+    useAutomationEditorStore.getState().setDraft(draft => draft && ({...draft, expertId: "Old Expert", expertName: "Old Expert"}));
+    vi.mocked(agentsList).mockResolvedValue([{name: "Old Expert", scope: "project", path: "/tmp/.echo-agent/agents/replacement.md", raw: "Other role"}]);
+    const toast = vi.fn(); render(<AutomationPanel onToast={toast} />); await ready();
+    expect(screen.getByRole("button", {name: "Old Expert · 需重新选择"})).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", {name: "保存"}));
+    expect(toast).toHaveBeenCalledWith(expect.stringContaining("重新选择专家")); expect(automationsSave).not.toHaveBeenCalled();
+    fireEvent.click(screen.getByRole("button", {name: "Old Expert · 需重新选择"}));
+    fireEvent.click(screen.getByRole("button", {name: "Old Expert"}));
+    fireEvent.click(screen.getByRole("button", {name: "保存"}));
+    await waitFor(() => expect(automationsSave).toHaveBeenCalledWith(expect.objectContaining({expertPath: "/tmp/.echo-agent/agents/replacement.md"})));
   });
 });

@@ -92,3 +92,5 @@ pub fn env_bool(name: &str) -> Option<bool> {
         _ => None,
     }
 }
+
+pub use paths::{controlled_discovery_home, discovery_home_dir, resolve_discovery_home_with};

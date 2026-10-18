@@ -49,6 +49,9 @@ interface KnowledgeState extends PersistedKnowledgePreferences {
   sourceCount: number;
   retrievals: Record<string, KnowledgeRetrievalStatus>;
   turnTraces: Record<string, Record<string, KnowledgeTurnTrace>>;
+  traceLoadErrors: Record<string, string | undefined>;
+  setTraceLoadError: (sessionId: string, error?: string) => void;
+  restoreTurnTraces: (sessionId: string, traces: Record<string, KnowledgeTurnTrace>) => void;
   setDefaultSources: (sources: KnowledgeSource[]) => void;
   setSessionSources: (sessionId: string, sources: KnowledgeSource[]) => void;
   setDefaultOrganizationScopeIds: (scopeIds: string[]) => void;
@@ -73,7 +76,6 @@ const STORAGE_KEY = "echoagent.knowledge-preferences.v3";
 const V2_STORAGE_KEY = "echoagent.knowledge-preferences.v2";
 const LEGACY_STORAGE_KEY = "echoagent.knowledge-preferences.v1";
 const MAX_PERSISTED_SESSIONS = 500;
-const MAX_TURN_TRACES_PER_SESSION = 50;
 
 function normalizeSources(value: unknown): KnowledgeSource[] {
   if (!Array.isArray(value)) return [];
@@ -194,17 +196,12 @@ function persistPreferences(state: Pick<KnowledgeState,
   }
 }
 
-function withBoundedTurnTrace(
+function withTurnTrace(
   traces: Record<string, KnowledgeTurnTrace>,
   promptId: string,
   trace: KnowledgeTurnTrace,
 ): Record<string, KnowledgeTurnTrace> {
-  const next = { ...traces, [promptId]: trace };
-  const keys = Object.keys(next);
-  for (const key of keys.slice(0, Math.max(0, keys.length - MAX_TURN_TRACES_PER_SESSION))) {
-    delete next[key];
-  }
-  return next;
+  return { ...traces, [promptId]: trace };
 }
 
 const initial = loadPreferences();
@@ -214,6 +211,12 @@ export const useKnowledgeStore = create<KnowledgeState>((set, get) => ({
   sourceCount: 0,
   retrievals: {},
   turnTraces: {},
+  traceLoadErrors: {},
+  setTraceLoadError: (sessionId, error) => set(state => ({ traceLoadErrors: { ...state.traceLoadErrors, [sessionId]: error } })),
+  restoreTurnTraces: (sessionId, traces) => set(state => ({ turnTraces: {
+    ...state.turnTraces,
+    [sessionId]: { ...traces, ...state.turnTraces[sessionId] },
+  } })),
   setDefaultSources: (sources) => set((state) => {
     const defaultSources = normalizeSources(sources);
     const defaultOrganizationScopeIds = defaultSources.includes("organization")
@@ -257,12 +260,14 @@ export const useKnowledgeStore = create<KnowledgeState>((set, get) => ({
       const sessionOrganizationScopeIds = { ...state.sessionOrganizationScopeIds };
       const retrievals = { ...state.retrievals };
       const turnTraces = { ...state.turnTraces };
+      const traceLoadErrors = { ...state.traceLoadErrors };
       delete sessionSources[sessionId];
       delete sessionOrganizationScopeIds[sessionId];
       delete retrievals[sessionId];
       delete turnTraces[sessionId];
+      delete traceLoadErrors[sessionId];
       saved = persistPreferences({ ...state, sessionSources, sessionOrganizationScopeIds });
-      return { sessionSources, sessionOrganizationScopeIds, retrievals, turnTraces };
+      return { sessionSources, sessionOrganizationScopeIds, retrievals, turnTraces, traceLoadErrors };
     });
     return saved;
   },
@@ -296,7 +301,7 @@ export const useKnowledgeStore = create<KnowledgeState>((set, get) => ({
     set((state) => ({
       turnTraces: {
         ...state.turnTraces,
-        [sessionId]: withBoundedTurnTrace(
+        [sessionId]: withTurnTrace(
           state.turnTraces[sessionId] ?? {},
           promptId,
           {
@@ -318,7 +323,7 @@ export const useKnowledgeStore = create<KnowledgeState>((set, get) => ({
       retrievals,
       turnTraces: {
         ...state.turnTraces,
-        [sessionId]: withBoundedTurnTrace(sessionTraces, promptId, {
+        [sessionId]: withTurnTrace(sessionTraces, promptId, {
           ...current,
           personal: status,
         }),

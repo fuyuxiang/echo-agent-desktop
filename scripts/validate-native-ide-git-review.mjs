@@ -4,8 +4,8 @@ import assert from 'node:assert/strict';
 import { execFileSync, spawn } from 'node:child_process';
 import { createHash, randomBytes } from 'node:crypto';
 import { createServer } from 'node:http';
-import { chmodSync, copyFileSync, existsSync, lstatSync, mkdirSync, mkdtempSync, readFileSync,
-  realpathSync, writeFileSync } from 'node:fs';
+import { chmodSync, existsSync, lstatSync, mkdirSync, mkdtempSync, readFileSync,
+  realpathSync, unlinkSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
 import { setTimeout as delay } from 'node:timers/promises';
@@ -13,6 +13,7 @@ import { pathToFileURL } from 'node:url';
 import { auditNativeGitConfiguration, nativeGitProcessEnvironment,
   runNativeGitCommand } from './lib/native-git-review.mjs';
 import { readonlyCompatibilitySourceRevocations } from './lib/native-core-review-isolation.mjs';
+import { assertNativeReviewSessionUnlocked, activateNativeReviewWindow } from './lib/native-review-window.mjs';
 
 const digest = value => createHash('sha256').update(value).digest('hex');
 const checks = ['ide-private-native-isolation', 'ide-git-provider-native', 'ide-chinese-editor-native',
@@ -77,10 +78,122 @@ export function verifyIdeReport(report, manifest, pid, startedAt) {
   return report.expected;
 }
 
+export function ideRestartManifest(manifest, expected) {
+  assert.equal(manifest.phase, 'first-launch'); assert.equal(manifest.expected, null);
+  assert.equal(expected.initialHead, manifest.initialHead); assert.equal(expected.file, manifest.file);
+  assert.equal(expected.version3, manifest.version3); assert.equal(expected.worktreeSavedVersion, manifest.version1);
+  assert(/^(?:[a-f0-9]{40}|[a-f0-9]{64})$/.test(expected.committedHead));
+  assert.notEqual(expected.committedHead, expected.initialHead);
+  assert(/^[a-f0-9-]{36}$/.test(expected.originalTaskId));
+  assert(expected.worktreeRoot.startsWith(`${manifest.home}/coding-worktrees/`)
+    && /^[a-f0-9-]{36}\/worktree$/.test(expected.worktreeRoot.slice(`${manifest.home}/coding-worktrees/`.length)));
+  return { ...manifest, phase: 'restart', expected: structuredClone(expected) };
+}
+
+export function verifyIdeRestartReport(report, manifest, pid, startedAt) {
+  assert.equal(manifest.phase, 'restart'); assert(manifest.expected);
+  assert.equal(report?.version, 1); assert.equal(report.kind, 'native-ide-git');
+  assert.equal(report.passed, true); assert.deepEqual(report.errors, []);
+  assert.equal(report.nativeVerified, false); assert.equal(report.fakeIPC, false); assert.equal(report.osPickerVerified, false);
+  assert.equal(report.nativeContext?.pid, pid); assert.equal(report.nativeContext.ideRequested, true);
+  assert.equal(report.nativeContext.evaluations, 1); assert.equal(report.nativeContext.home, manifest.home);
+  assert.equal(report.nativeContext.phase, 'restart');
+  for (const name of ['home', 'cwd', 'nonce', 'generation', 'phase']) assert.equal(report[name], manifest[name]);
+  assert(Date.parse(report.finishedAt) >= startedAt && Date.parse(report.finishedAt) <= Date.now() + 1000);
+  assert.deepEqual(report.expected, manifest.expected);
+  const ids = ['ide-private-native-isolation', 'ide-restart-worktree-native', 'ide-restart-source-editor-native', 'ide-restart-source-task-native'];
+  assert.equal(report.checks?.length, ids.length);
+  const evidence = Object.fromEntries(ids.map(id => {
+    const matched = report.checks.filter(check => check.id === id);
+    assert.equal(matched.length, 1); assert.equal(matched[0].result, 'passed'); return [id, matched[0].evidence];
+  }));
+  const isolation = evidence[ids[0]], worktree = evidence[ids[1]], source = evidence[ids[2]], task = evidence[ids[3]];
+  assert.deepEqual(isolation, { pid, cwd: manifest.cwd, fixedManifest: true });
+  assert.equal(worktree.workspace.root, manifest.expected.worktreeRoot); assert.equal(worktree.sameWorktree, true);
+  assert.equal(worktree.savedWorktree.root, manifest.expected.worktreeRoot);
+  assert.equal(worktree.savedWorktree.path, join(manifest.expected.worktreeRoot, manifest.file));
+  assert.equal(worktree.savedWorktree.text, manifest.version1); assert.equal(worktree.savedWorktree.dirty, false);
+  assert.equal(worktree.savedWorktree.visible, true);
+  assert.equal(source.source.path, join(manifest.cwd, manifest.file)); assert.equal(source.source.visible, true);
+  assert.equal(source.source.text, manifest.version3); assert.equal(source.source.dirty, false);
+  assert.equal(source.provider.id, 'git'); assert.equal(source.noNewCommit, true);
+  assert.deepEqual(task, { originalTaskId: manifest.expected.originalTaskId, phase: 'discovering', visibleInUi: true, modelExecuted: false });
+  return report.expected;
+}
+
+export function verifyIdeReportHistory(history, reports, prefix = '') {
+  assert(history.startsWith(prefix), 'Native report history changed an earlier launch');
+  assert(history.endsWith('\n'), 'Native report history is incomplete');
+  const entries = history.slice(0, -1).split('\n').map(line => JSON.parse(line));
+  assert.deepEqual(entries, reports, 'Expected exactly one preserved native report per launch');
+  return { entries: entries.length, sha256: digest(history), preservedPrefixSha256: digest(prefix) };
+}
+
+export function verifyIdeRestartPhysical(before, after, manifest) {
+  const expected = manifest.expected;
+  for (const facts of [before, after]) {
+    assert.equal(facts.sourceRoot, manifest.cwd); assert.equal(facts.worktreeRoot, expected.worktreeRoot);
+    for (const hash of [facts.sourceHistorySha256, facts.worktreeHistorySha256, facts.terminalSha256, facts.task?.sha256]) assert(/^[a-f0-9]{64}$/.test(hash));
+    assert.equal(facts.sourceHead, expected.committedHead); assert.equal(facts.worktreeHead, expected.committedHead);
+    assert.equal(facts.sourceSha256, digest(manifest.version3)); assert.equal(facts.worktreeSha256, digest(manifest.version1));
+    assert.equal(facts.commitsSinceBaseline, '1'); assert.deepEqual(facts.sourceDiffPaths, [manifest.file]);
+    assert.deepEqual(facts.stagedPaths, []); assert.equal(facts.remotes, '');
+    assert.deepEqual(facts.baselineFiles, manifest.baselineFiles);
+    assert.equal(facts.task.id, expected.originalTaskId); assert.equal(facts.task.phase, 'discovering');
+    assert.equal(facts.task.name, `隔离并行夹具-${manifest.generation}`); assert.equal(facts.task.sessionId, null);
+  }
+  assert.deepEqual(after, before, 'Restart changed private source/worktree/Git/task/terminal history');
+  return { passed: true, before, after, unchanged: true };
+}
+
+// Pure launch admission/environment logic is guard-tested without GUI access.
+export function nativeIdeReviewEnvironment(base, legacy, phase = 'first-launch') {
+  assert(['first-launch', 'restart'].includes(phase));
+  const env = { ...base, GROK_HOME: legacy, ECHO_DESKTOP_REVIEW: '1', ECHO_DESKTOP_REVIEW_IDE: '1', ECHO_DESKTOP_REVIEW_PHASE: phase };
+  for (const key of Object.keys(env)) if ((key.startsWith('ECHO_DESKTOP_REVIEW_') && !['ECHO_DESKTOP_REVIEW_IDE', 'ECHO_DESKTOP_REVIEW_PHASE'].includes(key))
+    || ['ECHO_AGENT_HOME', 'ECHO_DESKTOP_VALIDATION', 'ECHO_THEIA_NODE', 'NODE_OPTIONS', 'NODE_PATH'].includes(key)) delete env[key];
+  // Capture native admission dispatch while leaving all other module filters intact.
+  env.RUST_LOG = `${env.RUST_LOG || 'warn'},echoagent_lib::desktop_validation=info,echoagent_lib::native_ide_validation=info`;
+  return env;
+}
+
+export function collectIdeLaunchDiagnostics({ home, cwd, pid, executable, startedAt, ended, exitCode, signal, phase = 'first-launch', now = Date.now() }) {
+  const boundedLogTail = path => {
+    if (!existsSync(path)) return null;
+    const stat = lstatSync(path);
+    if (!stat.isFile() || stat.isSymbolicLink() || realpathSync(path) !== path) return '[not an owned ordinary log file]';
+    if (stat.size > 8 * 1024 * 1024) return '[log exceeds bounded diagnostic size]';
+    return readFileSync(path, 'utf8').slice(-12000);
+  };
+  return {
+    pid, executable, phase, elapsedMs: now - startedAt, ended, exitCode: exitCode ?? null, signal: signal ?? null,
+    nativeReportExists: existsSync(join(home, 'native-review.json')),
+    nativeHistoryExists: existsSync(join(home, 'native-review-history.jsonl')),
+    terminalProofExists: existsSync(join(cwd, '.ide-terminal-proof.json')),
+    barriers: Object.fromEntries(['stage', 'commit', 'disconnect'].map(phase => [phase, {
+      ready: existsSync(join(cwd, `.native-ide-${phase}-ready.json`)), proof: existsSync(join(cwd, `.native-ide-${phase}-proof.json`)),
+    }])),
+    // A debug binary using Vite's localhost devUrl is deliberately rejected by
+    // require_main_internal. Do not weaken that boundary to make a test pass.
+    requiredPageOrigin: 'tauri://localhost or http(s)://tauri.localhost without a port; use the embedded custom-protocol build',
+    theiaLogTail: boundedLogTail(join(home, 'theia', 'theia.log')),
+  };
+}
+
+export function requireIdeRendererReport(diagnostics) {
+  const file = `${diagnostics.phase || 'first-launch'}-diagnostics.json`;
+  assert(diagnostics.ended, `IDE Native process exceeded its bound; see ${file}`);
+  assert.equal(diagnostics.exitCode, 0, `IDE Native process failed; see ${file}`);
+  assert.equal(diagnostics.signal, null, `IDE Native process was signalled; see ${file}`);
+  assert(diagnostics.nativeReportExists,
+    `IDE application exited without a renderer report (PID ${diagnostics.pid}, exit 0, ${diagnostics.elapsedMs}ms). `
+    + `No functional result was verified. Check the embedded-page/custom-protocol build and scope rejection in launch logs; see ${file}. An exit code alone is not acceptance.`);
+}
+
 export async function runNativeIdeGitReview({ executable, resourceOnly = false, crashSignal = null } = {}) {
   assert.equal(process.platform, 'darwin');
   assert([null, 'SIGTERM', 'SIGKILL'].includes(crashSignal));
-  if (!resourceOnly) { assert(executable); executable = realpathSync(resolve(executable)); assert(lstatSync(executable).isFile()); }
+  if (!resourceOnly) { assertNativeReviewSessionUnlocked(); assert(executable); executable = realpathSync(resolve(executable)); assert(lstatSync(executable).isFile()); }
   const output = nativeReviewOutput('native-ide-git', 'NATIVE_IDE_GIT_REVIEW_OUTPUT');
   const home = realpathSync(mkdtempSync(join(tmpdir(), 'echo-native-review-ide-git-'))); chmodSync(home, 0o700);
   const cwd = join(home, 'workspaces', 'default'), legacy = join(home, 'empty-legacy');
@@ -163,34 +276,37 @@ export async function runNativeIdeGitReview({ executable, resourceOnly = false, 
       file, initialHead, previewUrl: `http://127.0.0.1:${server.address().port}/ide-preview/${generation}`,
       version1: version(1), version2: version(2), version3: version(3), commitMessage: 'Private IDE fixture change', baselineFiles };
     writeFileSync(join(home, 'native-ide-manifest.private.json'), JSON.stringify(manifest), { mode: 0o600 });
-    const nativeEnv = { ...env, GROK_HOME: legacy, ECHO_DESKTOP_REVIEW: '1', ECHO_DESKTOP_REVIEW_IDE: '1', ECHO_DESKTOP_REVIEW_PHASE: 'first-launch' };
-    for (const key of Object.keys(nativeEnv)) if ((key.startsWith('ECHO_DESKTOP_REVIEW_') && !['ECHO_DESKTOP_REVIEW_IDE', 'ECHO_DESKTOP_REVIEW_PHASE'].includes(key))
-      || ['ECHO_AGENT_HOME', 'ECHO_DESKTOP_VALIDATION', 'ECHO_THEIA_NODE', 'NODE_OPTIONS', 'NODE_PATH'].includes(key)) delete nativeEnv[key];
+    const nativeEnv = nativeIdeReviewEnvironment(env, legacy);
     const child = spawn(executable, ['--data-home', home], { cwd, env: nativeEnv, stdio: ['ignore', 'pipe', 'pipe'] });
     active = child; let ended = false, exitCode, signal, bytes = 0, stageHandled = false, commitHandled = false, disconnectHandled = false, barrierFailure;
     const exited = new Promise((accept, reject) => { child.once('error', reject); child.once('close', (code, sig) => { ended = true; exitCode = code; signal = sig; accept(); }); });
     const log = chunk => { bytes += chunk.length; if (bytes > 8 * 1024 * 1024) { child.kill('SIGTERM'); return; }
       writeFileSync(join(output, 'first-launch-app.log'), chunk, { flag: 'a', mode: 0o600 }); };
     child.stdout.on('data', log); child.stderr.on('data', log);
-    const activateOwnedWindow = async stage => {
+    const activateOwnedWindow = async (stage, ownedChild = child) => {
       // macOS can suspend a completely occluded WKWebView's frame callbacks.
       // Activate only the application PID this runner spawned, without AX,
       // screenshots, keyboard input, or selecting an app by its display name.
       let activated = false;
-      for (let attempt = 0; attempt < 20 && child.exitCode === null && child.signalCode === null; attempt++) {
+      for (let attempt = 0; attempt < 20 && ownedChild.exitCode === null && ownedChild.signalCode === null; attempt++) {
         try {
-          const script = `ObjC.import("AppKit"); var reviewOwner = $.NSRunningApplication.runningApplicationWithProcessIdentifier(${child.pid}); Boolean(reviewOwner && typeof reviewOwner.activateWithOptions === "function" && reviewOwner.activateWithOptions(3));`;
-          activated = execFileSync('/usr/bin/osascript', ['-l', 'JavaScript', '-e', script], { encoding: 'utf8', timeout: 3000 }).trim() === 'true';
+          activated = activateNativeReviewWindow(ownedChild.pid);
           if (activated) break;
         } catch { /* Keep every functional assertion even if activation fails. */ }
         await delay(250);
       }
-      (result.windowActivation ??= []).push({ stage, pid: child.pid, activated });
+      (result.windowActivation ??= []).push({ stage, pid: ownedChild.pid, activated });
     };
     const start = Date.now();
     await activateOwnedWindow('start');
+    let lastActivation = Date.now();
     while (!ended && Date.now() - start < 660000) {
       try {
+        // Startup can take longer than the initial five-second activation
+        // window. Retry only this child PID while awaiting the first handoff.
+        if (!stageHandled && Date.now() - lastActivation >= 5000) {
+          await activateOwnedWindow('await-first-handoff'); lastActivation = Date.now();
+        }
         for (const phase of ['stage', 'commit', 'disconnect']) {
           if ((phase === 'stage' && stageHandled) || (phase === 'commit' && commitHandled) || (phase === 'disconnect' && disconnectHandled)) continue;
           const path = join(cwd, `.native-ide-${phase}-ready.json`); if (!existsSync(path)) continue;
@@ -274,9 +390,13 @@ export async function runNativeIdeGitReview({ executable, resourceOnly = false, 
       } catch (error) { barrierFailure = error; break; }
       await delay(150);
     }
+    result.launch = collectIdeLaunchDiagnostics({ home, cwd, pid: child.pid, executable, startedAt: start, ended, exitCode, signal });
+    writeFileSync(join(output, 'first-launch-diagnostics.json'), JSON.stringify(result.launch, null, 2), { mode: 0o600 });
     if (barrierFailure) throw barrierFailure;
-    assert(ended, 'IDE Native process exceeded its bound'); await exited; assert.equal(exitCode, 0); assert.equal(signal, null);
-    const raw = join(home, 'native-review.json'); copyFileSync(raw, join(output, 'first-launch.json'));
+    requireIdeRendererReport(result.launch); await exited;
+    const raw = join(home, 'native-review.json');
+    // Validate an ordinary owned file before copying any bytes into evidence.
+    writeFileSync(join(output, 'first-launch.json'), physical(raw), { mode: 0o600 });
     const report = JSON.parse(physical(raw)), expected = verifyIdeReport(report, manifest, child.pid, start);
     assert(stageHandled && commitHandled && disconnectHandled); assert(previewRequests > 0, 'Actual preview made no HTTP request');
     assert.equal(physical(join(cwd, file)).toString('utf8'), version(3));
@@ -299,7 +419,78 @@ export async function runNativeIdeGitReview({ executable, resourceOnly = false, 
     result.taskPhysical = { id: savedTask.id, phase: savedTask.phase, sha256: digest(physical(taskPath)), syntheticSetupWithoutModel: true };
     assert.deepEqual((await git(['diff', '--name-only', '-z'])).split('\0').filter(Boolean), [file]); assert.equal((await git(['remote'])).trim(), '');
     result.expected = expected; result.pid = child.pid; result.exitCode = exitCode; result.signal = signal;
-    result.previewRequests = previewRequests; result.terminal = term; result.nativeVerified = true; result.passed = true;
+    result.previewRequests = previewRequests; result.terminal = term;
+    result.phases = [{ phase: 'first-launch', pid: child.pid, checks: checks.length, passed: true }];
+    // A successful first launch is insufficient: the compiled restart factory
+    // must reopen the exact prior worktree and source task in a new process.
+    const restartManifest = ideRestartManifest(manifest, expected);
+    const historyPath = join(home, 'native-review-history.jsonl'), historyBefore = physical(historyPath).toString('utf8');
+    verifyIdeReportHistory(historyBefore, [report]);
+    const worktreeGit = async args => {
+      const reply = await runNativeGitCommand('git', args, { cwd: worktreeRoot, env });
+      assert.equal(reply.exitCode, 0, `Owned worktree Git command failed: ${reply.stderr.slice(-1200)}`);
+      assert(!reply.timedOut && !reply.overflow); return reply.stdout;
+    };
+    const snapshot = async () => {
+      const taskRaw = physical(taskPath), task = JSON.parse(taskRaw);
+      return {
+        sourceRoot: cwd, worktreeRoot,
+        sourceHead: (await git(['rev-parse', 'HEAD'])).trim(), worktreeHead: (await worktreeGit(['rev-parse', 'HEAD'])).trim(),
+        sourceHistorySha256: digest(await git(['log', '--all', '--format=%H%x00%P%x00%s', '--no-show-signature'])),
+        worktreeHistorySha256: digest(await worktreeGit(['log', '--all', '--format=%H%x00%P%x00%s', '--no-show-signature'])),
+        commitsSinceBaseline: (await git(['rev-list', '--count', `${initialHead}..HEAD`])).trim(),
+        sourceSha256: digest(physical(join(cwd, file))), worktreeSha256: digest(physical(join(worktreeRoot, file))),
+        sourceDiffPaths: (await git(['diff', '--name-only', '-z'])).split('\0').filter(Boolean),
+        stagedPaths: (await git(['diff', '--cached', '--name-only', '-z'])).split('\0').filter(Boolean),
+        remotes: (await git(['remote'])).trim(),
+        baselineFiles: Object.fromEntries(Object.keys(baselineFiles).map(name => [name, digest(physical(join(cwd, name)))])),
+        terminalSha256: digest(physical(join(cwd, '.ide-terminal-proof.json'))),
+        task: { id: task.id, name: task.name, phase: task.phase, sessionId: task.sessionId ?? null, sha256: digest(taskRaw) },
+      };
+    };
+    const beforeRestart = await snapshot();
+    verifyIdeRestartPhysical(beforeRestart, beforeRestart, restartManifest);
+    writeFileSync(join(output, 'restart-before-physical-proof.json'), JSON.stringify(beforeRestart, null, 2), { mode: 0o600 });
+    const manifestPath = join(home, 'native-ide-manifest.private.json'); physical(manifestPath);
+    writeFileSync(manifestPath, JSON.stringify(restartManifest), { mode: 0o600 });
+    physical(raw); unlinkSync(raw); // A stale first-launch report must never admit restart.
+    const restartStartedAt = Date.now();
+    const restarted = spawn(executable, ['--data-home', home], { cwd,
+      env: nativeIdeReviewEnvironment(env, legacy, 'restart'), stdio: ['ignore', 'pipe', 'pipe'] });
+    active = restarted;
+    let restartEnded = false, restartExitCode, restartSignal, restartBytes = 0, restartSpawnError;
+    const restartExited = new Promise(accept => {
+      restarted.once('error', error => { restartSpawnError = error; restartEnded = true; accept(); });
+      restarted.once('close', (code, sig) => { restartEnded = true; restartExitCode = code; restartSignal = sig; accept(); });
+    });
+    const restartLog = chunk => {
+      restartBytes += chunk.length; if (restartBytes > 8 * 1024 * 1024) { restarted.kill('SIGTERM'); return; }
+      writeFileSync(join(output, 'restart-app.log'), chunk, { flag: 'a', mode: 0o600 });
+    };
+    restarted.stdout.on('data', restartLog); restarted.stderr.on('data', restartLog);
+    assert.notEqual(restarted.pid, child.pid, 'Restart requires a new owned native process');
+    await activateOwnedWindow('restart-start', restarted); lastActivation = Date.now();
+    while (!restartEnded && Date.now() - restartStartedAt < 660000) {
+      if (Date.now() - lastActivation >= 5000) {
+        await activateOwnedWindow('restart-await-report', restarted); lastActivation = Date.now();
+      }
+      await delay(150);
+    }
+    result.restartLaunch = collectIdeLaunchDiagnostics({ home, cwd, pid: restarted.pid, executable,
+      startedAt: restartStartedAt, ended: restartEnded, exitCode: restartExitCode, signal: restartSignal, phase: 'restart' });
+    writeFileSync(join(output, 'restart-diagnostics.json'), JSON.stringify(result.restartLaunch, null, 2), { mode: 0o600 });
+    if (restartSpawnError) throw restartSpawnError;
+    requireIdeRendererReport(result.restartLaunch); await restartExited;
+    const restartBytesRaw = physical(raw); writeFileSync(join(output, 'restart.json'), restartBytesRaw, { mode: 0o600 });
+    const restartReport = JSON.parse(restartBytesRaw);
+    verifyIdeRestartReport(restartReport, restartManifest, restarted.pid, restartStartedAt);
+    const restartPhysical = verifyIdeRestartPhysical(beforeRestart, await snapshot(), restartManifest);
+    restartPhysical.nativeHistory = verifyIdeReportHistory(physical(historyPath).toString('utf8'), [report, restartReport], historyBefore);
+    writeFileSync(join(output, 'restart-physical-proof.json'), JSON.stringify(restartPhysical, null, 2), { mode: 0o600 });
+    result.restartPhysical = restartPhysical;
+    result.phases.push({ phase: 'restart', pid: restarted.pid, checks: restartReport.checks.length, passed: true });
+    assert.deepEqual(result.phases.map(phase => [phase.phase, phase.passed, phase.checks]), [['first-launch', true, 17], ['restart', true, 4]]);
+    result.nativeVerified = true; result.passed = true;
   } catch (error) { result.errors.push(String(error?.message || error).slice(0, 2500)); }
   finally {
     // Failure cleanup is separate from the crash assertion and cannot make a

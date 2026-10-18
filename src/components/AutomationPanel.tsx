@@ -93,7 +93,7 @@ interface AutomationPanelProps {
 }
 
 type TabKey = "tasks" | "records";
-type RecordFilter = "all" | "success" | "failed" | "running" | "archived";
+type RecordFilter = "all" | "success" | "failed" | "interrupted" | "running" | "archived";
 type ReferenceCatalog = "workspaces" | "models" | "skills" | "experts" | "connectors";
 
 const REFERENCE_CATALOG_LABELS: Record<ReferenceCatalog, string> = {
@@ -108,15 +108,18 @@ const RECORD_FILTERS: { key: RecordFilter; label: string }[] = [
   { key: "all", label: "全部" },
   { key: "success", label: "成功" },
   { key: "failed", label: "失败" },
+  { key: "interrupted", label: "人工接管" },
   { key: "running", label: "进行中" },
   { key: "archived", label: "已归档" },
 ];
 
 function recordStatusLabel(item: AutomationRunRecord): string {
+  if (item.completionPending) return "已结束 · 保存待重试";
   if (item.status === "queued") return "等待调度";
   if (item.status === "running") return "运行中";
   if (item.status === "success") return "成功";
   if (item.status === "failed") return "失败";
+  if (item.status === "interrupted") return "已人工接管";
   return item.status;
 }
 
@@ -154,6 +157,7 @@ function RecordStatusIcon({ item }: { item: AutomationRunRecord }) {
   }
   if (item.status === "success") return <CheckBoldIcon size={16} color="var(--echo-color-text-disabled, #000)" />;
   if (item.status === "failed") return <ErrorCircleIcon size={16} />;
+  if (item.status === "interrupted") return <CirclePauseIcon width={16} height={16} color="var(--echo-color-text-secondary)" />;
   return <CheckIcon size={16} />;
 }
 
@@ -730,6 +734,7 @@ export function AutomationPanel({
     if (focusedAutomationId) items = items.filter((item) => item.automationId === focusedAutomationId);
     if (filterStatus === "success") items = items.filter((i) => i.status === "success" && !i.archived);
     else if (filterStatus === "failed") items = items.filter((i) => i.status === "failed" && !i.archived);
+    else if (filterStatus === "interrupted") items = items.filter((i) => i.status === "interrupted" && !i.archived);
     else if (filterStatus === "running") {
       items = items.filter((i) => (i.status === "queued" || i.status === "running") && !i.archived);
     }
@@ -1445,6 +1450,7 @@ function InboxRow({
           <span className="atm-row-result-label" title={item.error || recordStatusLabel(item)}>
             {recordStatusLabel(item)}
             {item.error ? ` · ${item.error}` : ""}
+            {item.notificationDelivery ? ` · ${item.notificationDelivery}` : ""}
           </span>
         </div>
       </div>

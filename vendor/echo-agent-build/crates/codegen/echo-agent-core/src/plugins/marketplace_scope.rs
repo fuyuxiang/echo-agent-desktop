@@ -244,7 +244,7 @@ fn resolve_path(value: &str, base: &Path) -> PathBuf {
 
 fn logical_path(value: &str, base: &Path) -> PathBuf {
     let path = if let Some(relative) = value.strip_prefix("~/") {
-        dirs::home_dir()
+        echo_agent_config::discovery_home_dir()
             .unwrap_or_else(|| base.to_path_buf())
             .join(relative)
     } else {

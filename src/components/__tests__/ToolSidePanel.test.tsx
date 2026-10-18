@@ -1,4 +1,4 @@
-import { fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { act, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { invoke } from "@tauri-apps/api/core";
 import { ToolSidePanel, type ToolSidePanelMode } from "../ToolSidePanel";
@@ -124,6 +124,47 @@ describe("ToolSidePanel navigation collapse", () => {
       });
     },
   );
+
+  it("waits for the persisted export receipt before reading a historical file", async () => {
+    let authorize!: () => void;
+    vi.mocked(invoke).mockImplementation(async command => {
+      if (command === "session_export_authorize") return new Promise<void>(resolve => {authorize = resolve;});
+      if (command === "read_text_file") return "restored export content";
+      return undefined;
+    });
+    const exported = {...artifact("C:\\outside\\report.md"), kind: "document_export", toolCallId: `document-export:${"a".repeat(64)}`};
+    renderPanel("artifacts", [exported]);
+    fireEvent.click(screen.getByRole("button", {name: /^report\.md/}));
+    await waitFor(() => expect(invoke).toHaveBeenCalledWith("session_export_authorize", {sessionId: "session-1", path: exported.path, sha256: "a".repeat(64)}));
+    expect(vi.mocked(invoke).mock.calls.some(([command]) => command === "read_text_file")).toBe(false);
+    await act(async () => {authorize();});
+    expect(await screen.findByText("restored export content")).toBeInTheDocument();
+  });
+
+  it("does not read an old export when its receipt ACK arrives after the session switches", async () => {
+    let authorize!: () => void;
+    vi.mocked(invoke).mockImplementation(async command => {
+      if (command === "session_export_authorize") return new Promise<void>(resolve => {authorize = resolve;});
+      return undefined;
+    });
+    const exported = {...artifact("C:\\outside\\report.md"), kind: "document_export", toolCallId: `document-export:${"a".repeat(64)}`};
+    const props = {open: true, mode: "artifacts" as const, cwd: "C:\\work", onClose: vi.fn(), onSelectTool: vi.fn(), onSelectArtifact: vi.fn(), onOpenArtifacts: vi.fn()};
+    const {rerender} = render(<ToolSidePanel {...props} artifacts={[exported]} sessionId="first" />);
+    fireEvent.click(screen.getByRole("button", {name: /^report\.md/}));
+    await waitFor(() => expect(invoke).toHaveBeenCalledWith("session_export_authorize", expect.anything()));
+    rerender(<ToolSidePanel {...props} artifacts={[]} sessionId="second" />);
+    await act(async () => {authorize();});
+    expect(vi.mocked(invoke).mock.calls.some(([command]) => command === "read_text_file")).toBe(false);
+  });
+
+  it("keeps a changed export visible with a useful error and does not open or read it", async () => {
+    vi.mocked(invoke).mockRejectedValue(new Error("导出文件已移动、删除或内容已变化，请重新导出"));
+    renderPanel("artifacts", [{...artifact("C:\\outside\\report.md"), kind: "document_export", toolCallId: `document-export:${"a".repeat(64)}`}]);
+    fireEvent.click(screen.getByRole("button", {name: /^report\.md/}));
+    expect(await screen.findByRole("alert")).toHaveTextContent("请重新导出");
+    expect(screen.queryByRole("button", {name: "用系统应用打开"})).not.toBeInTheDocument();
+    expect(vi.mocked(invoke).mock.calls.every(([command]) => command === "session_export_authorize")).toBe(true);
+  });
 
   it("explains external-file authorization instead of offering a broken open action", async () => {
     vi.mocked(invoke).mockRejectedValue("拒绝访问未授权的路径：C:\\outside\\report.md");
