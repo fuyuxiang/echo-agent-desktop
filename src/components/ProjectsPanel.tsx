@@ -1,7 +1,7 @@
 /**
  * 项目面板 — 对齐 EchoAgent 项目列表页 + 新建项目弹窗。
  *
- *  - CapabilityPage: 共享管理页标题、搜索和主操作
+ *  - CapabilityPage: 共享标题、搜索和主操作，保留项目工作台插画
  *  - 我的项目: 搜索 + 卡片网格（点击进入详情）
  *  - 从模版创建: 业务模板卡片
  *  - CreateProjectDialog: 对齐目标截图（项目名称 + 指令[选择模板] + 连接器/专家/技能 +添加 + 取消/确定）
@@ -20,6 +20,7 @@ import { createPortal } from "react-dom";
 import { AddIcon, MoreDotsIcon, ChevronDownIcon } from "@/foundation/components/Icon/icons";
 import { Button } from "./Button";
 import { CapabilityPage, CapabilityEmptyState } from "./experts-panel/shared/CapabilityPage";
+import heroImg from "@/assets/landing-hero.png";
 import { useProjectsStore, type ProjectMeta, type RefItem } from "@/stores/projects-store";
 import {
   TEMPLATE_OPTIONS,
@@ -194,6 +195,7 @@ export function ProjectsPanel({
   return (
     <CapabilityPage title="项目" className="project-management"
       description="集中管理项目资料、任务对话和交付成果"
+      illustration={<img src={heroImg} alt="项目工作台插画" draggable={false} />}
       search={{ value: query, onChange: setQuery, label: "搜索项目" }}
       actions={<Button ref={createButtonRef} variant="primary" onClick={() => setCreate({})}><AddIcon size="sm" />新建项目</Button>}>
       {persistError && (
@@ -207,7 +209,6 @@ export function ProjectsPanel({
       <section className="project-section">
         <div className="project-section__head">
           <h3 className="project-section__title">我的项目</h3>
-
         </div>
         {filtered.length === 0 ? (
           <CapabilityEmptyState title={projects.length === 0 ? "还没有项目" : "没有匹配的项目"}

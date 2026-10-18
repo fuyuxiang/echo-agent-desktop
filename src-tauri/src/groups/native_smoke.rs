@@ -228,14 +228,16 @@ paths = ["{relative_plugin}"]
         std::time::Duration::from_secs(30),
         crate::agent_runtime::group_session(
             &tx,
-            workspace.path(),
-            "group-test/mock",
-            &profile,
-            &gid,
-            &member,
-            0,
-            true,
-            None,
+            crate::agent_runtime::GroupSessionRequest {
+                cwd: workspace.path(),
+                model: "group-test/mock",
+                profile: &profile,
+                group_id: &gid,
+                member_id: &member,
+                generation: 0,
+                discussion: true,
+                existing: None,
+            },
         ),
     )
     .await
@@ -297,14 +299,16 @@ paths = ["{relative_plugin}"]
     assert_eq!(closed["outcome"], "closed");
     crate::agent_runtime::group_session(
         &tx,
-        workspace.path(),
-        "group-test/mock",
-        &profile,
-        &gid,
-        &member,
-        0,
-        true,
-        Some(&sid),
+        crate::agent_runtime::GroupSessionRequest {
+            cwd: workspace.path(),
+            model: "group-test/mock",
+            profile: &profile,
+            group_id: &gid,
+            member_id: &member,
+            generation: 0,
+            discussion: true,
+            existing: Some(&sid),
+        },
     )
     .await
     .unwrap();
@@ -360,14 +364,16 @@ paths = ["{relative_plugin}"]
     let executor = group.members[1].id.clone();
     let execution_sid = crate::agent_runtime::group_session(
         &tx,
-        workspace.path(),
-        "group-test/mock",
-        &profile,
-        &gid,
-        &executor,
-        0,
-        false,
-        None,
+        crate::agent_runtime::GroupSessionRequest {
+            cwd: workspace.path(),
+            model: "group-test/mock",
+            profile: &profile,
+            group_id: &gid,
+            member_id: &executor,
+            generation: 0,
+            discussion: false,
+            existing: None,
+        },
     )
     .await
     .unwrap();

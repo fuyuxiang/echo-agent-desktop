@@ -592,17 +592,31 @@ fn permission_mode_meta(mode: &str) -> serde_json::Map<String, serde_json::Value
 /// Group sessions use the same ACP transport and session actor as ordinary
 /// tasks. Their profile and memory namespace are supplied on both lifecycle
 /// paths; a restore must never silently become the default assistant.
+pub(crate) struct GroupSessionRequest<'a> {
+    pub cwd: &'a Path,
+    pub model: &'a str,
+    pub profile: &'a serde_json::Value,
+    pub group_id: &'a str,
+    pub member_id: &'a str,
+    pub generation: u64,
+    pub discussion: bool,
+    pub existing: Option<&'a str>,
+}
+
 pub(crate) async fn group_session(
     tx: &AcpAgentTx,
-    cwd: &Path,
-    model: &str,
-    profile: &serde_json::Value,
-    group_id: &str,
-    member_id: &str,
-    generation: u64,
-    discussion: bool,
-    existing: Option<&str>,
+    request: GroupSessionRequest<'_>,
 ) -> Result<String> {
+    let GroupSessionRequest {
+        cwd,
+        model,
+        profile,
+        group_id,
+        member_id,
+        generation,
+        discussion,
+        existing,
+    } = request;
     let mut meta = permission_mode_meta("ask");
     meta.insert("modelId".into(), serde_json::json!(model));
     meta.insert("agentProfile".into(), profile.clone());
@@ -654,9 +668,24 @@ pub(crate) async fn group_prompt(
     text: &str,
     attachments: &[String],
 ) -> Result<crate::bridge::CompleteEvent> {
-    begin_group_prompt(tx, session, prompt_id, text, attachments)?
-        .complete()
-        .await
+    begin_group_prompt(
+        tx,
+        GroupPromptRequest {
+            session,
+            prompt_id,
+            text,
+            attachments,
+        },
+    )?
+    .complete()
+    .await
+}
+
+pub(crate) struct GroupPromptRequest<'a> {
+    pub session: &'a str,
+    pub prompt_id: &'a str,
+    pub text: &'a str,
+    pub attachments: &'a [String],
 }
 
 pub(crate) struct GroupPrompt {
@@ -680,11 +709,14 @@ impl GroupPrompt {
 /// Waiting for the model is deliberately outside that short dispatch boundary.
 pub(crate) fn begin_group_prompt(
     tx: &AcpAgentTx,
-    session: &str,
-    prompt_id: &str,
-    text: &str,
-    attachments: &[String],
+    request: GroupPromptRequest<'_>,
 ) -> Result<GroupPrompt> {
+    let GroupPromptRequest {
+        session,
+        prompt_id,
+        text,
+        attachments,
+    } = request;
     let blocks = build_prompt_blocks(text, attachments, None)?;
     let req = acp::PromptRequest::new(session.to_string(), blocks).meta(Some(
         acp::Meta::from_iter([("promptId".into(), serde_json::json!(prompt_id))]),

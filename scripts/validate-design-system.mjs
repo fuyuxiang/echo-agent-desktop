@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import { writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { createUiReviewServer, reviewChromium, reviewOutput } from "./ui-review-runtime.mjs";
+import { inspectButtonBackgrounds, assertButtonBackgrounds } from "./ui-button-audit.mjs";
 
 // Read the working tree, never HEAD: this is post-change acceptance evidence.
 assert.notEqual(process.env.UI_REVIEW_BASELINE, "1", "Post-change validation must use the working tree");
@@ -22,8 +23,20 @@ const surfaces = process.argv.includes("--controls-only") ? ["page:技能", "pag
   "page:自动化", "automation-edit", "page:知识库", "organization", "organization-login", "meeting", "coding",
   "model", "general", "personalize", "memory", "personal-memory", "agent-settings", "shortcuts",
   "usage", "cloud-storage", "data", "archived", "security", "help", "agent-mail", "notify-channels", "weixin-unconnected",
-  "modal-long", "modal-error", "about", "feedback", "update",
+  "modal-long", "modal-error", "about", "feedback", "update", "results", "details", "trust", "execution", "runtime", "queue",
+  "weixin-connected", "weixin-offline",
 ];
+function checkBrandAction({ background, color }, label) {
+  const rgb = value => value.match(/[\d.]+/g).slice(0, 3).map(Number);
+  const luminance = value => rgb(value).map(channel => {
+    const c = channel / 255;
+    return c <= .04045 ? c / 12.92 : ((c + .055) / 1.055) ** 2.4;
+  }).reduce((sum, channel, index) => sum + channel * [.2126, .7152, .0722][index], 0);
+  const [r, g, b] = rgb(background);
+  assert.ok(g > r + 20 && g > b, `${label}: primary action lost its teal identity`);
+  const levels = [luminance(background), luminance(color)].sort((a, b) => b - a);
+  assert.ok((levels[0] + .05) / (levels[1] + .05) >= 4.5, `${label}: primary label contrast is below 4.5:1`);
+}
 async function checkSearch(page) {
   const input = page.locator(".capability-search input");
   const header = page.locator(".capability-page__header");
@@ -63,6 +76,8 @@ async function checkPlans(page, base, scenario) {
   }
 }
 async function inspect(page, spec, scenario, capture = false) {
+  const buttonAudit = await inspectButtonBackgrounds(page, scenario[2]);
+  assertButtonBackgrounds(buttonAudit, `${spec} ${scenario}`);
   const geometry = await page.evaluate(() => {
     const rect = e => { const r = e.getBoundingClientRect(); return { x:r.x,y:r.y,width:r.width,height:r.height,right:r.right,bottom:r.bottom }; };
     const titles = [...document.querySelectorAll(".capability-page__title,.settings-section__title,.model-connections__header h2,.meeting-panel__header h1,.org-memory__header h1")]
@@ -73,21 +88,27 @@ async function inspect(page, spec, scenario, capture = false) {
   assert.ok(!geometry.overflow, `${spec} ${scenario}: document overflows horizontally`);
   for(const box of geometry.dialogs) assert.ok(box.x >= -1 && box.y >= -1 && box.right <= scenario[0]+1 && box.bottom <= scenario[1]+1, `${spec}: modal outside viewport`);
   if(capture) await page.screenshot({ path:join(output, `${spec.replaceAll(":","-")}-${scenario.join("-")}.png`) });
-  evidence.push({ spec, scenario, ...geometry });
+  evidence.push({ spec, scenario, ...geometry, buttons:buttonAudit.buttons });
 }
 try {
   browser = await (await reviewChromium()).launch({ headless:true, executablePath:process.env.CHROME_BIN || "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome" });
+  console.log("Checking baseline source isolation");
   const baselineServer=await createUiReviewServer(0,{baseline:true});
   let baselinePage;
   try {
     const page=baselinePage=await browser.newPage(); const errors=[];page.on("pageerror",e=>errors.push(e.message));
+    // HEAD uses a fresh dependency cache; allow the same cold-compilation
+    // navigation budget as the other browser review entries.
+    page.setDefaultNavigationTimeout(60000);
     await page.goto(`${address(baselineServer)}/__ui-review?surface=conversation`,{waitUntil:"networkidle"});
     await page.locator(".chatview").waitFor();
     const styles=await page.locator("style[data-vite-dev-id]").evaluateAll(elements=>elements.map(e=>e.getAttribute("data-vite-dev-id")).filter(id=>id.includes("/src/") && id.endsWith(".css")));
     assert.ok(styles.length>0 && styles.every(id=>!id.startsWith(process.cwd())),"Baseline imports working-tree CSS");
     assert.deepEqual(errors,[],"Baseline cannot render HEAD source and styles");
   } finally { await baselinePage?.close(); await baselineServer.close(); }
+  console.log("Baseline source isolation passed");
   for(const scenario of scenarios) {
+    console.log(`Checking ${surfaces.length} surfaces: ${scenario.join(" / ")}`);
     const [width,height,theme,font] = scenario;
     const page = await browser.newPage({ viewport:{width,height}, colorScheme:theme });
     const errors=[]; page.on("pageerror", error=>errors.push(error.message));
@@ -102,6 +123,23 @@ try {
       await page.goto(`${address(server)}/__ui-review?${params}`, {waitUntil:"networkidle"});
       await page.locator("#root > *").first().waitFor();
       if(await page.locator(".capability-search input").count()) await checkSearch(page);
+      if(spec === "page:项目") {
+        const image = page.getByRole("img", {name:"项目工作台插画"});
+        assert.ok(await image.isVisible(), "Project introduction lost its illustration");
+        assert.ok(await image.evaluate(e => e.complete && e.naturalWidth > 0), "Project illustration failed to load");
+        // A wide sidebar reduces available content independently of the window.
+        const container = page.locator(".project-management");
+        await container.evaluate(e => e.style.width = "calc(100% - 360px)");
+        const bounds = await container.evaluate(e => {
+          const area = e.getBoundingClientRect();
+          return [...e.querySelectorAll(".capability-page__header img, .capability-page__controls input, .capability-page__actions button")].map(child => {
+            const box = child.getBoundingClientRect();
+            return {visible:box.width > 0 && box.height > 0, inside:box.left >= area.left && box.right <= area.right};
+          });
+        });
+        assert.ok(bounds.every(box => box.visible && box.inside), "Project artwork or actions overflow a narrow content area");
+        await container.evaluate(e => e.style.removeProperty("width"));
+      }
       if(surface==="automation-edit") {
         const toggles=await page.locator(".echo-switch--checked").evaluateAll(elements=>elements.map(e=>({track:getComputedStyle(e).backgroundColor,thumb:getComputedStyle(e.querySelector(".echo-switch-thumb")).backgroundColor})));
         assert.ok(toggles.length>0 && toggles.every(toggle=>toggle.track!==toggle.thumb),"Checked switch thumb disappears into its track");
@@ -119,6 +157,7 @@ try {
     }));
     assert.equal(metrics.length,6);
     for(const metric of metrics) assert.deepEqual(metric,metrics[0],`Button aliases drift at ${scenario}`);
+    for(const metric of metrics) checkBrandAction(metric, `Primary alias at ${scenario}`);
     const save=page.getByRole("button",{name:"保存这段较长的说明"});
     const initial=await save.boundingBox();
     const expectedState = async name => save.evaluate((element, name) => {
@@ -127,8 +166,10 @@ try {
     },name);
     await save.hover();
     assert.equal(await save.evaluate(e=>getComputedStyle(e).backgroundColor),await expectedState("--button-hover"),"Hover loses primary semantics");
+    checkBrandAction(await save.evaluate(e=>({background:getComputedStyle(e).backgroundColor,color:getComputedStyle(e).color})), "Hovered primary");
     await page.mouse.down();
     assert.equal(await save.evaluate(e=>getComputedStyle(e).backgroundColor),await expectedState("--button-active"),"Active loses primary semantics");
+    checkBrandAction(await save.evaluate(e=>({background:getComputedStyle(e).backgroundColor,color:getComputedStyle(e).color})), "Pressed primary");
     await page.mouse.up();
     assert.equal(await save.getAttribute("aria-busy"),"true");
     assert.deepEqual(await save.boundingBox(),initial,"Loading changes button geometry");

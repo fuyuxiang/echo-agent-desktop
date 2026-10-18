@@ -289,10 +289,11 @@ body[data-vscode-theme-name="IDE Light"] {
   --echo-todo-menu-text-default: var(--echo-palette-black-90);
   --echo-todo-menu-text-heading: var(--echo-palette-black-30);
   --echo-todo-menu-text-view-more: var(--echo-palette-black-50);
-  --echo-button-primary-bg: var(--echo-palette-black-90);
-  --echo-button-primary-bg-hover: color-mix(in srgb, var(--echo-palette-black-100) 96%, transparent);
-  --echo-button-primary-bg-active: color-mix(in srgb, var(--echo-palette-black-100) 80%, transparent);
-  --echo-button-primary-bg-disabled: color-mix(in srgb, var(--echo-palette-black-100) 24%, transparent);
+  /* Product actions retain EchoAgent's teal identity with readable labels. */
+  --echo-button-primary-bg: #007d64;
+  --echo-button-primary-bg-hover: #00614d;
+  --echo-button-primary-bg-active: #004f3f;
+  --echo-button-primary-bg-disabled: color-mix(in srgb, var(--echo-button-primary-bg) 24%, transparent);
   --echo-button-primary-fg: var(--echo-palette-white-100);
   --echo-button-primary-fg-disabled: var(--echo-palette-white-60);
   --echo-button-secondary-bg: var(--echo-palette-white-100);
@@ -370,11 +371,11 @@ body.dark,
   --echo-todo-menu-text-default: var(--echo-palette-white-90);
   --echo-todo-menu-text-heading: var(--echo-palette-white-40);
   --echo-todo-menu-text-view-more: var(--echo-palette-white-50);
-  --echo-button-primary-bg: var(--echo-palette-white-100);
-  --echo-button-primary-bg-hover: color-mix(in srgb, var(--echo-palette-white-100) 88%, transparent);
-  --echo-button-primary-bg-active: color-mix(in srgb, var(--echo-palette-white-100) 72%, transparent);
-  --echo-button-primary-bg-disabled: color-mix(in srgb, var(--echo-palette-white-100) 24%, transparent);
-  --echo-button-primary-fg: var(--echo-palette-black-90);
+  --echo-button-primary-bg: #7cf0d8;
+  --echo-button-primary-bg-hover: #a8f5e5;
+  --echo-button-primary-bg-active: #5adcc1;
+  --echo-button-primary-bg-disabled: color-mix(in srgb, var(--echo-button-primary-bg) 24%, transparent);
+  --echo-button-primary-fg: #102b25;
   --echo-button-primary-fg-disabled: rgba(0, 0, 0, 0.45);
   --echo-button-secondary-bg: var(--echo-color-bg-primary-default);
   --echo-button-secondary-bg-hover: var(--echo-color-bg-primary-hover);
@@ -595,14 +596,13 @@ body.dark,
   --echo-page-title-weight: 650;
   --echo-page-title-line-height: 1.4;
   --echo-section-gap: 24px;
-  --echo-button-brand-bg: #007d64;
-  --echo-button-brand-bg-hover: #00614d;
-  --echo-button-brand-fg: #fff;
+  /* Compatibility: brand and primary share the same product action palette. */
+  --echo-button-brand-bg: var(--echo-button-primary-bg);
+  --echo-button-brand-bg-hover: var(--echo-button-primary-bg-hover);
+  --echo-button-brand-bg-active: var(--echo-button-primary-bg-active);
+  --echo-button-brand-fg: var(--echo-button-primary-fg);
 }
 [data-theme="dark"] {
   --echo-surface-sidebar: #181a19;
   --echo-shadow-floating: 0 20px 56px rgba(0, 0, 0, .36), 0 2px 8px rgba(0, 0, 0, .24);
-  --echo-button-brand-bg: #7cf0d8;
-  --echo-button-brand-bg-hover: #a8f5e5;
-  --echo-button-brand-fg: #102b25;
 }

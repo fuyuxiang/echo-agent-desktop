@@ -92,6 +92,16 @@ jobs:
             ${{ runner.temp }}/mermaid-render-evidence/*geometry*.json
           if-no-files-found: ignore
 
+  rustfmt:
+    name: Rust formatting
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt
+      - run: cargo fmt --manifest-path src-tauri/Cargo.toml --check
+
   rust:
     runs-on: ubuntu-24.04
     steps:
@@ -115,9 +125,10 @@ jobs:
         with:
           node-version: '22'
       - run: node scripts/verify-vendored-runtime.mjs
-      - run: cargo fmt --manifest-path src-tauri/Cargo.toml --check
-      - run: cargo clippy --locked --manifest-path src-tauri/Cargo.toml --lib -- -D warnings
-      - run: node scripts/test-rust-desktop.mjs
+      - name: Check Rust warnings and lints
+        run: cargo clippy --locked --manifest-path src-tauri/Cargo.toml --lib -- -D warnings
+      - name: Run isolated Rust unit and integration tests
+        run: node scripts/test-rust-desktop.mjs
 
   automation-macos:
     name: Automation / macOS Intel + Apple Silicon

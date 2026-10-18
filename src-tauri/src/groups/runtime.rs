@@ -42,27 +42,16 @@ pub(super) fn dispatch_lock(group_id: &str) -> std::sync::Arc<DispatchLock> {
     lock
 }
 
+#[cfg(test)]
 pub(super) async fn dispatch_prompt(
     store: &Store,
     group_id: &str,
     work_id: &str,
     tx: &echo_agent_acp::AcpAgentTx,
-    session: &str,
-    prompt_id: &str,
-    prompt: &str,
-    attachments: &[String],
+    request: crate::agent_runtime::GroupPromptRequest<'_>,
 ) -> Result<Option<crate::agent_runtime::GroupPrompt>, String> {
     let _dispatch = dispatch_lock(group_id).lock_owned().await;
-    dispatch_prompt_under_gate(
-        store,
-        group_id,
-        work_id,
-        tx,
-        session,
-        prompt_id,
-        prompt,
-        attachments,
-    )
+    dispatch_prompt_under_gate(store, group_id, work_id, tx, request)
 }
 
 fn dispatch_prompt_under_gate(
@@ -70,17 +59,14 @@ fn dispatch_prompt_under_gate(
     group_id: &str,
     work_id: &str,
     tx: &echo_agent_acp::AcpAgentTx,
-    session: &str,
-    prompt_id: &str,
-    prompt: &str,
-    attachments: &[String],
+    request: crate::agent_runtime::GroupPromptRequest<'_>,
 ) -> Result<Option<crate::agent_runtime::GroupPrompt>, String> {
     if !store.update(group_id, |g| Ok(g.begin_prompt(work_id)))? {
         return Ok(None);
     }
     // Synchronous enqueue while the same gate used by Stop is held. There is
     // no await between the durable start check and the native request.
-    crate::agent_runtime::begin_group_prompt(tx, session, prompt_id, prompt, attachments)
+    crate::agent_runtime::begin_group_prompt(tx, request)
         .map(Some)
         .map_err(|e| e.to_string())
 }
@@ -265,14 +251,16 @@ async fn execute(
     };
     let sid = crate::agent_runtime::group_session(
         &tx,
-        &root,
-        &member.model_id,
-        &member.profile,
-        gid,
-        &member.id,
-        member.generation,
-        work.discussion,
-        existing,
+        crate::agent_runtime::GroupSessionRequest {
+            cwd: &root,
+            model: &member.model_id,
+            profile: &member.profile,
+            group_id: gid,
+            member_id: &member.id,
+            generation: member.generation,
+            discussion: work.discussion,
+            existing,
+        },
     )
     .await
     .map_err(|e| e.to_string())?;
@@ -386,10 +374,12 @@ async fn execute(
         gid,
         work_id,
         &tx,
-        &sid,
-        &work.prompt_id,
-        &prompt,
-        &attachments,
+        crate::agent_runtime::GroupPromptRequest {
+            session: &sid,
+            prompt_id: &work.prompt_id,
+            text: &prompt,
+            attachments: &attachments,
+        },
     )?
     else {
         return Ok(None);

@@ -41,8 +41,9 @@ export function prepareMacosTestSignatures(env = process.env) {
   const targetPath = JSON.parse(metadata.stdout).target_directory;
   const build = spawnSync('cargo', ['test', '--locked', '--manifest-path', 'src-tauri/Cargo.toml',
     '--lib', '--tests', '-j', '2', '--no-run', '--message-format=json'],
-  { env, encoding: 'utf8', maxBuffer: 32 * 1024 * 1024 });
-  if (build.stderr) process.stderr.write(build.stderr);
+  // Keep artifact JSON private to this parser while showing compilation and
+  // lock-wait progress immediately, including during long cold builds.
+  { env, encoding: 'utf8', maxBuffer: 32 * 1024 * 1024, stdio: ['ignore', 'pipe', 'inherit'] });
   assert.equal(build.status, 0, 'Test compilation failed; no signing performed');
   // A fresh checkout has no target directory until Cargo creates it.
   const target = realpathSync(targetPath);

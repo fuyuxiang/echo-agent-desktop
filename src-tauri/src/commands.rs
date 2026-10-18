@@ -2070,14 +2070,14 @@ pub(crate) async fn delete_session_data(
     session_id: &str,
     cwd: Option<&str>,
 ) -> Result<SessionDeleteResult, String> {
-    if !valid_session_id(&session_id) {
+    if !valid_session_id(session_id) {
         return Err("会话 ID 无效或过长".into());
     }
     let workspace = trusted_existing_session_cwd(
-        &state,
+        state,
         &app.state::<crate::shell_fs::FilesystemAccess>(),
-        &session_id,
-        cwd.as_deref(),
+        session_id,
+        cwd,
     )?;
     delete_owned_session_data(state, session_id, &workspace).await
 }
@@ -2102,11 +2102,11 @@ pub(crate) async fn delete_owned_session_data(
     let workspace_arg = workspace.to_string_lossy().into_owned();
     // Stop side effects before history deletion. A failed stop remains
     // retryable and must not leave an active browser belonging to a removed task.
-    crate::automation::stop_existing_session(&session_id).await?;
-    agent_runtime::delete_session(&tx, &session_id, Some(&workspace_arg))
+    crate::automation::stop_existing_session(session_id).await?;
+    agent_runtime::delete_session(&tx, session_id, Some(&workspace_arg))
         .await
         .map_err(|e| e.to_string())?;
-    Ok(forget_deleted_session(state, &workspace, session_id).await)
+    Ok(forget_deleted_session(state, workspace, session_id).await)
 }
 
 /// Group ownership is proven by the durable member ledger. Locate by exact ID
@@ -2144,7 +2144,7 @@ pub(crate) async fn forget_deleted_session(
     session_id: &str,
 ) -> SessionDeleteResult {
     let (memory_summaries_deleted, mut memory_cleanup_warning) =
-        match crate::agent_admin::delete_session_memory_artifacts(&workspace, &session_id) {
+        match crate::agent_admin::delete_session_memory_artifacts(workspace, session_id) {
             Ok(count) => (count, None),
             Err(error) => {
                 tracing::warn!(
@@ -2155,11 +2155,11 @@ pub(crate) async fn forget_deleted_session(
                 (0, Some(error))
             }
         };
-    state.forget_session_workspace(&session_id);
-    crate::automation::forget_session(&session_id).await;
-    crate::org_mcp::forget_session_selection(&session_id).await;
-    crate::permission_config::forget_session_permission_mode(&session_id);
-    if let Err(error) = crate::meta::clear_session_metadata(&session_id) {
+    state.forget_session_workspace(session_id);
+    crate::automation::forget_session(session_id).await;
+    crate::org_mcp::forget_session_selection(session_id).await;
+    crate::permission_config::forget_session_permission_mode(session_id);
+    if let Err(error) = crate::meta::clear_session_metadata(session_id) {
         tracing::warn!(%error, %session_id, "session deleted but sidecar metadata cleanup failed");
         memory_cleanup_warning = Some(match memory_cleanup_warning {
             Some(previous) => format!("{previous}；会话附属信息清理失败：{error}"),

@@ -7,8 +7,12 @@
 .weixin-channel__card-header { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
 .weixin-channel__card-header h3 { margin: 0; }
 .weixin-channel__recovery { display: flex; gap: 8px; margin-top: 12px; }
-.weixin-channel__card button, .weixin-channel__code button { border: 0; border-radius: 8px; background: var(--echo-brand); color: white; cursor: pointer; padding: 8px 13px; }
+.weixin-channel__card button, .weixin-channel__code button { border: 0; border-radius: 8px; background: var(--echo-button-primary-bg); color: var(--echo-button-primary-fg); cursor: pointer; padding: 8px 13px; }
+.weixin-channel__card button:hover:not(:disabled), .weixin-channel__code button:hover:not(:disabled) { background: var(--echo-button-primary-bg-hover); }
+.weixin-channel__card button:active:not(:disabled), .weixin-channel__code button:active:not(:disabled) { background: var(--echo-button-primary-bg-active); }
 .weixin-channel__card button.weixin-channel__secondary { background: transparent; color: var(--echo-text-medium); border: 1px solid var(--echo-border-default); padding: 5px 9px; font-size: 12px; }
+.weixin-channel__card button.weixin-channel__secondary:hover:not(:disabled), .weixin-channel__shared button:hover:not(:disabled) { background: var(--echo-button-secondary-bg-hover); }
+.weixin-channel__card button.weixin-channel__secondary:active:not(:disabled), .weixin-channel__shared button:active:not(:disabled) { background: var(--echo-button-secondary-bg-active); }
 .weixin-channel__card button:disabled { opacity: .5; cursor: default; }
 .weixin-channel__qr { width: 232px; height: 232px; display: block; margin: 16px 0; border: 1px solid #e6e6e6; }
 .weixin-channel__code { display: flex; gap: 8px; margin: 12px 0; }

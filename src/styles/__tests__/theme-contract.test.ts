@@ -94,8 +94,8 @@ describe("theme token contract", () => {
 
     expect(baseRule).toBeGreaterThanOrEqual(0);
     expect(activeRule).toBeGreaterThan(baseRule);
-    expect(activeBlock).toContain("background: var(--echo-brand);");
-    expect(activeBlock).toContain("color: var(--echo-text-on-primary, #fff);");
+    expect(activeBlock).toContain("background: var(--echo-brand-soft);");
+    expect(activeBlock).toContain("color: var(--echo-color-text-brand-default);");
   });
 
 });

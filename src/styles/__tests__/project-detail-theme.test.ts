@@ -34,10 +34,10 @@ describe("project detail theme contract", () => {
     }
 
     // 项目 composer 改用首页 `<Composer>` 后,发送按钮由 Composer 提供(.echo-composer__send);
-    // 主题契约由 `--echo-bg-pill-active` / `--echo-bg-tertiary` 等 token 保障,在此验证双主题可读性。
+    // 发送操作和普通主操作使用同一组品牌前景、背景；空输入仍保持中性禁用态。
     const sendBlock = rule(".echo-composer__send");
-    expect(sendBlock).toContain("background: var(--echo-bg-pill-active);");
-    expect(sendBlock).toContain("color: #fff;");
+    expect(sendBlock).toContain("background: var(--echo-button-primary-bg);");
+    expect(sendBlock).toContain("color: var(--echo-button-primary-fg);");
     // disabled 状态与 empty 共享规则体,索引查找直接定位规则块。
     const disabledStart = css.indexOf(".echo-composer__send:disabled,");
     expect(disabledStart, "missing disabled rule for .echo-composer__send").toBeGreaterThanOrEqual(0);

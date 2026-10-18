@@ -30,6 +30,9 @@ export async function createUiReviewServer(port = 1439, {
     // Baseline and current pages may run together; their dependency optimizers
     // must not invalidate each other's module URLs or share a cache lifecycle.
     ...(original ? { cacheDir: join(original.directory, ".vite") } : {}),
+    // A fresh baseline cache must publish optimized React dependencies before
+    // the fixture's import crawl finishes; otherwise each can wait on the other.
+    optimizeDeps: { holdUntilCrawlEnd: false },
     // Review pages navigate rapidly and deliberately abort some entry scripts.
     // Only transform requested modules: speculative warmups can outlive the
     // browser and leave Vite 5 waiting indefinitely during server.close().
@@ -70,13 +73,19 @@ export async function createUiReviewServer(port = 1439, {
     throw error;
   }
   const close = server.close.bind(server);
-  server.close = () => {
-    const closing = close();
-    // The browser has already closed when callers dispose a review server.
-    // Drain keep-alive/aborted requests too, so Node does not keep a fixture
-    // listener alive after all assertions have completed.
-    server.httpServer?.closeAllConnections?.();
-    return closing.finally(() => original?.close());
+  server.close = async () => {
+    try {
+      // Vite 5 cancels dependency optimization during close, but unfinished
+      // transforms may still await its result. Finish the initial import crawl
+      // before cancellation so closing a baseline cannot deadlock the review.
+      await server.waitForRequestsIdle();
+      const closing = close();
+      // The browser has already closed when callers dispose a review server.
+      // Drain keep-alive/aborted requests too, so Node does not keep a fixture
+      // listener alive after all assertions have completed.
+      server.httpServer?.closeAllConnections?.();
+      await closing;
+    } finally { original?.close(); }
   };
   return server;
 }

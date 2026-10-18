@@ -113,7 +113,7 @@ EchoAgent 使用 React 18 构建界面，Tauri 2 与 Rust 负责桌面能力、�
 | --- | --- |
 | `pnpm tauri dev` | 启动完整桌面应用，并自动准备 Theia 与 Office Worker。 |
 | `pnpm test` | 运行前端 Vitest 测试。 |
-| `pnpm test:scripts` | 验证浏览器快照标签、macOS 测试签名范围和 IDE 脏文档计数；CI 自动运行。 |
+| `pnpm test:scripts` | 验证浏览器快照标签、测试签名范围、IDE 状态与进程回收、日志脱敏和窗口验收条件；CI 自动运行。 |
 | `pnpm test:ide` | 构建 Theia 后验证固定 VSIX 完整性和 SCM 命令完成、失败传播。 |
 | `pnpm test:native-guards` | 在 macOS 运行原生验收工具的合成报告、隔离和续跑条件回归；不启动桌面应用，也不代表真实界面验收。 |
 | `pnpm test:mermaid` | 验证真实图表渲染、换行、预览、复制、下载及失败恢复；macOS 同时检查原生 WKWebView。 |
@@ -123,6 +123,8 @@ EchoAgent 使用 React 18 构建界面，Tauri 2 与 Rust 负责桌面能力、�
 | `cargo fmt --manifest-path src-tauri/Cargo.toml --check` | 检查 Rust 格式。 |
 | `cargo clippy --locked --manifest-path src-tauri/Cargo.toml --lib -- -D warnings` | 运行 Rust 静态检查。 |
 | `pnpm dist:mac` / `pnpm dist:win` | 在对应平台构建发行安装包；正式发行需平台签名。 |
+
+CI 的 Rust 格式检查独立运行，格式错误不会阻止静态检查与功能测试提供结果。提交前可运行 `cargo fmt --manifest-path src-tauri/Cargo.toml` 修正格式，再执行上表中的格式检查、Clippy 和 `pnpm test:rust`。
 
 发行步骤见 [桌面发行说明](docs/desktop-release.md)。
 

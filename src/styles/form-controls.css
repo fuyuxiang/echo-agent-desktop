@@ -68,11 +68,11 @@
   --button-fg: var(--echo-button-danger-fg-on-solid);
   --button-border: transparent;
 }
-/* Brand emphasis is opt-in; ordinary primary always means high contrast. */
+/* Historical brand variant follows the primary product action palette. */
 .echo-button--brand {
   --button-bg: var(--echo-button-brand-bg);
   --button-hover: var(--echo-button-brand-bg-hover);
-  --button-active: var(--echo-button-brand-bg-hover);
+  --button-active: var(--echo-button-brand-bg-active);
   --button-fg: var(--echo-button-brand-fg);
   --button-border: transparent;
 }

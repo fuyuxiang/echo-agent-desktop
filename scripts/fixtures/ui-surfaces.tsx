@@ -17,6 +17,7 @@ import { ProjectDetailView } from "../../src/components/ProjectDetailView";
 import { WorkbenchIdentity } from "../../src/features/coding/shell/WorkbenchIdentity";
 import { ProjectSwitcher } from "../../src/features/coding/shell/ProjectSwitcher";
 import { TaskSwitcher } from "../../src/features/coding/shell/TaskSwitcher";
+import { TheiaAgentComposer } from "../../src/features/coding/agent/TheiaAgentComposer";
 import { OrganizationMemoryPanel } from "../../src/components/OrganizationMemoryPanel";
 import { ChatView } from "../../src/components/ChatView";
 import { SecondarySidebar } from "../../src/components/SecondarySidebar";
@@ -432,7 +433,7 @@ function Fixture() {
     <aside style={{ width: "min(250px, 22vw)", flex: "none", borderRight: "1px solid var(--echo-border-default)", background: "var(--echo-bg-secondary)", padding: "24px 16px", boxSizing: "border-box" }}>EchoAgent</aside>
     <ChatView onSend={() => {}} onCancel={() => {}} title="评审投影仪性能与内存泄漏" />
   </div>;
-  if (surface === "organization" || surface === "organization-login") return <div style={{ height: "100%", overflow: "auto" }}><OrganizationMemoryPanel /></div>;
+  if (surface === "organization" || surface === "organization-login") return <div style={{ height: "100%", overflow: "auto" }}><OrganizationMemoryPanel onStartConversation={() => {}} /></div>;
   if (surface === "meeting") return <MeetingMinutesPanel modelId="review/MiniMax-M3" models={[{ id: "review/MiniMax-M3", label: "MiniMax M3", providerId: "review", providerKind: "custom", source: "personal" }]} />;
   if (surface === "permission-picker") return <div style={{ position: "relative", height: "100%", background: "var(--echo-bg-secondary)" }}>
     <div style={{ position: "absolute", left: "46%", top: "63%" }}><PermissionPicker /></div>
@@ -456,7 +457,12 @@ function Fixture() {
         onRename={() => {}}
         onDelete={() => {}}
       />
-    </div></aside>
+    </div><TheiaAgentComposer workspaceRoot={cwd} task={null} sessionId={null}
+      models={[{ id:"review/model", label:"评审模型", providerId:"review", providerKind:"custom" }]}
+      modelId="review/model" contextPaths={[]} apiReady starting={false} sending={false} streaming={false}
+      suggestedPrompt="检查代码工作台的主操作按钮"
+      onModelChange={() => {}} onStart={() => {}} onSend={() => {}} onRemoveContext={() => {}} onDraftContextPaths={() => {}} />
+    </aside>
   </div></div>;
   return <SettingsPanel open initialSection={(surface === "weixin-connected" || surface === "weixin-offline" || surface === "weixin-unconnected" ? "weixin-channel" : surface) as SettingsSectionId} cwd={surface === "personal-memory" ? "/Users/fuyuxiang/Documents/EchoAgent" : undefined} onClose={() => {}} />;
 }

@@ -291,8 +291,7 @@ fn acquire_team_store_lock(path: &Path) -> Result<File, String> {
     let parent = path
         .parent()
         .ok_or_else(|| format!("团队状态路径没有父目录：{}", path.display()))?;
-    std::fs::create_dir_all(parent)
-        .map_err(|error| format!("创建团队状态目录失败：{error}"))?;
+    std::fs::create_dir_all(parent).map_err(|error| format!("创建团队状态目录失败：{error}"))?;
     let parent_metadata = std::fs::symlink_metadata(parent)
         .map_err(|error| format!("检查团队状态目录失败：{error}"))?;
     if parent_metadata.file_type().is_symlink() || !parent_metadata.is_dir() {
@@ -436,8 +435,8 @@ fn load_teams_from_disk_at(path: &Path) -> Result<HashMap<String, TeamInfo>, Str
 
 fn save_teams_to_disk_at(path: &Path, teams: &HashMap<String, TeamInfo>) -> Result<(), String> {
     validate_team_store(teams)?;
-    let contents = serde_json::to_vec_pretty(teams)
-        .map_err(|error| format!("序列化团队状态失败：{error}"))?;
+    let contents =
+        serde_json::to_vec_pretty(teams).map_err(|error| format!("序列化团队状态失败：{error}"))?;
     if contents.len() as u64 > MAX_TEAM_STORE_BYTES {
         return Err("团队状态超过 4MB 上限".into());
     }
@@ -507,9 +506,7 @@ fn normalized_team_id(value: &str) -> Result<String, String> {
         || value.len() > MAX_TEAM_ID_BYTES
         || value.chars().any(char::is_control)
     {
-        return Err(format!(
-            "团队 ID 必须为 1–{MAX_TEAM_ID_CHARS} 个非控制字符"
-        ));
+        return Err(format!("团队 ID 必须为 1–{MAX_TEAM_ID_CHARS} 个非控制字符"));
     }
     Ok(value.to_string())
 }

@@ -808,10 +808,12 @@ async fn stop_during_preparation_fences_a_delayed_native_prompt() {
                 &id,
                 &work,
                 &tx,
-                "native",
-                &prompt_id,
-                "写入文件",
-                &[],
+                crate::agent_runtime::GroupPromptRequest {
+                    session: "native",
+                    prompt_id: &prompt_id,
+                    text: "写入文件",
+                    attachments: &[],
+                },
             )
             .await
         }
@@ -848,12 +850,21 @@ async fn paused_preparation_returns_to_queue_and_dispatch_enqueues_before_awaiti
     let prompt_id = g.works[0].prompt_id.clone();
     store.create(&g).unwrap();
     let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel();
-    assert!(
-        runtime::dispatch_prompt(&store, &g.id, &work, &tx, "native", &prompt_id, "分析", &[])
-            .await
-            .unwrap()
-            .is_none()
-    );
+    assert!(runtime::dispatch_prompt(
+        &store,
+        &g.id,
+        &work,
+        &tx,
+        crate::agent_runtime::GroupPromptRequest {
+            session: "native",
+            prompt_id: &prompt_id,
+            text: "分析",
+            attachments: &[],
+        },
+    )
+    .await
+    .unwrap()
+    .is_none());
     assert!(rx.try_recv().is_err());
     assert_eq!(store.get(&g.id).unwrap().works[0].status, "queued");
     store
@@ -863,11 +874,21 @@ async fn paused_preparation_returns_to_queue_and_dispatch_enqueues_before_awaiti
             Ok(())
         })
         .unwrap();
-    let pending =
-        runtime::dispatch_prompt(&store, &g.id, &work, &tx, "native", &prompt_id, "分析", &[])
-            .await
-            .unwrap()
-            .unwrap();
+    let pending = runtime::dispatch_prompt(
+        &store,
+        &g.id,
+        &work,
+        &tx,
+        crate::agent_runtime::GroupPromptRequest {
+            session: "native",
+            prompt_id: &prompt_id,
+            text: "分析",
+            attachments: &[],
+        },
+    )
+    .await
+    .unwrap()
+    .unwrap();
     let echo_agent_acp::AcpAgentMessage::Prompt(args) = rx.try_recv().unwrap() else {
         panic!("expected native prompt");
     };

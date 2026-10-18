@@ -1482,10 +1482,12 @@ button,
 }
 
 .automation-approval__actions .automation-approval__approve {
-  border-color: var(--echo-brand);
-  background: var(--echo-brand);
-  color: white;
+  border-color: transparent;
+  background: var(--echo-button-primary-bg);
+  color: var(--echo-button-primary-fg);
 }
+.automation-approval__actions .automation-approval__approve:hover:not(:disabled) { background: var(--echo-button-primary-bg-hover); }
+.automation-approval__actions .automation-approval__approve:active:not(:disabled) { background: var(--echo-button-primary-bg-active); }
 
 .automation-approval__actions button:disabled {
   cursor: default;
@@ -4276,14 +4278,11 @@ a.help-card:hover {
   font-size: 0.6875rem;
 }
 
-/* Keep the selected-state colors together in the last-loaded stylesheet.
- * Otherwise the base rule above overrides app.css's brand background while
- * leaving its white foreground in place, producing white-on-white in light
- * mode. */
+/* Selection uses a soft brand surface; keep its readable foreground paired. */
 .notification-filter.notification-filter--active {
-  border-color: var(--echo-brand);
-  background: var(--echo-brand);
-  color: var(--echo-text-on-primary, #fff);
+  border-color: var(--echo-brand-border);
+  background: var(--echo-brand-soft);
+  color: var(--echo-color-text-brand-default);
 }
 
 .notification-list {

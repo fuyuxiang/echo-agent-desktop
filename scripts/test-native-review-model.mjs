@@ -4,6 +4,8 @@ import { chmodSync, mkdtempSync, readFileSync, realpathSync, rmSync, statSync, w
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { spawn } from 'node:child_process';
+import { EventEmitter, once } from 'node:events';
+import { PassThrough } from 'node:stream';
 import { captureReviewModelLogs, createReviewModelSecretRedactor } from './lib/native-review-model.mjs';
 
 const marker = '[REDACTED_MODEL_CREDENTIAL]';
@@ -46,10 +48,59 @@ test('real stdout and stderr pipes redact independently and flush their final te
     assert.equal(child.exitCode, 0); assert.equal(logs.overflow, false);
     const content = readFileSync(path, 'utf8');
     assert(!content.includes(key)); assert.equal(content.split(marker).length - 1, 2);
-    assert(content.includes('中文日志')); assert(content.includes('short ' + key.slice(0, 5)));
+    // Each pipe buffers possible credential prefixes independently. The other
+    // pipe may append text before a buffered tail is flushed at EOF.
+    assert(content.includes('中文日志')); assert(content.includes('short '));
+    assert(content.includes(key.slice(0, 5)), 'stdout must flush its final credential prefix');
     if (process.platform !== 'win32') assert.equal(statSync(path).mode & 0o077, 0);
   } finally { child.kill('SIGKILL'); rmSync(root, { recursive: true, force: true }); }
 });
+
+for (const ending of [['stdout', 'stderr'], ['stderr', 'stdout']]) {
+  test(`interleaved pipes preserve buffered tails when ${ending[0]} ends first`, async () => {
+    const root = mkdtempSync(join(tmpdir(), 'echo-review-log-interleaved-')), path = join(root, 'log.txt');
+    const key = 'synthetic-stdio-credential-only';
+    const child = Object.assign(new EventEmitter(), { stdout: new PassThrough(), stderr: new PassThrough() });
+    try {
+      const logs = captureReviewModelLogs(child, path, { apiKey: key });
+      child.stdout.write('stdout ' + key.slice(0, 10));
+      child.stderr.write('stderr ' + key.slice(0, 7));
+      child.stdout.write(key.slice(10) + ' 中文日志\nshort ' + key.slice(0, 5));
+      child.stderr.write(key.slice(7) + ' 完成\npartial ' + key.slice(0, 3));
+      const tails = { stdout: key.slice(0, 5), stderr: key.slice(0, 3) };
+      const beforeEnd = `stdout stderr ${marker} 中文日志\nshort ${marker} 完成\npartial `;
+      assert.equal(readFileSync(path, 'utf8'), beforeEnd);
+      for (const pipe of ending) {
+        const ended = once(child[pipe], 'end');
+        child[pipe].end();
+        await ended;
+      }
+      child.emit('close', 0);
+      await logs.finished;
+      assert.equal(readFileSync(path, 'utf8'), beforeEnd + ending.map(pipe => tails[pipe]).join(''));
+      assert.equal(logs.incomplete, false); assert.equal(logs.overflow, false);
+    } finally {
+      child.stdout.destroy(); child.stderr.destroy();
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+}
+
+for (const pipe of ['stdout', 'stderr']) {
+  test(`${pipe} alone preserves contiguous final text through the real process pipe`, async () => {
+    const root = mkdtempSync(join(tmpdir(), 'echo-review-log-tail-')), path = join(root, 'log.txt');
+    const key = 'synthetic-stdio-credential-only';
+    const child = spawn(process.execPath, ['-e', `process.${pipe}.write(${JSON.stringify(key + ' 中文日志\nshort ' + key.slice(0, 5))})`],
+      { stdio: ['ignore', 'pipe', 'pipe'] });
+    try {
+      const logs = captureReviewModelLogs(child, path, { apiKey: key });
+      await logs.finished;
+      assert.equal(child.exitCode, 0);
+      assert.equal(readFileSync(path, 'utf8'), `${marker} 中文日志\nshort ${key.slice(0, 5)}`);
+      assert.equal(logs.incomplete, false); assert.equal(logs.overflow, false);
+    } finally { child.kill('SIGKILL'); rmSync(root, { recursive: true, force: true }); }
+  });
+}
 
 test('oversized process logs stop the child and still settle capture', async () => {
   const root = mkdtempSync(join(tmpdir(), 'echo-review-log-bound-'));

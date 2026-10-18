@@ -2150,7 +2150,10 @@ fn remember_plugins(value: &serde_json::Value) -> Result<(), String> {
             }
             ids.insert(id.to_string());
         }
-        if let Some(path) = plugin.pointer("/management/removalPath").and_then(serde_json::Value::as_str) {
+        if let Some(path) = plugin
+            .pointer("/management/removalPath")
+            .and_then(serde_json::Value::as_str)
+        {
             if let Ok(canonical) = Path::new(path).canonicalize() {
                 roots.insert(canonical.clone());
                 config_paths.insert(canonical, path.to_string());
@@ -2264,8 +2267,12 @@ fn normalize_plugin_action(
             if !listed {
                 return Err("只能移除后端最近加载的精确插件路径".into());
             }
-            let configured = admin_capabilities().lock().unwrap_or_else(|p| p.into_inner())
-                .plugin_config_paths.get(&canonical).cloned()
+            let configured = admin_capabilities()
+                .lock()
+                .unwrap_or_else(|p| p.into_inner())
+                .plugin_config_paths
+                .get(&canonical)
+                .cloned()
                 .unwrap_or_else(|| canonical.to_string_lossy().into_owned());
             object.insert("path".into(), serde_json::Value::String(configured));
             Ok(())

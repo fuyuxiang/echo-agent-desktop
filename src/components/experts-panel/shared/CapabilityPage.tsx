@@ -13,17 +13,18 @@ interface Props {
     placeholder?: string;
   };
   actions?: ReactNode;
+  illustration?: ReactNode;
   summary?: ReactNode;
   children: ReactNode;
 }
 
 /** The extension pages share one toolbar, content gutter and scroll owner. */
-export function CapabilityPage({ title, description, className = "", search, actions, summary, children }: Props) {
+export function CapabilityPage({ title, description, className = "", search, actions, illustration, summary, children }: Props) {
   const searchRef = useRef<HTMLInputElement>(null);
   return (
     <section className={`capability-page ${className}`} aria-label={title}>
       <div className="capability-page__inner">
-        <header className="capability-page__header">
+        <header className={`capability-page__header${illustration ? " capability-page__header--illustrated" : ""}`}>
           <div className="capability-page__heading">
             <h2 className="capability-page__title">{title}</h2>
             {description && <p className="capability-page__description">{description}</p>}
@@ -43,6 +44,7 @@ export function CapabilityPage({ title, description, className = "", search, act
             )}
             {actions && <div className="capability-page__actions">{actions}</div>}
           </div>
+          {illustration && <div className="capability-page__illustration">{illustration}</div>}
         </header>
         {summary && <div className="capability-page__summary">{summary}</div>}
         <div className="capability-page__content">{children}</div>

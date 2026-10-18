@@ -98,13 +98,16 @@ See the [automation platform and security guide](docs/automation-platform-suppor
 | --- | --- |
 | `pnpm tauri dev` | Start the full desktop app, preparing Theia and the Office Worker automatically. |
 | `pnpm test` | Run frontend Vitest tests. |
+| `pnpm test:scripts` | Verify browser labels, test signing, IDE state and process cleanup, log redaction and window review guards; also run in CI. |
 | `pnpm test:mermaid` | Verify actual diagram rendering, wrapping, preview, copy, download and failure recovery; also test native WKWebView on macOS. |
 | `pnpm build` | Type-check TypeScript and build the production frontend. |
 | `pnpm office:test` | Verify the built-in document generator. |
-| `cargo test --locked --manifest-path src-tauri/Cargo.toml --lib --tests -j 2` | Run Rust unit and integration tests. |
+| `pnpm test:rust` | Run all Rust unit and integration tests with isolated data; locally sign this workspace's test harnesses on macOS before execution. |
 | `cargo fmt --manifest-path src-tauri/Cargo.toml --check` | Check Rust formatting. |
 | `cargo clippy --locked --manifest-path src-tauri/Cargo.toml --lib -- -D warnings` | Run Rust static analysis. |
 | `pnpm dist:mac` / `pnpm dist:win` | Build an installer on the corresponding platform; production releases require platform signing. |
+
+CI runs Rust formatting independently so formatting errors do not prevent static analysis and functional test results. Before committing, run `cargo fmt --manifest-path src-tauri/Cargo.toml` to format the code, then run the formatting check, Clippy and `pnpm test:rust` listed above.
 
 See the [desktop release guide](docs/desktop-release.en.md) for packaging.
 

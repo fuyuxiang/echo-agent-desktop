@@ -22,14 +22,12 @@ static OWNERS: OnceLock<RwLock<std::collections::HashMap<String, Option<Owner>>>
 static INIT_ERROR: OnceLock<Mutex<Option<String>>> = OnceLock::new();
 pub fn initialize(app: tauri::AppHandle) -> Result<(), String> {
     let store = Store::open(&crate::paths::echo_agent_home_dir().join("collaboration.sqlite"))
-        .map_err(|error| {
+        .inspect_err(|error| {
             *INIT_ERROR.get_or_init(Default::default).lock().unwrap() = Some(error.clone());
-            error
         })?;
-    store.recover().map_err(|error| {
+    store.recover().inspect_err(|error| {
         *INIT_ERROR.get_or_init(Default::default).lock().unwrap() =
             Some(format!("专家团记录恢复失败，已有数据已保留：{error}"));
-        error
     })?;
     STORE.set(store).map_err(|_| "专家团服务已初始化")?;
     APP.set(app).map_err(|_| "专家团事件已初始化")?;
@@ -684,7 +682,7 @@ pub(super) async fn delete_group_data(
         changed(&group_id);
         let result = tokio::time::timeout(
             std::time::Duration::from_secs(60),
-            crate::commands::delete_group_session_data(&state, sid, std::path::Path::new(cwd)),
+            crate::commands::delete_group_session_data(state, sid, std::path::Path::new(cwd)),
         )
         .await
         .map_err(|_| "执行记录清理超时，专家团记录已保留，可稍后重试".to_string())?

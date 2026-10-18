@@ -2241,15 +2241,10 @@
 }
 /* Composer 流式时的入队按钮 */
 .echo-composer__send--enqueue {
-  background: var(--echo-brand);
-  color: #fff;
   border-radius: 8px;
   font-size: 1.125rem;
   font-weight: 700;
   line-height: 1;
-}
-.echo-composer__send--enqueue:hover:not(:disabled) {
-  opacity: 0.9;
 }
 /* 发送前成本预估徽章(对齐 EchoAgent credit-estimate) */
 .echo-composer__cost {
@@ -6651,8 +6646,14 @@ button.diff__path {
   justify-content: center;
   border-radius: 50%;
   margin-left: 4px;
-  background: var(--echo-bg-pill-active);
-  color: #fff;
+  background: var(--echo-button-primary-bg);
+  color: var(--echo-button-primary-fg);
+}
+.echo-composer__send:hover:not(:disabled):not(.echo-composer__send--empty) {
+  background: var(--echo-button-primary-bg-hover);
+}
+.echo-composer__send:active:not(:disabled):not(.echo-composer__send--empty) {
+  background: var(--echo-button-primary-bg-active);
 }
 .echo-composer__send:disabled,
 .echo-composer__send--empty {
@@ -6663,15 +6664,10 @@ button.diff__path {
   cursor: default;
 }
 .echo-composer__send--stop {
-  background: var(--echo-bg-pill-active);
   font-size: 0.625rem;
 }
 .echo-composer__send--now {
-  background: var(--echo-brand);
   box-shadow: 0 0 0 2px color-mix(in srgb, var(--echo-brand) 14%, transparent);
-}
-.echo-composer__send--now:hover:not(:disabled) {
-  filter: brightness(1.06);
 }
 .echo-composer-meta {
   display: flex;
@@ -7387,8 +7383,8 @@ button.diff__path {
   color: var(--echo-text-medium);
 }
 .home__scene--active {
-  background: var(--echo-bg-pill-active);
-  color: var(--echo-text-white);
+  background: var(--echo-brand-soft);
+  color: var(--echo-color-text-brand-default);
   font-weight: 600;
 }
 .home__composer-area {
@@ -8602,10 +8598,12 @@ button.diff__path {
 }
 .context-menu__rename-actions button:hover { background: var(--echo-bg-hover); }
 .context-menu__rename-actions .context-menu__rename-save {
-  border-color: var(--echo-bg-pill-active, #1f1f1f);
-  background: var(--echo-bg-pill-active, #1f1f1f);
-  color: var(--echo-text-white, #fff);
+  border-color: transparent;
+  background: var(--echo-button-primary-bg);
+  color: var(--echo-button-primary-fg);
 }
+.context-menu__rename-actions .context-menu__rename-save:hover:not(:disabled) { background: var(--echo-button-primary-bg-hover); }
+.context-menu__rename-actions .context-menu__rename-save:active:not(:disabled) { background: var(--echo-button-primary-bg-active); }
 .context-menu__rename-actions button:disabled { opacity: 0.5; cursor: default; }
 
 /* SP1: file-tree context menu additions */
@@ -10520,9 +10518,9 @@ button.diff__path {
   color: var(--echo-brand);
 }
 .plan-panel__mode-toggle--active {
-  background: var(--echo-brand);
-  border-color: var(--echo-brand);
-  color: #fff;
+  background: var(--echo-brand-soft);
+  border-color: var(--echo-brand-border);
+  color: var(--echo-color-text-brand-default);
 }
 .plan-panel__mode-btn {
   margin-top: 12px;
@@ -10661,8 +10659,8 @@ button.diff__path {
   cursor: pointer;
 }
 .chatview__plan-toggle--active {
-  background: var(--echo-brand);
-  color: #fff;
+  background: var(--echo-brand-soft);
+  color: var(--echo-color-text-brand-default);
 }
 .chatview__plan-panel {
   position: absolute;
@@ -10824,9 +10822,9 @@ button.diff__path {
   color: var(--echo-text-strong);
 }
 .rewind-bar__mode-btn--active {
-  background: var(--echo-brand);
-  border-color: var(--echo-brand);
-  color: #fff;
+  background: var(--echo-brand-soft);
+  border-color: var(--echo-brand-border);
+  color: var(--echo-color-text-brand-default);
 }
 .rewind-bar__timeline {
   list-style: none;
@@ -13040,9 +13038,9 @@ body:has([aria-modal="true"]) .global-tooltip:not(.global-tooltip--dialog) {
   transition: all 0.1s ease;
 }
 .model-tags__chip--on {
-  background: var(--echo-brand);
-  border-color: var(--echo-brand);
-  color: #fff;
+  background: var(--echo-brand-soft);
+  border-color: var(--echo-brand-border);
+  color: var(--echo-color-text-brand-default);
 }
 .model-tags__chip:hover {
   border-color: var(--echo-brand);
@@ -13260,8 +13258,8 @@ body:has([aria-modal="true"]) .global-tooltip:not(.global-tooltip--dialog) {
   border-color: var(--echo-brand);
 }
 .notification-filter--active {
-  background: var(--echo-brand);
-  border-color: var(--echo-brand);
+  background: var(--echo-brand-soft);
+  border-color: var(--echo-brand-border);
   color: #fff;
 }
 .notification-list {
@@ -13543,7 +13541,7 @@ body:has([aria-modal="true"]) .global-tooltip:not(.global-tooltip--dialog) {
 
 .create-colleague-tags { display: flex; gap: 8px; flex-wrap: wrap; }
 .create-colleague-tag { padding: 6px 14px; border: 1px solid var(--echo-border-default); border-radius: 8px; background: transparent; font-size: 0.8125rem; cursor: pointer; color: var(--echo-text-medium); transition: all .15s; }
-.create-colleague-tag--on { background: var(--echo-brand); color: #fff; border-color: var(--echo-brand); }
+.create-colleague-tag--on { background: var(--echo-brand-soft); color: var(--echo-color-text-brand-default); border-color: var(--echo-brand-border); }
 
 .create-colleague-footer { display: flex; justify-content: flex-end; gap: 10px; padding: 16px 20px; border-top: 1px solid var(--echo-border-default); }
 
