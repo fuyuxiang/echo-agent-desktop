@@ -6,7 +6,6 @@ import { useAppDialog } from "@/components/AppDialog";
 import { Toast, type ToastAction } from "@/components/Toast";
 import { groupControl, groupMetadata, groupSaveTeam, groupSnapshot, terminalWork, type Group } from "./group-client";
 import { useGroupStore } from "./group-store";
-import "./groups.css";
 
 type Menu = { id: string; x: number; y: number; anchor: HTMLElement };
 const useActions = create<{ menu: Menu | null; busy: Record<string, boolean> }>(() => ({ menu: null, busy: {} }));

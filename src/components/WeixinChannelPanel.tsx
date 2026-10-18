@@ -6,7 +6,6 @@ import {
   weixinDisconnect, weixinQrPoll, weixinQrStart, weixinRevokeSession, weixinSetWorkspaces, weixinStatus,
   type WeixinStatus,
 } from "@/lib/weixin-client";
-import "./WeixinChannelPanel.css";
 
 interface Workspace { cwd: string; sessionCount?: number }
 

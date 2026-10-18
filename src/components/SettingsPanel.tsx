@@ -17,6 +17,7 @@ import {
   type LucideIcon,
 } from "lucide-react";
 import {
+  SettingsSection,
   AgentSettingsPanel,
   DataSettingsPanel,
   GeneralSettingsPanel,
@@ -311,52 +312,13 @@ export function SettingsPanel({
                 />
               </div>
             ) : active === "usage" ? (
-              <div className="settings-section">
-                <header className="settings-section__header">
-                  <div className="settings-section__heading">
-                    <h2 className="settings-section__title">用量统计</h2>
-                    <p className="settings-section__desc">查看 Token 消耗、成本估算和配额策略。</p>
-                  </div>
-                </header>
-                <div className="settings-section__body">
-                  <UsageQuotaPanel />
-                </div>
-              </div>
+              <SettingsSection title="用量统计" desc="查看 Token 消耗、成本估算和配额策略。"><UsageQuotaPanel /></SettingsSection>
             ) : active === "notify-channels" ? (
-              <div className="settings-section settings-subview">
-                <SettingsViewTabs label="通知视图" items={NOTIFICATION_VIEWS} active={active} onSelect={setActive} />
-                <header className="settings-section__header">
-                  <div className="settings-section__heading">
-                    <h2 className="settings-section__title">通知渠道</h2>
-                    <p className="settings-section__desc">配置任务完成、异常和自动化事件要推送到哪里。</p>
-                  </div>
-                </header>
-                <div className="settings-section__body">
-                  <NotifyChannelsPanel onToast={onToast} />
-                </div>
-              </div>
+              <SettingsSection title="通知渠道" desc="配置任务完成、异常和自动化事件要推送到哪里。" navigation={<SettingsViewTabs label="通知视图" items={NOTIFICATION_VIEWS} active={active} onSelect={setActive} />}><NotifyChannelsPanel onToast={onToast} /></SettingsSection>
             ) : active === "weixin-channel" ? (
-              <div className="settings-section">
-                <header className="settings-section__header">
-                  <div className="settings-section__heading">
-                    <h2 className="settings-section__title">消息通道</h2>
-                    <p className="settings-section__desc">连接消息应用，在外出时继续桌面任务并管理访问范围。</p>
-                  </div>
-                </header>
-                <div className="settings-section__body"><WeixinChannelPanel onToast={onToast} /></div>
-              </div>
+              <SettingsSection title="消息通道" desc="连接消息应用，在外出时继续桌面任务并管理访问范围。"><WeixinChannelPanel onToast={onToast} /></SettingsSection>
             ) : active === "cloud-storage" ? (
-              <div className="settings-section">
-                <header className="settings-section__header">
-                  <div className="settings-section__heading">
-                    <h2 className="settings-section__title">云存储</h2>
-                    <p className="settings-section__desc">管理 WebDAV 连接，并手动浏览、上传和下载云端文件；不会自动同步。</p>
-                  </div>
-                </header>
-                <div className="settings-section__body">
-                  <CloudStoragePanel onToast={onToast} onUnsavedChange={setCloudDirty} />
-                </div>
-              </div>
+              <SettingsSection title="云存储" desc="管理 WebDAV 连接，并手动浏览、上传和下载云端文件；不会自动同步。"><CloudStoragePanel onToast={onToast} onUnsavedChange={setCloudDirty} /></SettingsSection>
             ) : active === "general" ? (
               <GeneralSettingsPanel />
             ) : active === "agent-settings" ? (

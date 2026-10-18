@@ -27,7 +27,6 @@ import { useSessionStore } from "@/stores/session-store";
 import {
   filesystemPickDirectory,
 } from "@/lib/agent-client";
-import "@/styles/coding-workbench.css";
 
 import { AgentPane } from "./agent/AgentPane";
 import { TaskEvidenceStrip } from "./agent/TaskEvidenceStrip";

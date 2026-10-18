@@ -1,8 +1,8 @@
 import { existsSync, mkdirSync } from "node:fs";
-import { execFileSync } from "node:child_process";
-import { resolve } from "node:path";
+import { join, resolve } from "node:path";
 import { pathToFileURL } from "node:url";
 import { createServer } from "vite";
+import { createUiReviewBaseline } from "./ui-review-baseline.mjs";
 
 // Reuse the optional Theia browser test installation, or an explicitly supplied
 // Playwright module. Browser tooling is not shipped in the application bundle.
@@ -22,21 +22,21 @@ export function reviewOutput(fallback) {
 export async function createUiReviewServer(port = 1439, {
   freezeMotion = true,
   fixture = "/scripts/fixtures/ui-surfaces.tsx",
+  baseline = process.env.UI_REVIEW_BASELINE === "1",
 } = {}) {
-  const baseline = process.env.UI_REVIEW_BASELINE === "1";
-  const originalSources = new Map();
-  const server = await createServer({
-    server: { host: "127.0.0.1", port, strictPort: true },
-    plugins: [{ name: "ui-review-original-source", enforce: "pre", load(id) {
-      const path = id.split("?")[0];
-      if (!baseline || !/\.(tsx?|css)$/.test(path) || /[?&](raw|url|worker)([=&]|$)/.test(id) || !path.startsWith(resolve("src") + "/")) return null;
-      const relative = path.slice(process.cwd().length + 1);
-      if (!originalSources.has(relative)) {
-        try { originalSources.set(relative, execFileSync("git", ["show", `HEAD:${relative}`], { encoding: "utf8", maxBuffer: 8 * 1024 * 1024, stdio: ["ignore", "pipe", "ignore"] })); }
-        catch { originalSources.set(relative, null); }
-      }
-      return originalSources.get(relative);
-    } }, { name: "isolated-ui-review", configureServer(server) {
+  const original = baseline ? createUiReviewBaseline() : null;
+  let server;
+  try { server = await createServer({
+    // Baseline and current pages may run together; their dependency optimizers
+    // must not invalidate each other's module URLs or share a cache lifecycle.
+    ...(original ? { cacheDir: join(original.directory, ".vite") } : {}),
+    // Review pages navigate rapidly and deliberately abort some entry scripts.
+    // Only transform requested modules: speculative warmups can outlive the
+    // browser and leave Vite 5 waiting indefinitely during server.close().
+    server: { host: "127.0.0.1", port, strictPort: true, preTransformRequests: false,
+      ...(original ? { fs: { allow: [process.cwd(), original.directory] } } : {}),
+    },
+    plugins: [...(original ? [original.plugin] : []), { name: "isolated-ui-review", configureServer(server) {
       server.middlewares.use((request, response, next) => {
         if (!request.url?.startsWith("/__ui-review")) return next();
         // Screenshot fixtures can freeze motion; rendering regressions must
@@ -48,7 +48,7 @@ export async function createUiReviewServer(port = 1439, {
         }).catch(next);
       });
     } }],
-  });
+  }); } catch (error) { original?.close(); throw error; }
   try {
     if (port === 0) {
       // Vite 5 treats a configured zero as its default port. Listen on the
@@ -66,8 +66,17 @@ export async function createUiReviewServer(port = 1439, {
       await server.listen();
     }
   } catch (error) {
-    await server.close();
+    try { await server.close(); } finally { original?.close(); }
     throw error;
   }
+  const close = server.close.bind(server);
+  server.close = () => {
+    const closing = close();
+    // The browser has already closed when callers dispose a review server.
+    // Drain keep-alive/aborted requests too, so Node does not keep a fixture
+    // listener alive after all assertions have completed.
+    server.httpServer?.closeAllConnections?.();
+    return closing.finally(() => original?.close());
+  };
   return server;
 }

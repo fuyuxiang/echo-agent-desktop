@@ -1,9 +1,10 @@
-import type { ReactNode } from "react";
+import { useRef, type ReactNode } from "react";
 import { SearchIcon, XCloseIcon } from "@/foundation/components/Icon/icons";
-import "@/styles/capability-page.css";
+import { Button, IconButton } from "@/components/Button";
 
 interface Props {
   title: string;
+  description?: string;
   className?: string;
   search?: {
     value: string;
@@ -17,23 +18,27 @@ interface Props {
 }
 
 /** The extension pages share one toolbar, content gutter and scroll owner. */
-export function CapabilityPage({ title, className = "", search, actions, summary, children }: Props) {
+export function CapabilityPage({ title, description, className = "", search, actions, summary, children }: Props) {
+  const searchRef = useRef<HTMLInputElement>(null);
   return (
     <section className={`capability-page ${className}`} aria-label={title}>
       <div className="capability-page__inner">
         <header className="capability-page__header">
-          <h2 className="capability-page__title">{title}</h2>
+          <div className="capability-page__heading">
+            <h2 className="capability-page__title">{title}</h2>
+            {description && <p className="capability-page__description">{description}</p>}
+          </div>
           <div className="capability-page__controls">
             {search && (
               <div className="capability-search">
                 <SearchIcon size="sm" className="capability-search__icon" />
-                <input type="text" aria-label={search.label}
+                <input ref={searchRef} type="text" aria-label={search.label}
                   placeholder={search.placeholder ?? search.label}
                   value={search.value} onChange={(event) => search.onChange(event.target.value)} />
-                {search.value && <button type="button" className="capability-search__clear"
-                  aria-label={`清空${search.label}`} onClick={() => search.onChange("")}>
+                {search.value && <IconButton className="capability-search__clear"
+                  label={`清空${search.label}`} onClick={() => { search.onChange(""); searchRef.current?.focus(); }}>
                   <XCloseIcon size="sm" />
-                </button>}
+                </IconButton>}
               </div>
             )}
             {actions && <div className="capability-page__actions">{actions}</div>}
@@ -58,7 +63,7 @@ export function CapabilityEmptyState({ icon, title, description, onClear }: {
       <p>{title}</p>
       {description && <div className="capability-empty__description">{description}</div>}
     </div>
-    {onClear && <button type="button" className="capability-button" onClick={onClear}>清空搜索</button>}
+    {onClear && <Button onClick={onClear}>清空搜索</Button>}
   </div>;
 }
 
@@ -69,8 +74,8 @@ export function CapabilityError({ children, onRetry, retrying = false }: {
 }) {
   return <div className="capability-error" role="alert">
     <span>{children}</span>
-    <button type="button" className="capability-button" onClick={onRetry} disabled={retrying}>
+    <Button onClick={onRetry} disabled={retrying} aria-busy={retrying}>
       {retrying ? "重试中…" : "重试"}
-    </button>
+    </Button>
   </div>;
 }

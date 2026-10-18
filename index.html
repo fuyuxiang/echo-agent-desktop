@@ -13,6 +13,9 @@
         try {
           const saved = localStorage.getItem("echoagent.theme");
           if (saved === "dark" || saved === "light") theme = saved;
+          else if (saved === "system" && typeof window.matchMedia === "function") {
+            theme = window.matchMedia("(prefers-color-scheme: dark)").matches ? "dark" : "light";
+          }
         } catch (_) {
           // Storage may be unavailable in a restricted WebView; light is safe.
         }

@@ -1,3 +1,4 @@
+import "../../src/styles/index.css";
 // Development-only browser fixture: production meeting UI, in-memory native IPC.
 // It never records physical audio, accesses credentials or calls a model service.
 import React, { useState } from "react";
@@ -6,9 +7,6 @@ import { MeetingMinutesPanel } from "../../src/components/MeetingMinutesPanel";
 import { ThemeProvider } from "../../src/components/ThemeProvider";
 import type { ModelOption } from "../../src/components/ModelSelector";
 import type { MeetingRecord } from "../../src/lib/meeting-minutes";
-import "../../src/styles/global.css";
-import "../../src/styles/app.css";
-import "../../src/styles/form-controls.css";
 
 const query = new URLSearchParams(location.search);
 const scenario = query.get("scenario") ?? "history";

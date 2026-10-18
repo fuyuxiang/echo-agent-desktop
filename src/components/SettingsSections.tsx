@@ -106,7 +106,8 @@ const SHORTCUT_GROUPS: Array<{
   },
 ];
 
-function SectionShell({
+export function SettingsSection({
+  navigation,
   title,
   desc,
   actions,
@@ -115,10 +116,12 @@ function SectionShell({
   title: string;
   desc?: string;
   actions?: React.ReactNode;
+  navigation?: React.ReactNode;
   children: React.ReactNode;
 }) {
   return (
-    <div className="settings-section">
+    <div className={`settings-section${navigation ? " settings-subview" : ""}`}>
+      {navigation}
       <header className="settings-section__header">
         <div className="settings-section__heading">
           <h2 className="settings-section__title">{title}</h2>
@@ -131,7 +134,7 @@ function SectionShell({
   );
 }
 
-function SettingsGroup({
+export function SettingsGroup({
   title,
   desc,
   meta,
@@ -169,7 +172,7 @@ export function PersonalizeSettingsPanel() {
   }, [fontSize]);
 
   return (
-    <SectionShell
+    <SettingsSection
       title="个性化"
       desc="调整外观和阅读字号。主题与主要界面文字会立即更新。"
     >
@@ -229,7 +232,7 @@ export function PersonalizeSettingsPanel() {
           </div>
         </div>
       </SettingsGroup>
-    </SectionShell>
+    </SettingsSection>
   );
 }
 
@@ -237,7 +240,7 @@ export function PersonalizeSettingsPanel() {
 
 export function ShortcutsSettingsPanel() {
   return (
-    <SectionShell
+    <SettingsSection
       title="快捷键"
       desc="以下是当前版本已实际生效的快捷键。"
     >
@@ -255,7 +258,7 @@ export function ShortcutsSettingsPanel() {
           </SettingsGroup>
         ))}
       </div>
-    </SectionShell>
+    </SettingsSection>
   );
 }
 
@@ -329,7 +332,7 @@ export function MemorySettingsPanel() {
   ];
 
   return (
-    <SectionShell
+    <SettingsSection
       title="记忆"
       desc="跨会话记忆保存在本机，可随时审阅。会话摘要是自动提取的中间资料，不是完整聊天记录。"
     >
@@ -364,7 +367,7 @@ export function MemorySettingsPanel() {
         </div>
       </SettingsGroup>
       {msg && <p className="settings-msg">{msg}</p>}
-    </SectionShell>
+    </SettingsSection>
   );
 }
 
@@ -392,7 +395,7 @@ export function HelpSettingsPanel() {
   };
 
   return (
-    <SectionShell title="帮助与更新" desc="检查版本更新，查阅使用文档和常见问题排查步骤。">
+    <SettingsSection title="帮助与更新" desc="检查版本更新，查阅使用文档和常见问题排查步骤。">
       <SettingsGroup
         title="版本升级"
         desc="启动时会自动检查 EchoAgent 内网上的签名发布版。"
@@ -466,7 +469,7 @@ export function HelpSettingsPanel() {
           <li><span>3</span><div><strong>重新加载或重启</strong><p>先在“系统设置”尝试热重载，仍无效时再重启应用。</p></div></li>
         </ol>
       </SettingsGroup>
-    </SectionShell>
+    </SettingsSection>
   );
 }
 
@@ -585,7 +588,7 @@ export function SecuritySettingsPanel() {
   };
 
   return (
-    <SectionShell
+    <SettingsSection
       title="安全中心"
       desc="管理网页与电脑操作权限、工具授权规则和本地遥测。"
     >
@@ -726,7 +729,7 @@ export function SecuritySettingsPanel() {
           </div>
         </div>
       </SettingsGroup>
-    </SectionShell>
+    </SettingsSection>
   );
 }
 
@@ -746,7 +749,7 @@ export function DataSettingsPanel() {
   }, []);
 
   return (
-    <SectionShell title="数据管理" desc="查看 EchoAgent 在本机保存的数据位置和内容范围。">
+    <SettingsSection title="数据管理" desc="查看 EchoAgent 在本机保存的数据位置和内容范围。">
       <SettingsGroup title="备份与恢复" desc="备份会话、项目资料、代码任务记录、记忆、粘贴附件、草稿、队列和本机用量。不包含模型密钥、组织凭据或外部工作目录的文件。">
         <p className="settings-hint">建议在任务结束后备份。备份包含聊天和资料正文，请保存在可信位置。恢复会替换备份中同名的数据，其他数据保留；历史外部文件仍依赖原工作目录。</p>
         <div className="settings-group__footer">
@@ -795,7 +798,7 @@ export function DataSettingsPanel() {
           删除会话请在侧栏对单个会话操作；直接修改或清理目录可能导致项目、通知或配置无法恢复。
         </div>
       </SettingsGroup>
-    </SectionShell>
+    </SettingsSection>
   );
 }
 
@@ -863,7 +866,7 @@ export function GeneralSettingsPanel() {
   };
 
   return (
-    <SectionShell
+    <SettingsSection
       title="系统设置"
       desc="管理窗口、后台运行与 EchoAgent 配置重载。"
     >
@@ -913,7 +916,7 @@ export function GeneralSettingsPanel() {
         </div>
       </SettingsGroup>
       {msg && <p className="settings-msg">{msg}</p>}
-    </SectionShell>
+    </SettingsSection>
   );
 }
 
@@ -971,7 +974,7 @@ export function AgentSettingsPanel() {
   }, [loadError, subagentDepth, subagentDraft]);
 
   return (
-    <SectionShell
+    <SettingsSection
       title="智能体设置"
       desc="调整子代理的运行方式。技能、连接器与插件请在左侧「扩展」中管理。"
       actions={(
@@ -1033,7 +1036,7 @@ export function AgentSettingsPanel() {
           )}
       </SettingsGroup>
 
-    </SectionShell>
+    </SettingsSection>
   );
 }
 
@@ -1205,7 +1208,7 @@ export function NotificationCenterSettingsPanel({
   const unreadCount = entries.filter((e) => !e.read).length;
 
   return (
-    <SectionShell
+    <SettingsSection
       title="通知中心"
       desc="集中查看待处理请求、连接问题和任务结果。"
       actions={
@@ -1368,7 +1371,7 @@ export function NotificationCenterSettingsPanel({
         </div>
       </SettingsGroup>
       {dialog}
-    </SectionShell>
+    </SettingsSection>
   );
 }
 

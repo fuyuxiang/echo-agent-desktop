@@ -1,3 +1,6 @@
+import { useElementSize } from "@/lib/use-element-size";
+import { Button } from "@/components/Button";
+import { CapabilityPage, CapabilityEmptyState, CapabilityError } from "@/components/experts-panel/shared/CapabilityPage";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { ArrowLeft, Plus, Users, Settings, Search, Pause, Square, Reply, X } from "lucide-react";
 import { agentsList, agentResolvePlanApproval, type WorkspaceInfo } from "@/lib/agent-client";
@@ -25,7 +28,6 @@ import { collectSessionArtifacts } from "@/lib/session-artifacts";
 import { useGroupStore } from "./group-store";
 import { GroupActionButton, openGroupMenu } from "./GroupActions";
 import { groupCreate, groupControl, groupSend, groupSettings, groupDecision, groupStatus, groupRecipients, terminalWork, workLabels, type Group, type GroupMessage } from "./group-client";
-import "./groups.css";
 
 const errorText = (error: unknown) => String(error).replace(/^Error:\s*/, "");
 const messageViews = new WeakMap<GroupMessage, ChatMessage>();
@@ -41,7 +43,7 @@ function messageView(message: GroupMessage): ChatMessage {
 }
 
 export function GroupWorkspace({ cwd, modelId, models, workspaces, onToast, onOpenSettings, onOpenKnowledgeBase, onOpenOrganization }: { cwd: string; modelId?: string; models: ModelOption[]; workspaces: WorkspaceInfo[]; onToast: (text: string) => void; onOpenSettings: () => void; onOpenKnowledgeBase?: () => void; onOpenOrganization?: () => void }) {
-  const { groups, current, currentId, loading, error, createFrom } = useGroupStore();
+  const { groups, current, loading, error, createFrom } = useGroupStore();
   const [creating, setCreating] = useState(false);
   const [teamsOpen, setTeamsOpen] = useState(false);
   const [query, setQuery] = useState("");
@@ -53,11 +55,13 @@ export function GroupWorkspace({ cwd, modelId, models, workspaces, onToast, onOp
   if (current) return <GroupChat key={current.id} group={current} models={models} onToast={onToast} onBack={() => { void useGroupStore.getState().select(null); }} onOpenSettings={onOpenSettings} onOpenKnowledgeBase={onOpenKnowledgeBase} onOpenOrganization={onOpenOrganization} loadError={error} />;
   if (creating) return <GroupCreate cwd={cwd} modelId={modelId} models={models} workspaces={workspaces} onClose={() => { setCreating(false); useGroupStore.setState({ createFrom: null, createTemplate: null }); }} onCreated={id => { setCreating(false); void useGroupStore.getState().refresh(); void useGroupStore.getState().select(id); }} />;
   const visibleGroups = groups.filter(group => (group.archived === archived) && `${group.name} ${group.goal}`.toLowerCase().includes(query.trim().toLowerCase())).sort((a,b) => Number(b.pinned) - Number(a.pinned) || b.updatedAt - a.updatedAt);
-  return <div className="groups-page">
-    <header className="groups-page__header"><div><span className="groups-eyebrow">一起讨论，协作交付</span><h1>专家团</h1><p>把熟悉的专家聚在一起，围绕一个目标持续交流与完成工作。</p></div><button className="btn btn--primary" onClick={() => setCreating(true)}><Plus size={16} />创建专家团</button></header>
-    <div className="groups-toolbar"><button className="btn btn--ghost" onClick={() => setTeamsOpen(true)}>专家团模板</button><label className="groups-search"><Search size={15} /><input aria-label="搜索专家团" placeholder="搜索名称或协作目标" value={query} onChange={event => setQuery(event.target.value)} /></label><div className="groups-status-filter" role="group" aria-label="专家团状态"><button type="button" aria-pressed={!archived} onClick={() => setArchived(false)}>未归档</button><button type="button" aria-pressed={archived} onClick={() => setArchived(true)}>已归档</button></div><button className="btn btn--ghost" onClick={() => void useGroupStore.getState().refresh()}>刷新</button></div>
-    {error && <p className="groups-error" role="alert">{error}</p>}
-    {loading && currentId && <p role="status">正在读取专家团…</p>}
+  return <CapabilityPage title="专家团" className="groups-page groups-page--list"
+    description="把熟悉的专家聚在一起，围绕一个目标持续交流与完成工作。"
+    search={{ value: query, onChange: setQuery, label: "搜索专家团", placeholder: "搜索名称或协作目标" }}
+    actions={<><Button onClick={() => void useGroupStore.getState().refresh()} disabled={loading} aria-busy={loading}>刷新</Button><Button variant="primary" onClick={() => setCreating(true)}><Plus size={16} />创建专家团</Button></>}>
+    <div className="groups-toolbar"><Button variant="ghost" onClick={() => setTeamsOpen(true)}>专家团模板</Button><div className="groups-status-filter" role="group" aria-label="专家团状态"><button type="button" aria-pressed={!archived} onClick={() => setArchived(false)}>未归档</button><button type="button" aria-pressed={archived} onClick={() => setArchived(true)}>已归档</button></div></div>
+    {error && <CapabilityError onRetry={() => void useGroupStore.getState().refresh()} retrying={loading}>{error}</CapabilityError>}
+    {loading && <p className="capability-loading" role="status">正在读取专家团…</p>}
     <div className="groups-grid">{visibleGroups.slice(0, visibleCount).map(group => <article className="group-card group-card--managed" key={group.id} onContextMenu={event => openGroupMenu(group.id, event)}>
       <button type="button" className="group-card__open" onClick={() => void useGroupStore.getState().select(group.id)} aria-label={`打开专家团 ${group.name}`}>
         <span className="group-card__icon"><Users size={24} /></span><span className="group-card__head"><strong>{group.name}</strong><small>{groupStatus(group)}</small></span><p>{group.goal || "在专家团里说明目标，协调员会和专家一起推进。"}</p><span className="group-card__members">{group.members.filter(member => !member.removed).map(member => member.name).join(" · ")}</span><small className="group-card__cwd" title={group.cwd}>{group.cwd}</small>
@@ -65,10 +69,10 @@ export function GroupWorkspace({ cwd, modelId, models, workspaces, onToast, onOp
       <GroupActionButton group={group} />
     </article>)}</div>
     {visibleGroups.length > visibleCount && <div className="groups-load-more"><button type="button" className="btn btn--ghost" onClick={() => setVisibleCount(count => count + 24)}>加载更多专家团（已显示 {Math.min(visibleCount, visibleGroups.length)} / {visibleGroups.length}）</button></div>}
-    {groups.length > 0 && !visibleGroups.length && <div className="groups-empty"><Search size={30} /><h2>{query ? "没有找到专家团" : archived ? "没有已归档的专家团" : "没有未归档的专家团"}</h2><p>{query ? "试试其他名称或协作目标。" : archived ? "归档后会保留聊天和工作记录，可随时恢复。" : "可以创建专家团，或从已归档列表恢复。"}</p>{query && <button className="btn btn--ghost" onClick={() => setQuery("")}>清除搜索</button>}</div>}
+    {!loading && groups.length > 0 && !visibleGroups.length && <div className="groups-empty"><Search size={30} /><h2>{query ? "没有找到专家团" : archived ? "没有已归档的专家团" : "没有未归档的专家团"}</h2><p>{query ? "试试其他名称或协作目标。" : archived ? "归档后会保留聊天和工作记录，可随时恢复。" : "可以创建专家团，或从已归档列表恢复。"}</p>{query && <button className="btn btn--ghost" onClick={() => setQuery("")}>清除搜索</button>}</div>}
 
-    {!groups.length && !error && <div className="groups-empty"><Users size={38} /><h2>让一组专家成为你的协作伙伴</h2><p>选择本地专家建立专家团。你可以直接 @成员，也可以由协调员安排工作。</p><button className="btn btn--primary" onClick={() => setCreating(true)}>创建第一个专家团</button></div>}
-  </div>;
+    {!loading && !groups.length && !error && <CapabilityEmptyState icon={<Users size={24} />} title="让一组专家成为你的协作伙伴" description={<>选择本地专家建立专家团。你可以直接 @成员，也可以由协调员安排工作。<div className="groups-empty__action"><Button variant="primary" onClick={() => setCreating(true)}>创建第一个专家团</Button></div></>} />}
+  </CapabilityPage>;
 }
 
 function GroupCreate({ cwd, modelId, models, workspaces, onClose, onCreated }: { cwd: string; modelId?: string; models: ModelOption[]; workspaces: WorkspaceInfo[]; onClose: () => void; onCreated: (id: string) => void }) {
@@ -119,6 +123,14 @@ function GroupChat({ group, models, onToast, onBack, onOpenSettings, onOpenKnowl
   useEffect(() => { useGroupStore.getState().setDraftOptions(group.id, {targets, discussion, replyTo:reply}); }, [group.id, targets, discussion, reply]);
   const [tab, setTab] = useState<"members" | "work" | "files" | "settings">("members");
   const [detailOpen, setDetailOpen] = useState(() => typeof window === "undefined" || window.innerWidth >= 1000), [error, setError] = useState<string | null>(null), [busy, setBusy] = useState(false), [query, setQuery] = useState("");
+  const chatRef = useRef<HTMLDivElement>(null);
+  const chatWidth = useElementSize(chatRef, "width");
+  const detailInitialized = useRef(false);
+  useEffect(() => {
+    if (chatWidth === null || detailInitialized.current) return;
+    detailInitialized.current = true;
+    setDetailOpen(chatWidth > 820);
+  }, [chatWidth]);
   const [tool, setTool] = useState<ToolCallView | null>(null), [newMessages, setNewMessages] = useState(false);
   const draft = useGroupStore(state => state.drafts[group.id] ?? "");
   const recipients = groupRecipients(group, draft, targets, reply);
@@ -156,7 +168,7 @@ function GroupChat({ group, models, onToast, onBack, onOpenSettings, onOpenKnowl
   const permissions = usePermissionStore(state => state.queues), questions = useQuestionStore(state => state.queues);
   const pendingPlan = useSessionStore(state => sessions.some(id => state.transcripts[id]?.planApprovals?.length));
   const pending = sessions.filter(id => permissions[id]?.length || questions[id]?.length);
-  return <div className="group-chat">
+  return <div className="group-chat" ref={chatRef}>
     <header className="group-chat__header"><button className="groups-icon" aria-label="返回专家团列表" onClick={onBack}><ArrowLeft size={18} /></button><span className="group-card__icon"><Users size={22} /></span><div className="group-chat__heading"><h1>{group.name}</h1><p title={group.cwd}>{group.goal || group.cwd}</p></div><span className="group-status" data-status={groupStatus(group)}>{pending.length || pendingPlan ? "需要你处理" : groupStatus(group)}</span><GroupActionButton group={group} /><button className="groups-icon" aria-label="专家团详情" aria-expanded={detailOpen} onClick={() => setDetailOpen(open => !open)}><Settings size={18} /></button></header>
     <div className="group-chat__body"><div className="group-chat__main">
       <div className="group-chat__tools"><label className="groups-search"><Search size={14} /><input value={query} onChange={event => setQuery(event.target.value)} aria-label="搜索讨论消息" placeholder="搜索讨论消息" /></label><span className="groups-muted">{activeMembers.length} 位成员 · {group.works.reduce((sum, work) => sum + work.tokens, 0).toLocaleString()} Token</span></div>

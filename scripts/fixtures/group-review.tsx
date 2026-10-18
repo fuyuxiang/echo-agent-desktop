@@ -1,3 +1,4 @@
+import "../../src/styles/index.css";
 // Isolated browser fixture; only production group components are rendered.
 import React, { useEffect, useState } from "react";
 import { createRoot } from "react-dom/client";
@@ -9,10 +10,6 @@ import { Sidebar } from "../../src/components/Sidebar";
 import { useGroupEvents, useGroupStore } from "../../src/features/groups/group-store";
 import { usePermissionStore } from "../../src/stores/permission-store";
 import type { Group, TeamTemplate } from "../../src/features/groups/group-client";
-import "../../src/styles/global.css";
-import "../../src/styles/app.css";
-import "../../src/styles/visual-polish.css";
-import "../../src/styles/form-controls.css";
 
 const theme = new URLSearchParams(location.search).get("theme") ?? "light";
 localStorage.setItem("echoagent.theme", theme);

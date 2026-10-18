@@ -10,6 +10,9 @@ vi.mock("@/lib/agent-client", async original => ({ ...await original<typeof impo
 vi.mock("../group-client", async original => ({ ...await original<typeof import("../group-client")>(), groupSend: vi.fn(async () => {}) }));
 vi.mock("@/components/MessageItem", () => ({ MessageItem: () => <div>成员回答</div> }));
 
+let measuredWidth: number | null = null;
+vi.mock("@/lib/use-element-size", () => ({ useElementSize: (_ref: unknown, dimension: string) => dimension === "width" ? measuredWidth : null }));
+
 const group: Group = { id:"reply-group",name:"需求协作组",goal:"验证",cwd:"/work",sourceSessionId:null,sourceTeamId:null,
   coordinatorId:"c",members:[
     {id:"c",name:"协调员",expert:null,role:"协调",modelId:"test",sessionId:"native-c",discussionSessionId:null,generation:0},
@@ -18,7 +21,7 @@ const group: Group = { id:"reply-group",name:"需求协作组",goal:"验证",cwd
   works:[],decisions:[],archived:false,pinned:false,paused:false,revision:1,updatedAt:1,maxCalls:12,tokenBudget:100000 };
 
 beforeEach(() => {
-  localStorage.clear(); vi.clearAllMocks();
+  localStorage.clear(); vi.clearAllMocks(); measuredWidth = null;
   useKnowledgeStore.setState({defaultSources:[],sessionSources:{},defaultOrganizationScopeIds:[],sessionOrganizationScopeIds:{}});
   useGroupStore.setState({current:structuredClone(group),currentId:group.id,groups:[structuredClone(group)],drafts:{},outbox:{},error:null});
 });
@@ -34,4 +37,16 @@ it("回复收件人可改为协调员，引用保留，发送对象与界面一�
   fireEvent.change(screen.getByPlaceholderText(/说明目标，或输入 @选择成员/),{target:{value:"请结合这条回复汇总"}});
   fireEvent.click(screen.getByRole("button",{name:"发送"}));
   await waitFor(() => expect(groupSend).toHaveBeenCalledWith(group.id,expect.objectContaining({memberIds:["c"],replyTo:"answer",text:"请结合这条回复汇总"})));
+});
+
+it("按实际聊天宽度初始化详情面板，并保留用户主动展开的选择", () => {
+  measuredWidth = 760;
+  const view = render(<GroupWorkspace cwd="/work" models={[{id:"test",label:"测试"}]} workspaces={[]} onToast={() => {}} onOpenSettings={() => {}} />);
+  const details = screen.getByRole("button", {name:"专家团详情"});
+  expect(details).toHaveAttribute("aria-expanded", "false");
+  fireEvent.click(details);
+  expect(details).toHaveAttribute("aria-expanded", "true");
+  measuredWidth = 600;
+  view.rerender(<GroupWorkspace cwd="/work" models={[{id:"test",label:"测试"}]} workspaces={[]} onToast={() => {}} onOpenSettings={() => {}} />);
+  expect(details).toHaveAttribute("aria-expanded", "true");
 });

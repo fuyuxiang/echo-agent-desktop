@@ -4,7 +4,6 @@ import { ChevronDownIcon } from "@/foundation/components/Icon/icons";
 import { useGroupStore } from "./group-store";
 import { groupStatus } from "./group-client";
 import { GroupActionButton, openGroupMenu } from "./GroupActions";
-import "./groups.css";
 
 export function GroupSidebar({ onOpen, active = false }: { onOpen: () => void; active?: boolean }) {
   const groups = useGroupStore(state => state.groups);

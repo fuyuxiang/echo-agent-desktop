@@ -1,20 +1,144 @@
-/* Shared native controls: keep browser keyboard/accessibility behavior while
- * presenting the same dimensions in WebKit and Chromium. */
-.form-control {
-  min-width: 0;
-  min-height: 36px;
-  padding: 7px 11px;
-  border: 1px solid var(--echo-border-default);
-  border-radius: 8px;
-  background-color: var(--echo-bg-primary);
-  color: var(--echo-text-strong);
+/* Shared application controls. Historical class names are compatibility aliases,
+ * not separate button systems. Features own placement; tokens own appearance. */
+:is(.echo-button, .btn, .form-button, .capability-button, .settings-btn, .atm-btn,
+    .app-dialog__button, .atm-create-btn, .atm-detail-btn, .meeting-primary,
+    .meeting-secondary, .meeting-danger,
+    .kb-panel__add-btn, .kb-panel__refresh-btn, .org-memory__primary, .feedback-dialog__btn, .browser-preview__go, .um-btn, .plan-panel__approve-btn, .plan-panel__add-btn, .plan-panel__row-edit-save, .coding-primary-btn) {
+  --control-height: var(--echo-size-control-md);
+  --button-bg: var(--echo-button-secondary-bg);
+  --button-hover: var(--echo-button-secondary-bg-hover);
+  --button-active: var(--echo-button-secondary-bg-active);
+  --button-fg: var(--echo-button-secondary-fg);
+  --button-border: var(--echo-button-secondary-border);
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: var(--echo-control-gap);
+  box-sizing: border-box;
+  min-height: var(--control-height);
+  height: auto;
+  padding: 6px 12px;
+  border: 1px solid var(--button-border);
+  border-radius: var(--echo-radius-control);
+  background: var(--button-bg);
+  color: var(--button-fg);
   font: inherit;
-  font-size: 0.8125rem;
-  line-height: 20px;
+  font-size: var(--echo-control-font-size);
+  font-weight: 550;
+  line-height: var(--echo-control-line-height);
+  text-decoration: none;
+  white-space: nowrap;
+  cursor: pointer;
+  transition: background var(--echo-motion-duration-fast), border-color var(--echo-motion-duration-fast), color var(--echo-motion-duration-fast);
+}
+/* Only the React button needs a containing block for its loading spinner.
+ * Low specificity lets feature classes own positioning and flex sizing. */
+:where(.echo-button) { position: relative; flex: 0 0 auto; }
+:is(.echo-button--primary, .btn--primary, .form-button--primary,
+    .capability-button--primary, .settings-btn--primary, .atm-btn--primary,
+    .app-dialog__button--primary, .atm-create-btn, .atm-detail-btn--primary,
+    .meeting-primary, .kb-panel__add-btn, .org-memory__primary,
+    .feedback-dialog__btn--primary, .browser-preview__go, .um-btn--primary,
+    .plan-panel__approve-btn, .plan-panel__add-btn, .plan-panel__row-edit-save, .coding-primary-btn) {
+  --button-bg: var(--echo-button-primary-bg);
+  --button-hover: var(--echo-button-primary-bg-hover);
+  --button-active: var(--echo-button-primary-bg-active);
+  --button-fg: var(--echo-button-primary-fg);
+  --button-border: transparent;
+}
+:is(.echo-button--ghost, .btn--ghost, .form-button--ghost, .capability-button--ghost) {
+  --button-bg: var(--echo-button-ghost-bg);
+  --button-hover: var(--echo-button-ghost-bg-hover);
+  --button-active: var(--echo-button-ghost-bg-active);
+  --button-fg: var(--echo-button-ghost-fg);
+  --button-border: transparent;
+}
+:is(.echo-button--danger, .btn--danger, .form-button--danger, .settings-btn--danger,
+    .atm-btn--danger, .meeting-danger) {
+  --button-bg: transparent;
+  --button-hover: var(--echo-button-danger-bg-soft-hover);
+  --button-active: var(--echo-button-danger-bg-soft-active);
+  --button-fg: var(--echo-button-danger-fg);
+  --button-border: var(--echo-button-danger-border);
+}
+:is(.echo-button--danger-solid, .app-dialog__button--danger) {
+  --button-bg: var(--echo-button-danger-bg);
+  --button-hover: var(--echo-button-danger-bg-hover);
+  --button-active: var(--echo-button-danger-bg-active);
+  --button-fg: var(--echo-button-danger-fg-on-solid);
+  --button-border: transparent;
+}
+/* Brand emphasis is opt-in; ordinary primary always means high contrast. */
+.echo-button--brand {
+  --button-bg: var(--echo-button-brand-bg);
+  --button-hover: var(--echo-button-brand-bg-hover);
+  --button-active: var(--echo-button-brand-bg-hover);
+  --button-fg: var(--echo-button-brand-fg);
+  --button-border: transparent;
+}
+:is(.echo-button, .btn, .form-button, .capability-button, .settings-btn, .atm-btn,
+    .app-dialog__button, .atm-create-btn, .atm-detail-btn, .meeting-primary,
+    .meeting-secondary, .meeting-danger,
+    .kb-panel__add-btn, .kb-panel__refresh-btn, .org-memory__primary, .feedback-dialog__btn, .browser-preview__go, .um-btn, .plan-panel__approve-btn, .plan-panel__add-btn, .plan-panel__row-edit-save, .coding-primary-btn):hover:not(:disabled):not([aria-disabled="true"]) {
+  background: var(--button-hover);
+  color: var(--button-fg);
+}
+:is(.echo-button, .btn, .form-button, .capability-button, .settings-btn, .atm-btn,
+    .app-dialog__button, .atm-create-btn, .atm-detail-btn, .meeting-primary,
+    .meeting-secondary, .meeting-danger,
+    .kb-panel__add-btn, .kb-panel__refresh-btn, .org-memory__primary, .feedback-dialog__btn, .browser-preview__go, .um-btn, .plan-panel__approve-btn, .plan-panel__add-btn, .plan-panel__row-edit-save, .coding-primary-btn):active:not(:disabled):not([aria-disabled="true"]) {
+  background: var(--button-active);
+}
+:is(.echo-button, .btn, .form-button, .capability-button, .settings-btn, .atm-btn,
+    .app-dialog__button, .atm-create-btn, .atm-detail-btn, .meeting-primary,
+    .meeting-secondary, .meeting-danger,
+    .kb-panel__add-btn, .kb-panel__refresh-btn, .org-memory__primary, .feedback-dialog__btn, .browser-preview__go, .um-btn, .plan-panel__approve-btn, .plan-panel__add-btn, .plan-panel__row-edit-save, .coding-primary-btn):is(:disabled, [aria-disabled="true"]) {
+  opacity: .5;
+  cursor: not-allowed;
+}
+:is(.echo-button--small, .echo-button--compact, .form-button--compact, .btn--compact, .browser-preview__go, .plan-panel__add-btn, .plan-panel__row-edit-save) {
+  --control-height: var(--echo-size-control-sm);
+  padding: 4px 10px;
+}
+.echo-button--large { --control-height: var(--echo-size-control-lg); padding: 8px 16px; }
+.echo-button--icon-only { width: var(--control-height); min-width: var(--control-height); padding: 0; }
+.echo-button__content { display: inline-flex; align-items: center; justify-content: center; gap: var(--echo-control-gap); }
+.echo-button__content--loading { opacity: 0; }
+.echo-button__spinner { position: absolute; width: 16px; height: 16px; animation: echo-icon-spin 1s linear infinite; }
+.app-dialog__button { min-width: 76px; }
+
+:is(.echo-button, .btn, .form-button, .capability-button, .settings-btn, .atm-btn):focus-visible {
+  outline: 2px solid var(--echo-focus-ring);
+  outline-offset: 2px;
 }
 
+/* Keep scoped aliases at zero specificity so a complex selector cannot raise
+ * the priority of every native field (including select and invalid states). */
+:is(.form-control, .settings-input, :where(.app-dialog__field input,
+    .app-dialog__field textarea, .group-form input:not([type="checkbox"]),
+    .group-form textarea, .group-form select, .meeting-panel__create input,
+    .meeting-panel__create select)) {
+  box-sizing: border-box;
+  min-width: 0;
+  min-height: var(--echo-size-control-md);
+  padding: 6px 11px;
+  border: 1px solid var(--echo-button-secondary-border);
+  border-radius: var(--echo-radius-control);
+  background-color: var(--echo-bg-input);
+  color: var(--echo-text-strong);
+  font: inherit;
+  font-size: var(--echo-control-font-size);
+  line-height: var(--echo-control-line-height);
+}
+:is(.form-control, .settings-input, :where(.app-dialog__field input,
+    .app-dialog__field textarea, .group-form input:not([type="checkbox"]),
+    .group-form textarea, .group-form select, .meeting-panel__create input,
+    .meeting-panel__create select)):focus { border-color: var(--echo-focus-ring); }
+:is(.form-control, .settings-input)::placeholder { color: var(--echo-text-weak); }
+:is(.form-control, .settings-input):disabled { opacity: .55; cursor: not-allowed; }
+:is(.form-control, .settings-input)[readonly] { background-color: var(--echo-bg-secondary); }
+:is(.form-control, .settings-input)[aria-invalid="true"] { border-color: var(--echo-status-error); }
 select.form-control {
-  -webkit-appearance: none;
   appearance: none;
   padding-right: 34px;
   background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='16' height='16' viewBox='0 0 24 24' fill='none' stroke='%23808080' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='m6 9 6 6 6-6'/%3E%3C/svg%3E");
@@ -22,40 +146,17 @@ select.form-control {
   background-position: right 10px center;
   cursor: pointer;
 }
-
-.form-control:focus-visible,
-.form-button:focus-visible {
-  outline: 2px solid var(--echo-brand);
+/* Later than feature resets (including outline:none). Deliberately not a
+ * universal input/button rule: hosted editors and user HTML remain isolated. */
+:is(.app, .settings-modal, .app-dialog, .modal-overlay, .panel-section, .groups-page,
+    .group-chat, .automation-panel, .atm-floating-layer, .atm-modal-scope,
+    .org-memory, .org-document-modal, .meeting-panel, .conversation-search-modal,
+    .create-colleague-dialog, .about-dialog, .feedback-dialog, .update-dialog, .trust-dialog, .coding-workbench, .echo-coding-portal,
+    .capability-page, .placeholder-page, .project-page, .pd-page)
+  :is(button, input, select, textarea, a, summary, [role="button"], [tabindex]):not(:where(.monaco-editor *, .xterm *, .markdown-body *, .md-content *, [contenteditable="true"])):focus-visible {
+  outline: 2px solid var(--echo-focus-ring);
   outline-offset: 2px;
 }
-
-.form-control:disabled,
-.form-button:disabled {
-  cursor: not-allowed;
-  opacity: .55;
+@media (prefers-reduced-motion: reduce) {
+  .echo-button { transition: none; }
 }
-
-.form-button {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  gap: 6px;
-  min-height: 36px;
-  padding: 7px 12px;
-  border: 1px solid var(--echo-border-default);
-  border-radius: 8px;
-  background: var(--echo-bg-primary);
-  color: var(--echo-text-strong);
-  font: inherit;
-  font-size: 0.8125rem;
-  line-height: 20px;
-  font-weight: 550;
-  white-space: nowrap;
-  cursor: pointer;
-}
-
-.form-button:hover:not(:disabled) { background: var(--echo-bg-hover); }
-.form-button--primary { background: var(--echo-brand); border-color: var(--echo-brand); color: #fff; }
-.form-button--primary:hover:not(:disabled) { background: var(--echo-brand-hover); border-color: var(--echo-brand-hover); }
-.form-button--danger { color: var(--echo-status-error); }
-.form-button--compact { min-height: 30px; padding: 4px 9px; font-size: 0.75rem; }

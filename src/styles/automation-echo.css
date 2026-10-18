@@ -1,146 +1,79 @@
 /* =====================================================================
  * Automation Panel (自动化) — EchoAgent 1:1
  * 复刻自 automation-panel-Dw-U_iZd.css；颜色全部走 --atm-* 令牌，
- * [data-theme="dark"] 下整组反色。下拉定位为 inline fixed（portal），
+ * 别名映射到统一 --echo-* 语义。下拉定位为 inline fixed（portal），
  * 此处仅保留视觉样式。
  * ===================================================================== */
 
+/* Component aliases intentionally inherit light/dark semantics from tokens.css.
+ * Floating portals receive the same aliases through atm-floating-layer. */
 .automation-panel,
 .echo-agent-automation,
 .atm-floating-layer,
 .atm-modal-scope {
-  --atm-surface: #FFFFFF;
-  --atm-surface-muted: #F7F7F7;
-  --atm-surface-subtle: #F5F5F5;
-  --atm-surface-soft: #FAFAFA;
-  --atm-surface-hover: #F8F8F8;
-  --atm-surface-active: #F2F3F5;
-  --atm-surface-active-hover: #F7F8FA;
-  --atm-template-card-bg: #FCFCFC;
-  --atm-template-card-bg-hover: #F5F5F5;
-  --atm-template-card-add-bg: #F2F2F2;
-  --atm-template-card-add-bg-hover: #EBEBEB;
-  --atm-tab-active-bg: #FFFFFF;
-  --atm-tab-active-shadow: 0 1px 3px rgba(0, 0, 0, 0.06);
-  --atm-switch-thumb: #FFFFFF;
-  --atm-switch-thumb-shadow: 0 1px 2px rgba(0, 0, 0, 0.18);
-  --atm-toolbar-pill-bg: #F2F2F2;
-  --atm-toolbar-pill-bg-hover: #EBEBEB;
-  --atm-modal-bg: #FFFFFF;
-  --atm-popover-bg: #FFFFFF;
-  --atm-border: #E5E5E5;
-  --atm-border-secondary: #E5E6EB;
-  --atm-modal-border: transparent;
-  --atm-border-soft: #ECECEC;
-  --atm-border-softest: #EFEFEF;
-  --atm-border-hover: #D8D8D8;
-  --atm-border-focus: #999999;
-  --atm-border-selected: #C9CDD4;
-  --atm-text-primary: #222222;
-  --atm-text-secondary: #666666;
-  --atm-text-tertiary: #888888;
-  --atm-text-muted: #999999;
-  --atm-text-subtle: #777777;
-  --atm-text-strong: #444444;
-  --atm-text-placeholder: #A0A0A0;
-  --atm-pause-icon: #8A8A8A;
-  --atm-success-dot: #6FC78B;
-  --atm-pending-dot: #8D8D8D;
-  --atm-failed-dot: #EF4444;
-  --atm-chip-bg: #F7F7F7;
-  --atm-chip-soft-bg: #F5F5F5;
-  --atm-chip-border: #ECECEC;
-  --atm-result-success-text: #16A83E;
-  --atm-result-neutral-text: #B4690E;
-  --atm-result-failed-bg: rgba(239, 68, 68, 0.08);
-  --atm-result-failed-border: #EF4444;
-  --atm-result-failed-text: #EF4444;
-  --atm-overlay-bg: rgba(0, 0, 0, 0.45);
-  --atm-modal-shadow: 0 8px 32px rgba(0, 0, 0, 0.12);
-  --atm-primary-btn-bg: #111111;
-  --atm-primary-btn-border: #111111;
-  --atm-primary-btn-hover-bg: #000000;
-  --atm-primary-btn-hover-border: #000000;
-  --atm-primary-btn-text: #FFFFFF;
-  --atm-secondary-btn-bg: #FFFFFF;
-  --atm-secondary-btn-border: #E0E0E0;
-  --atm-secondary-btn-hover-bg: #F8F8F8;
-  --atm-secondary-btn-text: #333333;
-  --atm-chat-placeholder: #A0A0A0;
-  --atm-calendar-selected-bg: #111111;
-  --atm-calendar-selected-text: #FFFFFF;
-  --atm-calendar-range-bg: rgba(17, 17, 17, 0.08);
-  --atm-calendar-range-hover-bg: rgba(17, 17, 17, 0.12);
-  --atm-calendar-range-text: #333333;
-}
-
-[data-theme="dark"] .automation-panel,
-[data-theme="dark"] .echo-agent-automation,
-[data-theme="dark"] .atm-floating-layer,
-[data-theme="dark"] .atm-modal-scope {
-  --atm-surface: #1D1D1F;
-  --atm-surface-muted: rgba(255, 255, 255, 0.02);
-  --atm-surface-subtle: rgba(255, 255, 255, 0.04);
-  --atm-surface-soft: rgba(255, 255, 255, 0.03);
-  --atm-surface-hover: rgba(255, 255, 255, 0.05);
-  --atm-surface-active: #3A3A3D;
-  --atm-surface-active-hover: #404045;
-  --atm-template-card-bg: rgba(255, 255, 255, 0.04);
-  --atm-template-card-bg-hover: rgba(255, 255, 255, 0.07);
-  --atm-template-card-add-bg: rgba(255, 255, 255, 0.1);
-  --atm-template-card-add-bg-hover: rgba(255, 255, 255, 0.14);
-  --atm-tab-active-bg: rgba(255, 255, 255, 0.1);
-  --atm-tab-active-shadow: 0 1px 4px rgba(0, 0, 0, 0.4);
-  --atm-switch-thumb: #FFFFFF;
-  --atm-switch-thumb-shadow: 0 1px 4px rgba(0, 0, 0, 0.6);
-  --atm-toolbar-pill-bg: rgba(255, 255, 255, 0.1);
-  --atm-toolbar-pill-bg-hover: rgba(255, 255, 255, 0.14);
-  --atm-modal-bg: #2B2B2D;
-  --atm-popover-bg: #303033;
-  --atm-border: rgba(255, 255, 255, 0.1);
-  --atm-border-secondary: rgba(255, 255, 255, 0.1);
-  --atm-modal-border: rgba(255, 255, 255, 0.08);
-  --atm-border-soft: rgba(255, 255, 255, 0.08);
-  --atm-border-softest: rgba(255, 255, 255, 0.06);
-  --atm-border-hover: rgba(255, 255, 255, 0.18);
-  --atm-border-focus: rgba(255, 255, 255, 0.24);
-  --atm-border-selected: rgba(255, 255, 255, 0.2);
-  --atm-text-primary: rgba(255, 255, 255, 0.92);
-  --atm-text-secondary: rgba(255, 255, 255, 0.72);
-  --atm-text-tertiary: rgba(255, 255, 255, 0.56);
-  --atm-text-muted: rgba(255, 255, 255, 0.44);
-  --atm-text-subtle: rgba(255, 255, 255, 0.64);
-  --atm-text-strong: rgba(255, 255, 255, 0.96);
-  --atm-text-placeholder: rgba(255, 255, 255, 0.34);
-  --atm-pause-icon: rgba(255, 255, 255, 0.52);
-  --atm-success-dot: #73C991;
-  --atm-pending-dot: rgba(255, 255, 255, 0.42);
-  --atm-failed-dot: #EF4444;
-  --atm-chip-bg: #343437;
-  --atm-chip-soft-bg: #3A3A3D;
-  --atm-chip-border: rgba(255, 255, 255, 0.08);
-  --atm-result-success-text: #16A83E;
-  --atm-result-neutral-text: #D89A3D;
-  --atm-result-failed-bg: rgba(239, 68, 68, 0.1);
-  --atm-result-failed-border: #EF4444;
-  --atm-result-failed-text: #EF4444;
-  --atm-overlay-bg: rgba(0, 0, 0, 0.58);
-  --atm-modal-shadow: 0 18px 48px rgba(0, 0, 0, 0.38);
-  --atm-primary-btn-bg: #FFFFFF;
-  --atm-primary-btn-border: #FFFFFF;
-  --atm-primary-btn-hover-bg: #F2F2F2;
-  --atm-primary-btn-hover-border: #F2F2F2;
-  --atm-primary-btn-text: #111111;
-  --atm-secondary-btn-bg: transparent;
-  --atm-secondary-btn-border: rgba(255, 255, 255, 0.1);
-  --atm-secondary-btn-hover-bg: rgba(255, 255, 255, 0.05);
-  --atm-secondary-btn-text: rgba(255, 255, 255, 0.88);
-  --atm-chat-placeholder: rgba(255, 255, 255, 0.34);
-  --atm-calendar-selected-bg: #3A3A3D;
-  --atm-calendar-selected-text: rgba(255, 255, 255, 0.92);
-  --atm-calendar-range-bg: rgba(255, 255, 255, 0.06);
-  --atm-calendar-range-hover-bg: rgba(255, 255, 255, 0.09);
-  --atm-calendar-range-text: rgba(255, 255, 255, 0.92);
+  --atm-surface: var(--echo-bg-primary);
+  --atm-surface-muted: var(--echo-bg-secondary);
+  --atm-surface-subtle: var(--echo-bg-secondary);
+  --atm-surface-soft: var(--echo-bg-secondary);
+  --atm-surface-hover: var(--echo-bg-hover);
+  --atm-surface-active: var(--echo-bg-active);
+  --atm-surface-active-hover: var(--echo-bg-hover);
+  --atm-template-card-bg: var(--echo-bg-secondary);
+  --atm-template-card-bg-hover: var(--echo-bg-hover);
+  --atm-template-card-add-bg: var(--echo-bg-secondary);
+  --atm-template-card-add-bg-hover: var(--echo-bg-hover);
+  --atm-tab-active-bg: var(--echo-bg-active);
+  --atm-tab-active-shadow: var(--echo-shadow-sm);
+  --atm-switch-thumb: var(--echo-palette-white-100);
+  --atm-switch-thumb-shadow: var(--echo-shadow-sm);
+  --atm-toolbar-pill-bg: var(--echo-bg-secondary);
+  --atm-toolbar-pill-bg-hover: var(--echo-bg-hover);
+  --atm-modal-bg: var(--echo-bg-primary);
+  --atm-popover-bg: var(--echo-bg-primary);
+  --atm-border: var(--echo-border-default);
+  --atm-border-secondary: var(--echo-border-default);
+  --atm-modal-border: var(--echo-border-default);
+  --atm-border-soft: var(--echo-border-weak);
+  --atm-border-softest: var(--echo-border-weak);
+  --atm-border-hover: var(--echo-border-default);
+  --atm-border-focus: var(--echo-focus-ring);
+  --atm-border-selected: var(--echo-border-default);
+  --atm-text-primary: var(--echo-text-strong);
+  --atm-text-secondary: var(--echo-text-medium);
+  --atm-text-tertiary: var(--echo-text-weak);
+  --atm-text-muted: var(--echo-text-weak);
+  --atm-text-subtle: var(--echo-text-medium);
+  --atm-text-strong: var(--echo-text-strong);
+  --atm-text-placeholder: var(--echo-text-weak);
+  --atm-pause-icon: var(--echo-text-weak);
+  --atm-success-dot: var(--echo-status-success);
+  --atm-pending-dot: var(--echo-text-weak);
+  --atm-failed-dot: var(--echo-status-error);
+  --atm-chip-bg: var(--echo-bg-secondary);
+  --atm-chip-soft-bg: var(--echo-bg-secondary);
+  --atm-chip-border: var(--echo-border-default);
+  --atm-result-success-text: var(--echo-status-success);
+  --atm-result-neutral-text: var(--echo-status-warning);
+  --atm-result-failed-bg: var(--echo-status-error-soft);
+  --atm-result-failed-border: var(--echo-status-error);
+  --atm-result-failed-text: var(--echo-status-error);
+  --atm-overlay-bg: var(--echo-bg-overlay);
+  --atm-modal-shadow: var(--echo-shadow-modal);
+  --atm-primary-btn-bg: var(--echo-button-primary-bg);
+  --atm-primary-btn-border: var(--echo-button-primary-bg);
+  --atm-primary-btn-hover-bg: var(--echo-button-primary-bg-hover);
+  --atm-primary-btn-hover-border: var(--echo-button-primary-bg-hover);
+  --atm-primary-btn-text: var(--echo-button-primary-fg);
+  --atm-secondary-btn-bg: var(--echo-button-secondary-bg);
+  --atm-secondary-btn-border: var(--echo-button-secondary-border);
+  --atm-secondary-btn-hover-bg: var(--echo-button-secondary-bg-hover);
+  --atm-secondary-btn-text: var(--echo-button-secondary-fg);
+  --atm-chat-placeholder: var(--echo-text-weak);
+  --atm-calendar-selected-bg: var(--echo-button-primary-bg);
+  --atm-calendar-selected-text: var(--echo-button-primary-fg);
+  --atm-calendar-range-bg: var(--echo-bg-hover);
+  --atm-calendar-range-hover-bg: var(--echo-bg-active);
+  --atm-calendar-range-text: var(--echo-text-strong);
 }
 
 .automation-panel {
@@ -169,28 +102,7 @@
 [data-theme="dark"] .automation-panel:hover::-webkit-scrollbar-thumb { background-color: rgba(255, 255, 255, 0.16); }
 
 /* ---------- 顶部 CTA / 工具栏按钮 ---------- */
-.atm-create-btn {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  gap: 4px;
-  border: none;
-  background: var(--atm-primary-btn-bg);
-  color: var(--atm-primary-btn-text);
-  border-radius: 8px;
-  box-sizing: border-box;
-  height: 32px;
-  padding: 0 14px;
-  font-size: 0.875rem;
-  font-weight: 600;
-  cursor: pointer;
-  line-height: 1;
-  white-space: nowrap;
-  transition: background-color 0.15s ease;
-}
 .atm-create-btn svg { flex-shrink: 0; }
-.atm-create-btn:hover:not(:disabled) { background: var(--atm-primary-btn-hover-bg); }
-.atm-create-btn:disabled { opacity: 0.5; cursor: not-allowed; }
 
 .atm-toolbar {
   display: flex;
@@ -208,7 +120,8 @@
   -webkit-app-region: drag;
 }
 .atm-toolbar > * { -webkit-app-region: no-drag; }
-.atm-toolbar-left { display: flex; align-items: center; gap: 4px; }
+.atm-toolbar-left { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; }
+.atm-page-title { margin: 0; font-size: var(--echo-page-title-size); font-weight: var(--echo-page-title-weight); line-height: var(--echo-page-title-line-height); }
 .atm-toolbar-right { display: flex; align-items: center; gap: 8px; flex-shrink: 1; min-width: 0; }
 
 /* ---------- Segmented（定时任务/运行记录、周期/按间隔/单次） ---------- */
@@ -217,7 +130,7 @@
   align-items: center;
   gap: 2px;
   padding: 2px;
-  height: 34px;
+  height: var(--echo-size-control-md);
   box-sizing: border-box;
   border-radius: 8px;
   background: var(--echo-palette-gray-3);
@@ -228,12 +141,12 @@
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  height: 30px;
+  height: calc(var(--echo-size-control-md) - 4px);
   padding: 4px 12px;
   border: none;
   border-radius: 6px;
   background: transparent;
-  font-size: 0.875rem;
+  font-size: var(--echo-control-font-size);
   font-weight: 400;
   color: var(--atm-text-secondary);
   cursor: pointer;
@@ -257,7 +170,7 @@
   min-width: 80px;
   display: flex;
   align-items: center;
-  height: 32px;
+  height: var(--echo-size-control-md);
   border-radius: 8px;
   background: var(--atm-toolbar-pill-bg);
   transition: background 0.15s;
@@ -290,12 +203,12 @@
   align-items: center;
   gap: 6px;
   box-sizing: border-box;
-  height: 32px;
+  height: var(--echo-size-control-md);
   padding: 5px 12px;
   border-radius: 8px;
   border: none;
   background: var(--atm-toolbar-pill-bg);
-  font-size: 0.875rem;
+  font-size: var(--echo-control-font-size);
   font-weight: 500;
   color: var(--atm-text-primary);
   cursor: pointer;
@@ -312,7 +225,7 @@
   align-items: center;
   justify-content: center;
   width: 32px;
-  height: 32px;
+  height: var(--echo-size-control-md);
   border-radius: 71px;
   border: none;
   background: transparent;
@@ -874,29 +787,6 @@
 .atm-detail-icon-btn:hover:not(:disabled) { background: transparent; color: var(--echo-color-text-primary); }
 .atm-detail-icon-btn:disabled { opacity: 0.3; cursor: not-allowed; }
 .atm-detail-btn-actions { display: flex; align-items: center; gap: 12px; }
-.atm-detail-btn {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  height: 32px;
-  padding: 0 16px;
-  border: none;
-  border-radius: 20px;
-  font-size: 0.875rem;
-  font-weight: 500;
-  cursor: pointer;
-  white-space: nowrap;
-  transition: background 0.15s;
-}
-.atm-detail-btn:disabled { opacity: 0.4; cursor: not-allowed; }
-.atm-detail-btn--secondary { background: var(--atm-surface-muted); color: var(--atm-text-primary); }
-.atm-detail-btn--secondary:hover:not(:disabled) { background: var(--atm-surface-hover); }
-.atm-detail-btn--primary {
-  background: var(--atm-primary-btn-bg);
-  color: var(--atm-primary-btn-text);
-  font-weight: 600;
-}
-.atm-detail-btn--primary:hover:not(:disabled) { background: var(--atm-primary-btn-hover-bg); }
 
 .atm-detail-content {
   display: flex;
@@ -955,7 +845,7 @@
 
 /* 工作空间输入（全宽输入框 + 下拉建议） */
 .atm-workspace-input { position: relative; }
-.atm-workspace-input__field { display: flex; align-items: center; gap: 8px; }
+.atm-workspace-input__field { display: flex; align-items: center; gap: 8px; min-height: var(--echo-size-control-md); }
 .atm-workspace-input__field .atm-modal-input { flex: 1; min-width: 0; }
 .atm-workspace-input__browse {
   display: inline-flex;
@@ -1602,7 +1492,7 @@
   box-shadow: var(--atm-switch-thumb-shadow);
   transition: transform 0.15s ease;
 }
-.echo-switch--checked .echo-switch-thumb { transform: translateX(16px); }
+.echo-switch--checked .echo-switch-thumb { transform: translateX(16px); background: var(--atm-primary-btn-text); }
 
 .atm-detail-created-at {
   color: var(--echo-color-text-tertiary, rgba(0, 0, 0, 0.5));
@@ -1920,37 +1810,13 @@
 .automation-permission-confirm__actions-right { display: flex; align-items: center; gap: var(--echo-spacing-3); margin-left: auto; }
 
 /* ---------- 通用按钮 / 确认弹窗 / 复选框 ---------- */
-.atm-btn {
-  border: 1px solid transparent;
-  border-radius: 6px;
-  height: 36px;
-  padding: 0 18px;
-  font-size: 0.8125rem;
-  font-weight: 500;
-  cursor: pointer;
-  transition: opacity 0.15s, background-color 0.15s, border-color 0.15s, color 0.15s;
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  box-sizing: border-box;
-}
-.atm-btn:disabled { opacity: 0.5; cursor: not-allowed; }
-.atm-btn--primary { background: var(--atm-primary-btn-bg); color: var(--atm-primary-btn-text); border-color: var(--atm-primary-btn-border); }
-.atm-btn--primary:hover:not(:disabled) { background: var(--atm-primary-btn-hover-bg); border-color: var(--atm-primary-btn-hover-border); }
-.atm-btn--secondary { background: var(--atm-secondary-btn-bg); color: var(--atm-secondary-btn-text); border: 1px solid var(--atm-secondary-btn-border); }
-.atm-btn--secondary:hover:not(:disabled) { background: var(--atm-secondary-btn-hover-bg); }
-.atm-btn--danger { background: var(--atm-result-failed-bg); color: var(--atm-result-failed-text); border: 1px solid var(--atm-result-failed-border); }
-.atm-btn--danger:hover:not(:disabled) {
-  background: color-mix(in srgb, var(--atm-result-failed-bg) 85%, var(--atm-result-failed-text) 15%);
-  border-color: color-mix(in srgb, var(--atm-result-failed-border) 78%, var(--atm-result-failed-text) 22%);
-}
 
 .atm-confirm-dialog {
   width: 400px;
   max-width: calc(100vw - 48px);
   background: var(--atm-modal-bg, #fff);
-  border-radius: 12px;
-  box-shadow: var(--atm-modal-shadow);
+  border-radius: var(--echo-radius-dialog);
+  box-shadow: var(--echo-shadow-modal);
   padding: 20px 24px;
   display: flex;
   flex-direction: column;

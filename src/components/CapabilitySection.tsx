@@ -1,6 +1,5 @@
 import type { ReactNode } from "react";
 import { CAPABILITY_NAV_ITEMS } from "@/lib/capability-navigation";
-import "@/styles/panel-navigation.css";
 
 export function CapabilitySection({ active, onNavigate, children }: {
   active: string;

@@ -1,5 +1,5 @@
 // @vitest-environment jsdom
-import { fireEvent, render, screen } from "@testing-library/react";
+import { act, fireEvent, render, screen } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   THEME_STORAGE_KEY,
@@ -9,9 +9,10 @@ import {
 } from "../ThemeProvider";
 
 function ThemeProbe() {
-  const { theme, setTheme } = useTheme();
+  const { theme, setTheme, toggle } = useTheme();
   return (
     <div>
+      <button type="button" onClick={toggle}>切换主题</button>
       <output aria-label="当前主题">{theme}</output>
       <button type="button" onClick={() => setTheme("dark")}>深色</button>
       <button type="button" onClick={() => setTheme("light")}>浅色</button>
@@ -86,4 +87,26 @@ describe("ThemeProvider", () => {
     expect(screen.getByLabelText("当前主题")).toHaveTextContent("dark");
     expect(document.documentElement).toHaveAttribute("data-theme", "dark");
   });
+  it("跟随系统启动并响应外观变化，切换按钮依据当前有效主题", () => {
+    let dark = true;
+    let change: (() => void) | undefined;
+    vi.spyOn(window, "matchMedia").mockImplementation(() => ({
+      get matches() { return dark; },
+      addEventListener: (_type: string, callback: () => void) => { change = callback; },
+      removeEventListener: vi.fn(),
+    }) as unknown as MediaQueryList);
+    localStorage.setItem(THEME_STORAGE_KEY, "system");
+    expect(initializeTheme()).toBe("dark");
+    render(<ThemeProvider><ThemeProbe /></ThemeProvider>);
+    dark = false;
+    act(() => change?.());
+    expect(screen.getByLabelText("当前主题")).toHaveTextContent("light");
+    expect(localStorage.getItem(THEME_STORAGE_KEY)).toBe("system");
+    dark = true;
+    act(() => change?.());
+    fireEvent.click(screen.getByRole("button", { name: "切换主题" }));
+    expect(screen.getByLabelText("当前主题")).toHaveTextContent("light");
+    expect(localStorage.getItem(THEME_STORAGE_KEY)).toBe("light");
+  });
+
 });

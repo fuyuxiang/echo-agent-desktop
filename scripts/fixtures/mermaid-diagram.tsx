@@ -1,12 +1,8 @@
+import "../../src/styles/index.css";
 import ReactDOM from "react-dom/client";
 import { useState } from "react";
 import { MarkdownPreMermaid } from "../../src/components/markdown/MarkdownPreMermaid";
 import { inspectDiagramImage } from "./mermaid-review-inspect.mjs";
-import "../../src/styles/global.css";
-import "../../src/styles/app.css";
-import "../../src/styles/automation-echo.css";
-import "../../src/styles/visual-polish.css";
-import "../../src/styles/form-controls.css";
 
 const branches = [
   ["文件操作", "write", "grep", "search_replace", "read_file", "list_directory"],

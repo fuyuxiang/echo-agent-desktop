@@ -10,6 +10,7 @@
  */
 import { useCallback, useEffect, useLayoutEffect, useRef, useState } from "react";
 import { useSessionStore } from "@/stores/session-store";
+import { Button } from "./Button";
 import {
   agentResolvePlanApproval,
   setPlanMode as agentSetPlanMode,
@@ -383,28 +384,28 @@ export function PlanPanel({
 
   const approvalActions = planApproval ? (
     <>
-      <div className="plan-panel__approval">
-        <button
+      <div className="plan-panel__approval" role="group" aria-label="计划审批">
+        <Button variant="primary"
           className="plan-panel__approve-btn"
           onClick={handleApprove}
           disabled={approvalBusy || hasUncommittedInput || hasEmptyRevision}
         >
           <CheckIcon size="sm" /> {dirty ? "同步修改并重新审批" : "批准执行"}
-        </button>
-        <button
+        </Button>
+        <Button size="compact"
           className="plan-panel__reject-btn"
           onClick={handleRevise}
           disabled={approvalBusy || hasUncommittedInput || hasEmptyRevision}
         >
           修改计划
-        </button>
-        <button
+        </Button>
+        <Button size="compact" variant="danger"
           className="plan-panel__reject-btn"
           onClick={handleAbandon}
           disabled={approvalBusy || hasUncommittedInput}
         >
           <XCloseIcon size="sm" /> 放弃计划
-        </button>
+        </Button>
       </div>
       {hasUncommittedInput && <p className="plan-panel__hint" role="status">请先保存或按 Esc 取消步骤编辑，并添加或清空新增步骤，再提交计划。</p>}
       {approvalError && <p role="alert">{approvalError}</p>}

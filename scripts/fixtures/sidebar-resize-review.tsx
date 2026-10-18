@@ -1,3 +1,4 @@
+import "../../src/styles/index.css";
 // Isolated browser review with the production sidebar shell and tooltip layers.
 // No native data or application startup is needed to exercise resizing.
 import React, { useEffect, useLayoutEffect, useState } from "react";
@@ -10,10 +11,6 @@ import { TitleBar } from "../../src/components/TitleBar";
 import { SidebarLayoutContext, SIDEBAR_WIDTH_KEY, useAppSidebarLayout } from "../../src/lib/sidebar-layout";
 import { useSessionsStore } from "../../src/stores/sessions-store";
 import { useModalFocus } from "../../src/lib/use-modal-focus";
-import "../../src/styles/global.css";
-import "../../src/styles/app.css";
-import "../../src/styles/visual-polish.css";
-import "../../src/styles/form-controls.css";
 
 const query = new URLSearchParams(location.search);
 const mac = query.get("platform") !== "other";

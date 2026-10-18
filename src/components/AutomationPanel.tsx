@@ -892,6 +892,7 @@ export function AutomationPanel({
       ) : (
         <div className="atm-toolbar" data-tauri-drag-region>
           <div className="atm-toolbar-left">
+            <h1 className="atm-page-title">自动化</h1>
             {isBatchMode ? (
               <div className="atm-batch-info">
                 <button
@@ -943,6 +944,7 @@ export function AutomationPanel({
                   <div className="atm-filter-wrap" ref={filterRef}>
                     <button
                       type="button"
+                      aria-label="筛选运行记录"
                       className={`atm-filter-btn${filterStatus !== "all" ? " atm-filter-btn--active" : ""}`}
                       onClick={() => setFilterOpen((v) => !v)}
                     >
@@ -975,6 +977,7 @@ export function AutomationPanel({
                   <SearchIcon size="sm" className="atm-search-input-icon" />
                   <input
                     type="text"
+                    aria-label="搜索自动化和运行记录"
                     placeholder="搜索自动化/记录"
                     value={searchQuery}
                     onChange={(e) => setSearchQuery(e.target.value)}

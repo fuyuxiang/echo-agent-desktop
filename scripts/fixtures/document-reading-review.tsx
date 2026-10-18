@@ -1,11 +1,10 @@
+import "../../src/styles/index.css";
 import React, { useState } from "react";
 import { createRoot } from "react-dom/client";
 import { ToolCallDetailBody } from "../../src/components/ToolCallCard";
 import { ExecutionProcess } from "../../src/components/ExecutionProcess";
 import { ThemeProvider } from "../../src/components/ThemeProvider";
 import type { ToolCallView } from "../../src/stores/session-store";
-import "../../src/styles/global.css";
-import "../../src/styles/app.css";
 
 document.documentElement.dataset.theme = new URLSearchParams(location.search).get("theme") ?? "light";
 localStorage.setItem("echoagent.theme", document.documentElement.dataset.theme);

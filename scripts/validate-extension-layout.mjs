@@ -66,15 +66,15 @@ export async function validateExtensionLayouts(page, output) {
         if (spec.primary) {
           const button = page.getByRole('button', { name: spec.primary, exact: true });
           const color = await button.evaluate(element => getComputedStyle(element).backgroundColor);
-          const brand = await button.evaluate(element => {
+          const primary = await button.evaluate(element => {
             const probe = document.createElement('span');
-            probe.style.color = 'var(--echo-brand)';
+            probe.style.color = 'var(--echo-button-primary-bg)';
             element.append(probe);
             const value = getComputedStyle(probe).color;
             probe.remove();
             return value;
           });
-          assert.equal(color, brand, 'Primary extension action lost the brand color');
+          assert.equal(color, primary, 'Primary extension action must use the shared high-contrast primary token');
           if (!primaryColor) primaryColor = color;
           else assert.equal(color, primaryColor, 'Primary extension actions use different colors');
         }

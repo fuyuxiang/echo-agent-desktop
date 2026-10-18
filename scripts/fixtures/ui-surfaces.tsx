@@ -1,3 +1,11 @@
+import { BrowserPreview } from "../../src/components/BrowserPreview";
+import { AboutDialog } from "../../src/components/AboutDialog";
+import { FeedbackDialog } from "../../src/components/FeedbackDialog";
+import { UpdateDialog } from "../../src/components/UpdateDialog";
+import { useUpdateStore } from "../../src/stores/update-store";
+import { DesignSystemReview } from "./design-system-review";
+import { SearchOverlay } from "../../src/components/SearchOverlay";
+import "../../src/styles/index.css";
 // Development-only visual fixture. Native calls use isolated in-memory data;
 // this module is never imported by the production entry point.
 import React, { useState } from "react";
@@ -35,14 +43,9 @@ import { useSessionsStore } from "../../src/stores/sessions-store";
 import { useProjectsStore } from "../../src/stores/projects-store";
 import { useGroupStore } from "../../src/features/groups/group-store";
 import { useMessageQueueStore } from "../../src/stores/message-queue-store";
-import "../../src/styles/global.css";
-import "../../src/styles/app.css";
-import "../../src/styles/automation-echo.css";
-import "../../src/styles/visual-polish.css";
-import "../../src/styles/form-controls.css";
-import "../../src/styles/coding-workbench.css";
 
 const query = new URLSearchParams(location.search);
+if (query.get("surface") === "update") useUpdateStore.setState({ status: "error", error: "暂时无法检查更新，请保留现有工作并稍后重试。" });
 if (query.get("surface") === "runtime") query.set("executionView", "runtime");
 localStorage.setItem("echoagent.theme", query.get("theme") ?? "light");
 let memory = { enabled: true, initialInjectionEnabled: true, saveOnEnd: true, watcherEnabled: true,
@@ -130,6 +133,12 @@ if (["conversation", "conversation-layout", "queue"].includes(query.get("surface
     { sessionId: "review-plugin", title: "添加搜索插件并检查连接配置", cwd: "", status: "failed", updatedAt: new Date(Date.now() - 48 * 3600000).toISOString() },
     { sessionId: "review-writing", title: "部署 writing-dna skill 与验证", cwd: "", status: "completed", updatedAt: new Date(Date.now() - 72 * 3600000).toISOString() },
   ], tasksOpen: true, loading: false, currentSessionId: "review-conversation" });
+  if (query.has("planReview")) {
+    const plan = { entries: [{ content: "检查当前实现与交付结果", priority: "high" as const, status: "pending" as const }] };
+    chat.setPlan(plan);
+    chat.requestPlanApproval({ requestId: "review-plan", sessionId: "review-conversation", toolCallId: "review-plan-tool" });
+    if (query.get("planReview") === "dirty") chat.setPlan(plan, { localRevision: true });
+  }
 }
 if (query.get("surface") === "sidebar-scroll") {
   const variant = query.get("variant") ?? "both";
@@ -178,9 +187,11 @@ if (query.get("surface") === "sidebar-scroll") {
   }
 }
 const callbacks = new Map();
+const planReviewOutcomes: unknown[] = [];
 let trustResolved = false;
 let modelImportAttempts = 0;
 Object.assign(window, {
+  planReviewOutcomes,
   __TAURI_INTERNALS__: {
     transformCallback: (callback: unknown) => { const id = callbacks.size + 1; callbacks.set(id, callback); return id; },
     unregisterCallback: (id: number) => callbacks.delete(id),
@@ -191,6 +202,7 @@ Object.assign(window, {
         if (extensionAttempts[command] === 1) throw new Error("隔离验收：列表暂不可用");
       }
       switch (command) {
+        case "agent_resolve_plan_approval": planReviewOutcomes.push(args); return true;
         case "team_snapshot": {
           if (query.get("teamState") === "error") throw new Error("隔离验收：团队快照读取失败");
           return executionReviewTeamSnapshot();
@@ -282,7 +294,7 @@ Object.assign(window, {
           return {status:"success"};
         }
         case "tasks_list": return [{ id: "review-task", source: "task", description: "执行代码验证和生成报告", status: "running", sessionId: args.sessionId }];
-        case "org_session": return { loggedIn: true, organizationMemoryEnabled: true, serverUrl: "https://10.132.19.82:8787", user: orgUser, bootstrap: { apiVersion: 1, user: orgUser, scopes: orgScopes, policy: { allowPersonalCloud: true, allowSkillSubmission: true }, serverTime: 1 } };
+        case "org_session": return { loggedIn: query.get("surface") !== "organization-login", organizationMemoryEnabled: true, serverUrl: "https://10.132.19.82:8787", user: orgUser, bootstrap: { apiVersion: 1, user: orgUser, scopes: orgScopes, policy: { allowPersonalCloud: true, allowSkillSubmission: true }, serverTime: 1 } };
         case "org_list_scopes": return orgScopes;
         case "org_list_documents": {
           const items = orgDocuments.filter((document) => !args.scopeId || document.scopeId === args.scopeId);
@@ -330,6 +342,12 @@ function Fixture() {
   const [automationDraft, setAutomationDraft] = useState(() => buildDraft(
     createAutomationTemplates()[0], "/Users/review/Documents/EchoAgent",
   ));
+  if (surface === "browser-toolbar") return <div className="tool-side-panel" style={{width:"min(100%, 520px)",height:"100%"}}><BrowserPreview url="" /></div>;
+  if (surface === "about") return <AboutDialog open onClose={() => {}} />;
+  if (surface === "feedback") return <FeedbackDialog open sessionId="review" messageId="review" rating="up" onClose={() => {}} />;
+  if (surface === "update") return <UpdateDialog open onClose={() => {}} />;
+  if (surface === "controls") return <DesignSystemReview />;
+  if (surface === "search") return <SearchOverlay open onClose={() => {}} onSelect={() => {}} />;
   if (surface === "automation-flow") return <div style={{ display: "flex", flexDirection: "column", height: "100%", minHeight: 0 }}>
     <div style={{ padding: 8 }}><button type="button" onClick={() => setAutomationNotificationSequence(sequence => sequence + 1)}>模拟任务通知</button></div>
     <AutomationPanel cwd="/review/EchoAgent" notificationAutomationId={automationNotificationSequence ? "review-notified-task" : undefined} notificationAutomationSequence={automationNotificationSequence} />
@@ -414,7 +432,7 @@ function Fixture() {
     <aside style={{ width: "min(250px, 22vw)", flex: "none", borderRight: "1px solid var(--echo-border-default)", background: "var(--echo-bg-secondary)", padding: "24px 16px", boxSizing: "border-box" }}>EchoAgent</aside>
     <ChatView onSend={() => {}} onCancel={() => {}} title="评审投影仪性能与内存泄漏" />
   </div>;
-  if (surface === "organization") return <div style={{ height: "100%", overflow: "auto" }}><OrganizationMemoryPanel /></div>;
+  if (surface === "organization" || surface === "organization-login") return <div style={{ height: "100%", overflow: "auto" }}><OrganizationMemoryPanel /></div>;
   if (surface === "meeting") return <MeetingMinutesPanel modelId="review/MiniMax-M3" models={[{ id: "review/MiniMax-M3", label: "MiniMax M3", providerId: "review", providerKind: "custom", source: "personal" }]} />;
   if (surface === "permission-picker") return <div style={{ position: "relative", height: "100%", background: "var(--echo-bg-secondary)" }}>
     <div style={{ position: "absolute", left: "46%", top: "63%" }}><PermissionPicker /></div>

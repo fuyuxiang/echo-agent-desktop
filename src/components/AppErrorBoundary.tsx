@@ -1,4 +1,5 @@
 import { Component, type ErrorInfo, type ReactNode } from "react";
+import { Button } from "./Button";
 
 interface AppErrorBoundaryProps {
   children: ReactNode;
@@ -43,7 +44,7 @@ export class AppErrorBoundary extends Component<
           textAlign: "center",
         }}
       >
-        <h1 style={{ fontSize: 20, margin: 0 }}>界面启动失败</h1>
+        <h1 style={{ fontSize: "var(--echo-page-title-size)", margin: 0 }}>界面启动失败</h1>
         <p style={{ color: "var(--echo-text-medium, #666660)", margin: 0, maxWidth: 560 }}>
           界面加载出现问题。请重新加载；若仍失败，请将下方错误信息提供给技术支持。
         </p>
@@ -58,20 +59,9 @@ export class AppErrorBoundary extends Component<
         >
           {this.state.message}
         </code>
-        <button
-          type="button"
-          onClick={() => window.location.reload()}
-          style={{
-            background: "var(--echo-control-selected-bg, #252522)",
-            border: 0,
-            borderRadius: 7,
-            color: "var(--echo-control-selected-fg, white)",
-            cursor: "pointer",
-            padding: "8px 16px",
-          }}
-        >
+        <Button variant="primary" onClick={() => window.location.reload()}>
           重新加载
-        </button>
+        </Button>
       </main>
     );
   }

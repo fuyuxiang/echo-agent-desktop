@@ -1,0 +1,13 @@
+/* Application-owned styles load exactly once, in this order. Third-party
+ * math/editor styles retain their own scope and lifecycle. */
+@import "./global.css";
+@import "./app.css";
+@import "./automation-echo.css";
+@import "./coding-workbench.css";
+@import "../features/groups/groups.css";
+@import "./panel-navigation.css";
+@import "./capability-page.css";
+@import "../components/AutomationBoundaryNotice.css";
+@import "../components/WeixinChannelPanel.css";
+@import "./visual-polish.css";
+@import "./form-controls.css";

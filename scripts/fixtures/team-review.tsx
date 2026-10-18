@@ -1,3 +1,4 @@
+import "../../src/styles/index.css";
 import React, { useState } from "react";
 import { createRoot } from "react-dom/client";
 import { TeamStatusView } from "../../src/components/TeamStatusView";
@@ -5,8 +6,6 @@ import { ThemeProvider } from "../../src/components/ThemeProvider";
 import { useSubagentStore } from "../../src/stores/subagent-store";
 import type { ChatMessage } from "../../src/stores/session-store";
 import type { RuntimeTeamInfo } from "../../src/lib/agent-client";
-import "../../src/styles/global.css";
-import "../../src/styles/app.css";
 
 document.documentElement.dataset.theme = new URLSearchParams(location.search).get("theme") ?? "light";
 localStorage.setItem("echoagent.theme", document.documentElement.dataset.theme);

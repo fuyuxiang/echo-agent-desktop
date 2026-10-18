@@ -1,7 +1,7 @@
 /**
  * 项目面板 — 对齐 EchoAgent 项目列表页 + 新建项目弹窗。
  *
- *  - hero: 标题「项目」+ 副标题 + 「新建项目」+ 协作插画
+ *  - CapabilityPage: 共享管理页标题、搜索和主操作
  *  - 我的项目: 搜索 + 卡片网格（点击进入详情）
  *  - 从模版创建: 业务模板卡片
  *  - CreateProjectDialog: 对齐目标截图（项目名称 + 指令[选择模板] + 连接器/专家/技能 +添加 + 取消/确定）
@@ -17,8 +17,9 @@ import {
   type CSSProperties,
 } from "react";
 import { createPortal } from "react-dom";
-import { AddIcon, SearchIcon, MoreDotsIcon, ChevronDownIcon } from "@/foundation/components/Icon/icons";
-import heroImg from "@/assets/landing-hero.png";
+import { AddIcon, MoreDotsIcon, ChevronDownIcon } from "@/foundation/components/Icon/icons";
+import { Button } from "./Button";
+import { CapabilityPage, CapabilityEmptyState } from "./experts-panel/shared/CapabilityPage";
 import { useProjectsStore, type ProjectMeta, type RefItem } from "@/stores/projects-store";
 import {
   TEMPLATE_OPTIONS,
@@ -191,7 +192,10 @@ export function ProjectsPanel({
   };
 
   return (
-    <div className="project-page">
+    <CapabilityPage title="项目" className="project-management"
+      description="集中管理项目资料、任务对话和交付成果"
+      search={{ value: query, onChange: setQuery, label: "搜索项目" }}
+      actions={<Button ref={createButtonRef} variant="primary" onClick={() => setCreate({})}><AddIcon size="sm" />新建项目</Button>}>
       {persistError && (
         <div className="project-persist-alert" role="alert">
           <span>项目已保存在本机缓存，但项目文件保存失败，请重试：{persistError}</span>
@@ -200,38 +204,15 @@ export function ProjectsPanel({
           </button>
         </div>
       )}
-      <section className="project-hero">
-        <div className="project-hero__text">
-          <h1 className="project-hero__title">项目</h1>
-          <p className="project-hero__subtitle">集中管理项目资料、任务对话和交付成果</p>
-          <button ref={createButtonRef} type="button" className="project-hero__create" onClick={() => setCreate({})}>
-            <AddIcon size="sm" />
-            <span>新建项目</span>
-          </button>
-        </div>
-        <img className="project-hero__art" src={heroImg} alt="项目工作台插画" draggable={false} />
-      </section>
-
       <section className="project-section">
         <div className="project-section__head">
           <h3 className="project-section__title">我的项目</h3>
-          <div className="project-search">
-            <SearchIcon size="sm" className="project-search__icon" />
-            <input
-              type="text"
-              className="project-search__input"
-              placeholder="搜索项目"
-              value={query}
-              onChange={(e) => setQuery(e.target.value)}
-            />
-          </div>
+
         </div>
         {filtered.length === 0 ? (
-          <div className="project-grid-empty">
-            {projects.length === 0
-              ? "还没有项目，点击「新建项目」或从下方模板创建。"
-              : "没有匹配的项目。"}
-          </div>
+          <CapabilityEmptyState title={projects.length === 0 ? "还没有项目" : "没有匹配的项目"}
+            description={projects.length === 0 ? "点击“新建项目”，或从下方模板创建。" : "试试其他项目名称。"}
+            onClear={query ? () => setQuery("") : undefined} />
         ) : (
           <div className="project-grid">
             {filtered.map((p) => (
@@ -298,7 +279,7 @@ export function ProjectsPanel({
         />
       )}
       {dialog}
-    </div>
+    </CapabilityPage>
   );
 }
 

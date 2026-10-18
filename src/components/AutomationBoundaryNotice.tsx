@@ -1,6 +1,5 @@
 import { ShieldAlertIcon } from "@/foundation/components/Icon/icons";
 import type { AutomationMode } from "@/lib/automation-client";
-import "./AutomationBoundaryNotice.css";
 
 export type PermissionRole = "ask" | "auto" | "always-approve";
 

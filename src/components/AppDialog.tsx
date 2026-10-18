@@ -1,3 +1,4 @@
+import { Button, IconButton } from "./Button";
 import {
   useCallback,
   useId,
@@ -268,7 +269,7 @@ function AppActionDialog({
       >
         <header className="app-dialog__header">
           <h2 id={titleId} className="app-dialog__title">{request.title}</h2>
-          <button type="button" className="app-dialog__close" aria-label="关闭对话框" onClick={cancel} disabled={busy}>×</button>
+          <IconButton label="关闭对话框" className="app-dialog__close" onClick={cancel} disabled={busy}>×</IconButton>
         </header>
         <div className="app-dialog__body">
         {request.description && (
@@ -310,7 +311,7 @@ function AppActionDialog({
         </div>
 
         <div className="app-dialog__actions">
-          <button
+          <Button
             type="button"
             className="app-dialog__button app-dialog__button--cancel"
             onClick={cancel}
@@ -318,15 +319,17 @@ function AppActionDialog({
             data-modal-initial-focus={request.kind === "confirmation" ? true : undefined}
           >
             {request.cancelLabel ?? "取消"}
-          </button>
-          <button
+          </Button>
+          <Button
             type="button"
+            variant={request.danger ? "danger-solid" : "primary"}
+            loading={busy}
             className={`app-dialog__button ${request.danger ? "app-dialog__button--danger" : "app-dialog__button--primary"}`}
             onClick={() => void execute()}
             disabled={busy}
           >
-            {busy ? "处理中…" : request.confirmLabel ?? "确定"}
-          </button>
+            {request.confirmLabel ?? "确定"}
+          </Button>
         </div>
       </div>
     </div>

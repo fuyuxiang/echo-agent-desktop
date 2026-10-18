@@ -1,31 +1,32 @@
 /*
  * EchoAgent visual polish layer
  *
- * This file loads after feature layouts and before shared form controls. It turns the existing collection of
+ * Loaded once by index.css after feature layouts and before shared controls.
+ * --ui-* names are compatibility aliases to tokens.css. It turns the existing collection of
  * feature-specific layouts into one visual system without changing product
  * behavior or the component API.
  */
 
 :root {
-  --ui-canvas: #f6f7f8;
-  --ui-sidebar: #eff1f2;
-  --ui-surface: #ffffff;
-  --ui-surface-muted: #f8f9f9;
-  --ui-surface-raised: rgba(255, 255, 255, 0.94);
-  --ui-line: rgba(21, 36, 34, 0.09);
-  --ui-line-strong: rgba(21, 36, 34, 0.14);
-  --ui-brand-soft: color-mix(in srgb, var(--echo-brand) 10%, transparent);
-  --ui-brand-line: color-mix(in srgb, var(--echo-brand) 24%, transparent);
-  --ui-radius-sm: 9px;
-  --ui-radius-md: 14px;
-  --ui-radius-lg: 18px;
-  --ui-control-sm: 36px;
-  --ui-control-md: 40px;
-  --ui-page-gutter: clamp(24px, 3vw, 40px);
-  --ui-shadow-xs: 0 1px 2px rgba(18, 30, 28, 0.04);
-  --ui-shadow-sm: 0 8px 24px rgba(18, 30, 28, 0.06), 0 1px 3px rgba(18, 30, 28, 0.04);
-  --ui-shadow-md: 0 18px 48px rgba(18, 30, 28, 0.1), 0 2px 8px rgba(18, 30, 28, 0.05);
-  --ui-content-width: 1120px;
+  --ui-canvas: var(--echo-bg-secondary);
+  --ui-sidebar: var(--echo-surface-sidebar);
+  --ui-surface: var(--echo-bg-primary);
+  --ui-surface-muted: var(--echo-bg-secondary);
+  --ui-surface-raised: var(--echo-surface-raised);
+  --ui-line: var(--echo-border-default);
+  --ui-line-strong: var(--echo-button-secondary-border);
+  --ui-brand-soft: var(--echo-brand-soft);
+  --ui-brand-line: var(--echo-brand-border);
+  --ui-radius-sm: var(--echo-radius-control);
+  --ui-radius-md: var(--echo-radius-card);
+  --ui-radius-lg: var(--echo-radius-dialog);
+  --ui-control-sm: var(--echo-size-control-sm);
+  --ui-control-md: var(--echo-size-control-md);
+  --ui-page-gutter: var(--echo-page-gutter);
+  --ui-shadow-xs: var(--echo-shadow-sm);
+  --ui-shadow-sm: var(--echo-shadow-md);
+  --ui-shadow-md: var(--echo-shadow-floating);
+  --ui-content-width: var(--echo-page-width);
 }
 
 /* Model connections: source-aware organization + personal configuration. */
@@ -49,9 +50,10 @@
 .model-connections__header h2 {
   margin: 0 0 6px;
   color: var(--echo-text-strong);
-  font-size: 1.375rem;
-  font-weight: 680;
+  font-size: var(--echo-page-title-size);
+  font-weight: var(--echo-page-title-weight);
   letter-spacing: -0.02em;
+  line-height: var(--echo-page-title-line-height);
 }
 
 .model-connections__header p,
@@ -822,20 +824,7 @@
   }
 }
 
-[data-theme="dark"] {
-  --ui-canvas: #171918;
-  --ui-sidebar: #111312;
-  --ui-surface: #202321;
-  --ui-surface-muted: #1b1e1c;
-  --ui-surface-raised: rgba(32, 35, 33, 0.94);
-  --ui-line: rgba(255, 255, 255, 0.09);
-  --ui-line-strong: rgba(255, 255, 255, 0.15);
-  --ui-brand-soft: color-mix(in srgb, var(--echo-brand) 13%, transparent);
-  --ui-brand-line: color-mix(in srgb, var(--echo-brand) 28%, transparent);
-  --ui-shadow-xs: 0 1px 2px rgba(0, 0, 0, 0.22);
-  --ui-shadow-sm: 0 10px 28px rgba(0, 0, 0, 0.24), 0 1px 3px rgba(0, 0, 0, 0.2);
-  --ui-shadow-md: 0 20px 56px rgba(0, 0, 0, 0.36), 0 2px 8px rgba(0, 0, 0, 0.24);
-}
+
 
 button,
 input,
@@ -849,10 +838,7 @@ button,
   -webkit-tap-highlight-color: transparent;
 }
 
-:where(button, input, select, textarea, [role="button"]):focus-visible {
-  outline: 2px solid color-mix(in srgb, var(--echo-brand) 72%, #ffffff);
-  outline-offset: 2px;
-}
+
 
 /* ---------- Application shell and sidebar ---------- */
 
@@ -1647,62 +1633,12 @@ button,
 
 /* ---------- Shared page rhythm ---------- */
 
-.project-page,
 .org-memory {
   scrollbar-gutter: stable;
 }
 
-.project-page {
-  width: 100%;
-  max-width: var(--ui-content-width);
-  margin: 0 auto;
-  padding: 40px var(--ui-page-gutter) 64px;
-}
-
-.project-hero {
-  min-height: 164px;
-  margin-bottom: 24px;
-  padding: 26px 30px;
-  overflow: hidden;
-  border: 1px solid var(--ui-line);
-  border-radius: var(--ui-radius-lg);
-  background:
-    linear-gradient(120deg, color-mix(in srgb, var(--echo-brand) 10%, var(--ui-surface)), var(--ui-surface) 58%),
-    var(--ui-surface);
-  box-shadow: var(--ui-shadow-sm);
-}
-
-.project-hero__title {
-  font-size: 1.875rem;
-  letter-spacing: -0.03em;
-}
-
-.project-hero__subtitle {
-  max-width: 430px;
-  color: var(--echo-text-medium);
-  line-height: 1.6;
-}
-
-[data-theme="dark"] .project-hero__art {
-  mix-blend-mode: screen;
-  filter: invert(1) hue-rotate(180deg) brightness(1.6);
-}
-
-.project-hero__create {
-  height: 38px;
-  border-color: transparent;
-  background: var(--echo-text-strong);
-  color: var(--ui-surface);
-  font-weight: 600;
-  box-shadow: 0 6px 16px rgba(18, 30, 28, 0.12);
-}
-
-.project-hero__create:hover {
-  background: color-mix(in srgb, var(--echo-text-strong) 90%, var(--echo-brand));
-}
-
 .project-section {
-  margin-top: 36px;
+  margin-top: 0;
 }
 
 .project-section__title {
@@ -1710,7 +1646,6 @@ button,
   font-weight: 700;
   letter-spacing: -0.015em;
 }
-.project-search__input,
 .resources-panel__search-input,
 .um-search-input,
 .myfiles-search {
@@ -1718,7 +1653,6 @@ button,
   background: var(--ui-surface);
   box-shadow: var(--ui-shadow-xs);
 }
-.project-search__input:focus,
 .resources-panel__search-input:focus,
 .um-search-input:focus,
 .myfiles-search:focus-within {
@@ -1795,12 +1729,6 @@ button,
 .atm-search-input {
   border: 1px solid var(--ui-line);
   background: color-mix(in srgb, var(--ui-surface) 74%, transparent);
-}
-
-.atm-create-btn {
-  height: var(--ui-control-sm);
-  border-radius: 10px;
-  box-shadow: var(--ui-shadow-xs);
 }
 
 .atm-template-card--compact {
@@ -2011,8 +1939,10 @@ button,
 }
 
 .org-memory__header h1 {
-  font-size: 1.375rem;
+  font-size: var(--echo-page-title-size);
   letter-spacing: -0.025em;
+  font-weight: var(--echo-page-title-weight);
+  line-height: var(--echo-page-title-line-height);
 }
 
 .org-library,
@@ -2070,9 +2000,10 @@ button,
 
 .kb-panel__title,
 .quota-panel__title {
-  font-size: 1.25rem;
-  font-weight: 720;
+  font-size: var(--echo-page-title-size);
+  font-weight: var(--echo-page-title-weight);
   letter-spacing: -0.02em;
+  line-height: var(--echo-page-title-line-height);
 }
 
 .notify-panel__title,
@@ -2122,7 +2053,9 @@ button,
 
 .knowledge-page .kb-panel__title {
   margin: 0;
-  font-size: 1.5rem;
+  font-size: var(--echo-page-title-size);
+  font-weight: var(--echo-page-title-weight);
+  line-height: var(--echo-page-title-line-height);
 }
 
 .knowledge-page .kb-panel__head-right {
@@ -2134,15 +2067,6 @@ button,
 .knowledge-page .kb-panel__sources {
   font-size: 0.75rem;
   white-space: nowrap;
-}
-
-.knowledge-page .kb-panel__add-btn,
-.knowledge-page .kb-panel__refresh-btn {
-  min-height: 36px;
-  padding: 7px 13px;
-  border-radius: 9px;
-  font-size: 0.75rem;
-  font-weight: 600;
 }
 
 .knowledge-page .kb-panel__empty-state,
@@ -2505,7 +2429,6 @@ button,
 /* ---------- Main-pane responsive layout ---------- */
 
 @container app-main (max-width: 960px) {
-.project-page,
 .resources-panel,
 .plugins-panel,
 .placeholder-page--panel {
@@ -2520,15 +2443,6 @@ button,
 
   .home__title {
     font-size: clamp(1.8125rem, 4.5cqi, 2.125rem);
-  }
-
-  .project-hero {
-    min-height: 148px;
-  }
-
-  .project-hero__art {
-    height: 124px;
-    max-width: 40%;
   }
 
   .um-topbar {
@@ -2782,15 +2696,6 @@ button,
     grid-template-columns: minmax(0, 1fr);
   }
 
-  .project-hero {
-    min-height: 0;
-    padding: 24px;
-  }
-
-  .project-hero__art {
-    display: none;
-  }
-
   .pd-side {
     grid-template-columns: repeat(3, minmax(110px, 1fr));
   }
@@ -2813,7 +2718,6 @@ button,
     align-items: stretch;
     flex-direction: column;
   }
-.project-search,
 .resources-panel__search {
     width: 100%;
   }
@@ -2827,9 +2731,10 @@ button,
 
 .models-settings-panel__title {
   margin-bottom: 24px;
-  font-size: 1.625rem;
-  font-weight: 720;
+  font-size: var(--echo-page-title-size);
+  font-weight: var(--echo-page-title-weight);
   letter-spacing: -0.025em;
+  line-height: var(--echo-page-title-line-height);
 }
 .models-settings-panel__card,
 .models-settings-panel__grouped,
@@ -2858,8 +2763,9 @@ button,
 .create-colleague-input,
 .create-colleague-textarea {
   border-color: var(--ui-line-strong);
-  border-radius: 10px;
+  border-radius: var(--echo-radius-control);
   background: var(--ui-surface);
+  min-height: var(--echo-size-control-md);
 }
 
 /* ---------- Responsive windows ---------- */
@@ -2930,15 +2836,9 @@ button,
   .quota-panel__stats {
     grid-template-columns: minmax(0, 1fr);
   }
-
-  .project-hero__art {
-    max-width: 42%;
-    opacity: 0.88;
-  }
 .resources-panel,
 .plugins-panel,
-.placeholder-page--panel,
-.project-page {
+.placeholder-page--panel {
     padding-left: 24px;
     padding-right: 24px;
   }
@@ -3004,22 +2904,12 @@ button,
   .um-search {
     flex-basis: 100%;
   }
-
-  .project-hero {
-    min-height: 0;
-    padding: 24px;
-  }
-
-  .project-hero__art {
-    display: none;
-  }
 .project-section__head,
 .resources-panel__header,
 .plugins-panel__header {
     align-items: flex-start;
     flex-direction: column;
   }
-.project-search,
 .resources-panel__search,
 .um-search {
     width: 100%;
@@ -3357,9 +3247,9 @@ button,
   margin: 0;
   padding: 0;
   color: var(--echo-text-strong);
-  font-size: 1.5rem;
-  font-weight: 720;
-  line-height: 1.25;
+  font-size: var(--echo-page-title-size);
+  font-weight: var(--echo-page-title-weight);
+  line-height: var(--echo-page-title-line-height);
   letter-spacing: -0.025em;
 }
 
@@ -3643,13 +3533,13 @@ button,
 
 .settings-status-badge--ok,
 .settings-status-badge--ready {
-  background: rgba(0, 168, 132, 0.12);
-  color: #00866a;
+  background: var(--echo-status-success-soft);
+  color: var(--echo-status-success);
 }
 
 .settings-status-badge--warn {
-  background: rgba(255, 176, 32, 0.13);
-  color: #9a6500;
+  background: var(--echo-status-warning-soft);
+  color: var(--echo-status-warning);
 }
 
 .settings-status-badge--accent {
@@ -3657,41 +3547,12 @@ button,
   color: var(--echo-brand);
 }
 
-.settings-btn,
 .settings-reset,
 .settings-input,
 .theme-toggle__btn {
-  min-height: 36px;
-  border-radius: 9px;
-  font-size: 0.75rem;
-}
-
-.settings-btn {
-  justify-content: center;
-  padding: 8px 14px;
-  font-weight: 560;
-  transition: border-color 0.14s ease, background 0.14s ease, color 0.14s ease,
-    transform 0.14s ease;
-}
-
-.settings-btn:hover:not(:disabled) {
-  background: var(--ui-surface-muted);
-}
-
-.settings-btn:active:not(:disabled) {
-  transform: translateY(1px);
-}
-
-.settings-btn--primary {
-  border-color: var(--echo-brand);
-  background: var(--echo-brand);
-  color: #fff;
-}
-
-.settings-btn--primary:hover:not(:disabled) {
-  border-color: var(--echo-brand-hover, var(--echo-brand));
-  background: var(--echo-brand-hover, var(--echo-brand));
-  color: #fff;
+  min-height: var(--echo-size-control-md);
+  border-radius: var(--echo-radius-control);
+  font-size: var(--echo-control-font-size);
 }
 
 /* ---- archived session manager ---- */
@@ -3943,8 +3804,8 @@ button,
 }
 
 .archived-settings__item-actions .settings-btn {
-  min-height: 34px;
-  padding: 6px 10px;
+  --control-height: var(--echo-size-control-sm);
+  padding: 4px 10px;
 }
 
 .archived-settings__delete {
@@ -4043,7 +3904,6 @@ button,
   outline: none;
 }
 
-.settings-btn:focus-visible,
 .settings-reset:focus-visible,
 .settings-input:focus-visible,
 .theme-toggle__btn:focus-visible,
@@ -4061,6 +3921,7 @@ button,
   border: 1px solid var(--ui-line-strong);
   background: var(--ui-surface);
   color: var(--echo-text-strong);
+  min-height: var(--echo-size-control-md);
 }
 
 .settings-input--narrow {
@@ -4485,6 +4346,9 @@ a.help-card:hover {
 
 .models-settings-panel__title {
   margin-bottom: 0;
+  font-size: var(--echo-page-title-size);
+  font-weight: var(--echo-page-title-weight);
+  line-height: var(--echo-page-title-line-height);
 }
 
 .models-settings-panel__header > .echo-button {
@@ -4570,7 +4434,7 @@ a.help-card:hover {
 
 .models-settings-panel__input,
 .models-settings-panel__select {
-  min-height: 38px;
+  min-height: var(--echo-size-control-md);
   padding-top: 8px;
   padding-bottom: 8px;
 }
@@ -4700,7 +4564,9 @@ a.help-card:hover {
 
   .settings-section__title,
   .models-settings-panel__title {
-    font-size: 1.375rem;
+    font-size: var(--echo-page-title-size);
+    font-weight: var(--echo-page-title-weight);
+    line-height: var(--echo-page-title-line-height);
   }
 
   .settings-section__body,

@@ -1,0 +1,47 @@
+import { afterEach, expect, it } from "vitest";
+import { execFileSync } from "node:child_process";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { preprocessCSS, resolveConfig } from "vite";
+import { createUiReviewBaseline } from "./ui-review-baseline.mjs";
+
+const cleanups = [];
+afterEach(() => { while (cleanups.length) cleanups.pop()(); });
+
+it("compiles nested CSS imports from HEAD and preserves the HEAD fixture entry order", async () => {
+  const root = mkdtempSync(join(tmpdir(), "echo-baseline-test-"));
+  cleanups.push(() => rmSync(root, { recursive: true, force: true }));
+  const write = (name, text) => { const file=join(root,name); mkdirSync(join(file,".."),{recursive:true}); writeFileSync(file,text); };
+  const git = (...args) => execFileSync("git", args, { cwd: root, stdio: "pipe" });
+  write("src/styles/index.css", '@import "./nested.css"; .head-entry { color: red; }');
+  write("src/styles/nested.css", '@import "../theme/tokens.css"; .head-nested { color: blue; }');
+  write("src/theme/tokens.css", ':root { --baseline-only: green; }');
+  write("scripts/fixtures/review.tsx", 'import "../../src/styles/index.css"; export const version = "head";');
+  write("index.html", '<!doctype html><html data-source="head"></html>');
+  git("init", "-q"); git("add", ".");
+  git("-c", "user.name=UI Review", "-c", "user.email=ui-review@example.invalid", "commit", "-qm", "Baseline fixture");
+  write("src/styles/index.css", '.working-entry { color: black; }');
+  write("src/styles/nested.css", '.working-nested { color: black; }');
+  write("scripts/fixtures/review.tsx", 'import "../../src/styles/new.css"; export const version = "working";');
+  write("src/styles/new.css", '.working-only { color: black; }');
+  write("index.html", '<!doctype html><html data-source="working"></html>');
+  rmSync(join(root,"src/theme/tokens.css"));
+
+  const baseline = createUiReviewBaseline(root);
+  cleanups.push(baseline.close);
+  expect(baseline.plugin.load(join(root,"scripts/fixtures/review.tsx"))).toContain('version = "head"');
+  expect(baseline.plugin.transformIndexHtml.handler("working",{path:"/"})).toContain('data-source="head"');
+  expect(baseline.plugin.transformIndexHtml.handler("fixture",{path:"/__ui-review"})).toBe("fixture");
+  const stylesheet = baseline.plugin.resolveId("../../src/styles/index.css",join(root,"scripts/fixtures/review.tsx"));
+  const config = await resolveConfig({configFile:false,root,logLevel:"silent"},"serve");
+  const { code } = await preprocessCSS(readFileSync(stylesheet,"utf8"),stylesheet,config);
+  expect(code).toContain("--baseline-only: green");
+  expect(code).toContain(".head-nested"); expect(code).toContain(".head-entry");
+  expect(code).not.toContain("working");
+  expect(baseline.plugin.resolveId("/src/styles/index.css?inline")).toBe(`${stylesheet}?inline`);
+  expect(() => baseline.plugin.resolveId("/src/styles/new.css")).toThrow("Baseline stylesheet is absent");
+  expect(() => baseline.plugin.load(join(root,"src/new-feature.tsx"))).toThrow("Baseline source is absent");
+  expect(baseline.plugin.resolveId("some-package/styles.css")).toBeNull();
+  baseline.close(); expect(existsSync(baseline.directory)).toBe(false);
+});
