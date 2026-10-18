@@ -272,7 +272,7 @@ impl Default for MemorySearchConfig {
 
         Self {
             max_results: 6,
-            min_score: 0.7,
+            min_score: 0.45,
             vector_weight: 0.7,
             text_weight: 0.3,
             recency_decay: DEFAULT_RECENCY_DECAY,
@@ -426,7 +426,7 @@ impl Default for MemoryInitialInjectionConfig {
     fn default() -> Self {
         Self {
             enabled: true,
-            min_score: Some(0.9),
+            min_score: Some(0.45),
         }
     }
 }
@@ -468,7 +468,7 @@ impl Default for MemoryDreamConfig {
         Self {
             enabled: true,
             min_hours: 24,
-            min_sessions: 5,
+            min_sessions: 1,
             stale_lock_secs: 3600,
             check_interval_secs: Some(3600),
         }

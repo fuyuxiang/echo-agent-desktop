@@ -1180,6 +1180,44 @@ export async function memoryList(cwd?: string): Promise<MemoryEntry[]> {
   return invoke<MemoryEntry[]>("memory_list", { cwd: cwd ?? null });
 }
 
+export interface PersonalMemoryRecord {
+  id: string;
+  scope: "global" | "workspace";
+  kind: "user" | "feedback" | "project" | "reference" | "task";
+  key: string;
+  content: string;
+  status: "active" | "forgotten" | "completed";
+  pinned: boolean;
+  origin: "manual" | "automatic";
+  confidence: number;
+  sources: string[];
+  evidence: string;
+  createdAt: number;
+  updatedAt: number;
+  validUntil: number | null;
+  revision: number;
+}
+
+export type PersonalMemoryInput = Pick<PersonalMemoryRecord, "scope" | "kind" | "key" | "content" | "pinned" | "validUntil"> & {
+  id?: string;
+  evidence?: string;
+  expectedRevision?: number;
+};
+
+export interface PersonalMemorySnapshot {
+  records: PersonalMemoryRecord[];
+  enabled: boolean;
+  pendingCount: number;
+  extraction: { attemptedAt: number | null; succeededAt: number | null; outcome: string; detail: string; recordsWritten: number };
+  retrieval: { at: number; mode: string; count: number; sources: string[]; durationMs: number };
+}
+
+export const memoryRecordsGet = (cwd?: string) => invoke<PersonalMemorySnapshot>("memory_records_get", { cwd: cwd ?? null });
+export const memoryRecordSave = (input: PersonalMemoryInput, cwd?: string) => invoke<PersonalMemoryRecord>("memory_record_save", { input, cwd: cwd ?? null });
+export const memoryRecordRetire = (record: PersonalMemoryRecord, cwd?: string, completed = false) => invoke<void>("memory_record_retire", {
+  cwd: cwd ?? null, scope: record.scope, id: record.id, revision: record.revision, completed,
+});
+
 /** Read a single memory file. */
 export async function memoryGet(scope: string, path: string, cwd?: string): Promise<string> {
   return invoke<string>("memory_get", { scope, path, cwd: cwd ?? null });

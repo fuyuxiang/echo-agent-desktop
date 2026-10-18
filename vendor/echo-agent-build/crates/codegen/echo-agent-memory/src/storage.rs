@@ -143,7 +143,10 @@ impl MemoryStorage {
     /// Returns `"global"`, `"workspace"`, or `"session"` based on location.
     pub fn classify_source(&self, path: &Path) -> &'static str {
         if path.starts_with(&self.workspace_dir) {
-            if path.file_name().is_some_and(|f| f == "MEMORY.md") {
+            if path
+                .file_name()
+                .is_some_and(|f| f == "MEMORY.md" || f == crate::records::RECORD_DOCUMENT)
+            {
                 "workspace"
             } else {
                 "session"
@@ -167,6 +170,10 @@ impl MemoryStorage {
         let candidate = normalize_event_path(path);
         if candidate == normalize_event_path(&self.global_memory_file())
             || candidate == normalize_event_path(&self.workspace_memory_file())
+            || candidate
+                == normalize_event_path(&self.global_dir.join(crate::records::RECORD_DOCUMENT))
+            || candidate
+                == normalize_event_path(&self.workspace_dir.join(crate::records::RECORD_DOCUMENT))
         {
             return true;
         }
@@ -374,6 +381,12 @@ impl MemoryStorage {
         }
 
         // Workspace session logs
+        for dir in [&self.global_dir, &self.workspace_dir] {
+            let path = dir.join(crate::records::RECORD_DOCUMENT);
+            if path.is_file() && !files.contains(&path) {
+                files.push(path);
+            }
+        }
         let sessions_dir = self.sessions_dir();
         if sessions_dir.is_dir() {
             let mut session_files: Vec<PathBuf> = std::fs::read_dir(&sessions_dir)?
@@ -572,7 +585,7 @@ fn is_empty_workspace(dir: &Path) -> bool {
 /// Atomically replace a durable memory file and retain the previous version.
 /// The history copy is made before replacement, and the temporary file lives
 /// beside the destination so persistence never crosses filesystem boundaries.
-fn atomic_write_with_history(path: &Path, content: &[u8]) -> std::io::Result<()> {
+pub(crate) fn atomic_write_with_history(path: &Path, content: &[u8]) -> std::io::Result<()> {
     if let Ok(metadata) = std::fs::symlink_metadata(path) {
         if metadata.file_type().is_symlink() || !metadata.is_file() {
             return Err(std::io::Error::new(

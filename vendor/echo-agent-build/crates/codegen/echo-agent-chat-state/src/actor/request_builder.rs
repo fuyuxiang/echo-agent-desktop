@@ -83,6 +83,18 @@ impl ChatStateActor {
         if needs_prune {
             prune_conversation(&mut items, &self.pruning_config);
         }
+        if !persist_memory_reminder {
+            if let Some(ConversationItem::System(system)) = items.first_mut() {
+                if let Some(start) = system.content.find(MEMORY_CONTEXT_OPEN_TAG) {
+                    let end = system.content[start..]
+                        .find(crate::types::MEMORY_CONTEXT_CLOSE_TAG)
+                        .map(|i| start + i + crate::types::MEMORY_CONTEXT_CLOSE_TAG.len())
+                        .unwrap_or(system.content.len());
+                    system.content =
+                        format!("{}{}", &system.content[..start], &system.content[end..]).into();
+                }
+            }
+        }
         if let Some(reminder) = memory_reminder {
             inject_memory_reminder(&mut items, &reminder);
         }

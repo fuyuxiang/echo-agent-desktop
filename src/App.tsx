@@ -61,7 +61,7 @@ import {
   filterModelsByRuntimeCatalog,
   notificationAppend,
   notificationMarkRead,
-  memoryAppend,
+  memoryRecordSave,
   internalReload,
   invalidateAgentKnowledgeSourceSync,
   KNOWLEDGE_MCP_SERVER_NAME,
@@ -2088,7 +2088,7 @@ function Shell() {
         { label: "检查会话摘要", onClick: () => openSettings("personal-memory") },
       ]);
     } else {
-      showActionToast("对话与自动摘要已删除。已整理的长期记忆可能仍包含相关内容。", [
+      showActionToast("对话与自动摘要已删除，关联的记忆已停用。旧版手动文档可在记忆页检查。", [
         { label: "检查长期记忆", onClick: () => openSettings("personal-memory") },
       ]);
     }
@@ -2530,7 +2530,7 @@ function Shell() {
           showToast("无法确定当前工作区，记忆未保存");
           return false;
         }
-        await memoryAppend(remember.scope, remember.content, memoryCwd || undefined);
+        await memoryRecordSave({ scope: remember.scope, kind: remember.scope === "global" ? "user" : "project", key: remember.content.slice(0, 80), content: remember.content, pinned: true, validUntil: null }, memoryCwd || undefined);
         showToast(remember.scope === "global" ? "已保存到全局记忆" : "已保存到当前工作区记忆");
         return true;
       }

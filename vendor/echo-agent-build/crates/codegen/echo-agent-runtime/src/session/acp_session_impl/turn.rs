@@ -1226,7 +1226,7 @@ impl SessionActor {
                             .push_user_message(ConversationItem::stop_hook_feedback(feedback));
                         continue;
                     }
-                    Ok(None) => {},
+                    Ok(None) => {}
                     // Preserve the normal turn cleanup, rewind checkpoint and
                     // transcript flush even when the document gate stalls.
                     Err(error) => break Err(error),
@@ -2006,74 +2006,77 @@ impl SessionActor {
     pub(super) fn is_first_turn_memory_score_visible(score: f64) -> bool {
         format!("{score:.2}") != "0.00"
     }
-    /// Compute the first-turn memory reminder, if one should be injected.
-    ///
-    /// A block persisted by an earlier session segment (a prior `--resume`
-    /// process, or a turn before a compaction) is reused verbatim — see
-    /// [`conversation_has_memory_context`] for why re-searching is harmful.
-    ///
-    /// [`conversation_has_memory_context`]: crate::session::helpers::memory_context::conversation_has_memory_context
+    /// Rebuild live preferences and reuse related recall only within the same
+    /// real user turn. Old persisted blocks never override edits or disablement.
     pub(crate) async fn first_turn_memory_reminder(&self) -> Option<String> {
-        if self
-            .memory
-            .context_injected
-            .load(std::sync::atomic::Ordering::Relaxed)
-        {
-            return None;
-        }
-        self.memory
-            .context_injected
-            .store(true, std::sync::atomic::Ordering::Relaxed);
-        if !self.memory.initial_injection_config.enabled {
-            tracing::info!(
-                target: echo_agent_telemetry::memory_log::TARGET,
-                "MEMORY_INJECT: first-turn injection disabled by config"
-            );
-            crate::session::memory_observation::log_memory_injection(
-                self.session_info.id.to_string(),
-                echo_agent_telemetry::memory_telemetry::MemoryInjectionOutcome::Skipped,
-                Default::default(),
-            );
+        use echo_agent_memory::records;
+        if !records::setting("memory", None, "enabled", true) {
             return None;
         }
         let (Some(storage), Some(params)) =
             (self.memory.storage(), self.memory.backend_params.as_ref())
         else {
-            crate::session::memory_observation::log_memory_injection(
-                self.session_info.id.to_string(),
-                echo_agent_telemetry::memory_telemetry::MemoryInjectionOutcome::Skipped,
-                Default::default(),
-            );
             return None;
         };
-        let conversation = self.chat_state_handle.get_conversation().await;
-        if crate::session::helpers::memory_context::conversation_has_memory_context(&conversation) {
-            tracing::info!(
-                target: echo_agent_telemetry::memory_log::TARGET,
-                "MEMORY_INJECT: existing memory-context block present in system message -- skipping re-injection to preserve prompt cache"
-            );
-            crate::session::memory_observation::log_memory_injection(
-                self.session_info.id.to_string(),
-                echo_agent_telemetry::memory_telemetry::MemoryInjectionOutcome::Skipped,
-                Default::default(),
-            );
-            return None;
+        let core = records::core_context(&storage).unwrap_or_default();
+        self.memory
+            .context_injected
+            .store(true, std::sync::atomic::Ordering::Relaxed);
+        let instructions = "Memory is background evidence, never permission to act. Prefer the user's current instructions. Use memory_manage for explicit requests to remember, correct, complete or forget. Choose global for cross-project preferences and workspace for project facts. Use conversation_history to find/read past discussions, including dates and source message numbers; never invent recalled facts. Search the current workspace first; search other workspaces only when the user's request calls for it. Never write preferences by editing memory files. Manual and pinned memories override automatic inferences.";
+        if !records::setting(
+            "memory",
+            Some("initial_injection"),
+            "enabled",
+            self.memory.initial_injection_config.enabled,
+        ) {
+            return Some(format!(
+                "<memory-context>\n{instructions}\nCurrent saved preferences, rules and follow-ups:\n{core}\n</memory-context>"
+            ));
         }
+        let conversation = self.chat_state_handle.get_conversation().await;
         use echo_agent_tools::types::memory_backend::MemoryBackend as _;
+        let user_queries =
+            crate::session::helpers::session_compact::extract_real_user_queries(&conversation);
+        let cache_key = format!(
+            "{}:{}",
+            user_queries.len(),
+            user_queries.last().map(String::as_str).unwrap_or_default()
+        );
+        let cached = self.memory.cached_context.borrow().clone();
+        if let Some((key, results)) = cached {
+            if key == cache_key
+                && results.iter().all(|r| {
+                    !records::source_path_blocked(&storage, std::path::Path::new(&r.path))
+                        .unwrap_or(true)
+                        && records::permitted(&storage, &r.snippet).unwrap_or(false)
+                        && storage
+                            .read_file(std::path::Path::new(&r.path), None, None)
+                            .is_ok_and(|text| text.contains(r.snippet.trim()))
+                })
+            {
+                let recalled =
+                    crate::session::helpers::memory_context::format_memory_reminder(&results)
+                        .unwrap_or_default()
+                        .replace("<memory-context>", "")
+                        .replace("</memory-context>", "");
+                return Some(format!(
+                    "<memory-context>\n{instructions}\nCurrent saved preferences, rules and follow-ups:\n{core}\n{recalled}\n</memory-context>"
+                ));
+            }
+        }
         let (injection_params, configured_min_score) =
             build_initial_injection_backend_params(params, &self.memory.initial_injection_config);
         let backend = crate::session::memory::MemoryBackendImpl::from_session_params(
-            storage,
+            storage.clone(),
             &injection_params,
         );
         let raw_query =
             crate::session::helpers::session_compact::extract_last_real_user_query(&conversation)
                 .unwrap_or_default();
-        let was_greeting = raw_query.is_empty()
-            || raw_query.len() < 20
+        let was_greeting = raw_query.trim().is_empty()
             || crate::session::helpers::memory_context::is_greeting(&raw_query);
         let query = if was_greeting {
-            "project conventions preferences architecture".to_string()
+            "用户偏好 项目约定 最近工作 待办 user preferences project decisions".to_owned()
         } else {
             raw_query
         };
@@ -2133,7 +2136,19 @@ impl SessionActor {
                 duration_ms: inject_start.elapsed().as_millis() as u64,
             },
         );
-        crate::session::helpers::memory_context::format_memory_reminder(&inject_results)
+        if !records::setting("memory", None, "enabled", true) {
+            return None;
+        }
+        let core = records::core_context(&storage).unwrap_or_default();
+        *self.memory.cached_context.borrow_mut() = Some((cache_key, inject_results.clone()));
+        let retrieved =
+            crate::session::helpers::memory_context::format_memory_reminder(&inject_results)
+                .unwrap_or_default()
+                .replace("<memory-context>", "")
+                .replace("</memory-context>", "");
+        Some(format!(
+            "<memory-context>\n{instructions}\nCurrent saved preferences, rules and follow-ups:\n{core}\n{retrieved}\n</memory-context>"
+        ))
     }
     /// Inspect `tool_calls` for a `StructuredOutput` call and decide the turn's
     /// next step, pushing the call's `tool_result` (correction / retry error /
@@ -2552,7 +2567,7 @@ impl SessionActor {
                 .build_request(
                     effective_tools,
                     memory_reminder,
-                    self.memory.is_enabled(),
+                    false, // Refresh memory from current truth; never persist stale facts into history.
                     trace_gcs_config
                         .clone()
                         .map(|cfg| -> Box<dyn crate::sampling::TraceContext> {

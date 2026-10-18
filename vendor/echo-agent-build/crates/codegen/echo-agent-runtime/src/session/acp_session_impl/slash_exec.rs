@@ -751,55 +751,34 @@ impl SessionActor {
                     enabled,
                     "memory toggle via /memory slash command",
                 );
-                let msg = if enabled && !self.memory.is_enabled() {
-                    if let Some(ref params) = self.memory.backend_params {
-                        let storage = crate::session::memory::MemoryStorage::new(
-                            std::path::Path::new(&self.session_info.cwd),
-                            None,
-                        );
-                        if let Err(e) = storage.ensure_initialized() {
-                            tracing::warn!(error = %e, "failed to initialize memory storage on re-enable");
-                            format!("Memory could not be enabled: {e}")
+                let result = crate::util::config::update_config_toml_at(
+                    &crate::util::echo_agent_home::echo_agent_home().join("config.toml"),
+                    |root| {
+                        let table = root
+                            .as_table_mut()
+                            .ok_or_else(|| anyhow::anyhow!("invalid config"))?;
+                        let memory = table
+                            .entry("memory")
+                            .or_insert_with(|| toml::Value::Table(Default::default()));
+                        memory
+                            .as_table_mut()
+                            .ok_or_else(|| anyhow::anyhow!("invalid memory settings"))?
+                            .insert("enabled".into(), toml::Value::Boolean(enabled));
+                        Ok(())
+                    },
+                );
+                self.memory
+                    .context_injected
+                    .store(false, std::sync::atomic::Ordering::Relaxed);
+                let msg = match result {
+                    Ok(()) => {
+                        if enabled {
+                            "记忆已开启，将用于后续对话。".to_owned()
                         } else {
-                            let backend =
-                                crate::session::memory::MemoryBackendImpl::from_session_params(
-                                    storage.clone(),
-                                    params,
-                                );
-                            *self.memory.search_counter.borrow_mut() =
-                                Some(backend.search_counter.clone());
-                            let backend: std::sync::Arc<
-                                dyn echo_agent_tools::types::memory_backend::MemoryBackend,
-                            > = std::sync::Arc::new(backend);
-                            let bridge = self.agent.borrow().tool_bridge().clone();
-                            bridge.update_resource(backend.clone()).await;
-                            if let Err(e) = self.register_memory_tools(&bridge).await {
-                                tracing::warn!(error = %e, "memory tool registration failed during toggle");
-                            }
-                            *self.memory.storage.borrow_mut() = Some(storage);
-                            "Memory enabled for this session.".to_owned()
+                            "记忆已关闭，后续请求停止提取和使用已有记忆。".to_owned()
                         }
-                    } else {
-                        "Memory cannot be enabled (not configured for this session).".to_owned()
                     }
-                } else if !enabled && self.memory.is_enabled() {
-                    let bridge = self.agent.borrow().tool_bridge().clone();
-                    if !bridge.unregister_tool_by_name(
-                        echo_agent_tools::implementations::memory::MEMORY_SEARCH_TOOL_NAME,
-                    ) {
-                        tracing::debug!("memory_search tool was not registered during unregister");
-                    }
-                    if !bridge.unregister_tool_by_name(
-                        echo_agent_tools::implementations::memory::MEMORY_GET_TOOL_NAME,
-                    ) {
-                        tracing::debug!("memory_get tool was not registered during unregister");
-                    }
-                    *self.memory.storage.borrow_mut() = None;
-                    *self.memory.search_counter.borrow_mut() = None;
-                    "Memory disabled for this session.".to_owned()
-                } else {
-                    let state = if enabled { "enabled" } else { "disabled" };
-                    format!("Memory is already {state}.")
+                    Err(error) => format!("记忆设置未保存：{error}"),
                 };
                 self.send_host_turn_slash_command_output(&msg).await;
                 self.refresh_goal_harness_enabled().await;

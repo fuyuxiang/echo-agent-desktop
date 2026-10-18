@@ -22,13 +22,13 @@ use std::rc::Rc;
 use std::sync::{Arc, Mutex};
 
 use agent_client_protocol as acp;
-use anyhow::{anyhow, Result};
+use anyhow::{Result, anyhow};
 use base64::Engine;
 use serde::Serialize;
 use tokio_util::sync::CancellationToken;
 
 use echo_agent_acp::{
-    acp_channels, acp_send, AcpAgentGatewaySender, AcpAgentTx, AcpClientRx, AcpGatewayReceiver,
+    AcpAgentGatewaySender, AcpAgentTx, AcpClientRx, AcpGatewayReceiver, acp_channels, acp_send,
 };
 use echo_agent_runtime::agent::init::bootstrap;
 use echo_agent_runtime::agent::mvp_agent::MvpAgent;
@@ -180,11 +180,9 @@ pub fn spawn_agent_runtime(_cwd: PathBuf) -> Result<AgentHandle> {
     // `raw` is the embedded Runtime's toml 0.9 value while the desktop
     // settings module intentionally uses its direct toml 0.8 dependency.
     // Read this host override in-place instead of crossing those crate types.
-    let memory_enabled = raw
-        .get("memory")
-        .and_then(|memory| memory.get("enabled"))
-        .and_then(|enabled| enabled.as_bool())
-        .unwrap_or(true);
+    // Keep the backend available while disabled so settings can take effect
+    // in existing sessions. Each memory operation checks the live policy.
+    let memory_enabled = true;
     // Empty remote settings: local defaults only. Must be set both here (runtime
     // resolution) and on `cfg.remote_settings` before bootstrap (see below).
     let local_remote_settings = echo_agent_runtime::util::config::RemoteSettings::default();
@@ -1251,11 +1249,13 @@ mod tests {
                 server.url,
                 format!("http://127.0.0.1:{}/mcp", 62001 + index)
             );
-            assert!(server
-                .headers
-                .iter()
-                .any(|header| header.name == "Authorization"
-                    && header.value == format!("Bearer current-process-{index}")));
+            assert!(
+                server
+                    .headers
+                    .iter()
+                    .any(|header| header.name == "Authorization"
+                        && header.value == format!("Bearer current-process-{index}"))
+            );
             if server.name == crate::office_mcp::MCP_SERVER_NAME
                 || server.name == crate::automation::MCP_SERVER_NAME
             {
@@ -1273,11 +1273,12 @@ mod tests {
             .response_tx
             .send(Ok(acp::LoadSessionResponse::new()))
             .expect("load response");
-        assert!(task
-            .await
-            .expect("load task")
-            .expect("load success")
-            .is_none());
+        assert!(
+            task.await
+                .expect("load task")
+                .expect("load success")
+                .is_none()
+        );
     }
 
     #[test]

@@ -433,7 +433,9 @@ fn validate_custom_profile_macos_version(
         return Err(unknown.into());
     }
     if major < 14 {
-        return Err(format!("自定义数据目录的独立 WebView 存储需要 macOS 14 或更新版本，当前为 {version}；已阻止启动以保护现有资料。请升级系统，或使用默认数据目录。"));
+        return Err(format!(
+            "自定义数据目录的独立 WebView 存储需要 macOS 14 或更新版本，当前为 {version}；已阻止启动以保护现有资料。请升级系统，或使用默认数据目录。"
+        ));
     }
     Ok(())
 }
@@ -534,9 +536,9 @@ fn restore_desktop_window_state(app: &tauri::AppHandle, window: &tauri::WebviewW
 #[cfg(any(target_os = "macos", target_os = "windows", target_os = "linux"))]
 fn setup_desktop_lifecycle(app: &mut tauri::App) -> Result<(), Box<dyn std::error::Error>> {
     use tauri::{
+        DragDropEvent, Manager, WindowEvent,
         menu::{Menu, MenuItem},
         tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent},
-        DragDropEvent, Manager, WindowEvent,
     };
     #[cfg(target_os = "macos")]
     use tauri_plugin_autostart::MacosLauncher;
@@ -1012,6 +1014,9 @@ pub fn run() {
             meeting_minutes::meeting_open_audio,
             // EchoAgent admin: memory / search / rewind / commands / plan / tasks / reload
             agent_admin::memory_list,
+            agent_admin::memory_records_get,
+            agent_admin::memory_record_save,
+            agent_admin::memory_record_retire,
             agent_admin::memory_get,
             agent_admin::memory_save,
             agent_admin::memory_append,
@@ -1253,11 +1258,13 @@ mod exit_tests {
         assert!(!redirected);
         assert!(super::validate_validation_profile_launch(true, redirected).is_err());
         let custom = directory.path().join("独立目录");
-        assert!(super::validate_validation_profile_launch(
-            true,
-            crate::paths::is_redirected_data_home(&custom, Some(&default))
-        )
-        .is_ok());
+        assert!(
+            super::validate_validation_profile_launch(
+                true,
+                crate::paths::is_redirected_data_home(&custom, Some(&default))
+            )
+            .is_ok()
+        );
     }
 
     #[test]
@@ -1376,12 +1383,16 @@ mod exit_tests {
 
     #[tokio::test]
     async fn local_process_shutdown_timeout_is_a_retryable_failure() {
-        assert!(super::required_shutdown(std::future::pending(), "fixture")
-            .await
-            .is_err());
-        assert!(super::required_shutdown(async { Ok(()) }, "fixture")
-            .await
-            .is_ok());
+        assert!(
+            super::required_shutdown(std::future::pending(), "fixture")
+                .await
+                .is_err()
+        );
+        assert!(
+            super::required_shutdown(async { Ok(()) }, "fixture")
+                .await
+                .is_ok()
+        );
     }
 
     #[tokio::test]

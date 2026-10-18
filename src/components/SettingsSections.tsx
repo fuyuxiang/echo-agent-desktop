@@ -266,7 +266,7 @@ const DEFAULT_MEMORY_CONFIG: MemoryConfig = {
   dreamEnabled: true,
 };
 
-export function MemorySettingsPanel() {
+export function MemorySettingsPanel({ compact = false }: { compact?: boolean }) {
   const [busy, setBusy] = useState(false);
   const [msg, setMsg] = useState<string | null>(null);
   const [config, setConfig] = useState<MemoryConfig>(DEFAULT_MEMORY_CONFIG);
@@ -301,7 +301,7 @@ export function MemorySettingsPanel() {
     try {
       const saved = await memoryConfigSave({ [key]: value }, config.revision);
       setConfig({ ...previous, [key]: value, ...saved });
-      setMsg("记忆配置已保存，重启 Agent 后对新会话生效。");
+      setMsg("记忆配置已保存，立即用于后续提取和模型请求。");
     } catch (e) {
       setConfig(previous);
       setLoadError(true);
@@ -311,56 +311,30 @@ export function MemorySettingsPanel() {
     }
   };
 
-  const toggles: Array<{
-    key: "enabled" | "initialInjectionEnabled" | "saveOnEnd" | "watcherEnabled" | "autoFlushEnabled" | "dreamEnabled";
-    name: string;
-    description: string;
-  }> = [
-    { key: "enabled", name: "启用记忆", description: "为新会话启用记忆检索、写入和整理能力" },
-    { key: "initialInjectionEnabled", name: "会话开始时检索", description: "首轮对话自动注入相关长期记忆" },
-    { key: "saveOnEnd", name: "会话结束时保存", description: "有可复用信息时生成可检索的会话摘要" },
-    { key: "watcherEnabled", name: "监听外部修改", description: "在应用外修改记忆文件后自动同步检索索引" },
-    { key: "autoFlushEnabled", name: "自动提取", description: "空闲或上下文压缩前提取信息并写入会话摘要" },
-    { key: "dreamEnabled", name: "自动整理", description: "定期将会话摘要合并为结构化长期记忆" },
-  ];
+  const legacyPolicyChanged = !config.initialInjectionEnabled || !config.saveOnEnd || !config.watcherEnabled || !config.autoFlushEnabled || !config.dreamEnabled;
+  const restorePolicy = async () => {
+    if (loading || loadError || busy) return;
+    setBusy(true);
+    try {
+      const saved = await memoryConfigSave({ ...DEFAULT_MEMORY_CONFIG, enabled: config.enabled }, config.revision);
+      setConfig(saved);
+      setMsg("已恢复自动学习、整理和参考记忆。");
+    } catch (e) { setLoadError(true); setMsg(`失败：${String(e).replace(/^Error:\s*/, "")}`); }
+    finally { setBusy(false); }
+  };
 
-  const renderToggles = (items: typeof toggles) => items.map((toggle) => (
-    <div className="settings-row settings-row--comfortable" key={toggle.key}>
-      <div className="settings-row__label settings-row__label--stacked">
-        <span className="settings-row__name">{toggle.name}</span>
-        <span className="settings-row__description">{toggle.description}</span>
-      </div>
-      <label className="sk-toggle">
-        <input
-          type="checkbox"
-          aria-label={toggle.name}
-          checked={config[toggle.key]}
-          disabled={loading || loadError || busy || (toggle.key !== "enabled" && !config.enabled)}
-          onChange={(event) => void updateConfig(toggle.key, event.target.checked)}
-        />
-        <span className="sk-toggle-track"><span className="sk-toggle-thumb" /></span>
-      </label>
+  const controls = <>
+    {loadError && <div role="alert" className="settings-hint">配置未加载，暂时无法修改。<button className="settings-btn" onClick={() => setReload((n) => n + 1)}>重新加载</button></div>}
+    <div className="settings-row settings-row--comfortable">
+      <div className="settings-row__label settings-row__label--stacked"><span className="settings-row__name">记住并参考对话信息</span><span className="settings-row__description">让 Echo 记住你的偏好和工作背景，在后续对话中参考；关闭后停止提取和使用已有记忆</span></div>
+      <label className="sk-toggle"><input type="checkbox" aria-label="记住并参考对话信息" checked={config.enabled} disabled={loading || loadError || busy} onChange={(event) => void updateConfig("enabled", event.target.checked)} /><span className="sk-toggle-track"><span className="sk-toggle-thumb" /></span></label>
     </div>
-  ));
+    {!loading && !loadError && legacyPolicyChanged && <p className="settings-hint" role="note">你在旧版中关闭了部分记忆策略，自动学习或参考记忆可能受限。<button className="settings-btn" disabled={busy} onClick={() => void restorePolicy()}>恢复推荐策略</button></p>}
+    <p className="settings-hint">自动整理偏好、项目事实和近期事项。提取使用已配置的模型服务。你可以随时查看、更正或忘记已保存的内容。</p>
+    {msg && <p className="settings-msg" role="status">{msg}</p>}
+  </>;
+  return compact ? <div className="personal-memory__switch">{controls}</div> : <SettingsSection title="记忆" desc="管理 Echo 对你的了解。">{controls}</SettingsSection>;
 
-  return (
-    <SettingsSection
-      title="记忆"
-      desc="让 Agent 在后续任务中参考已有经验。可在“个人记忆”中查看、编辑或删除内容。"
-    >
-      {loadError && <div role="alert" className="settings-hint">配置未加载，暂时无法修改。<button className="settings-btn" onClick={() => setReload((n) => n + 1)}>重新加载</button></div>}
-      <SettingsGroup title="记忆能力" desc="提取摘要和整理内容会使用当前会话的模型服务。">
-        {renderToggles(toggles.filter((toggle) => ["enabled", "autoFlushEnabled", "dreamEnabled"].includes(toggle.key)))}
-      </SettingsGroup>
-      <SettingsDisclosure title="检索与保存策略" description="会话开始、结束时的处理，以及外部文件变更监听">
-        <SettingsGroup title="自动处理策略">
-          {renderToggles(toggles.filter((toggle) => ["initialInjectionEnabled", "saveOnEnd", "watcherEnabled"].includes(toggle.key)))}
-        </SettingsGroup>
-        <p className="settings-hint">记忆保存在本机，可在“个人记忆”中审阅。会话摘要是提取结果，不是完整聊天记录。</p>
-      </SettingsDisclosure>
-      {msg && <p className="settings-msg">{msg}</p>}
-    </SettingsSection>
-  );
 }
 
 // ---------- 帮助与更新 ----------

@@ -381,8 +381,20 @@ impl MemoryBackend for MemoryBackendImpl {
         max_results: usize,
         min_score: f64,
     ) -> Result<Vec<MemorySearchResult>, Box<dyn std::error::Error + Send + Sync>> {
+        let max_results = max_results.clamp(1, 50);
+        if query.chars().count() > 4096 || !min_score.is_finite() {
+            return Err("Invalid memory search parameters".into());
+        }
+        let min_score = min_score.clamp(0.0, 1.0);
         let search_start = std::time::Instant::now();
         let query_length = query.len();
+        let personal_memory = self.embed_chunks_on_search;
+        if personal_memory && !crate::records::setting("memory", None, "enabled", true) {
+            return Ok(Vec::new());
+        }
+        if personal_memory {
+            crate::records::refresh_documents(&self.storage)?;
+        }
         let keyword_count = super::query_expansion::extract_keywords(query).len();
 
         let embed_dims = self.embed_config.as_ref().map_or(1024, |ec| ec.dimensions);
@@ -412,6 +424,16 @@ impl MemoryBackend for MemoryBackendImpl {
             }
         };
 
+        // Managed records always reflect current validity and edits, including
+        // when external-file watching was disabled or has not delivered events.
+        if personal_memory {
+            for dir in [self.storage.global_dir(), self.storage.workspace_dir()] {
+                let path = dir.join(crate::records::RECORD_DOCUMENT);
+                if path.is_file() {
+                    index.reindex_file(&path, self.storage.classify_source(&path))?;
+                }
+            }
+        }
         // ── Sync phase 1: reindex dirty files, collect chunks needing embeddings ──
         let mut reindex_chunks: Vec<(String, String)> = Vec::new();
         let mut needs_release = false;
@@ -563,7 +585,13 @@ impl MemoryBackend for MemoryBackendImpl {
         } else {
             max_results
         };
-        search_config.min_score = min_score as f32;
+        // Retrieve a broad candidate pool before applying the relevance model's
+        // threshold. Coarse and rerank scores are different scales.
+        search_config.min_score = if reranker.is_some() {
+            0.0
+        } else {
+            min_score as f32
+        };
         if reranker.is_some() {
             // The relevance model is the final ordering stage. Running MMR
             // first would discard its coarse-rank alignment and reduce the
@@ -652,6 +680,51 @@ impl MemoryBackend for MemoryBackendImpl {
             results.truncate(max_results);
         }
 
+        if personal_memory {
+            if !crate::records::setting("memory", None, "enabled", true) {
+                return Ok(Vec::new());
+            }
+            // Edits, expiry or disablement can occur while embedding/reranking
+            // is in flight. Never return an obsolete managed projection.
+            crate::records::refresh_documents(&self.storage)?;
+        }
+        results.retain(|r| {
+            if r.score < min_score {
+                return false;
+            }
+            if !personal_memory {
+                return true;
+            }
+            let path = std::path::Path::new(&r.path);
+            if crate::records::source_path_blocked(&self.storage, path).unwrap_or(true) {
+                return false;
+            }
+            if path
+                .file_name()
+                .is_some_and(|name| name == crate::records::RECORD_DOCUMENT)
+            {
+                self.storage
+                    .read_file(path, None, None)
+                    .is_ok_and(|text| text.contains(r.snippet.trim()))
+            } else {
+                crate::records::permitted(&self.storage, &r.snippet).unwrap_or(false)
+            }
+        });
+        if personal_memory {
+            crate::records::set_retrieval(
+                &self.storage,
+                &crate::records::RetrievalActivity {
+                    at: crate::records::now(),
+                    mode: format!("{mode:?}"),
+                    count: results.len(),
+                    sources: results
+                        .iter()
+                        .map(|r| format!("{}:{}-{}", r.path, r.start_line + 1, r.end_line))
+                        .collect(),
+                    duration_ms: search_start.elapsed().as_millis() as u64,
+                },
+            );
+        }
         // Record accesses for the returned chunks so access_count and
         // last_accessed stay current.  Non-fatal: a failed write is a no-op
         // for the caller and does not affect the search response.
@@ -701,7 +774,32 @@ impl MemoryBackend for MemoryBackendImpl {
         from: Option<usize>,
         lines: Option<usize>,
     ) -> Result<String, Box<dyn std::error::Error + Send + Sync>> {
-        Ok(self.storage.read_file(Path::new(path), from, lines)?)
+        if !self.embed_chunks_on_search {
+            return Ok(self.storage.read_file(Path::new(path), from, lines)?);
+        }
+        if !crate::records::setting("memory", None, "enabled", true) {
+            return Err("Memory is disabled".into());
+        }
+        let requested = if path == "MEMORY.md" {
+            self.storage.workspace_memory_file()
+        } else {
+            Path::new(path).to_owned()
+        };
+        if !self.storage.is_indexable_memory_file(&requested)
+            || crate::records::source_path_blocked(&self.storage, &requested)?
+        {
+            return Err("Memory path is outside the current live memory scope".into());
+        }
+        crate::records::refresh_documents(&self.storage)?;
+        let content = self.storage.read_file(&requested, from, lines)?;
+        if requested
+            .file_name()
+            .is_none_or(|name| name != crate::records::RECORD_DOCUMENT)
+            && !crate::records::permitted(&self.storage, &content)?
+        {
+            return Err("This content has been excluded from memory".into());
+        }
+        Ok(content)
     }
 
     fn total_chunks(&self) -> Result<usize, Box<dyn std::error::Error + Send + Sync>> {

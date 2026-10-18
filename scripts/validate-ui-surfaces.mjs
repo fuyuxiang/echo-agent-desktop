@@ -55,21 +55,18 @@ page.setDefaultNavigationTimeout(60000);
       await page.goto(`http://127.0.0.1:1439/__ui-review?surface=${surface}&theme=${theme}`);
       await page.addStyleTag({ content: "*,*::before,*::after{animation:none!important;transition:none!important}" });
       if (surface === "personal-memory") {
-        await page.getByRole("tab", { name: /会话摘要/ }).click();
-        await page.getByText("2026-09-06-interval-01a074eb.md").waitFor();
-        const memoryLayout = await page.evaluate(() => {
-          const rect = (selector) => document.querySelector(selector).getBoundingClientRect();
-          return {
-            lefts: [".resources-panel__header", ".resources-panel__toolbar", ".resources-panel__notice", ".resources-panel__list-controls", ".resources-panel__list"].map(selector => rect(selector).left),
-            cards: [...document.querySelectorAll(".resources-panel__item")].map(element => ({ left: element.getBoundingClientRect().left, top: element.getBoundingClientRect().top })),
-            overflow: document.documentElement.scrollWidth > innerWidth + 1,
-          };
-        });
-        assert.ok(Math.max(...memoryLayout.lefts) - Math.min(...memoryLayout.lefts) < 2, "personal memory sections are misaligned");
+        await page.getByRole("heading", { name: "记忆", exact: true }).waitFor();
+        assert.equal(await page.getByRole("checkbox").count(), 1, "memory should expose only its master switch");
+        assert.equal(await page.locator(".resources-panel").count(), 0, "legacy documents should be loaded on demand");
+        const memoryLayout = await page.evaluate(() => ({
+          overflow: document.documentElement.scrollWidth > innerWidth + 1,
+          cards: document.querySelectorAll(".personal-memory__card").length,
+        }));
         assert.ok(!memoryLayout.overflow, "personal memory causes horizontal page overflow");
-        assert.equal(memoryLayout.cards.length, 2);
-        assert.equal(memoryLayout.cards[0].top === memoryLayout.cards[1].top, width === 1440, "personal memory card columns are incorrect");
-        assert.equal(await page.locator(".resources-panel__item-preview").first().innerText(), "旧版摘要没有可展示的内容，可删除这条无效摘要。");
+        assert.equal(memoryLayout.cards, 2);
+        await page.getByRole("button", { name: "添加记忆", exact: true }).click();
+        await page.getByLabel("记忆内容").fill("测试偏好：先给结论");
+        assert.equal(await page.getByLabel("主题（可选）").isVisible(), false, "advanced fields should be collapsed");
         await page.screenshot({ path: join(output, `personal-memory-${width}-${theme}.png`) });
         layouts += 1;
         continue;
@@ -190,9 +187,8 @@ page.setDefaultNavigationTimeout(60000);
       const controls = await page.locator("select.form-control").evaluateAll(elements => elements.map(element => ({ appearance: getComputedStyle(element).appearance, height: element.getBoundingClientRect().height })));
       for (const control of controls) { assert.equal(control.appearance, "none"); assert.ok(control.height >= 36, `${surface}: short select (${control.height}px)`); }
       if (surface === "memory") {
-        await page.getByText("检索与保存策略", { exact: true }).click();
-        const rows = await page.locator(".settings-group__content .settings-row").evaluateAll(elements => elements.map(element => ({ top: element.getBoundingClientRect().top, bottom: element.getBoundingClientRect().bottom })));
-        assert.ok(rows.length >= 4 && rows.slice(1, 4).every((row, index) => row.top >= rows[index].bottom - 1), "memory settings rows overlap");
+        assert.equal(await page.getByRole("checkbox").count(), 1);
+        assert.equal(await page.getByRole("checkbox", { name: "记住并参考对话信息" }).isChecked(), true);
       }
       if (surface === "security") {
         await page.getByText("自定义工具规则", { exact: true }).click();
@@ -272,9 +268,9 @@ page.setDefaultNavigationTimeout(60000);
   await page.screenshot({ path: join(output, "organization-xlsx-preview.png") });
 
   await page.goto("http://127.0.0.1:1439/__ui-review?surface=memory");
-  await page.getByRole("checkbox", { name: "自动整理", exact: true }).locator("..").click();
-  await page.getByText("记忆配置已保存，重启 Agent 后对新会话生效。").waitFor();
-  assert.equal(await page.getByRole("checkbox", { name: "自动整理", exact: true }).isChecked(), false);
+  await page.getByRole("checkbox", { name: "记住并参考对话信息", exact: true }).locator("..").click();
+  await page.getByText("记忆配置已保存，立即用于后续提取和模型请求。").waitFor();
+  assert.equal(await page.getByRole("checkbox", { name: "记住并参考对话信息", exact: true }).isChecked(), false);
 
   await page.goto("http://127.0.0.1:1439/__ui-review?surface=notify-channels");
   await page.getByRole("button", { name: /推送到其他应用/ }).click();

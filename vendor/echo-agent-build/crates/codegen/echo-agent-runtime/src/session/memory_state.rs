@@ -23,6 +23,13 @@ pub(crate) struct SessionMemory {
     /// this session segment. Cross-segment idempotency comes from
     /// `conversation_has_memory_context`, not this flag.
     pub context_injected: AtomicBool,
+    /// Reuse search results within one user turn; validate against live files before use.
+    pub cached_context: RefCell<
+        Option<(
+            String,
+            Vec<echo_agent_tools::types::memory_backend::MemorySearchResult>,
+        )>,
+    >,
     /// Memory flush configuration (from MemoryConfig).
     pub flush_config: crate::config::MemoryFlushConfig,
     /// When `true`, auto-compact checks are suppressed during memory flush.
@@ -61,6 +68,7 @@ impl SessionMemory {
     /// Whether memory is enabled for this session.
     pub(crate) fn is_enabled(&self) -> bool {
         self.storage.borrow().is_some()
+            && echo_agent_memory::records::setting("memory", None, "enabled", true)
     }
 
     /// Clone the storage out of the `RefCell`, dropping the borrow immediately.

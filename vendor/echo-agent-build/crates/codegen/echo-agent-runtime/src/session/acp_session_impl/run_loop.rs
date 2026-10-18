@@ -651,6 +651,8 @@ pub(super) async fn run_session(
                         tokio::task::spawn_local({
                             let session = session.clone();
                             async move {
+                                session.recover_pending_memories().await;
+                                if session.last_idle_flush_conversation_len.load(std::sync::atomic::Ordering::Relaxed) >= current_len { return; }
                                 if session.run_memory_flush("interval", None).await {
                                     session.last_idle_flush_conversation_len
                                         .store(current_len, std::sync::atomic::Ordering::Relaxed);
@@ -2541,6 +2543,9 @@ pub(super) async fn run_session(
                             ..
                         })
                     );
+                    if turn_ran && turn_succeeded {
+                        session.queue_memory_extraction().await;
+                    }
                     let completed_prompt_id = prompt_id.clone();
                     let owned_completion = session.handle_completion(prompt_id, result).await;
                     // Drain any monitor events that were routed to the mid-turn buffer

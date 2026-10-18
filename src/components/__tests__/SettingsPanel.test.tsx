@@ -38,6 +38,8 @@ vi.mock("@/lib/agent-client", () => ({
     dreamEnabled: true,
   }),
   memoryConfigSave: vi.fn(async (memory) => memory),
+  memoryRecordsGet: vi.fn().mockResolvedValue({ enabled: true, records: [], pendingCount: 0, extraction: {outcome:"",detail:"",recordsWritten:0}, retrieval:{at:0,sources:[],count:0,mode:"",durationMs:0} }),
+  memoryRecordSave: vi.fn(), memoryRecordRetire: vi.fn(),
   memoryFlush: vi.fn(),
   memoryDream: vi.fn(),
   memoryList: vi.fn().mockResolvedValue([]),
@@ -95,9 +97,11 @@ describe("SettingsPanel", () => {
     vi.mocked(memoryList).mockClear();
     render(<ThemeProvider><SettingsPanel open initialSection="personal-memory" cwd="/workspace" sessionId="session-1" onClose={() => {}} /></ThemeProvider>);
 
-    expect(await screen.findByRole("heading", { name: "个人记忆" })).toBeInTheDocument();
+    expect(await screen.findByRole("heading", { name: "记忆" })).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "记忆" })).toHaveAttribute("aria-current", "page");
-    expect(screen.getByRole("button", { name: "个人记忆" })).toHaveAttribute("aria-pressed", "true");
+    expect(screen.queryByRole("button", { name: "记忆行为" })).not.toBeInTheDocument();
+    fireEvent.click(screen.getByText("高级：记忆文档与会话摘要"));
+    await waitFor(() => expect(memoryList).toHaveBeenCalledWith("/workspace"));
     expect(screen.getByLabelText("当前记忆上下文")).toHaveTextContent("/workspace");
     expect(screen.getByLabelText("当前记忆上下文")).toHaveTextContent("已连接当前会话");
     await waitFor(() => expect(memoryList).toHaveBeenCalledWith("/workspace"));
@@ -239,8 +243,8 @@ describe("SettingsPanel", () => {
     expect(screen.queryByRole("button", { name: "微信远程对话" })).not.toBeInTheDocument();
 
     fireEvent.click(screen.getByRole("button", { name: "记忆" }));
-    fireEvent.click(screen.getByRole("button", { name: "个人记忆" }));
-    expect(await screen.findByRole("heading", { name: "个人记忆" })).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "个人记忆" })).not.toBeInTheDocument();
+    expect(await screen.findByRole("heading", { name: "记忆" })).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "记忆" })).toHaveAttribute("aria-current", "page");
 
     fireEvent.click(screen.getByRole("button", { name: "数据管理" }));
@@ -410,14 +414,39 @@ describe("SettingsPanel", () => {
     render(<ThemeProvider><SettingsPanel open initialSection="memory" onClose={() => {}} /></ThemeProvider>);
     await screen.findByText(/配置未加载/);
     for (const input of screen.getAllByRole("checkbox")) expect(input).toBeDisabled();
-    fireEvent.click(screen.getByRole("checkbox", { name: "自动整理" }));
+    fireEvent.click(screen.getByRole("checkbox", { name: "记住并参考对话信息" }));
     expect(memoryConfigSave).not.toHaveBeenCalled();
     vi.mocked(memoryConfigGet).mockResolvedValueOnce({ enabled: true, initialInjectionEnabled: false, saveOnEnd: false, watcherEnabled: false, autoFlushEnabled: false, dreamEnabled: false, revision: "r1" });
     fireEvent.click(screen.getByRole("button", { name: "重新加载" }));
-    await waitFor(() => expect(screen.getByRole("checkbox", { name: "自动整理" })).toBeEnabled());
-    fireEvent.click(screen.getByRole("checkbox", { name: "自动整理" }));
-    await waitFor(() => expect(memoryConfigSave).toHaveBeenCalledWith({ dreamEnabled: true }, "r1"));
-    expect(screen.getByRole("checkbox", { name: "监听外部修改" })).not.toBeChecked();
+    await waitFor(() => expect(screen.getByRole("checkbox", { name: "记住并参考对话信息" })).toBeEnabled());
+    fireEvent.click(screen.getByRole("checkbox", { name: "记住并参考对话信息" }));
+    await waitFor(() => expect(memoryConfigSave).toHaveBeenCalledWith({ enabled: false }, "r1"));
+    expect(screen.queryByRole("checkbox", { name: "监听外部修改" })).not.toBeInTheDocument();
+  });
+
+  it("旧版关闭策略按原选择保留，可明确恢复推荐策略", async () => {
+    vi.mocked(memoryConfigGet).mockResolvedValueOnce({ enabled: true, initialInjectionEnabled: true, saveOnEnd: true, watcherEnabled: true, autoFlushEnabled: false, dreamEnabled: true, revision: "legacy" });
+    vi.mocked(memoryConfigSave).mockClear();
+    render(<ThemeProvider><SettingsPanel open initialSection="memory" onClose={() => {}} /></ThemeProvider>);
+    const restore = await screen.findByRole("button", { name: "恢复推荐策略" });
+    expect(memoryConfigSave).not.toHaveBeenCalled();
+    expect(screen.getAllByRole("checkbox")).toHaveLength(1);
+    fireEvent.click(restore);
+    await waitFor(() => expect(memoryConfigSave).toHaveBeenCalledWith({ enabled: true, initialInjectionEnabled: true, saveOnEnd: true, watcherEnabled: true, autoFlushEnabled: true, dreamEnabled: true }, "legacy"));
+  });
+
+  it("离开记忆页先保护草稿，取消离开保留编辑内容", async () => {
+    render(<ThemeProvider><SettingsPanel open initialSection="memory" onClose={() => {}} /></ThemeProvider>);
+    fireEvent.click(await screen.findByRole("button", { name: "添加记忆" }));
+    fireEvent.change(screen.getByLabelText("记忆内容"), { target: { value: "汇报先给结论" } });
+    fireEvent.click(screen.getByRole("button", { name: "通用" }));
+    const confirmation = await screen.findByRole("alertdialog", { name: "舍弃未保存的记忆？" });
+    fireEvent.click(within(confirmation).getByRole("button", { name: "取消" }));
+    expect(screen.getByLabelText("记忆内容")).toHaveValue("汇报先给结论");
+    fireEvent.click(screen.getByRole("button", { name: "通用" }));
+    fireEvent.click(within(await screen.findByRole("alertdialog", { name: "舍弃未保存的记忆？" })).getByRole("button", { name: "舍弃修改" }));
+    expect(screen.queryByLabelText("记忆内容")).not.toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "通用" })).toHaveAttribute("aria-current", "page");
   });
 
   it("记忆开关仅保存更改字段", async () => {
@@ -427,16 +456,16 @@ describe("SettingsPanel", () => {
       </ThemeProvider>,
     );
 
-    const autoFlush = await screen.findByRole("checkbox", { name: "自动提取" });
+    const autoFlush = await screen.findByRole("checkbox", { name: "记住并参考对话信息" });
     expect(screen.queryByLabelText("记忆检索方式")).not.toBeInTheDocument();
     expect(autoFlush).toBeChecked();
     fireEvent.click(autoFlush);
 
     await waitFor(() => {
-      expect(memoryConfigSave).toHaveBeenCalledWith({ autoFlushEnabled: false }, undefined);
+      expect(memoryConfigSave).toHaveBeenCalledWith({ enabled: false }, undefined);
     });
     expect(
-      screen.getByText("记忆配置已保存，重启 Agent 后对新会话生效。"),
+      screen.getByText("记忆配置已保存，立即用于后续提取和模型请求。"),
     ).toBeInTheDocument();
   });
 

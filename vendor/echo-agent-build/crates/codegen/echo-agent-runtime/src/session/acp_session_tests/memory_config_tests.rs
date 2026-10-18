@@ -201,6 +201,7 @@ async fn create_test_actor_with_memory(
             backend_params: None,
             initial_injection_config: memory_initial_injection_config,
             context_injected: std::sync::atomic::AtomicBool::new(false),
+            cached_context: Default::default(),
             flush_count: std::sync::atomic::AtomicU64::new(0),
             last_flush_content: std::cell::RefCell::new(None),
             flush_success_count: std::sync::atomic::AtomicU64::new(0),
@@ -512,8 +513,8 @@ async fn test_memory_storage_created_when_enabled() {
         .await;
 }
 /// Actor with injection enabled and an FTS index matching the test query, so
-/// `first_turn_memory_reminder()` WOULD inject — tests can then prove the
-/// idempotency guard alone is what suppresses re-injection.
+/// `first_turn_memory_reminder()` can inject and cache related recall while
+/// rebuilding live preferences on each request.
 #[allow(clippy::field_reassign_with_default)]
 async fn create_injection_ready_actor(
     initial_conversation: Vec<echo_agent_sampling_types::ConversationItem>,
@@ -536,7 +537,7 @@ async fn create_injection_ready_actor(
     let storage =
         crate::session::memory::MemoryStorage::with_paths(global_dir, workspace_dir.clone());
     crate::session::memory::index::init_sqlite_vec();
-    let note = tmp.path().join("note.md");
+    let note = storage.workspace_memory_file();
     std::fs::write(
         &note,
         "# Conventions\n\nProject uses Rust for backend services.",
@@ -597,7 +598,10 @@ async fn test_first_turn_reminder_injects_without_persisted_block() {
                     .load(std::sync::atomic::Ordering::Relaxed),
                 "latch must be set after the injection decision runs"
             );
-            assert_eq!(None, actor.first_turn_memory_reminder().await);
+            assert_eq!(
+                Some(reminder.to_owned()),
+                actor.first_turn_memory_reminder().await
+            );
         })
         .await;
 }
@@ -621,7 +625,13 @@ async fn test_first_turn_reminder_skips_all_displayed_zero_results() {
                 .search_config
                 .source_weights
                 .insert("workspace".to_owned(), 0.0);
-            assert_eq!(None, actor.first_turn_memory_reminder().await);
+            assert!(
+                !actor
+                    .first_turn_memory_reminder()
+                    .await
+                    .unwrap()
+                    .contains("Project uses Rust")
+            );
             assert_eq!(
                 0,
                 actor
@@ -635,14 +645,19 @@ async fn test_first_turn_reminder_skips_all_displayed_zero_results() {
                     .context_injected
                     .load(std::sync::atomic::Ordering::Relaxed)
             );
-            assert_eq!(None, actor.first_turn_memory_reminder().await);
+            assert!(
+                !actor
+                    .first_turn_memory_reminder()
+                    .await
+                    .unwrap()
+                    .contains("Project uses Rust")
+            );
         })
         .await;
 }
-/// A block persisted by an earlier `--resume` segment must suppress the
-/// re-search — a re-scored block would bust the prompt-prefix KV cache.
+/// A persisted block cannot override current records after resume.
 #[tokio::test(flavor = "current_thread")]
-async fn test_first_turn_reminder_skips_when_block_persisted() {
+async fn test_first_turn_reminder_refreshes_when_block_persisted() {
     let local = tokio::task::LocalSet::new();
     local
         .run_until(async {
@@ -654,7 +669,7 @@ async fn test_first_turn_reminder_skips_when_block_persisted() {
                         start_line: 0,
                         end_line: 5,
                         score: 0.98,
-                        snippet: "Project uses Rust for backend services.".into(),
+                        snippet: "Obsolete preference that must not be reused.".into(),
                         source: "workspace".into(),
                         created_at: None,
                     },
@@ -669,25 +684,15 @@ async fn test_first_turn_reminder_skips_when_block_persisted() {
                 ),
             ])
             .await;
-            assert_eq!(
-                None,
-                actor.first_turn_memory_reminder().await,
-                "persisted block must be reused verbatim — no re-search, no re-injection"
-            );
-            assert_eq!(
-                0,
-                actor
-                    .memory
-                    .injection_count
-                    .load(std::sync::atomic::Ordering::Relaxed),
-                "guard skip must not count as an injection"
-            );
+            let reminder = actor.first_turn_memory_reminder().await.unwrap();
+            assert!(!reminder.contains("Obsolete preference"));
+            assert!(reminder.contains("Project uses Rust"));
             assert!(
                 actor
                     .memory
                     .context_injected
                     .load(std::sync::atomic::Ordering::Relaxed),
-                "latch must still be set so later turns skip cheaply"
+                "the live context decision is recorded"
             );
         })
         .await;

@@ -1670,6 +1670,7 @@ pub(crate) async fn spawn_session_actor(
             backend_params: memory_backend_params_for_session,
             initial_injection_config: memory_initial_injection_config,
             context_injected: std::sync::atomic::AtomicBool::new(false),
+            cached_context: Default::default(),
             flush_count: std::sync::atomic::AtomicU64::new(0),
             last_flush_content: std::cell::RefCell::new(None),
             flush_success_count: std::sync::atomic::AtomicU64::new(0),
@@ -1698,7 +1699,6 @@ pub(crate) async fn spawn_session_actor(
             .map(std::time::Duration::from_secs),
         dream_check_timeout: memory_config
             .as_ref()
-            .filter(|mc| mc.dream.enabled)
             .and_then(|mc| mc.dream.check_interval_secs)
             .filter(|&s| s > 0)
             .map(std::time::Duration::from_secs),
@@ -1942,7 +1942,21 @@ pub(crate) async fn spawn_session_actor(
             .set_display_cwd(std::path::PathBuf::from(display_cwd))
             .await;
     }
-    if let Some(storage) = session.memory.storage() {
+    {
+        let bridge = session.agent.borrow().tool_bridge().clone();
+        if let Err(error) = session.register_memory_extras(&bridge).await {
+            tracing::warn!(%error, "memory tools could not be registered");
+        }
+        let actor = session.clone();
+        tokio::task::spawn_local(async move {
+            actor.recover_pending_memories().await;
+        });
+    }
+    if let Some(storage) = session
+        .memory
+        .storage()
+        .filter(|_| echo_agent_memory::records::setting("memory", None, "enabled", true))
+    {
         crate::session::memory::init_sqlite_vec();
         let index_config = memory_config
             .as_ref()

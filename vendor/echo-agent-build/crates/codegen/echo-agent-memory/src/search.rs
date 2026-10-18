@@ -275,7 +275,7 @@ pub(super) fn hybrid_search_merge(
     //     (text_weight × fts_score + vector_weight × vec_score)
     //   - Chunks with ONLY FTS matches: score = fts_score (full weight, not
     //     penalized to text_weight just because other chunks have vectors)
-    //   - Chunks with ONLY vector matches: score = vector_weight × vec_score
+    //   - Chunks with ONLY vector matches: score = vec_score (absolute similarity)
     //
     // This ensures FTS-only chunks (e.g., global MEMORY.md with no embedding
     // match) can still score high enough to pass min_score.
@@ -353,7 +353,7 @@ pub(super) fn hybrid_search_merge(
             fts
         } else {
             // Vector-only: weighted vector score
-            vector_weight * vec
+            vec
         };
 
         scores.insert(chunk_id.clone(), score);

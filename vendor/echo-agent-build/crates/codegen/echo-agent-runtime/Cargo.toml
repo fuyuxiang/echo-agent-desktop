@@ -61,6 +61,7 @@ echo-agent-mcp = { workspace = true }
 reqwest = { workspace = true, features = ["stream", "blocking"] }
 reqwest-middleware = { workspace = true }
 serde = { workspace = true }
+schemars = { workspace = true }
 serde_ignored = "0.1"
 serde_json = { workspace = true, features = ["preserve_order"] }
 similar = { workspace = true }

@@ -6,19 +6,20 @@
 //!
 //! ## What is saved
 //!
-//! The current implementation writes a **structured metadata summary** with
+//! The fallback writes a **structured session summary** with
 //! zero latency and no LLM call:
 //! - message counts (user / assistant / tool results)
 //! - the first few real user topics from the session (never synthetic prefixes)
+//! - recent assistant outcomes, stripped of reasoning blocks
 //! - session date
 //!
-//! For richer content capture (decisions, patterns, reasoning)
-//! use `/flush`, which is user-initiated and produces an LLM-generated summary.
+//! The runtime also queues source-attributed extraction after completed turns
+//! and attempts a bounded rich extraction before this shutdown fallback.
 //!
 //! ## Reliability
 //!
-//! - **Minimum conversation gate:** Skip sessions with < 3 *real* user prompts
-//!   or < 50 total query bytes (synthetic metadata-only prefixes and
+//! - **Minimum conversation gate:** Skip sessions with < 1 *real* user prompt
+//!   or < 20 total query bytes (synthetic metadata-only prefixes and
 //!   auto-continue markers are excluded).
 //! - **`save_on_end` config gate:** Skipped when `[memory.session].save_on_end = false`.
 //! - **SIGTERM:** Triggered via `SessionCommand::Shutdown` handler
@@ -30,7 +31,7 @@ use crate::session::memory::storage::{MemoryStorage, slugify};
 ///
 /// "Real" excludes synthetic metadata prefixes and auto-continue sentinels —
 /// see [`extract_real_user_queries`].
-const MIN_USER_MESSAGES: usize = 3;
+const MIN_USER_MESSAGES: usize = 1;
 
 /// Minimum total byte length of all real user queries required to save.
 ///
@@ -39,7 +40,7 @@ const MIN_USER_MESSAGES: usize = 3;
 ///
 /// Uses `str::len()` (byte length) rather than `chars().count()` — for the
 /// mostly-ASCII inputs this gate targets, the distinction is immaterial.
-const MIN_TOTAL_QUERY_BYTES: usize = 50;
+const MIN_TOTAL_QUERY_BYTES: usize = 20;
 
 /// Result of the session end hook.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -193,6 +194,35 @@ pub(crate) fn generate_metadata_summary(
         summary.push('\n');
     }
 
+    // Retain the actual final outcome when a model extraction is interrupted.
+    // These are attributed excerpts, never inferred facts or tool payloads.
+    let outcomes: Vec<_> = conversation
+        .iter()
+        .enumerate()
+        .filter_map(|(index, item)| {
+            if let ConversationItem::Assistant(assistant) = item {
+                let text =
+                    echo_agent_memory::text_utils::strip_reasoning_blocks(&assistant.content);
+                let text = text.trim();
+                if text.chars().count() >= 20 {
+                    return Some(format!(
+                        "### Assistant message {} (verify before reuse)\n\n{}\n",
+                        index + 1,
+                        text.chars().take(2000).collect::<String>()
+                    ));
+                }
+            }
+            None
+        })
+        .rev()
+        .take(4)
+        .collect();
+    if !outcomes.is_empty() {
+        summary.push_str("## Recorded Outcomes\n\n");
+        for outcome in outcomes.into_iter().rev() {
+            summary.push_str(&outcome);
+        }
+    }
     summary
 }
 
@@ -253,7 +283,7 @@ mod tests {
         let storage = test_storage(&tmp);
         storage.ensure_initialized().unwrap();
 
-        // Only 1 real user message — should skip.
+        // A greeting contains no substantial query — should skip.
         let conv = vec![make_user("hello"), make_assistant("hi")];
         let result = on_session_end(&storage, &conv, "test-session-id", true);
         assert_eq!(result, SessionEndResult::Skipped);
@@ -265,7 +295,7 @@ mod tests {
         let storage = test_storage(&tmp);
         storage.ensure_initialized().unwrap();
 
-        // 3 real messages but very short — total bytes < MIN_TOTAL_QUERY_BYTES (50).
+        // 3 real messages but very short — total bytes < MIN_TOTAL_QUERY_BYTES (20).
         // "hi" (2) + "ok" (2) + "bye" (3) = 7 bytes
         let conv = vec![
             make_user("hi"),
@@ -465,11 +495,11 @@ mod tests {
         storage.ensure_initialized().unwrap();
 
         // The conversation has 2 User items, but the first is metadata-only
-        // and the second is a real query.  Only 1 real prompt → still skipped.
+        // and the second is a brief greeting. Only its real query bytes count.
         let conv = vec![
             make_metadata_only(), // synthetic, no <user_query>
             make_assistant("hi"),
-            make_user("help me with something"), // 1 real prompt
+            make_user("hello"), // 1 brief real prompt
             make_assistant("sure"),
         ];
 

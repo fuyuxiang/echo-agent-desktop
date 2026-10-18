@@ -20,7 +20,6 @@ import {
   DataSettingsPanel,
   GeneralSettingsPanel,
   HelpSettingsPanel,
-  MemorySettingsPanel,
   NotificationCenterSettingsPanel,
   SecuritySettingsPanel,
   ShortcutsSettingsPanel,
@@ -31,7 +30,7 @@ import { NotifyChannelsPanel } from "./NotifyChannelsPanel";
 import { WeixinChannelPanel } from "./WeixinChannelPanel";
 import { CloudStoragePanel } from "./CloudStoragePanel";
 import { ArchivedSessionsSettingsPanel } from "./ArchivedSessionsSettingsPanel";
-import { ResourcesPanel } from "./ResourcesPanel";
+import { PersonalMemoryPanel } from "./PersonalMemoryPanel";
 import { useModalFocus } from "@/lib/use-modal-focus";
 import { useAppDialog } from "./AppDialog";
 import { useSessionsStore } from "@/stores/sessions-store";
@@ -83,7 +82,7 @@ const NOTIFICATION_VIEWS: Array<[SettingsSectionId, string]> = [
   ["notify-channels", "提醒设置"], ["agent-mail", "通知记录"],
 ];
 const MEMORY_VIEWS: Array<[SettingsSectionId, string]> = [
-  ["memory", "记忆行为"], ["personal-memory", "个人记忆"],
+  ["memory", "记忆"], ["personal-memory", "记忆"],
 ];
 const DATA_VIEWS: Array<[SettingsSectionId, string]> = [
   ["data", "备份与恢复"], ["archived", "已归档"],
@@ -182,15 +181,19 @@ export function SettingsPanel({
 }) {
   const [active, setActive] = useState<SettingsSectionId>(initialSection === "personalize" ? "general" : initialSection);
   const [cloudDirty, setCloudDirty] = useState(false);
+  const [memoryDirty, setMemoryDirty] = useState(false);
+  const [memoryBusy, setMemoryBusy] = useState(false);
   const { requestConfirmation, dialog } = useAppDialog();
   const confirmLeave = (action: () => void) => {
-    if (active !== "cloud-storage" || !cloudDirty) {
+    const isMemory = active === "memory" || active === "personal-memory";
+    if (isMemory && memoryBusy) return;
+    if (!(active === "cloud-storage" && cloudDirty) && !(isMemory && memoryDirty)) {
       action();
       return;
     }
     requestConfirmation({
-      title: "舍弃云端文件未保存的修改？",
-      description: "当前云端文本尚未保存。继续将丢失这些修改。",
+      title: isMemory ? "舍弃未保存的记忆？" : "舍弃云端文件未保存的修改？",
+      description: isMemory ? "记忆编辑或导入尚未保存。继续将丢失这些修改。" : "当前云端文本尚未保存。继续将丢失这些修改。",
       confirmLabel: "舍弃修改",
       danger: true,
       action: async () => action(),
@@ -283,15 +286,9 @@ export function SettingsPanel({
                 <SettingsViewTabs label="通用视图" items={GENERAL_VIEWS} active={active} onSelect={setActive} />
                 <ShortcutsSettingsPanel />
               </div>
-            ) : active === "memory" ? (
-              <div className="settings-subview">
-                <SettingsViewTabs label="记忆视图" items={MEMORY_VIEWS} active={active} onSelect={setActive} />
-                <MemorySettingsPanel />
-              </div>
-            ) : active === "personal-memory" ? (
+            ) : active === "memory" || active === "personal-memory" ? (
               <div className="settings-subview settings-personal-memory">
-                <SettingsViewTabs label="记忆视图" items={MEMORY_VIEWS} active={active} onSelect={setActive} />
-                <ResourcesPanel cwd={cwd} sessionId={sessionId} onToast={onToast} />
+                <PersonalMemoryPanel cwd={cwd} sessionId={sessionId} onToast={onToast} onOpenSession={onOpenSession} onUnsavedChange={setMemoryDirty} onBusyChange={setMemoryBusy} />
               </div>
             ) : active === "help" ? (
               <HelpSettingsPanel />

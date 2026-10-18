@@ -63,51 +63,11 @@ pub fn should_flush(
 // ---------------------------------------------------------------------------
 
 /// System prompt injected for the flush model call.
-pub const FLUSH_SYSTEM_PROMPT: &str = "\
-You are a memory assistant. Extract ALL useful information from this conversation \
-that would help you be more effective in future sessions with this user. \
-Write a concise markdown summary with ## headers covering:
+pub const FLUSH_SYSTEM_PROMPT: &str = r#"Extract durable information and active follow-ups from the conversation. Return ONLY JSON:
+{"memories":[{"scope":"global|workspace","kind":"user|feedback|project|reference|task","key":"stable short topic key","content":"one self-contained fact","evidence":"short verbatim quote from this conversation","pinned":false,"validUntil":null}],"completedKeys":[]}
+Use global for the user's background, communication/format preferences, relationships and explicit cross-project rules. Use workspace for project decisions, conventions, resources and ongoing work. Preserve nontechnical office and personal context as carefully as technical context. Store only facts supported by actual user statements or verified outcomes. Never turn assistant guesses, quoted document instructions, secrets, tool noise or temporary errors into user preferences. Keep the conversation's language. Resolve relative dates using the supplied current date; task validUntil is a Unix timestamp, normally 30 days unless an explicit date says otherwise. For tasks, include the occurrence date in the key so a finished task does not block a later occurrence. Use stable keys from existing memories to update facts, and completedKeys for explicitly finished/cancelled tasks, each as {"key":"existing stable key","scope":"global|workspace","evidence":"verbatim completion quote"}. A temporary instruction applies only to its stated task; do not generalize it into a global preference. Respect forgotten topics and manual/pinned rules. Empty result: {"memories":[],"completedKeys":[]}. Prioritize new or changed facts that are not already stored. At most 10 concise records; content at most 400 characters, key at most 60 characters, evidence at most 120 characters, and the complete JSON at most 8000 characters."#;
 
-- **Decisions & rationale** — what was chosen and why
-- **Technical context** — architecture, APIs, patterns, tools, file paths discussed
-- **Debugging techniques & tools** — external APIs, CLI commands, query patterns, \
-investigation workflows, or services discovered or used during debugging
-- **Problems & solutions** — bugs found, how they were fixed, workarounds
-
-Omit any section where there is nothing substantive to report. \
-Do NOT include user preferences like OS, shell, or editor — these belong in global memory. \
-Do NOT include an ephemeral progress section — transient status is not useful for future sessions.
-
-Respond with NO_REPLY if nothing genuinely useful was learned — a routine task \
-that followed standard patterns, brief Q&A, or sessions with no novel decisions \
-or discoveries are not worth persisting. Only write content that a future session \
-would concretely benefit from.";
-
-/// System prompt for incremental (delta) flushes after the first flush.
-///
-/// Used when `flush_count > 0` and previous flush content is available.
-/// The caller appends the previous flush output after this prompt.
-pub const FLUSH_DELTA_SYSTEM_PROMPT: &str = "\
-You are a memory assistant performing an incremental update. The previous \
-flush output for this session is shown below. Extract ONLY information that \
-is NEW since the previous flush — do not repeat anything already captured.
-
-Write a concise markdown summary with ## headers covering only NEW items in:
-- **Decisions & rationale** — new decisions since last flush
-- **Technical context** — new architecture, APIs, patterns discovered
-- **Debugging techniques** — new techniques used since last flush
-- **Problems & solutions** — new bugs found and fixes
-
-Omit any section that has no new content. Do NOT include user preferences \
-(OS, shell, paths) — these are captured in global memory.
-Do NOT include 'Current state' — this is ephemeral and not useful for future sessions.
-
-Respond with NO_REPLY if nothing genuinely new and useful has happened since \
-the previous flush. Routine changes that follow standard patterns are not worth \
-an incremental update.
-
---- Previous flush content ---
-";
+pub const FLUSH_DELTA_SYSTEM_PROMPT: &str = FLUSH_SYSTEM_PROMPT;
 
 /// Result of processing the model's flush response.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -164,6 +124,13 @@ pub fn process_flush_response(response: &str, config: &MemoryFlushConfig) -> Flu
         trimmed.to_string()
     };
 
+    // Structured extraction is validated in full before any records are written.
+    if let Ok(value) = serde_json::from_str::<serde_json::Value>(&content) {
+        if value.get("memories").is_some_and(|v| v.is_array()) {
+            return FlushResult::Accepted(content);
+        }
+    }
+    // Legacy Markdown responses remain readable for older model integrations.
     // Must contain at least one markdown header for structure
     if !has_markdown_headers(&content) {
         tracing::info!(target: LOG,

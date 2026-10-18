@@ -9,6 +9,150 @@ pub(super) struct MemoryFlushSnapshot {
     chat_history: Vec<ConversationItem>,
 }
 
+struct FlushLockGuard<'a>(&'a super::memory_state::SessionMemory);
+impl Drop for FlushLockGuard<'_> {
+    fn drop(&mut self) {
+        self.0.release_flush_lock();
+    }
+}
+
+#[derive(serde::Serialize, serde::Deserialize)]
+struct PendingMemory {
+    source_id: String,
+    history: Vec<ConversationItem>,
+    #[serde(default)]
+    conversation_len: usize,
+    #[serde(default)]
+    queued_at: i64,
+}
+
+impl SessionActor {
+    /// Persist the work before starting the model call. A quick quit, provider
+    /// error or crash leaves a bounded, retryable job in this workspace.
+    pub(super) async fn queue_memory_extraction(self: &std::sync::Arc<Self>) {
+        use echo_agent_memory::records;
+        if self.startup_hints.is_subagent
+            || !records::setting("memory", None, "enabled", true)
+            || !records::setting("compaction", Some("memory_flush"), "enabled", true)
+        {
+            return;
+        }
+        let Some(storage) = self.memory.storage() else {
+            return;
+        };
+        if storage.is_ephemeral() {
+            return;
+        }
+        let snapshot = self.snapshot_memory_flush_state().await;
+        let job = PendingMemory {
+            queued_at: records::now(),
+            source_id: self.session_info.id.to_string(),
+            conversation_len: snapshot.counts.total,
+            history: crate::session::helpers::memory_flush_window::select_flush_window(
+                snapshot.chat_history,
+                80,
+            ),
+        };
+        let name = blake3::hash(job.source_id.as_bytes()).to_hex().to_string();
+        if let Err(error) = records::write_json(
+            &storage
+                .workspace_dir()
+                .join("pending")
+                .join(format!("{name}.json")),
+            &job,
+        ) {
+            tracing::warn!(%error, "could not checkpoint memory extraction");
+            return;
+        }
+        let actor = self.clone();
+        tokio::task::spawn_local(async move {
+            actor.recover_pending_memories().await;
+        });
+    }
+
+    pub(super) async fn recover_pending_memories(&self) {
+        use echo_agent_memory::records;
+        if self.startup_hints.is_subagent
+            || !records::setting("memory", None, "enabled", true)
+            || !records::setting("compaction", Some("memory_flush"), "enabled", true)
+        {
+            return;
+        }
+        let Some(storage) = self.memory.storage() else {
+            return;
+        };
+        for _pass in 0..3 {
+            let Ok(entries) = std::fs::read_dir(storage.workspace_dir().join("pending")) else {
+                return;
+            };
+            for entry in entries.take(32).flatten() {
+                let path = entry.path();
+                if !entry.file_type().is_ok_and(|kind| kind.is_file())
+                    || path.extension().is_none_or(|v| v != "json")
+                {
+                    continue;
+                }
+                if !entry
+                    .metadata()
+                    .is_ok_and(|meta| meta.len() <= 8 * 1024 * 1024)
+                {
+                    continue;
+                }
+                let Ok(bytes) = std::fs::read(&path) else {
+                    continue;
+                };
+                let Ok(job) = serde_json::from_slice::<PendingMemory>(&bytes) else {
+                    continue;
+                };
+                let counts = echo_agent_chat_state::ConversationCounts {
+                    total: job.history.len(),
+                    user: job
+                        .history
+                        .iter()
+                        .filter(|i| matches!(i, ConversationItem::User(_)))
+                        .count(),
+                    assistant: job
+                        .history
+                        .iter()
+                        .filter(|i| matches!(i, ConversationItem::Assistant(_)))
+                        .count(),
+                    tool_result: job
+                        .history
+                        .iter()
+                        .filter(|i| matches!(i, ConversationItem::ToolResult(_)))
+                        .count(),
+                };
+                let completed_len = job.conversation_len;
+                let same_session = job.source_id == self.session_info.id.to_string();
+                if self
+                    .run_memory_flush_for_source(
+                        "task_completed",
+                        Some(MemoryFlushSnapshot {
+                            counts,
+                            chat_history: job.history,
+                        }),
+                        &job.source_id,
+                        Some(job.queued_at),
+                    )
+                    .await
+                {
+                    if same_session {
+                        self.last_idle_flush_conversation_len
+                            .store(completed_len, std::sync::atomic::Ordering::Relaxed);
+                    }
+                    // A newer completed turn may have replaced the same job while
+                    // the model was running. Never discard that newer checkpoint.
+                    if std::fs::read(&path).is_ok_and(|current| current == bytes) {
+                        let _ = std::fs::remove_file(&path);
+                    }
+                } else {
+                    return;
+                }
+            }
+        }
+    }
+}
+
 /// Build first-turn injection backend params without mutating the shared
 /// session params.
 ///
@@ -34,39 +178,6 @@ pub(super) fn build_initial_injection_backend_params(
 }
 
 impl SessionActor {
-    /// Re-register `memory_search` and `memory_get` tools on the tool bridge.
-    ///
-    /// Used when re-enabling memory mid-session (`/memory on`). The tools are
-    /// registered via the dynamic `register_mcp_tools` path which puts them in
-    /// the `LocalRegistry` for dispatch. The memory backend itself is already
-    /// in `Resources` (inserted by the caller before calling this method).
-    pub(super) async fn register_memory_tools(
-        &self,
-        bridge: &echo_agent_tools::bridge::ToolBridge,
-    ) -> Result<(), String> {
-        use echo_agent_tools::implementations::memory::{
-            MEMORY_GET_TOOL_NAME, MEMORY_SEARCH_TOOL_NAME,
-        };
-
-        bridge
-            .register_mcp_tools(
-                MEMORY_SEARCH_TOOL_NAME.to_owned(),
-                echo_agent_tools::implementations::memory::search_tool::MemorySearchImpl,
-                None,
-            )
-            .await
-            .map_err(|e| format!("failed to register memory_search: {e}"))?;
-        bridge
-            .register_mcp_tools(
-                MEMORY_GET_TOOL_NAME.to_owned(),
-                echo_agent_tools::implementations::memory::get_tool::MemoryGetImpl,
-                None,
-            )
-            .await
-            .map_err(|e| format!("failed to register memory_get: {e}"))?;
-        Ok(())
-    }
-
     pub(super) fn emit_memory_session_summary(
         &self,
         telem: &super::memory_state::MemoryTelemetry,
@@ -101,6 +212,23 @@ impl SessionActor {
     /// `log_suffix` is appended to the `MEMORY_SESSION_END:` log line so each
     /// arm keeps a distinct reason string in logs.
     pub(super) async fn run_session_end_memory_pipeline(&self, log_suffix: &str) {
+        if !echo_agent_memory::records::setting("memory", None, "enabled", true) {
+            return;
+        }
+        if !self.startup_hints.is_subagent
+            && echo_agent_memory::records::setting(
+                "memory",
+                Some("session"),
+                "save_on_end",
+                self.memory.save_on_end,
+            )
+        {
+            let _ = tokio::time::timeout(
+                std::time::Duration::from_secs(20),
+                self.run_memory_flush("session_end", None),
+            )
+            .await;
+        }
         let mut session_end_result = "disabled";
         let mut total_chunks_at_end = 0usize;
         // Dream consolidates *prior* logs. Run after Written/Failed, or when
@@ -114,7 +242,12 @@ impl SessionActor {
                     &storage,
                     &conversation,
                     &self.session_info.id.0,
-                    self.memory.save_on_end,
+                    echo_agent_memory::records::setting(
+                        "memory",
+                        Some("session"),
+                        "save_on_end",
+                        self.memory.save_on_end,
+                    ),
                 );
                 match &result {
                     crate::session::memory::hooks::SessionEndResult::Written(path_str) => {
@@ -202,6 +335,16 @@ impl SessionActor {
     /// Uses the same sampling client infrastructure as flush but sends
     /// the dream prompt instead. The model call has a 60s timeout.
     pub(super) async fn maybe_run_dream(&self) {
+        if !echo_agent_memory::records::setting("memory", None, "enabled", true)
+            || !echo_agent_memory::records::setting(
+                "memory",
+                Some("dream"),
+                "enabled",
+                self.memory.dream_config.enabled,
+            )
+        {
+            return;
+        }
         if self.startup_hints.is_subagent {
             tracing::debug!(
                 target: echo_agent_telemetry::memory_log::TARGET,
@@ -216,7 +359,9 @@ impl SessionActor {
             return;
         };
 
-        let gate = check_dream_gates(&self.memory.dream_config, &lock, &sessions_dir, Some(&sid8));
+        let mut live_config = self.memory.dream_config;
+        live_config.enabled = true;
+        let gate = check_dream_gates(&live_config, &lock, &sessions_dir, Some(&sid8));
         let sessions = match gate {
             DreamGate::Open { sessions } => sessions,
             other => {
@@ -301,19 +446,44 @@ impl SessionActor {
     ) -> Result<bool, String> {
         use crate::session::memory::dream::*;
 
+        if !echo_agent_memory::records::setting("memory", None, "enabled", true) {
+            return Ok(false);
+        }
         let existing_memory = std::fs::read_to_string(storage.workspace_memory_file()).ok();
+        let safe_existing = existing_memory.as_deref().map(|text| {
+            text.split("\n\n")
+                .filter(|paragraph| {
+                    echo_agent_memory::records::permitted(storage, paragraph).unwrap_or(false)
+                })
+                .collect::<Vec<_>>()
+                .join("\n\n")
+        });
+        let safe_sessions: Vec<_> = sessions
+            .iter()
+            .filter(|stem| {
+                let path = sessions_dir.join(format!("{stem}.md"));
+                !echo_agent_memory::records::source_path_blocked(storage, &path).unwrap_or(true)
+                    && std::fs::read_to_string(path).is_ok_and(|text| {
+                        echo_agent_memory::records::permitted(storage, &text).unwrap_or(false)
+                    })
+            })
+            .cloned()
+            .collect();
 
-        let dream_msg =
-            match build_dream_user_message(sessions_dir, sessions, existing_memory.as_deref()) {
-                Some(msg) => msg,
-                None => {
-                    tracing::info!(
-                        target: echo_agent_telemetry::memory_log::TARGET,
-                        "{log_prefix}: no readable session content, skipping"
-                    );
-                    return Ok(false);
-                }
-            };
+        let dream_msg = match build_dream_user_message(
+            sessions_dir,
+            &safe_sessions,
+            safe_existing.as_deref(),
+        ) {
+            Some(msg) => msg,
+            None => {
+                tracing::info!(
+                    target: echo_agent_telemetry::memory_log::TARGET,
+                    "{log_prefix}: no readable session content, skipping"
+                );
+                return Ok(false);
+            }
+        };
 
         let model_response = match tokio::time::timeout(
             std::time::Duration::from_secs(30 * 60),
@@ -341,6 +511,11 @@ impl SessionActor {
             }
         };
 
+        if !echo_agent_memory::records::setting("memory", None, "enabled", true)
+            || !echo_agent_memory::records::permitted(storage, &model_response).unwrap_or(false)
+        {
+            return Ok(false);
+        }
         let result = execute_dream_with_expected(
             lock,
             storage,
@@ -361,7 +536,7 @@ impl SessionActor {
 
         let dream_path = if matches!(result.status, DreamStatus::Completed { .. }) {
             let path = storage.workspace_memory_file();
-            self.memory.reindex_and_embed(&path, "dream").await;
+            self.memory.reindex_and_embed(&path, "workspace").await;
 
             // Remove stale index chunks only for session files that
             // were actually deleted — stems skipped by the recency guard
@@ -418,7 +593,11 @@ impl SessionActor {
         let session_id = self.session_info.id.to_string();
         let request = ConversationRequest {
             items: vec![
-                ConversationItem::system(crate::session::memory::dream::DREAM_SYSTEM_PROMPT),
+                ConversationItem::system(format!(
+                    "{}\nCurrent local date: {}",
+                    crate::session::memory::dream::DREAM_SYSTEM_PROMPT,
+                    chrono::Local::now().to_rfc3339()
+                )),
                 ConversationItem::user(user_message),
             ],
             model: Some(model),
@@ -450,7 +629,43 @@ impl SessionActor {
         trigger: &str,
         snapshot: Option<MemoryFlushSnapshot>,
     ) -> bool {
-        use echo_agent_memory::flush::*;
+        self.run_memory_flush_for_source(trigger, snapshot, &self.session_info.id.0, None)
+            .await
+    }
+
+    pub(super) async fn run_memory_flush_for_source(
+        &self,
+        trigger: &str,
+        snapshot: Option<MemoryFlushSnapshot>,
+        source_id: &str,
+        source_at: Option<i64>,
+    ) -> bool {
+        use echo_agent_memory::{flush::*, records};
+        let observed_at = source_at
+            .filter(|at| *at > 0 && *at <= records::now())
+            .unwrap_or_else(records::now);
+        if !records::setting("memory", None, "enabled", true)
+            || (trigger != "user_requested"
+                && trigger != "slash_command"
+                && !records::setting("compaction", Some("memory_flush"), "enabled", true))
+        {
+            return false;
+        }
+        let Some(storage_for_records) = self.memory.storage() else {
+            return false;
+        };
+        if records::source_blocked(&storage_for_records, source_id).unwrap_or(true) {
+            return true;
+        }
+        let previous_activity = records::activity(&storage_for_records);
+        let _ = records::set_activity(
+            &storage_for_records,
+            &records::MemoryActivity {
+                attempted_at: Some(records::now()),
+                outcome: "running".into(),
+                ..previous_activity
+            },
+        );
 
         // Atomically acquire the flushing lock. If another flush is already
         // running (idle timer, pre-compaction, or user-requested), skip.
@@ -462,6 +677,7 @@ impl SessionActor {
             return false;
         }
 
+        let _flush_guard = FlushLockGuard(&self.memory);
         tracing::info!(target: echo_agent_telemetry::memory_log::TARGET, "MEMORY_FLUSH: starting");
         let flush_start = std::time::Instant::now();
 
@@ -498,22 +714,16 @@ impl SessionActor {
                 80,
             );
 
-            let flush_count = self.memory.flush_count.load(std::sync::atomic::Ordering::Relaxed);
-            let system_prompt = if flush_count > 0 {
-                if let Some(prev) = self.memory.last_flush_content.borrow().as_deref() {
-                    format!("{FLUSH_DELTA_SYSTEM_PROMPT}{prev}")
-                } else {
-                    FLUSH_SYSTEM_PROMPT.to_owned()
-                }
-            } else {
-                FLUSH_SYSTEM_PROMPT.to_owned()
-            };
+            let system_prompt = format!("{}\nCurrent local date: {}\nExisting memories (manual and pinned entries must be preserved):\n{}",
+                FLUSH_SYSTEM_PROMPT, chrono::DateTime::from_timestamp(observed_at, 0).map(|time| time.with_timezone(&chrono::Local).to_rfc3339()).unwrap_or_else(|| chrono::Local::now().to_rfc3339()),
+                records::extraction_context(&storage_for_records).unwrap_or_default());
             let mut items: Vec<ConversationItem> = vec![ConversationItem::system(system_prompt)];
             tracing::info!(
                 target: echo_agent_telemetry::memory_log::TARGET,
                 "MEMORY_FLUSH: sending {n} recent messages to model (+ system prompt + user closer)",
                 n = recent.len(),
             );
+            let evidence_text = recent.iter().filter_map(|item| super::memory_tools::message_text(item).map(|(_, text)| text)).collect::<Vec<_>>().join("\n");
             items.extend(
                 echo_agent_chat_state::compaction_utils::ModelRequestHistory::from_raw(recent).into_items(),
             );
@@ -549,7 +759,10 @@ impl SessionActor {
                     .conversation_collect(request)
                     .await
                     .map_err(|e| format!("flush model call failed: {e}"))?;
-                Ok::<_, String>(response.assistant_text())
+                let text = response.assistant_text();
+                let text = text.trim().strip_prefix("```json").or_else(|| text.trim().strip_prefix("```"))
+                    .map(|value| value.trim().strip_suffix("```").unwrap_or(value).trim().to_owned()).unwrap_or(text);
+                records::grounded_extraction(&text, &evidence_text).map_err(|error| error.to_string())
             });
             // Abort the spawned task if this future is dropped (session
             // cancellation), preventing orphan HTTP streams.
@@ -570,6 +783,14 @@ impl SessionActor {
         }
         .await;
 
+        if !records::setting("memory", None, "enabled", true)
+            || (trigger != "user_requested"
+                && trigger != "slash_command"
+                && !records::setting("compaction", Some("memory_flush"), "enabled", true))
+            || records::source_blocked(&storage_for_records, source_id).unwrap_or(true)
+        {
+            return false;
+        }
         // (outcome_string, response_length, accepted_length, was_truncated, written_path)
         let (outcome, response_len, accepted_len, was_truncated, flush_path) = match result {
             Ok(response_text) => {
@@ -580,12 +801,52 @@ impl SessionActor {
                         ("nothing to store".to_string(), resp_len, 0, false, None)
                     }
                     FlushResult::Accepted(content) => {
+                        let structured = content.trim_start().starts_with('{');
+                        let content = if structured {
+                            match records::apply_extraction_at(
+                                &storage_for_records,
+                                &content,
+                                source_id,
+                                observed_at,
+                            ) {
+                                Ok(value) => {
+                                    for dir in [
+                                        storage_for_records.global_dir(),
+                                        storage_for_records.workspace_dir(),
+                                    ] {
+                                        let path = dir.join(records::RECORD_DOCUMENT);
+                                        self.reindex_and_embed(
+                                            &path,
+                                            storage_for_records.classify_source(&path),
+                                        )
+                                        .await;
+                                    }
+                                    value
+                                }
+                                Err(error) => {
+                                    let _ = records::set_activity(
+                                        &storage_for_records,
+                                        &records::MemoryActivity {
+                                            attempted_at: Some(records::now()),
+                                            outcome: "failed".into(),
+                                            detail: error.to_string(),
+                                            ..Default::default()
+                                        },
+                                    );
+                                    return false;
+                                }
+                            }
+                        } else {
+                            content
+                        };
                         let acc_len = content.len();
                         let truncated = acc_len < resp_len;
 
                         // Semantic dedup: check if this content overlaps with
                         // existing memory chunks before writing.
-                        let is_sem_dup = if let Some(storage) = self.memory.storage() {
+                        let is_sem_dup = if structured {
+                            content.is_empty()
+                        } else if let Some(storage) = self.memory.storage() {
                             if let Some(index) = self.memory.open_index(&storage) {
                                 let provider = if let Some(ref params) = self.memory.backend_params
                                 {
@@ -627,7 +888,7 @@ impl SessionActor {
                             )
                         } else if let Some(storage) = self.memory.storage() {
                             let date = chrono::Utc::now().format("%Y-%m-%d").to_string();
-                            let session_id = &self.session_info.id.0;
+                            let session_id = source_id;
                             match storage
                                 .write_daily_log(&date, trigger, session_id, &content, true)
                             {
@@ -720,7 +981,34 @@ impl SessionActor {
         });
 
         let completed = matches!(flush_outcome, "written" | "nothing_to_store");
-        self.memory.release_flush_lock();
+        let current_activity = records::activity(&storage_for_records);
+        let _ = records::set_activity(
+            &storage_for_records,
+            &records::MemoryActivity {
+                attempted_at: Some(records::now()),
+                succeeded_at: if completed {
+                    Some(records::now())
+                } else {
+                    current_activity.succeeded_at
+                },
+                outcome: if completed {
+                    if flush_outcome == "written" {
+                        "saved"
+                    } else {
+                        "unchanged"
+                    }
+                } else {
+                    "failed"
+                }
+                .into(),
+                detail: if completed {
+                    String::new()
+                } else {
+                    outcome.clone()
+                },
+                records_written: current_activity.records_written,
+            },
+        );
         self.send_echo_agent_notification(EchoAgentSessionUpdate::MemoryFlushCompleted {
             result: outcome,
             path: flush_path,

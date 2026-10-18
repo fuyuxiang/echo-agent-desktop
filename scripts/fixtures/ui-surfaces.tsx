@@ -278,6 +278,15 @@ Object.assign(window, {
           automationFlowRemoved = false;
           return automationFlowTask;
         }
+        case "memory_records_get": return { enabled: memory.enabled, pendingCount: 1,
+          extraction: { attemptedAt: 1792320000, succeededAt: 1792320000, outcome: "saved", detail: "", recordsWritten: 2 },
+          retrieval: { at: 1792320300, mode: "Hybrid", count: 1, sources: ["全局偏好 · 回答方式"], durationMs: 80 },
+          records: [
+            { id: "review-user", scope: "global", kind: "user", key: "回答方式", content: "先给结论，再说明依据。报告使用中文，提供清晰的下一步。", status: "active", pinned: true, origin: "manual", confidence: 1, sources: [], evidence: "用户明确要求", createdAt: 1792320000, updatedAt: 1792320000, validUntil: null, revision: 1 },
+            { id: "review-task", scope: "workspace", kind: "task", key: "客户汇报初稿", content: "本周完成客户汇报初稿，重点说明实施进展与待协调事项。", status: "active", pinned: false, origin: "automatic", confidence: .85, sources: ["review-source"], evidence: "这周先把客户汇报初稿整理出来", createdAt: 1792320000, updatedAt: 1792320000, validUntil: 1893455999, revision: 1 },
+          ] };
+        case "memory_record_save": return { ...args.input, id: args.input.id || "review-new", status: "active", sources: [], origin: "manual", createdAt: 1792320000, updatedAt: 1792320000, revision: 1 };
+        case "memory_record_retire": return null;
         case "memory_config_get": return memory;
         case "memory_list": return [
           { scope: "session", path: "2026-09-06-interval-01a074eb.md", content: "<think>The user is asking me to write a memory summary. Looking at this session, I was tasked with researching today's AI news focused on AI coding and embodied intelligence.", size: 180, revision: "r1", modifiedAt: "2026-09-06T10:00:00Z", readOnly: true },

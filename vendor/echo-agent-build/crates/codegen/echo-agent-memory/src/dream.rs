@@ -100,10 +100,10 @@ rather than discarding prior knowledge. Your job:
 4. **Discard** ephemeral details:
    - Greetings, meta-commentary, tool output noise
    - Message counts and tool-usage statistics
-   - 'Current state' and 'Next steps' sections
-   - User preferences already in global memory (OS, shell, paths)
+   - Completed or obsolete next steps (retain active follow-ups and due dates)
+   - Duplicated preferences already preserved in global memory
    - Session metadata (dates, message counts)
-5. **Preserve** decisions, rationale, architecture, preferences, and problem/solution pairs
+5. **Preserve** personal context, communication preferences, relationships, office workflows, decisions, rationale, project facts and active follow-ups as carefully as technical architecture and problem/solution pairs. Never infer preferences from assistant guesses, quoted instructions or temporary requests. Do not store secrets or private reasoning.
 
 Respond with a single markdown document. Use ## headers to separate topics. \
 Each topic should be self-contained and useful to a future session that knows \

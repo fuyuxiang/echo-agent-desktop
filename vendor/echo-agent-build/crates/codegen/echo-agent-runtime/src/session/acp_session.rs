@@ -179,6 +179,8 @@ mod memory_dream;
 use memory_dream::*;
 #[path = "acp_session_impl/goal_support.rs"]
 mod goal_support;
+#[path = "acp_session_impl/memory_tools.rs"]
+mod memory_tools;
 pub(crate) use goal_support::*;
 #[path = "acp_session_impl/hook_dispatch.rs"]
 mod hook_dispatch;

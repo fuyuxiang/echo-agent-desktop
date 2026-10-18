@@ -20,11 +20,11 @@ use std::io::Read;
 use std::path::{Path, PathBuf};
 use std::sync::{Mutex, OnceLock};
 
+use echo_agent_runtime::session::RewindMode as RuntimeRewindMode;
 use echo_agent_runtime::session::fork::{ForkSessionRequest, ForkSessionResponse};
 use echo_agent_runtime::session::memory::{
-    init_sqlite_vec, storage::normalize_memory_content, MemoryIndex, MemoryScope, MemoryStorage,
+    MemoryIndex, MemoryScope, MemoryStorage, init_sqlite_vec, storage::normalize_memory_content,
 };
-use echo_agent_runtime::session::RewindMode as RuntimeRewindMode;
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use tauri::{AppHandle, State};
@@ -488,6 +488,7 @@ pub(crate) fn delete_session_memory_artifacts(
         .to_str()
         .ok_or_else(|| "workspace path is not valid UTF-8".to_string())?;
     let storage = memory_storage(Some(cwd))?;
+    echo_agent_memory::records::forget_source(&storage, session_id).map_err(|e| e.to_string())?;
     let _guard = memory_mutation_lock()
         .lock()
         .map_err(|_| "记忆写入锁已损坏".to_string())?;
@@ -1012,6 +1013,106 @@ pub async fn memory_dream(
         .get("changed")
         .and_then(serde_json::Value::as_bool)
         .ok_or_else(|| "Agent Runtime 未返回记忆整理结果".to_string())
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PersonalMemorySnapshot {
+    records: Vec<echo_agent_memory::records::MemoryRecord>,
+    extraction: echo_agent_memory::records::MemoryActivity,
+    retrieval: echo_agent_memory::records::RetrievalActivity,
+    pending_count: usize,
+    enabled: bool,
+}
+
+#[tauri::command]
+pub fn memory_records_get(
+    filesystem: State<'_, FilesystemAccess>,
+    cwd: Option<String>,
+) -> Result<PersonalMemorySnapshot, String> {
+    let cwd = authorized_optional_cwd(&filesystem, cwd)?;
+    let storage = memory_storage(cwd.as_deref())?;
+    let records =
+        echo_agent_memory::records::list(&storage, cwd.is_some()).map_err(|e| e.to_string())?;
+    let pending_count = std::fs::read_dir(storage.workspace_dir().join("pending"))
+        .map(|entries| {
+            entries
+                .flatten()
+                .filter(|entry| {
+                    entry.file_type().is_ok_and(|kind| kind.is_file())
+                        && entry.path().extension().is_some_and(|ext| ext == "json")
+                })
+                .count()
+        })
+        .unwrap_or(0);
+    Ok(PersonalMemorySnapshot {
+        records,
+        extraction: echo_agent_memory::records::activity(&storage),
+        retrieval: echo_agent_memory::records::retrieval(&storage),
+        pending_count,
+        enabled: crate::agent_config::memory_config_get()?.enabled,
+    })
+}
+
+fn sync_record_projection(storage: &MemoryStorage, scope: MemoryEntryScope) -> Result<(), String> {
+    let root = if scope == MemoryEntryScope::Global {
+        storage.global_dir()
+    } else {
+        storage.workspace_dir()
+    };
+    sync_memory_indexes(
+        storage,
+        scope,
+        &root.join(echo_agent_memory::records::RECORD_DOCUMENT),
+        false,
+    )
+    .map_err(|error| format!("记忆已保存，检索索引更新失败；下次检索会重试：{error}"))
+}
+
+#[tauri::command]
+pub fn memory_record_save(
+    filesystem: State<'_, FilesystemAccess>,
+    cwd: Option<String>,
+    input: echo_agent_memory::records::RecordInput,
+) -> Result<echo_agent_memory::records::MemoryRecord, String> {
+    let scope = MemoryEntryScope::parse(&input.scope)?;
+    scope.writable()?;
+    let cwd = authorized_optional_cwd(&filesystem, cwd)?;
+    if scope == MemoryEntryScope::Workspace && cwd.is_none() {
+        return Err("请先选择工作区".into());
+    }
+    if input.id.is_some() && input.expected_revision.is_none() {
+        return Err("更新记忆需要当前版本，请刷新后重试".into());
+    }
+    let storage = memory_storage(cwd.as_deref())?;
+    ensure_memory_hierarchy(&storage, scope, true)?;
+    let record = echo_agent_memory::records::remember(&storage, input, None, false)
+        .map_err(|e| e.to_string())?
+        .ok_or("记忆未保存")?;
+    sync_record_projection(&storage, scope)?;
+    Ok(record)
+}
+
+#[tauri::command]
+pub fn memory_record_retire(
+    filesystem: State<'_, FilesystemAccess>,
+    cwd: Option<String>,
+    scope: String,
+    id: String,
+    revision: u64,
+    completed: bool,
+) -> Result<(), String> {
+    let scope = MemoryEntryScope::parse(&scope)?;
+    scope.writable()?;
+    let cwd = authorized_optional_cwd(&filesystem, cwd)?;
+    if scope == MemoryEntryScope::Workspace && cwd.is_none() {
+        return Err("请先选择工作区".into());
+    }
+    let storage = memory_storage(cwd.as_deref())?;
+    ensure_memory_hierarchy(&storage, scope, false)?;
+    echo_agent_memory::records::retire(&storage, scope.as_str(), &id, Some(revision), completed)
+        .map_err(|e| e.to_string())?;
+    sync_record_projection(&storage, scope)
 }
 
 // ========================================================================
@@ -2431,13 +2532,13 @@ pub async fn plugins_action(
 #[cfg(test)]
 mod tests {
     use super::{
-        check_expected_revision, delete_session_memory_artifacts_from_storage, file_revision,
-        init_sqlite_vec, kill_running_task, list_memory, list_running_tasks,
-        normalize_plugin_action, parse_model_reload_ack, parse_rewind_execution,
-        parse_slash_commands, remember_plugins, request_internal_reload_and_wait,
-        require_listed_plugin_id, resolve_memory_path, rewind_execute_payload, rewind_point_values,
-        secure_remote_source, validate_admin_action, MemoryEntryScope, MemoryIndex, MemoryStorage,
-        ModelReloadAck, RawSearchHit, RunningTaskSource, MAX_ADMIN_ACTION_STRING_BYTES,
+        MAX_ADMIN_ACTION_STRING_BYTES, MemoryEntryScope, MemoryIndex, MemoryStorage,
+        ModelReloadAck, RawSearchHit, RunningTaskSource, check_expected_revision,
+        delete_session_memory_artifacts_from_storage, file_revision, init_sqlite_vec,
+        kill_running_task, list_memory, list_running_tasks, normalize_plugin_action,
+        parse_model_reload_ack, parse_rewind_execution, parse_slash_commands, remember_plugins,
+        request_internal_reload_and_wait, require_listed_plugin_id, resolve_memory_path,
+        rewind_execute_payload, rewind_point_values, secure_remote_source, validate_admin_action,
     };
 
     fn canonical_fork_response() -> serde_json::Value {
@@ -2525,12 +2626,14 @@ mod tests {
             serde_json::json!({ "sessionId": "legacy-fork", "parentSessionId": "foreign-parent" }),
             serde_json::json!({ "sessionId": "legacy-fork", "newCwd": "/private/tmp/foreign-workspace" }),
         ] {
-            assert!(super::parse_session_fork_response(
-                wire,
-                "source-session",
-                std::path::Path::new("/private/tmp/owned-workspace")
-            )
-            .is_err());
+            assert!(
+                super::parse_session_fork_response(
+                    wire,
+                    "source-session",
+                    std::path::Path::new("/private/tmp/owned-workspace")
+                )
+                .is_err()
+            );
         }
     }
 
@@ -2553,12 +2656,14 @@ mod tests {
             serde_json::json!("source-session"),
             serde_json::json!({ "sessionId": "../escaped" }),
         ] {
-            assert!(super::parse_session_fork_response(
-                wire,
-                "source-session",
-                std::path::Path::new("/private/tmp/owned-workspace")
-            )
-            .is_err());
+            assert!(
+                super::parse_session_fork_response(
+                    wire,
+                    "source-session",
+                    std::path::Path::new("/private/tmp/owned-workspace")
+                )
+                .is_err()
+            );
         }
     }
 
@@ -2898,9 +3003,11 @@ mod tests {
                 "authReady": true,
             })));
 
-        assert!(parse_model_reload_ack(response)
-            .expect_err("authReady without an auth method must fail closed")
-            .contains("inconsistent authentication state"));
+        assert!(
+            parse_model_reload_ack(response)
+                .expect_err("authReady without an auth method must fail closed")
+                .contains("inconsistent authentication state")
+        );
     }
 
     #[test]
@@ -2967,10 +3074,12 @@ mod tests {
             )
             .unwrap();
             assert_eq!(index.search_fts("NewPreferenceToken", 10).unwrap().len(), 1);
-            assert!(index
-                .search_fts("OldPreferenceToken", 10)
-                .unwrap()
-                .is_empty());
+            assert!(
+                index
+                    .search_fts("OldPreferenceToken", 10)
+                    .unwrap()
+                    .is_empty()
+            );
         }
         super::sync_memory_indexes(&first_storage, MemoryEntryScope::Global, &global_file, true)
             .unwrap();
@@ -2981,10 +3090,12 @@ mod tests {
             crate::agent_runtime::MEMORY_EMBEDDING_DIMENSIONS,
         )
         .unwrap();
-        assert!(index
-            .search_fts("NewPreferenceToken", 10)
-            .unwrap()
-            .is_empty());
+        assert!(
+            index
+                .search_fts("NewPreferenceToken", 10)
+                .unwrap()
+                .is_empty()
+        );
     }
 
     #[test]
@@ -3076,10 +3187,10 @@ mod tests {
             accepted,
             flush::FlushResult::Accepted("## Decision\n\nKeep the public result.".to_string())
         );
-        assert!(dream::process_dream_response(
-            "<reasoning>private ## headings</reasoning>\nNO_REPLY"
-        )
-        .is_none());
+        assert!(
+            dream::process_dream_response("<reasoning>private ## headings</reasoning>\nNO_REPLY")
+                .is_none()
+        );
     }
 
     #[test]
