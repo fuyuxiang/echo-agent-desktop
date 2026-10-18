@@ -61,7 +61,7 @@ describe("Sidebar", () => {
     const nav = container.querySelector(".sidebar__nav");
     expect(nav).not.toBeNull();
     expect(within(nav as HTMLElement).getAllByRole("button").map((button) => button.textContent?.trim())).toEqual([
-      "新建任务", "项目", "组织", "专家与扩展", "代码开发", "更多知识与工具",
+      "新建任务", "项目", "组织", "专家·技能·连接器", "代码开发", "更多知识与工具",
     ]);
     expect(screen.queryByText("助理")).not.toBeInTheDocument();
   });
@@ -491,9 +491,9 @@ describe("Sidebar", () => {
   it.each(["专家·技能·连接器", "专家团", "技能", "连接器", "插件"])("扩展子页 %s 始终选中同一个侧栏入口", activeNav => {
     const onNavigate = vi.fn();
     render(<Sidebar {...base} activeNav={activeNav} onNavigate={onNavigate} />);
-    expect(screen.getByRole("button", { name: "专家与扩展" })).toHaveClass("sidebar__nav-item--active");
+    expect(screen.getByRole("button", { name: "专家·技能·连接器" })).toHaveClass("sidebar__nav-item--active");
     expect(screen.getByText("更多").closest("button")).not.toHaveClass("sidebar__nav-item--active");
-    fireEvent.click(screen.getByRole("button", { name: "专家与扩展" }));
+    fireEvent.click(screen.getByRole("button", { name: "专家·技能·连接器" }));
     expect(onNavigate).toHaveBeenCalledWith("专家·技能·连接器");
   });
 

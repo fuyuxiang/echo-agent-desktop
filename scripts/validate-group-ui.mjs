@@ -13,7 +13,7 @@ try {
     const page = await browser.newPage({ viewport: { width, height: 1000 } });
     const errors = []; page.on("pageerror", error => errors.push(error.message));
     await page.goto(`http://127.0.0.1:${server.httpServer.address().port}/__ui-review?theme=${theme}&groupShell=${width === 1280 ? 1 : 0}`);
-    const capabilityNav = page.getByRole("navigation", { name: "专家与扩展管理" });
+    const capabilityNav = page.getByRole("navigation", { name: "专家·技能·连接器管理" });
     assert.equal(await capabilityNav.getByRole("button", { name: "专家团", exact: true }).getAttribute("aria-current"), "page");
     await capabilityNav.getByRole("button", { name: "专家", exact: true }).click();
     await page.getByRole("heading", { name: "我的专家", exact: true }).waitFor();
@@ -38,7 +38,7 @@ try {
     if (width === 1280) {
       const sidebarNav = page.locator(".sidebar__nav");
       assert.equal(await sidebarNav.getByRole("button", { name: "专家团", exact: true }).count(), 0);
-      assert.match(await sidebarNav.getByRole("button", { name: "专家与扩展", exact: true }).getAttribute("class"), /sidebar__nav-item--active/);
+      assert.match(await sidebarNav.getByRole("button", { name: "专家·技能·连接器", exact: true }).getAttribute("class"), /sidebar__nav-item--active/);
       await capabilityNav.getByRole("button", { name: "专家", exact: true }).click();
       await page.getByRole("heading", { name: "我的专家", exact: true }).waitFor();
       await page.locator(".group-sidebar").getByRole("button").filter({ hasText: "需求交付协作组" }).click();

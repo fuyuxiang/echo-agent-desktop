@@ -511,7 +511,7 @@ window.__echoNativeCoreReview = async function ({ home, nonce } = {}) {
         (await wait(() => button(document, '+ 添加自动化'), 'actual new automation form')).click();
         const name = await wait(() => document.querySelector('.atm-modal-input'), 'actual automation name');
         set(name, marker);
-        (await wait(() => [...document.querySelectorAll('.sidebar__nav-item')].find(node => visible(node) && node.textContent.trim() === '专家与扩展'), 'leave automation via actual navigation')).click();
+        (await wait(() => [...document.querySelectorAll('.sidebar__nav-item')].find(node => visible(node) && node.textContent.trim() === '专家·技能·连接器'), 'leave automation via actual navigation')).click();
         await wait(() => !document.contains(name), 'automation editor genuinely unmounted');
         await openAutomation();
         await wait(() => document.querySelector('.atm-modal-input')?.value === marker, 'actual draft restored after navigation');
