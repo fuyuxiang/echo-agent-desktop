@@ -536,9 +536,9 @@ fn restore_desktop_window_state(app: &tauri::AppHandle, window: &tauri::WebviewW
 #[cfg(any(target_os = "macos", target_os = "windows", target_os = "linux"))]
 fn setup_desktop_lifecycle(app: &mut tauri::App) -> Result<(), Box<dyn std::error::Error>> {
     use tauri::{
-        DragDropEvent, Manager, WindowEvent,
         menu::{Menu, MenuItem},
         tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent},
+        DragDropEvent, Manager, WindowEvent,
     };
     #[cfg(target_os = "macos")]
     use tauri_plugin_autostart::MacosLauncher;
@@ -1258,13 +1258,11 @@ mod exit_tests {
         assert!(!redirected);
         assert!(super::validate_validation_profile_launch(true, redirected).is_err());
         let custom = directory.path().join("独立目录");
-        assert!(
-            super::validate_validation_profile_launch(
-                true,
-                crate::paths::is_redirected_data_home(&custom, Some(&default))
-            )
-            .is_ok()
-        );
+        assert!(super::validate_validation_profile_launch(
+            true,
+            crate::paths::is_redirected_data_home(&custom, Some(&default))
+        )
+        .is_ok());
     }
 
     #[test]
@@ -1383,16 +1381,12 @@ mod exit_tests {
 
     #[tokio::test]
     async fn local_process_shutdown_timeout_is_a_retryable_failure() {
-        assert!(
-            super::required_shutdown(std::future::pending(), "fixture")
-                .await
-                .is_err()
-        );
-        assert!(
-            super::required_shutdown(async { Ok(()) }, "fixture")
-                .await
-                .is_ok()
-        );
+        assert!(super::required_shutdown(std::future::pending(), "fixture")
+            .await
+            .is_err());
+        assert!(super::required_shutdown(async { Ok(()) }, "fixture")
+            .await
+            .is_ok());
     }
 
     #[tokio::test]

@@ -9,11 +9,11 @@
 //! state in `~/.echo-agent/config.toml` (`[skills] disabled`, `[skills] paths`) and
 //! reloads on file changes.
 
+#[cfg(test)]
+use agent_client_protocol as acp;
 use echo_agent_tools::implementations::skills::capability::{
     ConnectorState, SkillCapabilityReport,
 };
-#[cfg(test)]
-use agent_client_protocol as acp;
 use serde::Deserialize;
 use serde_json::value::RawValue;
 use std::collections::HashMap;
@@ -28,14 +28,23 @@ use crate::ext::{call_ext, raw_params};
 /// the change. With no initialized runtime, the next session reads it from disk.
 pub(crate) async fn refresh_live_skills(state: &AppState) -> Result<(), String> {
     let tx = state.tx.lock().unwrap().clone();
-    if let Some(tx) = tx { refresh_skills_with_tx(&tx).await?; }
+    if let Some(tx) = tx {
+        refresh_skills_with_tx(&tx).await?;
+    }
     Ok(())
 }
 
 async fn refresh_skills_with_tx(tx: &echo_agent_acp::AcpAgentTx) -> Result<(), String> {
-    let response = tokio::time::timeout(std::time::Duration::from_secs(60),
-        call_ext::<serde_json::Value>(tx, "echo.agent/internal/reload_skills", raw_params(&serde_json::json!({}))))
-        .await.map_err(|_| "技能配置已保存，但现有会话刷新超时；请重试刷新".to_string())?;
+    let response = tokio::time::timeout(
+        std::time::Duration::from_secs(60),
+        call_ext::<serde_json::Value>(
+            tx,
+            "echo.agent/internal/reload_skills",
+            raw_params(&serde_json::json!({})),
+        ),
+    )
+    .await
+    .map_err(|_| "技能配置已保存，但现有会话刷新超时；请重试刷新".to_string())?;
     response.map_err(|error| format!("技能配置已保存，但现有会话刷新失败；请重试刷新：{error}"))?;
     Ok(())
 }

@@ -1875,22 +1875,42 @@ pub(crate) fn handle_prompt_complete(app: &AppHandle, complete: CompleteEvent) {
     let stop_reason = complete.stop_reason.clone();
     let disposition = completion_disposition(&complete);
     let automation = if disposition != CompletionDisposition::Superseded {
-        crate::automations::complete_run_for_session(&session_id, &complete.prompt_id,
+        crate::automations::complete_run_for_session(
+            &session_id,
+            &complete.prompt_id,
             disposition == CompletionDisposition::Success,
-            (disposition != CompletionDisposition::Success).then_some(complete.cancellation_category.as_deref().unwrap_or(&stop_reason)))
-    } else { crate::automations::interrupt_run_for_session(&session_id, &complete.prompt_id) };
-    let automation_handled = !matches!(&automation, crate::automations::AutomationCompletionOutcome::NotAutomation);
+            (disposition != CompletionDisposition::Success).then_some(
+                complete
+                    .cancellation_category
+                    .as_deref()
+                    .unwrap_or(&stop_reason),
+            ),
+        )
+    } else {
+        crate::automations::interrupt_run_for_session(&session_id, &complete.prompt_id)
+    };
+    let automation_handled = !matches!(
+        &automation,
+        crate::automations::AutomationCompletionOutcome::NotAutomation
+    );
     match automation {
-        crate::automations::AutomationCompletionOutcome::Persisted(completion) => crate::automations::publish_automation_completion(app, *completion),
+        crate::automations::AutomationCompletionOutcome::Persisted(completion) => {
+            crate::automations::publish_automation_completion(app, *completion)
+        }
         crate::automations::AutomationCompletionOutcome::PersistencePending(error) => {
             tracing::error!(%error, %session_id, "automation finished but history persistence is pending retry");
-            let _ = app.emit("automation://persistence-error", serde_json::json!({"sessionId": session_id, "error": error, "retrying": true}));
+            let _ = app.emit(
+                "automation://persistence-error",
+                serde_json::json!({"sessionId": session_id, "error": error, "retrying": true}),
+            );
         }
         _ => {}
     }
     // Public turn settlement is independent of automation history I/O and
     // applies to ordinary follow-ups in a historical automation session too.
-    if !claim_public_completion(&complete) { return; }
+    if !claim_public_completion(&complete) {
+        return;
+    }
     let automation_notification: Option<crate::automations::AutomationCompletion> = None;
 
     let failed = disposition == CompletionDisposition::Failed;

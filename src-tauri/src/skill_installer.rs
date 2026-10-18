@@ -207,7 +207,10 @@ pub async fn skills_install_package(
 }
 
 #[tauri::command]
-pub async fn skills_uninstall_package(state: State<'_, crate::commands::AppState>, path: String) -> Result<(), String> {
+pub async fn skills_uninstall_package(
+    state: State<'_, crate::commands::AppState>,
+    path: String,
+) -> Result<(), String> {
     tauri::async_runtime::spawn_blocking(move || uninstall_path(&path))
         .await
         .map_err(|error| format!("卸载技能包失败：{error}"))??;

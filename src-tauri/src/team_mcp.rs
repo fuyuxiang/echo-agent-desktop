@@ -136,7 +136,10 @@ fn notify_changed(session_id: &str) {
 
 fn team_workspace(session_id: Option<&str>) -> Result<Option<PathBuf>, String> {
     match (EVENT_APP.get(), session_id) {
-        (Some(app), Some(session)) => app.state::<crate::commands::AppState>().session_workspace(session).map(Some),
+        (Some(app), Some(session)) => app
+            .state::<crate::commands::AppState>()
+            .session_workspace(session)
+            .map(Some),
         _ => Ok(None),
     }
 }
@@ -234,9 +237,15 @@ pub(crate) fn prepare_prompt(
     if let Some(id) = selected_id.as_deref() {
         if let Some(cwd) = team_workspace(Some(session_id))? {
             let all = read_teams_from_disk()?;
-            let team = all.get(&team_key(Some(session_id), id)).ok_or("团队已失效，请重新选择")?;
+            let team = all
+                .get(&team_key(Some(session_id), id))
+                .ok_or("团队已失效，请重新选择")?;
             for member in &team.members {
-                crate::agents_store::require_runtime_identity(&member.name, Path::new(&member.file), &cwd)?;
+                crate::agents_store::require_runtime_identity(
+                    &member.name,
+                    Path::new(&member.file),
+                    &cwd,
+                )?;
             }
         }
         if let Some(team) = teams.iter().find(|team| team.team_id == id) {

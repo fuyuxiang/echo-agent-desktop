@@ -438,36 +438,74 @@ pub fn projects_save(projects: Vec<Value>) -> Result<(), String> {
 /// Grant only the selected, catalogued project files as task attachments.
 /// This deliberately never authorizes the private project directory as a workspace.
 #[tauri::command]
-pub fn project_assets_use(access: State<'_, crate::shell_fs::FilesystemAccess>, project_id: String, paths: Vec<String>) -> Result<Vec<String>, String> {
-    if paths.len() > 20 { return Err("每次任务最多选择20个项目资料文件".into()); }
+pub fn project_assets_use(
+    access: State<'_, crate::shell_fs::FilesystemAccess>,
+    project_id: String,
+    paths: Vec<String>,
+) -> Result<Vec<String>, String> {
+    if paths.len() > 20 {
+        return Err("每次任务最多选择20个项目资料文件".into());
+    }
     let _guard = self::access().lock().map_err(|_| "项目存储锁已损坏")?;
     let projects = read_from(&store_path())?;
-    let project = projects.iter().find(|p| p.get("id").and_then(Value::as_str) == Some(project_id.as_str())).ok_or("项目尚未保存或已删除，请重试")?;
-    let assets = project.get("assets").and_then(Value::as_array).ok_or("项目资料目录不可读")?;
+    let project = projects
+        .iter()
+        .find(|p| p.get("id").and_then(Value::as_str) == Some(project_id.as_str()))
+        .ok_or("项目尚未保存或已删除，请重试")?;
+    let assets = project
+        .get("assets")
+        .and_then(Value::as_array)
+        .ok_or("项目资料目录不可读")?;
     let root = asset_root(&project_id)?;
     let validated = validate_selected_assets(&root, assets, &paths)?;
-    validated.into_iter().map(|path| access.authorize_file(&path).map(|p| p.to_string_lossy().into_owned())).collect()
+    validated
+        .into_iter()
+        .map(|path| {
+            access
+                .authorize_file(&path)
+                .map(|p| p.to_string_lossy().into_owned())
+        })
+        .collect()
 }
 
-fn validate_selected_assets(root: &Path, assets: &[Value], paths: &[String]) -> Result<Vec<PathBuf>, String> {
-    if paths.len() > 20 { return Err("每次任务最多选择20个项目资料文件".into()); }
+fn validate_selected_assets(
+    root: &Path,
+    assets: &[Value],
+    paths: &[String],
+) -> Result<Vec<PathBuf>, String> {
+    if paths.len() > 20 {
+        return Err("每次任务最多选择20个项目资料文件".into());
+    }
     let mut total = 0u64;
     let mut validated = Vec::new();
     for path in paths {
-        if !assets.iter().any(|a| a.get("kind").and_then(Value::as_str) == Some("file") && a.get("path").and_then(Value::as_str) == Some(path.as_str())) {
+        if !assets.iter().any(|a| {
+            a.get("kind").and_then(Value::as_str) == Some("file")
+                && a.get("path").and_then(Value::as_str) == Some(path.as_str())
+        }) {
             return Err("所选项目资料已更改或不存在，请重新选择".into());
         }
         let requested = PathBuf::from(&path);
-        let metadata = std::fs::symlink_metadata(&requested).map_err(|e| format!("项目资料不可用：{path}：{e}"))?;
+        let metadata = std::fs::symlink_metadata(&requested)
+            .map_err(|e| format!("项目资料不可用：{path}：{e}"))?;
         let canonical = requested.canonicalize().map_err(|e| e.to_string())?;
-        if metadata.file_type().is_symlink() || !metadata.is_file() || !canonical.starts_with(root) {
+        if metadata.file_type().is_symlink() || !metadata.is_file() || !canonical.starts_with(root)
+        {
             return Err("项目资料必须是私有资产目录内的普通文件，不能是符号链接".into());
         }
-        if metadata.len() > 20 * 1024 * 1024 { return Err(format!("项目资料超过任务附件20MB上限：{path}")); }
-        if validated.contains(&canonical) { continue; }
+        if metadata.len() > 20 * 1024 * 1024 {
+            return Err(format!("项目资料超过任务附件20MB上限：{path}"));
+        }
+        if validated.contains(&canonical) {
+            continue;
+        }
         total += metadata.len();
-        if total > 64 * 1024 * 1024 { return Err("本次项目资料总大小不能超过64MB".into()); }
-        if !validated.contains(&canonical) { validated.push(canonical); }
+        if total > 64 * 1024 * 1024 {
+            return Err("本次项目资料总大小不能超过64MB".into());
+        }
+        if !validated.contains(&canonical) {
+            validated.push(canonical);
+        }
     }
     Ok(validated)
 }
@@ -606,8 +644,8 @@ pub fn project_assets_remove_all(project_id: String) -> Result<(), String> {
 #[cfg(test)]
 mod tests {
     use super::{
-        asset_root_at, available_destination, import_files, read_from, validate, write_to,
-        validate_selected_assets, MAX_BYTES,
+        asset_root_at, available_destination, import_files, read_from, validate,
+        validate_selected_assets, write_to, MAX_BYTES,
     };
     use serde_json::json;
 
@@ -615,26 +653,44 @@ mod tests {
     fn task_assets_require_exact_catalog_membership_containment_and_file_limits() {
         let home = tempfile::tempdir().unwrap();
         let root = home.path().canonicalize().unwrap();
-        let file = root.join("selected.md"); std::fs::write(&file, "explicit context").unwrap();
+        let file = root.join("selected.md");
+        std::fs::write(&file, "explicit context").unwrap();
         let catalog = vec![json!({"kind":"file","path":file.to_string_lossy()})];
         let chosen = vec![file.to_string_lossy().into_owned()];
-        assert_eq!(validate_selected_assets(&root, &catalog, &chosen).unwrap(), vec![file.clone()]);
+        assert_eq!(
+            validate_selected_assets(&root, &catalog, &chosen).unwrap(),
+            vec![file.clone()]
+        );
         assert!(validate_selected_assets(&root, &[], &chosen).is_err());
         let outside = tempfile::NamedTempFile::new().unwrap();
         let outside_path = outside.path().to_string_lossy().into_owned();
-        assert!(validate_selected_assets(&root, &[json!({"kind":"file","path":outside_path})], &[outside_path]).is_err());
-        let large = std::fs::OpenOptions::new().write(true).open(&file).unwrap(); large.set_len(20 * 1024 * 1024 + 1).unwrap();
-        assert!(validate_selected_assets(&root, &catalog, &chosen).unwrap_err().contains("20MB"));
+        assert!(validate_selected_assets(
+            &root,
+            &[json!({"kind":"file","path":outside_path})],
+            &[outside_path]
+        )
+        .is_err());
+        let large = std::fs::OpenOptions::new().write(true).open(&file).unwrap();
+        large.set_len(20 * 1024 * 1024 + 1).unwrap();
+        assert!(validate_selected_assets(&root, &catalog, &chosen)
+            .unwrap_err()
+            .contains("20MB"));
     }
 
     #[cfg(unix)]
     #[test]
     fn task_assets_reject_catalogued_symlinks() {
-        let home = tempfile::tempdir().unwrap(); let root = home.path().canonicalize().unwrap();
-        let target = root.join("source.md"); std::fs::write(&target, "data").unwrap();
-        let link = root.join("link.md"); std::os::unix::fs::symlink(&target, &link).unwrap();
+        let home = tempfile::tempdir().unwrap();
+        let root = home.path().canonicalize().unwrap();
+        let target = root.join("source.md");
+        std::fs::write(&target, "data").unwrap();
+        let link = root.join("link.md");
+        std::os::unix::fs::symlink(&target, &link).unwrap();
         let path = link.to_string_lossy().into_owned();
-        assert!(validate_selected_assets(&root, &[json!({"kind":"file","path":path})], &[path]).is_err());
+        assert!(
+            validate_selected_assets(&root, &[json!({"kind":"file","path":path})], &[path])
+                .is_err()
+        );
     }
 
     #[test]

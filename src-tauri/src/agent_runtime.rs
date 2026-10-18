@@ -22,13 +22,13 @@ use std::rc::Rc;
 use std::sync::{Arc, Mutex};
 
 use agent_client_protocol as acp;
-use anyhow::{Result, anyhow};
+use anyhow::{anyhow, Result};
 use base64::Engine;
 use serde::Serialize;
 use tokio_util::sync::CancellationToken;
 
 use echo_agent_acp::{
-    AcpAgentGatewaySender, AcpAgentTx, AcpClientRx, AcpGatewayReceiver, acp_channels, acp_send,
+    acp_channels, acp_send, AcpAgentGatewaySender, AcpAgentTx, AcpClientRx, AcpGatewayReceiver,
 };
 use echo_agent_runtime::agent::init::bootstrap;
 use echo_agent_runtime::agent::mvp_agent::MvpAgent;
@@ -1249,13 +1249,11 @@ mod tests {
                 server.url,
                 format!("http://127.0.0.1:{}/mcp", 62001 + index)
             );
-            assert!(
-                server
-                    .headers
-                    .iter()
-                    .any(|header| header.name == "Authorization"
-                        && header.value == format!("Bearer current-process-{index}"))
-            );
+            assert!(server
+                .headers
+                .iter()
+                .any(|header| header.name == "Authorization"
+                    && header.value == format!("Bearer current-process-{index}")));
             if server.name == crate::office_mcp::MCP_SERVER_NAME
                 || server.name == crate::automation::MCP_SERVER_NAME
             {
@@ -1273,12 +1271,11 @@ mod tests {
             .response_tx
             .send(Ok(acp::LoadSessionResponse::new()))
             .expect("load response");
-        assert!(
-            task.await
-                .expect("load task")
-                .expect("load success")
-                .is_none()
-        );
+        assert!(task
+            .await
+            .expect("load task")
+            .expect("load success")
+            .is_none());
     }
 
     #[test]

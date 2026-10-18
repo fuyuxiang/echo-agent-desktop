@@ -1,7 +1,8 @@
 //! Real persistence/index regressions. No production memory or external model.
 use echo_agent_memory::{
-    MemoryIndex, MemoryStorage, init_sqlite_vec,
+    init_sqlite_vec,
     records::{self, RecordInput},
+    MemoryIndex, MemoryStorage,
 };
 
 fn input(scope: &str, key: &str, content: &str) -> RecordInput {
@@ -63,22 +64,18 @@ fn correction_is_durable_and_automatic_extraction_cannot_overwrite_it() {
         records::remember(&storage, update, None, false).is_err(),
         "stale edits must fail"
     );
-    assert!(
-        records::remember(
-            &storage,
-            input("global", "报告语言", "报告使用英文"),
-            Some("source-new"),
-            true
-        )
-        .unwrap()
-        .is_none()
-    );
+    assert!(records::remember(
+        &storage,
+        input("global", "报告语言", "报告使用英文"),
+        Some("source-new"),
+        true
+    )
+    .unwrap()
+    .is_none());
     let reopened = MemoryStorage::with_paths(dir.path().join("global"), dir.path().join("a"));
-    assert!(
-        records::core_context(&reopened)
-            .unwrap()
-            .contains("报告使用中文")
-    );
+    assert!(records::core_context(&reopened)
+        .unwrap()
+        .contains("报告使用中文"));
     assert!(!records::permitted(&reopened, "旧会话：报告使用英文").unwrap());
     assert!(records::permitted(&reopened, "报告使用中文").unwrap());
     records::retire(
@@ -91,16 +88,14 @@ fn correction_is_durable_and_automatic_extraction_cannot_overwrite_it() {
     .unwrap();
     assert!(records::core_context(&reopened).unwrap().is_empty());
     assert!(records::source_blocked(&reopened, "source-old").unwrap());
-    assert!(
-        records::remember(
-            &reopened,
-            input("global", "另一种表述", "报告使用中文"),
-            Some("source-old"),
-            true
-        )
-        .unwrap()
-        .is_none()
-    );
+    assert!(records::remember(
+        &reopened,
+        input("global", "另一种表述", "报告使用中文"),
+        Some("source-old"),
+        true
+    )
+    .unwrap()
+    .is_none());
 }
 
 #[test]
@@ -149,15 +144,13 @@ fn extraction_preserves_personal_information_and_finishes_tasks() {
     let storage = MemoryStorage::with_paths(dir.path().join("global"), dir.path().join("a"));
     records::apply_extraction(&storage, r#"{"memories":[{"scope":"global","kind":"user","key":"职责","content":"负责企业客户实施","evidence":"我负责企业客户实施"},{"scope":"workspace","kind":"task","key":"客户汇报","content":"本周提交汇报","evidence":"这周提交汇报"}]}"#, "source-extract").unwrap();
     assert_eq!(records::list(&storage, true).unwrap().len(), 2);
-    assert!(
-        records::list(&storage, true)
-            .unwrap()
-            .iter()
-            .find(|r| r.kind == "task")
-            .unwrap()
-            .valid_until
-            .is_some()
-    );
+    assert!(records::list(&storage, true)
+        .unwrap()
+        .iter()
+        .find(|r| r.kind == "task")
+        .unwrap()
+        .valid_until
+        .is_some());
     records::apply_extraction(
         &storage,
         r#"{"memories":[],"completedKeys":[{"key":"客户汇报","scope":"workspace","evidence":"客户汇报已完成"}]}"#,
@@ -309,13 +302,11 @@ async fn forgotten_memories_leave_live_recall_without_affecting_knowledge_reads(
     .unwrap()
     .unwrap();
     let personal = echo_agent_memory::MemoryBackendImpl::new(db.clone(), storage.clone());
-    assert!(
-        !personal
-            .search("Atlas delivery", 10, 0.0)
-            .await
-            .unwrap()
-            .is_empty()
-    );
+    assert!(!personal
+        .search("Atlas delivery", 10, 0.0)
+        .await
+        .unwrap()
+        .is_empty());
     records::retire(
         &storage,
         "workspace",
@@ -324,14 +315,12 @@ async fn forgotten_memories_leave_live_recall_without_affecting_knowledge_reads(
         false,
     )
     .unwrap();
-    assert!(
-        personal
-            .search("Atlas delivery", 10, 0.0)
-            .await
-            .unwrap()
-            .iter()
-            .all(|r| !r.snippet.contains("obsolete delivery checklist"))
-    );
+    assert!(personal
+        .search("Atlas delivery", 10, 0.0)
+        .await
+        .unwrap()
+        .iter()
+        .all(|r| !r.snippet.contains("obsolete delivery checklist")));
     assert!(personal.get(path.to_str().unwrap(), None, None).is_err());
     let knowledge =
         echo_agent_memory::MemoryBackendImpl::new(db, storage).with_query_only_embedding_search();
@@ -339,14 +328,12 @@ async fn forgotten_memories_leave_live_recall_without_affecting_knowledge_reads(
         knowledge.get(path.to_str().unwrap(), None, None).unwrap(),
         content
     );
-    assert!(
-        knowledge
-            .search("Atlas delivery", 10, 0.0)
-            .await
-            .unwrap()
-            .iter()
-            .any(|r| r.snippet.contains("obsolete delivery checklist"))
-    );
+    assert!(knowledge
+        .search("Atlas delivery", 10, 0.0)
+        .await
+        .unwrap()
+        .iter()
+        .any(|r| r.snippet.contains("obsolete delivery checklist")));
 }
 
 #[test]
@@ -382,16 +369,12 @@ fn completing_one_occurrence_does_not_forget_future_work_on_the_same_topic() {
             .unwrap()
             .is_some()
     );
-    assert!(
-        records::core_context(&storage)
-            .unwrap()
-            .contains("2026-10-26")
-    );
-    assert!(
-        !records::core_context(&storage)
-            .unwrap()
-            .contains("2026-10-19")
-    );
+    assert!(records::core_context(&storage)
+        .unwrap()
+        .contains("2026-10-26"));
+    assert!(!records::core_context(&storage)
+        .unwrap()
+        .contains("2026-10-19"));
 }
 
 #[test]

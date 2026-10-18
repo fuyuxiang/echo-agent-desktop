@@ -645,11 +645,10 @@ fn write_records(store: &mut RunRecordStore) -> Result<(), String> {
     // Keep history bounded without ever evicting an unfinished run. Dropping a
     // queued/running row would also drop our durable dispatch/recovery marker.
     while store.records.len() > MAX_RECORDS {
-        let Some(index) = store
-            .records
-            .iter()
-            .position(|record| matches!(record.status.as_str(), "success" | "failed" | "interrupted") && !pending_terminals().lock().unwrap().contains_key(&record.id))
-        else {
+        let Some(index) = store.records.iter().position(|record| {
+            matches!(record.status.as_str(), "success" | "failed" | "interrupted")
+                && !pending_terminals().lock().unwrap().contains_key(&record.id)
+        }) else {
             break;
         };
         store.records.remove(index);
@@ -734,7 +733,10 @@ fn record_run_session(record_id: &str, session_id: &str, prompt_id: &str) -> Res
     record.session_id = Some(session_id.into());
     record.prompt_id = Some(prompt_id.into());
     write_records(&mut records)?;
-    active_run_prompts().lock().unwrap().insert((session_id.into(), prompt_id.into()), record_id.into());
+    active_run_prompts()
+        .lock()
+        .unwrap()
+        .insert((session_id.into(), prompt_id.into()), record_id.into());
     Ok(())
 }
 
@@ -902,9 +904,16 @@ fn apply_terminal_fact(records: &mut RunRecordStore, fact: &TerminalFact) -> Res
     Ok(finalize_from_fact(record, fact))
 }
 fn finalize_from_fact(record: &mut AutomationRunRecord, fact: &TerminalFact) -> bool {
-    let changed = finalize_record(record, fact.ok, &fact.finished_at,
-        fact.session_id.as_deref(), fact.error.as_deref());
-    if changed && fact.interrupted { record.status = "interrupted".into(); }
+    let changed = finalize_record(
+        record,
+        fact.ok,
+        &fact.finished_at,
+        fact.session_id.as_deref(),
+        fact.error.as_deref(),
+    );
+    if changed && fact.interrupted {
+        record.status = "interrupted".into();
+    }
     changed
 }
 
@@ -1007,11 +1016,22 @@ pub fn complete_run_for_session(
 /// Manual takeover ends this scheduled occurrence. The replacement message is
 /// an ordinary turn; historical follow-ups cannot claim or reopen this record.
 pub fn interrupt_run_for_session(session_id: &str, prompt_id: &str) -> AutomationCompletionOutcome {
-    complete_run_prompt(session_id, prompt_id, false,
-        Some("本次自动化已结束，后续消息按普通会话继续执行"), true)
+    complete_run_prompt(
+        session_id,
+        prompt_id,
+        false,
+        Some("本次自动化已结束，后续消息按普通会话继续执行"),
+        true,
+    )
 }
 
-fn complete_run_prompt(session_id: &str, prompt_id: &str, ok: bool, error: Option<&str>, interrupted: bool) -> AutomationCompletionOutcome {
+fn complete_run_prompt(
+    session_id: &str,
+    prompt_id: &str,
+    ok: bool,
+    error: Option<&str>,
+    interrupted: bool,
+) -> AutomationCompletionOutcome {
     let _guard = record_access().lock().unwrap();
     let known_id = active_run_prompts()
         .lock()
@@ -1112,8 +1132,14 @@ fn claim_external_attempt(
 }
 
 fn publish_pending_completion(app: &AppHandle, record_id: &str) {
-    let completion = pending_terminals().lock().unwrap().get(record_id).and_then(|fact| fact.completion.clone());
-    if let Some(completion) = completion { publish_automation_completion(app, completion); }
+    let completion = pending_terminals()
+        .lock()
+        .unwrap()
+        .get(record_id)
+        .and_then(|fact| fact.completion.clone());
+    if let Some(completion) = completion {
+        publish_automation_completion(app, completion);
+    }
 }
 
 fn publications_in_flight() -> &'static Mutex<HashSet<String>> {
@@ -1199,7 +1225,13 @@ pub(crate) fn publish_automation_completion(app: &AppHandle, completion: Automat
                 Some(body),
                 completion.event.session_id.as_deref(),
                 &completion.event.automation_id,
-                if failed { "error" } else if completion.event.status == "interrupted" { "warn" } else { "info" },
+                if failed {
+                    "error"
+                } else if completion.event.status == "interrupted" {
+                    "warn"
+                } else {
+                    "info"
+                },
             )?;
             fact.local_notification_id = Some(notification_id);
             let send_external =
@@ -1325,7 +1357,9 @@ fn fail_stale_running_records() {
     let now = Local::now().to_rfc3339();
     let mut changed = false;
     for record in &mut records.records {
-        if record.status == "running" && !pending_terminals().lock().unwrap().contains_key(&record.id) {
+        if record.status == "running"
+            && !pending_terminals().lock().unwrap().contains_key(&record.id)
+        {
             record.status = "failed".into();
             record.finished_at = Some(now.clone());
             record.error = Some("运行结果未知：应用或 Agent 中断，未找到可恢复的完成事实；请核查会话，系统不会自动重跑".into());
@@ -1338,7 +1372,10 @@ fn fail_stale_running_records() {
             tracing::error!(%error, "failed to persist stale automation recovery");
         } else {
             let pending = pending_terminals().lock().unwrap();
-            active_run_prompts().lock().unwrap().retain(|_, id| pending.contains_key(id));
+            active_run_prompts()
+                .lock()
+                .unwrap()
+                .retain(|_, id| pending.contains_key(id));
         }
     }
 }
@@ -1816,9 +1853,12 @@ pub fn automations_snapshot(app: AppHandle) -> Result<AutomationSnapshot, String
         let mut records = read_records()?.records;
         let pending = pending_terminals().lock().unwrap();
         for record in &mut records {
-            if pending.contains_key(&record.id) && matches!(record.status.as_str(), "queued" | "running") {
+            if pending.contains_key(&record.id)
+                && matches!(record.status.as_str(), "queued" | "running")
+            {
                 record.completion_pending = true;
-                record.error = Some("运行已结束，完成记录等待保存；系统正在重试，不会重复执行任务".into());
+                record.error =
+                    Some("运行已结束，完成记录等待保存；系统正在重试，不会重复执行任务".into());
             }
         }
         records
@@ -2434,12 +2474,13 @@ async fn run_automation_once(
         );
     }
     let prompt = automation_prompt(automation, &context);
-    let completion = crate::agent_runtime::prompt_for_automation(tx, &session_id, &prompt_id, &prompt)
-        .await
-        .map_err(|e| {
-            state.forget_session_workspace(&session_id);
-            e.to_string()
-        })?;
+    let completion =
+        crate::agent_runtime::prompt_for_automation(tx, &session_id, &prompt_id, &prompt)
+            .await
+            .map_err(|e| {
+                state.forget_session_workspace(&session_id);
+                e.to_string()
+            })?;
     Ok((session_id, completion))
 }
 
@@ -4233,20 +4274,45 @@ mod tests {
     fn manual_takeover_closes_original_occurrence_and_survives_publication_retry() {
         let (mut records, mut fact) = terminal_fixture();
         records.records[0].scheduled_for = Some("occurrence".into());
-        fact.ok = false; fact.interrupted = true;
+        fact.ok = false;
+        fact.interrupted = true;
         fact.error = Some("已人工接管：新消息按普通会话继续执行".into());
         let mut saved = String::new();
-        persist_terminal_transition(&mut records, &mut fact,
-            |fact| { saved = serde_json::to_string(fact).unwrap(); Ok(()) }, |_| Ok(())).unwrap();
+        persist_terminal_transition(
+            &mut records,
+            &mut fact,
+            |fact| {
+                saved = serde_json::to_string(fact).unwrap();
+                Ok(())
+            },
+            |_| Ok(()),
+        )
+        .unwrap();
         assert_eq!(records.records[0].status, "interrupted");
         assert!(scheduled_runs_in_flight(&records).is_empty());
-        assert!(!matches_prompt(&records.records[0], "session", "replacement-prompt"));
+        assert!(!matches_prompt(
+            &records.records[0],
+            "session",
+            "replacement-prompt"
+        ));
         let mut recovered: TerminalFact = serde_json::from_str(&saved).unwrap();
-        persist_terminal_transition(&mut records, &mut recovered, |_| Ok(()), |_| panic!("do not reopen a closed occurrence")).unwrap();
+        persist_terminal_transition(
+            &mut records,
+            &mut recovered,
+            |_| Ok(()),
+            |_| panic!("do not reopen a closed occurrence"),
+        )
+        .unwrap();
         let completion = recovered.completion.unwrap();
         assert_eq!(completion.event.status, "interrupted");
         assert!(publication_title(&completion).ends_with("已人工接管"));
-        assert!(!finalize_record(&mut records.records[0], true, "later", Some("session"), None));
+        assert!(!finalize_record(
+            &mut records.records[0],
+            true,
+            "later",
+            Some("session"),
+            None
+        ));
     }
 
     #[test]

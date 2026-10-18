@@ -67,8 +67,11 @@ pub(crate) fn apply_startup_data_home() -> Result<(), String> {
         // auth command, or telemetry destination from its launching shell.
         for (name, _) in std::env::vars_os() {
             let key = name.to_string_lossy();
-            if key.starts_with("ECHO_AGENT_AUTH") || key.starts_with("ECHO_AGENT_CONFIG")
-                || key.starts_with("OTEL_") || key.starts_with("GROK_AUTH") {
+            if key.starts_with("ECHO_AGENT_AUTH")
+                || key.starts_with("ECHO_AGENT_CONFIG")
+                || key.starts_with("OTEL_")
+                || key.starts_with("GROK_AUTH")
+            {
                 std::env::remove_var(name);
             }
         }

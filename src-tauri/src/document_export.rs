@@ -254,7 +254,9 @@ async fn export_for_session(
     if destination.extension().is_none() {
         destination.set_extension(&request.format);
     }
-    export_to_path_for_session(app, request, &destination, session_id).await.map(Some)
+    export_to_path_for_session(app, request, &destination, session_id)
+        .await
+        .map(Some)
 }
 
 pub(crate) fn validate_request(request: &DocumentExportRequest) -> Result<(), String> {
@@ -296,9 +298,13 @@ async fn export_to_path_for_session(
     let destination = if session_id.is_some() {
         let parent = destination.parent().ok_or("无效的保存目录")?;
         let name = destination.file_name().ok_or("无效的保存文件名")?;
-        canonical_destination = dunce::canonicalize(parent).map_err(|error| format!("无法确认保存目录：{error}"))?.join(name);
+        canonical_destination = dunce::canonicalize(parent)
+            .map_err(|error| format!("无法确认保存目录：{error}"))?
+            .join(name);
         canonical_destination.as_path()
-    } else { destination };
+    } else {
+        destination
+    };
     let temp = tempfile::tempdir().map_err(|error| format!("无法创建文档临时目录：{error}"))?;
     let output = temp.path().join(format!("output.{}", request.format));
     generate(app, &request, &output).await?;
@@ -317,7 +323,9 @@ async fn export_to_path_for_session(
     }
     install_output(&output, destination)?;
     if let Some(session) = session_id {
-        if let Err(error) = crate::session_artifacts::record(session, receipt.clone(), &request.title) {
+        if let Err(error) =
+            crate::session_artifacts::record(session, receipt.clone(), &request.title)
+        {
             tracing::warn!(%error, "export receipt staged; history will verify published output");
         }
     }
@@ -332,11 +340,19 @@ pub async fn document_export(
     session_id: Option<String>,
     request: DocumentExportRequest,
 ) -> Result<Option<DocumentExportReceipt>, String> {
-    if let Some(session) = &session_id { state.session_workspace(session)?; }
+    if let Some(session) = &session_id {
+        state.session_workspace(session)?;
+    }
     let result = export_for_session(&app, request, session_id.as_deref()).await?;
     if let Some(receipt) = &result {
-        access.authorize_file(Path::new(&receipt.path))
-            .map_err(|error| format!("文件已保存到 {}，成果回执已保留；打开前需要重新授权：{error}", receipt.path))?;
+        access
+            .authorize_file(Path::new(&receipt.path))
+            .map_err(|error| {
+                format!(
+                    "文件已保存到 {}，成果回执已保留；打开前需要重新授权：{error}",
+                    receipt.path
+                )
+            })?;
     }
     Ok(result)
 }

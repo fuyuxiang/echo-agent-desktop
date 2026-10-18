@@ -2160,10 +2160,20 @@ pub(crate) async fn forget_deleted_session(
     crate::org_mcp::forget_session_selection(session_id).await;
     crate::permission_config::forget_session_permission_mode(session_id);
     if let Err(error) = crate::knowledge_traces::forget_session(session_id) {
-        memory_cleanup_warning = Some(format!("{}知识来源记录清理失败：{error}", memory_cleanup_warning.map(|e| format!("{e}；")).unwrap_or_default()));
+        memory_cleanup_warning = Some(format!(
+            "{}知识来源记录清理失败：{error}",
+            memory_cleanup_warning
+                .map(|e| format!("{e}；"))
+                .unwrap_or_default()
+        ));
     }
     if let Err(error) = crate::session_artifacts::forget_session(session_id) {
-        memory_cleanup_warning = Some(format!("{}会话交付物记录清理失败：{error}", memory_cleanup_warning.map(|e| format!("{e}；")).unwrap_or_default()));
+        memory_cleanup_warning = Some(format!(
+            "{}会话交付物记录清理失败：{error}",
+            memory_cleanup_warning
+                .map(|e| format!("{e}；"))
+                .unwrap_or_default()
+        ));
     }
     if let Err(error) = crate::meta::clear_session_metadata(session_id) {
         tracing::warn!(%error, %session_id, "session deleted but sidecar metadata cleanup failed");
@@ -2310,7 +2320,14 @@ pub fn agent_set_session_expert(
         return Err("会话 ID 无效或过长".into());
     }
     let cwd = state.session_workspace(&session_id)?;
-    crate::agents_store::require_expert_snapshot(&cwd, &expert_name, expert_path.as_deref().ok_or("请选择有效的本地专家")?, expected_raw.as_deref().ok_or("专家定义版本缺失，请重新选择")?)?;
+    crate::agents_store::require_expert_snapshot(
+        &cwd,
+        &expert_name,
+        expert_path.as_deref().ok_or("请选择有效的本地专家")?,
+        expected_raw
+            .as_deref()
+            .ok_or("专家定义版本缺失，请重新选择")?,
+    )?;
     let binding = match source.as_str() {
         "local" => crate::agents_store::require_listed_local_expert(
             &expert_id,

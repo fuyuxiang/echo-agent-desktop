@@ -532,8 +532,11 @@ fn apply_unlocked(
                     );
             if !matches!(
                 task.phase,
-                TaskPhase::Discovering | TaskPhase::Implementing | TaskPhase::Repairing
-                    | TaskPhase::Verifying | TaskPhase::Diagnosing
+                TaskPhase::Discovering
+                    | TaskPhase::Implementing
+                    | TaskPhase::Repairing
+                    | TaskPhase::Verifying
+                    | TaskPhase::Diagnosing
             ) && !legacy_stop_misclassification
             {
                 return Err("只有正在执行的任务可以报告暂停或停止".into());
@@ -1044,17 +1047,29 @@ pub fn apply(
     apply_at_revision(root, task_id, event, None)
 }
 
-fn apply_at_revision(root: &Path, task_id: &str, event: OrchestratorEvent, expected: Option<&str>) -> Result<(CodingTask, PhaseDecision), String> {
+fn apply_at_revision(
+    root: &Path,
+    task_id: &str,
+    event: OrchestratorEvent,
+    expected: Option<&str>,
+) -> Result<(CodingTask, PhaseDecision), String> {
     store::with_task_transaction(root, task_id, || {
         if let Some(expected) = expected {
             let current = task::load(root, task_id).ok_or("任务不存在")?;
-            if current.updated_at != expected { return Err("任务状态已变化，本次验证未启动，请确认当前状态后重试".into()); }
+            if current.updated_at != expected {
+                return Err("任务状态已变化，本次验证未启动，请确认当前状态后重试".into());
+            }
         }
         apply_unlocked(root, task_id, event)
     })
 }
 
-async fn apply_and_emit(app: AppHandle, root: PathBuf, task_id: String, event: OrchestratorEvent) -> Result<CodingTask, String> {
+async fn apply_and_emit(
+    app: AppHandle,
+    root: PathBuf,
+    task_id: String,
+    event: OrchestratorEvent,
+) -> Result<CodingTask, String> {
     apply_and_emit_at_revision(app, root, task_id, event, None).await
 }
 
@@ -1238,7 +1253,14 @@ pub async fn coding_task_begin_verification(
 ) -> Result<CodingTask, String> {
     let root = access.require_workspace(&root)?;
     changeset::sync_changes(&root, &task_id).await?;
-    apply_and_emit_at_revision(app, root, task_id, OrchestratorEvent::VerificationStarted, expected_updated_at).await
+    apply_and_emit_at_revision(
+        app,
+        root,
+        task_id,
+        OrchestratorEvent::VerificationStarted,
+        expected_updated_at,
+    )
+    .await
 }
 
 #[tauri::command]
@@ -1865,9 +1887,25 @@ mod tests_v2 {
         current.phase = TaskPhase::Verifying;
         current.updated_at = "original-revision".into();
         task::save(dir.path(), &current).unwrap();
-        apply(dir.path(), &current.id, OrchestratorEvent::ImplementationInterrupted { interruption: TaskInterruption::Stopped }).unwrap();
-        assert!(apply_at_revision(dir.path(), &current.id, OrchestratorEvent::VerificationStarted, Some(&current.updated_at)).is_err());
-        assert_eq!(task::load(dir.path(), &current.id).unwrap().phase, TaskPhase::Stopped);
+        apply(
+            dir.path(),
+            &current.id,
+            OrchestratorEvent::ImplementationInterrupted {
+                interruption: TaskInterruption::Stopped,
+            },
+        )
+        .unwrap();
+        assert!(apply_at_revision(
+            dir.path(),
+            &current.id,
+            OrchestratorEvent::VerificationStarted,
+            Some(&current.updated_at)
+        )
+        .is_err());
+        assert_eq!(
+            task::load(dir.path(), &current.id).unwrap().phase,
+            TaskPhase::Stopped
+        );
     }
 
     #[test]
@@ -1877,12 +1915,28 @@ mod tests_v2 {
             let mut current = task::create_task(dir.path(), "task", "verify it").unwrap();
             current.phase = phase;
             task::save(dir.path(), &current).unwrap();
-            let (stopped, _) = apply(dir.path(), &current.id,
-                OrchestratorEvent::ImplementationInterrupted { interruption: TaskInterruption::Stopped }).unwrap();
+            let (stopped, _) = apply(
+                dir.path(),
+                &current.id,
+                OrchestratorEvent::ImplementationInterrupted {
+                    interruption: TaskInterruption::Stopped,
+                },
+            )
+            .unwrap();
             assert_eq!(stopped.phase, TaskPhase::Stopped);
             assert!(stopped.next_action.is_none());
-            assert!(apply(dir.path(), &current.id, OrchestratorEvent::StartFailed { reason: "late verification error".into() }).is_err());
-            assert_eq!(task::load(dir.path(), &current.id).unwrap().phase, TaskPhase::Stopped);
+            assert!(apply(
+                dir.path(),
+                &current.id,
+                OrchestratorEvent::StartFailed {
+                    reason: "late verification error".into()
+                }
+            )
+            .is_err());
+            assert_eq!(
+                task::load(dir.path(), &current.id).unwrap().phase,
+                TaskPhase::Stopped
+            );
         }
     }
 
