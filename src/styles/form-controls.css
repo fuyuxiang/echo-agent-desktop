@@ -46,7 +46,7 @@
   --button-fg: var(--echo-button-primary-fg);
   --button-border: transparent;
 }
-:is(.echo-button--ghost, .btn--ghost, .form-button--ghost, .capability-button--ghost) {
+:is(.echo-button--ghost, .btn--ghost, .form-button--ghost, .capability-button--ghost, .settings-btn--ghost) {
   --button-bg: var(--echo-button-ghost-bg);
   --button-hover: var(--echo-button-ghost-bg-hover);
   --button-active: var(--echo-button-ghost-bg-active);
@@ -66,6 +66,12 @@
   --button-hover: var(--echo-button-danger-bg-hover);
   --button-active: var(--echo-button-danger-bg-active);
   --button-fg: var(--echo-button-danger-fg-on-solid);
+  --button-border: transparent;
+}
+/* Icon and inline destructive actions keep the same danger foreground without
+ * acquiring the frame of a full secondary button. */
+:is(.echo-button--ghost, .btn--ghost, .form-button--ghost, .settings-btn--ghost):is(.echo-button--danger, .btn--danger, .form-button--danger, .settings-btn--danger) {
+  --button-bg: transparent;
   --button-border: transparent;
 }
 /* Historical brand variant follows the primary product action palette. */
@@ -96,12 +102,12 @@
   opacity: .5;
   cursor: not-allowed;
 }
-:is(.echo-button--small, .echo-button--compact, .form-button--compact, .btn--compact, .browser-preview__go, .plan-panel__add-btn, .plan-panel__row-edit-save) {
+:is(.echo-button--small, .echo-button--compact, .form-button--compact, .settings-btn--compact, .btn--compact, .browser-preview__go, .plan-panel__add-btn, .plan-panel__row-edit-save) {
   --control-height: var(--echo-size-control-sm);
   padding: 4px 10px;
 }
 .echo-button--large { --control-height: var(--echo-size-control-lg); padding: 8px 16px; }
-.echo-button--icon-only { width: var(--control-height); min-width: var(--control-height); padding: 0; }
+:is(.echo-button--icon-only, .settings-btn--icon-only, .form-button--icon-only) { width: var(--control-height); min-width: var(--control-height); padding: 0; }
 .echo-button__content { display: inline-flex; align-items: center; justify-content: center; gap: var(--echo-control-gap); }
 .echo-button__content--loading { opacity: 0; }
 .echo-button__spinner { position: absolute; width: 16px; height: 16px; animation: echo-icon-spin 1s linear infinite; }
@@ -153,9 +159,15 @@ select.form-control {
     .org-memory, .org-document-modal, .meeting-panel, .conversation-search-modal,
     .create-colleague-dialog, .about-dialog, .feedback-dialog, .update-dialog, .trust-dialog, .coding-workbench, .echo-coding-portal,
     .capability-page, .placeholder-page, .project-page, .pd-page)
-  :is(button, input, select, textarea, a, summary, [role="button"], [tabindex]):not(:where(.monaco-editor *, .xterm *, .markdown-body *, .md-content *, [contenteditable="true"])):focus-visible {
+  :is(button, input, select, textarea, a, summary, [role="button"], [tabindex]):not(:where(.monaco-editor *, .xterm *, .markdown-body *, .md-content *, [contenteditable="true"], .echo-composer__input, .echo-theia-agent__splitter)):focus-visible {
   outline: 2px solid var(--echo-focus-ring);
   outline-offset: 2px;
+}
+/* Composer's enclosing card and the IDE separator render their own focus.
+ * Keep every other control on the fallback ring, including toolbar buttons. */
+@media (forced-colors: active) {
+  .echo-composer:focus-within { outline: 2px solid Highlight; outline-offset: 2px; }
+  .echo-theia-agent__splitter:focus-visible { outline: 1px solid Highlight; }
 }
 @media (prefers-reduced-motion: reduce) {
   .echo-button { transition: none; }

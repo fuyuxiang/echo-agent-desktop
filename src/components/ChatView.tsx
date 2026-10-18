@@ -1,5 +1,5 @@
 import { useEffect, useLayoutEffect, useMemo, useRef, useState, useCallback } from "react";
-import { History } from "lucide-react";
+import { History, Folder, Plus } from "lucide-react";
 import { PauseIcon } from "@/foundation/components/Icon/icons";
 import { useSessionStore, type ToolCallView } from "@/stores/session-store";
 import { useSessionsStore } from "@/stores/sessions-store";
@@ -27,7 +27,7 @@ import { SubagentPanel } from "./SubagentPanel";
 import { TeamStatusView } from "./TeamStatusView";
 import { ShareMenu } from "./ShareMenu";
 import { QueuePanel } from "./QueuePanel";
-import { WorkspacePicker } from "./WorkspacePicker";
+import { displayPath, shortWorkspacePath } from "@/lib/display-path";
 import { useMessageQueueStore } from "@/stores/message-queue-store";
 import { selectQuestionForSession, useQuestionStore } from "@/stores/question-store";
 import { buildTimeline } from "@/lib/timeline-utils";
@@ -36,7 +36,6 @@ import { useSubagentStore } from "@/stores/subagent-store";
 import type { SessionControlAction } from "@/lib/session-control";
 import type { ModelOption } from "./ModelSelector";
 import type { AgentEntry } from "@/lib/types";
-import type { WorkspaceInfo } from "@/lib/agent-client";
 import type { SlashCommandInvocation } from "@/lib/slash-commands";
 import { useWorkspaceMentions } from "@/lib/use-workspace-mentions";
 import { useStickToBottom } from "./use-stick-to-bottom";
@@ -61,9 +60,7 @@ export function ChatView({
   models,
   onModelChange,
   cwd,
-  newSessionTargetCwd,
-  workspaces,
-  onSelectWorkspace,
+  onNewTask,
   onPrepareRetry,
   onRetrySend,
   onRewound,
@@ -102,10 +99,8 @@ export function ChatView({
   models?: ModelOption[];
   onModelChange?: (id: string) => void;
   cwd?: string;
-  /** Target chosen for a future session; never use it for active-session IO. */
-  newSessionTargetCwd?: string;
-  workspaces?: WorkspaceInfo[];
-  onSelectWorkspace?: (cwd: string) => void;
+  /** Open the new-task page; an existing session's workspace is immutable. */
+  onNewTask?: () => void;
   /** Validate send prerequisites before replacing conversation history. */
   onPrepareRetry?: (sessionId: string) => boolean | Promise<boolean>;
   /** Submit the exact prompt removed by a successful answer replacement. */
@@ -713,14 +708,15 @@ export function ChatView({
               onToast={onToast}
               placement="toolbar"
             />
-            {cwd && workspaces && onSelectWorkspace && (
+            {cwd && (
               <div className="chatview__workspace-bar">
-                <WorkspacePicker
-                  cwd={newSessionTargetCwd ?? cwd}
-                  workspaces={workspaces}
-                  onSelectWorkspace={onSelectWorkspace}
-                  menuPlacement="bottom"
-                />
+                <span className="chatview__workspace-label" title={`本任务工作目录：${displayPath(cwd)}`}>
+                  <Folder size={14} aria-hidden="true" />
+                  <span>{shortWorkspacePath(cwd)}</span>
+                </span>
+                {onNewTask && <button type="button" className="chatview__new-task" onClick={onNewTask} data-tip="在新任务中选择其他工作目录">
+                  <Plus size={14} aria-hidden="true" />新建任务
+                </button>}
               </div>
             )}
           </div>
@@ -1123,9 +1119,7 @@ export function ChatView({
               modelLoading={modelLoading}
             models={models}
             onModelChange={onModelChange}
-            cwd={newSessionTargetCwd ?? cwd}
-            workspaces={workspaces}
-            onSelectWorkspace={onSelectWorkspace}
+            cwd={cwd}
             showDisclaimer
             permissionInline
             onToast={onToast}

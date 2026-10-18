@@ -204,7 +204,9 @@ async fn prepare_recording_for_exit(app: &tauri::AppHandle) -> Result<(), String
             match tokio::time::timeout(Duration::from_secs(30), response).await {
                 Ok(Ok(result)) => result,
                 Ok(Err(_)) => Err("录音保存确认已中断，请重试退出".into()),
-                Err(_) => Err("退出准备确认超时，应用已保留。请完成草稿或录音的保存确认后重试退出。".into()),
+                Err(_) => Err(
+                    "退出准备确认超时，应用已保留。请完成草稿或录音的保存确认后重试退出。".into(),
+                ),
             }
         };
         {
@@ -1072,6 +1074,9 @@ pub fn run() {
             notifications::notification_mark_all_read,
             notifications::notification_clear,
             notifications::notify_channels_list,
+            notifications::notify_desktop_status,
+            notifications::notify_desktop_set_enabled,
+            notifications::notify_desktop_test,
             notifications::notify_channel_upsert,
             notifications::notify_channel_remove,
             notifications::notify_channel_set_enabled,

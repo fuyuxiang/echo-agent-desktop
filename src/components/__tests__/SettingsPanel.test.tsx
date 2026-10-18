@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 import { describe, expect, it, vi } from "vitest";
-import { fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import "@testing-library/jest-dom/vitest";
 
 vi.mock("@/lib/agent-client", () => ({
@@ -54,6 +54,13 @@ vi.mock("../WeixinChannelPanel", () => ({
   WeixinChannelPanel: () => <div data-testid="weixin-channel-panel"><h3>微信远程对话</h3></div>,
 }));
 
+vi.mock("@/lib/notify-channels", async (original) => ({
+  ...await original<object>(),
+  loadNotifyChannels: vi.fn(async () => []),
+  loadDesktopNotifyStatus: vi.fn(async () => ({enabled:true,source:"default",permission:"unknown"})),
+  testDesktopNotify: vi.fn(async () => ({id:"desktop",ok:true})),
+}));
+import { testDesktopNotify } from "@/lib/notify-channels";
 import { SettingsPanel } from "../SettingsPanel";
 import { ThemeProvider } from "../ThemeProvider";
 import {
@@ -127,22 +134,56 @@ describe("SettingsPanel", () => {
     opener.remove();
   });
 
-  it("按使用场景分组全部设置入口，并默认打开模型页", async () => {
+  it("按使用场景分组设置，默认进入通用，常用偏好聚合为子页面", async () => {
     const { container } = renderSettings();
 
-    for (const group of ["消息与提醒", "智能体", "应用", "数据与支持"]) {
+    for (const group of ["偏好", "智能体", "连接与数据", "支持"]) {
       expect(screen.getByRole("heading", { name: group, level: 2 })).toBeInTheDocument();
     }
 
-    expect(container.querySelectorAll(".settings-navigation__item")).toHaveLength(13);
+    expect(container.querySelectorAll(".settings-navigation__item")).toHaveLength(11);
     expect(screen.getByRole("button", { name: "用量统计" })).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "通知" })).toBeInTheDocument();
-    expect(screen.getByRole("button", { name: "消息通道" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "微信连接" })).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "云存储" })).toBeInTheDocument();
-    expect(screen.getByRole("button", { name: "模型" })).toHaveAttribute("aria-current", "page");
-    expect(await screen.findByRole("heading", { name: "模型与连接", level: 2 })).toBeInTheDocument();
-    expect(screen.getByText("使用内置模型，或连接组织和个人模型服务。自动选择优先级：已设默认、组织模型、个人模型、内置模型（仅限可用模型）。"))
-      .toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "通用" })).toHaveAttribute("aria-current", "page");
+    expect(await screen.findByRole("heading", { name: "通用", level: 2 })).toBeInTheDocument();
+    expect(screen.queryByText("MCP 连接器")).not.toBeInTheDocument();
+    expect(screen.getByRole("group", { name: "界面主题" })).toBeInTheDocument();
+    expect(screen.getByRole("slider", { name: "界面字号" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "通用" })).toHaveAttribute("aria-current", "page");
+    fireEvent.click(screen.getByRole("button", { name: "快捷键" }));
+    expect(screen.getByRole("heading", { name: "快捷键", level: 2 })).toBeInTheDocument();
+
+  });
+
+  it("旧的外观和快捷键直达入口仍归属通用", async () => {
+    const { rerender } = render(<ThemeProvider><SettingsPanel open initialSection="personalize" onClose={() => {}} /></ThemeProvider>);
+    expect(screen.getByRole("button", { name: "通用" })).toHaveAttribute("aria-current", "page");
+    expect(screen.getByRole("button", { name: "常用偏好" })).toHaveAttribute("aria-pressed", "true");
+    rerender(<ThemeProvider><SettingsPanel open initialSection="shortcuts" onClose={() => {}} /></ThemeProvider>);
+    expect(await screen.findByRole("heading", { name: "快捷键", level: 2 })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "通用" })).toHaveAttribute("aria-current", "page");
+  });
+
+  it("配置重载和诊断集中在高级设置，保存诊断仍校验端点", async () => {
+    localStorage.removeItem("echoagent.otlp.endpoint");
+    render(<ThemeProvider><SettingsPanel open initialSection="security" onClose={() => {}} /></ThemeProvider>);
+    expect(screen.queryByLabelText("OTLP 遥测端点")).not.toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "高级设置" }));
+    expect(await screen.findByRole("heading", { name: "重新加载配置" })).toBeInTheDocument();
+    const disclosure = screen.getByText("诊断事件上报").closest("details")!;
+    expect(disclosure).not.toHaveAttribute("open");
+    fireEvent.click(screen.getByText("诊断事件上报"));
+    const field = screen.getByRole("textbox", { name: "OTLP 遥测端点" });
+    fireEvent.change(field, { target: { value: "javascript:invalid" } });
+    fireEvent.click(within(disclosure).getByRole("button", { name: "保存" }));
+    expect(screen.getByRole("status")).toHaveTextContent("无法保存诊断配置");
+    expect(localStorage.getItem("echoagent.otlp.endpoint")).toBeNull();
+    fireEvent.change(field, { target: { value: "http://127.0.0.1:4318/v1/logs" } });
+    fireEvent.click(within(disclosure).getByRole("button", { name: "保存" }));
+    expect(localStorage.getItem("echoagent.otlp.endpoint")).toBe("http://127.0.0.1:4318/v1/logs");
+    localStorage.removeItem("echoagent.otlp.endpoint");
   });
 
   it("允许 Slash 命令直接打开指定设置页", async () => {
@@ -176,30 +217,15 @@ describe("SettingsPanel", () => {
     renderSettings();
 
     const pages = [
-      "通知",
-      "消息通道",
-      "模型与连接",
-      "智能体设置",
-      "记忆",
-      "系统设置",
-      "个性化",
-      "快捷键",
-      "用量统计",
-      "云存储",
-      "数据管理",
-      "安全中心",
-      "帮助与更新",
+      ["通用", "通用"], ["通知", "提醒设置"], ["微信连接", "微信连接"],
+      ["模型", "模型与连接"], ["高级设置", "高级设置"], ["记忆", "记忆"],
+      ["用量统计", "用量统计"], ["云存储", "云存储"], ["数据管理", "备份与恢复"],
+      ["安全与权限", "安全与权限"], ["帮助与更新", "帮助与更新"],
     ];
-
-    for (const page of pages) {
-    const navigationItem = screen.getByRole("button", {
-      name: page === "模型与连接" ? "模型" : page,
-    });
-    fireEvent.click(navigationItem);
-      expect(await screen.findByRole("heading", {
-        name: page === "通知" ? "通知中心" : page,
-        level: 2,
-      })).toBeInTheDocument();
+    for (const [label, heading] of pages) {
+      const navigationItem = within(screen.getByRole("navigation")).getByRole("button", { name: label });
+      fireEvent.click(navigationItem);
+      expect(await screen.findByRole("heading", { name: heading, level: 2 })).toBeInTheDocument();
       expect(navigationItem).toHaveAttribute("aria-current", "page");
     }
   }, 15_000);
@@ -207,8 +233,8 @@ describe("SettingsPanel", () => {
   it("通知、记忆和数据在一个一级入口下保留完整子页面", async () => {
     renderSettings();
     fireEvent.click(screen.getByRole("button", { name: "通知" }));
-    fireEvent.click(screen.getByRole("button", { name: "通知渠道" }));
-    expect(await screen.findByRole("heading", { name: "通知渠道" })).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "提醒设置" }));
+    expect(await screen.findByRole("heading", { name: "提醒设置" })).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "通知" })).toHaveAttribute("aria-current", "page");
     expect(screen.queryByRole("button", { name: "微信远程对话" })).not.toBeInTheDocument();
 
@@ -227,21 +253,22 @@ describe("SettingsPanel", () => {
     const { rerender } = render(
       <ThemeProvider><SettingsPanel open initialSection="weixin-channel" onClose={() => {}} /></ThemeProvider>,
     );
-    expect(screen.getByRole("button", { name: "消息通道" })).toHaveAttribute("aria-current", "page");
+    expect(screen.getByRole("button", { name: "微信连接" })).toHaveAttribute("aria-current", "page");
     expect(screen.getByRole("button", { name: "通知" })).not.toHaveAttribute("aria-current");
-    expect(screen.getByRole("heading", { name: "消息通道", level: 2 })).toBeInTheDocument();
+    expect(screen.getByRole("heading", { name: "微信连接", level: 2 })).toBeInTheDocument();
     expect(screen.getByRole("heading", { name: "微信远程对话", level: 3 })).toBeInTheDocument();
     expect(screen.getByTestId("weixin-channel-panel")).toBeInTheDocument();
     expect(screen.queryByRole("group", { name: "通知视图" })).not.toBeInTheDocument();
 
     fireEvent.click(screen.getByRole("button", { name: "通知" }));
-    expect(await screen.findByRole("heading", { name: "通知中心" })).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "通知记录" }));
+    expect(await screen.findByRole("heading", { name: "通知记录" })).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "通知" })).toHaveAttribute("aria-current", "page");
     expect(screen.queryByTestId("weixin-channel-panel")).not.toBeInTheDocument();
 
     rerender(<ThemeProvider><SettingsPanel open={false} initialSection="weixin-channel" onClose={() => {}} /></ThemeProvider>);
     rerender(<ThemeProvider><SettingsPanel open initialSection="weixin-channel" onClose={() => {}} /></ThemeProvider>);
-    expect(screen.getByRole("button", { name: "消息通道" })).toHaveAttribute("aria-current", "page");
+    expect(screen.getByRole("button", { name: "微信连接" })).toHaveAttribute("aria-current", "page");
   });
 
   it("安全中心说明网页与电脑操作按任务开启，不设置高风险全局默认值", async () => {
@@ -257,7 +284,7 @@ describe("SettingsPanel", () => {
     expect(screen.queryByRole("checkbox", { name: /默认.*操作电脑/ })).toBeNull();
   });
 
-  it("移除助理设置，并将智能体邮箱统一显示为事件收件箱", async () => {
+  it("提醒设置和通知记录分开，记录页不重复显示偏好与概览", async () => {
     renderSettings();
 
     expect(screen.queryByRole("button", { name: "助理设置" })).not.toBeInTheDocument();
@@ -265,9 +292,11 @@ describe("SettingsPanel", () => {
     expect(screen.queryByText("智能体邮箱")).not.toBeInTheDocument();
 
     fireEvent.click(screen.getByRole("button", { name: "通知" }));
-    expect(await screen.findByRole("heading", { name: "通知中心" })).toBeInTheDocument();
-    expect(screen.getByRole("heading", { name: "通知概览", level: 3 })).toBeInTheDocument();
-    expect(screen.getByRole("heading", { name: "通知记录", level: 3 })).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "通知记录" }));
+    expect(await screen.findByRole("heading", { name: "通知记录" })).toBeInTheDocument();
+    expect(screen.queryByRole("heading", { name: "通知概览" })).toBeNull();
+    expect(screen.queryByRole("checkbox", { name: "桌面通知显示任务名称" })).toBeNull();
+    expect(screen.getByRole("heading", { name: "最近通知", level: 3 })).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "全部" })).toHaveAttribute("aria-pressed", "true");
     expect(screen.getByRole("button", { name: "全部已读" })).toBeDisabled();
     expect(screen.getByRole("button", { name: "清空" })).toBeDisabled();
@@ -299,7 +328,7 @@ describe("SettingsPanel", () => {
     );
 
     expect(await screen.findByText("需要信任工作区")).toBeInTheDocument();
-    fireEvent.click(screen.getByRole("button", { name: "文件夹信任" }));
+    fireEvent.click(screen.getByRole("button", { name: "需要处理" }));
     expect(screen.getByText("需要信任工作区")).toBeInTheDocument();
     expect(screen.queryByText("普通通知")).not.toBeInTheDocument();
   });
@@ -325,10 +354,14 @@ describe("SettingsPanel", () => {
     }]);
     const onOpenSession = vi.fn().mockResolvedValue(undefined);
     render(<ThemeProvider><SettingsPanel open initialSection="agent-mail" onOpenSession={onOpenSession} onClose={() => {}} /></ThemeProvider>);
+    fireEvent.click(screen.getByRole("button", { name: "提醒设置" }));
     const preview = await screen.findByRole("checkbox", { name: "桌面通知显示任务名称" });
+    await waitFor(() => expect(preview).toBeEnabled());
     fireEvent.click(preview);
     await waitFor(() => expect(desktopNotificationPreviewSave).toHaveBeenCalledWith(true));
-    fireEvent.click(screen.getByRole("button", { name: "打开相关任务" }));
+    vi.mocked(notificationList).mockResolvedValueOnce([{ id: 10, kind: "session_complete", at: "2026-09-04T20:00:00+08:00", title: "任务《整理报告》的回复已完成", severity: "info", read: false, sessionId: "session-456" }]);
+    fireEvent.click(screen.getByRole("button", { name: "通知记录" }));
+    fireEvent.click(await screen.findByRole("button", { name: "打开相关任务" }));
     await waitFor(() => expect(onOpenSession).toHaveBeenCalledWith("session-456"));
   });
 
@@ -689,4 +722,54 @@ describe("SettingsPanel", () => {
     expect(screen.getByRole("checkbox", { name: "选择 恢复失败归档" })).toBeChecked();
     expect(onToast).toHaveBeenCalledWith("已恢复 1 个，1 个恢复失败");
   });
+});
+
+
+it("通知一级入口直接提供桌面提醒和带当前任务目标的测试", async () => {
+  render(<ThemeProvider><SettingsPanel open onClose={() => {}} sessionId="active-task" /></ThemeProvider>);
+  fireEvent.click(screen.getByRole("button", {name:"通知"}));
+  expect(await screen.findByText(/默认开启，无需添加渠道/)).toBeInTheDocument();
+  fireEvent.click(screen.getByRole("button", {name:"测试桌面提醒"}));
+  await waitFor(() => expect(testDesktopNotify).toHaveBeenCalledWith("active-task"));
+  fireEvent.click(screen.getByRole("button", {name:"通知记录"}));
+  expect(await screen.findByRole("heading", {name:"通知记录"})).toBeInTheDocument();
+  expect(screen.getByRole("button", {name:"通知"})).toHaveAttribute("aria-current", "page");
+});
+
+it("通知记录按用户目的分组，连接异常归入异常且不误归为需要处理", async () => {
+  vi.mocked(notificationList).mockResolvedValueOnce([
+    { id: 1, kind: "permission", title: "等待任务授权", severity: "warn", read: false, at: "2026-10-18T10:00:00Z" },
+    { id: 2, kind: "mcp_status", title: "文档工具无法连接", severity: "warn", read: true, at: "2026-10-18T09:00:00Z" },
+    { id: 3, kind: "session_complete", title: "周报完成", severity: "info", read: false, at: "2026-10-18T08:00:00Z" },
+    { id: 4, kind: "models_update", title: "模型目录更新", severity: "info", read: true, at: "2026-10-18T07:00:00Z" },
+  ]);
+  render(<ThemeProvider><SettingsPanel open initialSection="agent-mail" onClose={() => {}} /></ThemeProvider>);
+  await screen.findByText("等待任务授权");
+  fireEvent.click(screen.getByRole("button", { name: "需要处理" }));
+  expect(screen.getByText("等待任务授权")).toBeInTheDocument();
+  expect(screen.queryByText("文档工具无法连接")).toBeNull();
+  fireEvent.click(screen.getByRole("button", { name: "异常" }));
+  expect(screen.getByText("文档工具无法连接")).toBeInTheDocument();
+  expect(screen.queryByText("等待任务授权")).toBeNull();
+  fireEvent.click(screen.getByRole("button", { name: "系统事件" }));
+  expect(screen.getByText("模型目录更新")).toBeInTheDocument();
+  expect(screen.queryByText("文档工具无法连接")).toBeNull();
+  fireEvent.click(screen.getByRole("button", { name: "未读" }));
+  expect(screen.getByText("等待任务授权")).toBeInTheDocument();
+  expect(screen.getByText("周报完成")).toBeInTheDocument();
+  expect(screen.queryByText("模型目录更新")).toBeNull();
+});
+
+it("普通通知说明直接可读，结构化诊断信息需要展开查看", async () => {
+  vi.mocked(notificationList).mockResolvedValueOnce([
+    { id: 1, kind: "mcp_status", title: "工具连接异常", body: '{"status":"disconnected","detail":"internal-diagnostic"}', severity: "warn", read: false, at: "2026-10-18T10:00:00Z" },
+    { id: 2, kind: "permission", title: "任务需要授权", body: "打开任务决定是否允许", severity: "warn", read: false, at: "2026-10-18T09:00:00Z" },
+  ]);
+  render(<ThemeProvider><SettingsPanel open initialSection="agent-mail" onClose={() => {}} /></ThemeProvider>);
+  expect(await screen.findByText("打开任务决定是否允许")).toBeVisible();
+  const details = screen.getByText("查看技术详情").closest("details")!;
+  expect(details).not.toHaveAttribute("open");
+  expect(screen.getByText(/internal-diagnostic/)).not.toBeVisible();
+  fireEvent.click(screen.getByText("查看技术详情"));
+  expect(screen.getByText(/internal-diagnostic/)).toBeVisible();
 });

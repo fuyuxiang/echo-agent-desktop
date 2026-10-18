@@ -104,3 +104,15 @@ describe("SlashCommands", () => {
     expect(screen.queryByRole("listbox")).not.toBeInTheDocument();
   });
 });
+
+it("快速切换目录时忽略旧目录迟到的命令目录", async () => {
+  let resolveA!: (commands: import("@/lib/types").SlashCommand[]) => void;
+  commandsListMock.mockImplementationOnce(() => new Promise(resolve => { resolveA = resolve; }));
+  commandsListMock.mockResolvedValueOnce([{name:"skill-c",description:"C 的技能"}]);
+  const {rerender} = render(<SlashCommands text="/skill-" cursor={7} cwd="/CWD/A" sessionId="A" onPick={vi.fn()} />);
+  rerender(<SlashCommands text="/skill-" cursor={7} cwd="/CWD/C" sessionId="C" onPick={vi.fn()} />);
+  expect(await screen.findByText("/skill-c")).toBeInTheDocument();
+  await act(async () => resolveA([{name:"skill-a",description:"A 的技能"}]));
+  expect(screen.queryByText("/skill-a")).toBeNull();
+  expect(screen.getByText("/skill-c")).toBeInTheDocument();
+});

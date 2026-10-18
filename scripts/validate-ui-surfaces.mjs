@@ -190,10 +190,12 @@ page.setDefaultNavigationTimeout(60000);
       const controls = await page.locator("select.form-control").evaluateAll(elements => elements.map(element => ({ appearance: getComputedStyle(element).appearance, height: element.getBoundingClientRect().height })));
       for (const control of controls) { assert.equal(control.appearance, "none"); assert.ok(control.height >= 36, `${surface}: short select (${control.height}px)`); }
       if (surface === "memory") {
+        await page.getByText("检索与保存策略", { exact: true }).click();
         const rows = await page.locator(".settings-group__content .settings-row").evaluateAll(elements => elements.map(element => ({ top: element.getBoundingClientRect().top, bottom: element.getBoundingClientRect().bottom })));
         assert.ok(rows.length >= 4 && rows.slice(1, 4).every((row, index) => row.top >= rows[index].bottom - 1), "memory settings rows overlap");
       }
       if (surface === "security") {
+        await page.getByText("自定义工具规则", { exact: true }).click();
         await page.locator(".permission-rule-builder").scrollIntoViewIfNeeded();
         const fields = await page.locator(".permission-rule-builder .form-control").evaluateAll(elements => elements.map(element => element.getBoundingClientRect().height));
         assert.ok(Math.max(...fields) - Math.min(...fields) < 1, "permission controls have inconsistent heights");
@@ -275,6 +277,8 @@ page.setDefaultNavigationTimeout(60000);
   assert.equal(await page.getByRole("checkbox", { name: "自动整理", exact: true }).isChecked(), false);
 
   await page.goto("http://127.0.0.1:1439/__ui-review?surface=notify-channels");
+  await page.getByRole("button", { name: /推送到其他应用/ }).click();
+  await page.getByRole("button", { name: "添加渠道", exact: true }).click();
   await page.getByRole("textbox", { name: "通知渠道显示名" }).fill("测试渠道");
   await page.getByRole("textbox", { name: "Webhook URL" }).fill("https://example.com/webhook");
   await page.getByRole("button", { name: "+ 添加", exact: true }).click();

@@ -1,6 +1,7 @@
 import { createHash } from "node:crypto";
 import { existsSync, lstatSync, readFileSync, readdirSync, realpathSync } from "node:fs";
 import { isAbsolute, join, relative } from "node:path";
+import { validateGitWindowless } from "./patch-theia-git-windowless.mjs";
 
 export const GIT_PLUGIN_IDS = Object.freeze(["vscode.git", "vscode.git-base"]);
 
@@ -72,4 +73,11 @@ export function theiaPluginTreeFingerprint(root, ids) {
   };
   for (const id of [...ids].sort()) visit(join(root, id));
   return hash.digest("hex");
+}
+
+/** Runtime admission is stricter than validation of an original upstream VSIX. */
+export function validateTheiaRuntimePlugin(directory, plugin, availableIds) {
+  const manifest = validateTheiaPlugin(directory, plugin, availableIds);
+  validateGitWindowless(directory, plugin);
+  return manifest;
 }

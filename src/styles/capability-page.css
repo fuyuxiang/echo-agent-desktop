@@ -17,12 +17,18 @@
 }
 .capability-page__header--illustrated .capability-page__heading { grid-area: heading; padding-top: 0; }
 .capability-page__header--illustrated .capability-page__controls { grid-area: controls; justify-content: flex-start; flex-wrap: wrap; }
-.capability-page__illustration { grid-area: illustration; min-width: 0; }
-.capability-page__illustration img { display: block; width: 100%; max-height: 180px; object-fit: contain; mix-blend-mode: multiply; user-select: none; }
+.capability-page__header--illustrated .capability-search { flex: 1 1 140px; width: auto; max-width: 240px; }
+/* Reserve the same copy tracks so switching illustrated pages does not move
+ * the art or actions when one page has account and connection details. */
+.capability-page__header--illustrated .capability-page__description { min-height: 3.2em; }
+.capability-page__header--illustrated .capability-page__metadata { min-height: calc(3.2em + 6px); }
+.capability-page__illustration { grid-area: illustration; min-width: 0; width: 100%; max-width: 540px; aspect-ratio: 3 / 1; justify-self: end; }
+.capability-page__illustration img { display: block; width: 100%; height: 100%; object-fit: contain; mix-blend-mode: multiply; user-select: none; }
 [data-theme="dark"] .capability-page__illustration img { mix-blend-mode: screen; filter: invert(1) hue-rotate(180deg) brightness(1.6); }
 .capability-page__title { flex: 0 1 auto; margin: 0; color: var(--echo-text-strong); font-size: var(--echo-page-title-size); font-weight: var(--echo-page-title-weight); line-height: var(--echo-page-title-line-height); }
 .capability-page__heading { padding-top: max(0px, calc((var(--capability-control-height) - 1.75rem) / 2)); min-width: 0; overflow-wrap: anywhere; }
 .capability-page__description { margin: 6px 0 0; color: var(--echo-text-medium); font-size: .8125rem; line-height: 1.6; }
+.capability-page__metadata { display: flex; flex-direction: column; align-items: flex-start; gap: 6px; margin-top: 12px; color: var(--echo-text-weak); font-size: .75rem; line-height: 1.6; overflow-wrap: anywhere; }
 .capability-page__controls, .capability-page__actions { display: flex; align-items: center; gap: 10px; min-width: 0; }
 .capability-page__controls { justify-content: flex-end; }
 .capability-page__actions { flex: 0 0 auto; }
@@ -79,10 +85,12 @@
   .capability-page__controls { width: 100%; justify-content: space-between; }
   .capability-search { flex-grow: 1; }
 }
-@container capability-page (max-width: 520px) {
-  .capability-page__inner { padding: 20px 16px 32px; }
+@container capability-page (max-width: 680px) {
   .capability-page__header--illustrated { grid-template-columns: minmax(0, 1fr); grid-template-areas: "heading" "illustration" "controls"; padding: 20px; }
   .capability-page__illustration { width: min(100%, 360px); justify-self: center; }
+}
+@container capability-page (max-width: 520px) {
+  .capability-page__inner { padding: 20px 16px 32px; }
   .capability-page__controls { flex-wrap: wrap; }
   .capability-search { flex-basis: 100%; width: 100%; }
   .capability-page__actions { flex-wrap: wrap; }

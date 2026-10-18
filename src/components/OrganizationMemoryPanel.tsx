@@ -64,6 +64,9 @@ import {
 import { organizationSessionBoundary, useOrgSessionStore } from "@/stores/org-session-store";
 import { filesystemPickDirectory, filesystemPickFiles } from "@/lib/agent-client";
 import { FilePreview } from "./FilePreview";
+import { Button } from "./Button";
+import { CapabilityPage } from "./experts-panel/shared/CapabilityPage";
+import organizationHeroImg from "@/assets/organization-hero.png";
 import { useModalFocus } from "@/lib/use-modal-focus";
 
 type Tab = "overview" | "memories" | "documents" | "skills";
@@ -918,25 +921,27 @@ export function OrganizationMemoryPanel({
         : "提交、安装和同步组织共享技能。";
 
   return (
-    <div className="org-memory">
-      <header className="org-memory__header">
-        <div>
-          <div className="org-memory__eyebrow">组织工作台</div>
-          <h1>{session.bootstrap?.scopes.find((scope) => scope.kind === "org")?.name ?? "组织知识管理中心"}</h1>
-          <p>{session.user?.displayName ?? session.user?.username} · {session.serverUrl}</p>
-          <span className={`org-memory__capability ${session.organizationMemoryEnabled ? "is-active" : ""}`}>
+    <CapabilityPage
+      className="org-memory org-memory--connected"
+      title={session.bootstrap?.scopes.find((scope) => scope.kind === "org")?.name ?? "组织知识管理中心"}
+      headingLevel={1}
+      description="集中管理组织经验、文档和技能，让团队知识助力每个任务"
+      illustration={<img src={organizationHeroImg} width={2172} height={724} alt="组织协作与知识共享插画" draggable={false} />}
+      metadata={<>
+          <span className="org-memory__identity" title={`${session.user?.displayName ?? session.user?.username} · ${session.serverUrl}`}>{session.user?.displayName ?? session.user?.username} · {session.serverUrl}</span>
+          <span className={`org-memory__capability ${session.organizationMemoryEnabled ? "is-active" : ""}`} role="status">
             <i />{session.organizationMemoryEnabled
               ? "Agent 组织上下文已启用"
               : session.bootstrap?.scopes?.some((scope) => scope.kind === "team" || scope.kind === "org")
                 ? "Agent 组织上下文暂不可用"
                 : "未加入共享组织范围"}
           </span>
-        </div>
-        <div className="org-memory__header-actions">
-          <button onClick={() => void refreshWorkspace()} disabled={busy}><RefreshCw size={15} />刷新</button>
-          <button onClick={() => void handleLogout()} disabled={busy}><LogOut size={15} />退出组织</button>
-        </div>
-      </header>
+        </>}
+      actions={<>
+          <Button onClick={() => void refreshWorkspace()} disabled={busy}><RefreshCw size={15} />刷新</Button>
+          <Button onClick={() => void handleLogout()} disabled={busy}><LogOut size={15} />退出组织</Button>
+        </>}
+    >
 
       <div className="org-memory__workspace">
         <nav className="org-memory__nav" aria-label="组织功能">
@@ -1103,7 +1108,7 @@ export function OrganizationMemoryPanel({
           </div>}
         </main>
       </div>
-    </div>
+    </CapabilityPage>
   );
 }
 

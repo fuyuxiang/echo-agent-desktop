@@ -380,7 +380,7 @@ function Shell() {
   const modalOpen = useModalPresence();
   const { confirm: confirmAutomationExit, dismiss: dismissAutomationExit, dialog: automationExitDialog } = useAppDialog();
 
-  const openSettings = useCallback((section: SettingsSectionId = "model") => {
+  const openSettings = useCallback((section: SettingsSectionId = "general") => {
     setSettingsSection(section);
     setSearchOpen(false);
     setAboutOpen(false);
@@ -2114,7 +2114,7 @@ function Shell() {
         openSearch();
       } else if (event.key === ",") {
         event.preventDefault();
-        openSettings("model");
+        openSettings("general");
       } else if (key === "b") {
         event.preventDefault();
         setSidebarCollapsed((value) => !value);
@@ -2476,7 +2476,7 @@ function Shell() {
         return true;
       case "settings": {
         const aliases: Record<string, SettingsSectionId> = {
-          "": "model",
+          "": "general",
           model: "model",
           agent: "agent-settings",
           memory: "memory",
@@ -2839,7 +2839,7 @@ function Shell() {
           onNewSession={handleNewSession}
           onSelect={handleSelectSession}
           onNavigate={handleNavigate}
-          onOpenSettings={() => openSettings("model")}
+          onOpenSettings={() => openSettings("general")}
           onToggleCollapse={() => setSidebarCollapsed(true)}
           onOpenSearch={openSearch}
           onPlaceholder={handlePlaceholder}
@@ -3016,9 +3016,7 @@ function Shell() {
                   models={models}
                   onModelChange={handleModelChange}
                   cwd={activeSessionCwd}
-                  newSessionTargetCwd={newSessionTargetCwd}
-                  workspaces={workspaces}
-                  onSelectWorkspace={handleSelectWorkspace}
+                  onNewTask={handleNewSession}
                   onPrepareRetry={handlePrepareRetry}
                   onRetrySend={handleRetrySend}
                   onRewound={handleRewound}

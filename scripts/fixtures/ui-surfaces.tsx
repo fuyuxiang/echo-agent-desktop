@@ -10,6 +10,8 @@ import "../../src/styles/index.css";
 // this module is never imported by the production entry point.
 import React, { useState } from "react";
 import { createRoot } from "react-dom/client";
+import { SidebarLayoutContext, useAppSidebarLayout } from "../../src/lib/sidebar-layout";
+import { SidebarResizeHandle } from "../../src/components/SidebarResizeHandle";
 import { ThemeProvider } from "../../src/components/ThemeProvider";
 import { SettingsPanel, type SettingsSectionId } from "../../src/components/SettingsPanel";
 import { PlaceholderPage } from "../../src/components/PlaceholderPage";
@@ -34,6 +36,7 @@ import { TasksPanel } from "../../src/components/TasksPanel";
 import { MeetingMinutesPanel } from "../../src/components/MeetingMinutesPanel";
 import { PermissionPicker } from "../../src/components/PermissionPicker";
 import { HomePage } from "../../src/components/HomePage";
+import { ProjectsPanel } from "../../src/components/ProjectsPanel";
 import ModalReview from "./modal-review";
 import ResultReviewFixture from "./result-review";
 import DetailReview from "./detail-review";
@@ -52,8 +55,24 @@ localStorage.setItem("echoagent.theme", query.get("theme") ?? "light");
 let memory = { enabled: true, initialInjectionEnabled: true, saveOnEnd: true, watcherEnabled: true,
   autoFlushEnabled: true, dreamEnabled: true, retrievalMode: "local", revision: "1",
   retrievalSummary: "仅在本机进行全文检索；摘要和整理仍使用会话模型" };
-let providers: unknown[] = [];
-let channels: unknown[] = [];
+let providers: unknown[] = query.get("settingsDesign") === "1" ? [{
+  id: "review-dav", label: "团队文件", kind: "webdav", baseUrl: "https://review.invalid/dav", enabled: true,
+}] : [];
+let channels: import("../../src/lib/notify-channels").NotifyChannel[] = [];
+let notificationTitlePreview = false;
+let notificationChannelReadFailed = false;
+let notificationDesktopReadFailed = false;
+if (query.get("notificationState") === "configured") channels = [
+  { id: "review-webhook", label: "团队任务动态", kind: "slack-webhook", endpoint: "https://hooks.example.test/private-review-token", enabled: true },
+  { id: "review-email", label: "旧邮件配置", kind: "email", enabled: true },
+];
+let notificationEntries: import("../../src/lib/types").NotificationEntry[] = query.get("notificationState") === "records" ? [
+  { id: 1, kind: "permission", title: "整理报告需要授权", body: "打开任务查看请求并决定是否允许", severity: "warn", read: false, sessionId: "review-task", requestId: "review-permission", at: "2026-10-18T10:00:00Z" },
+  { id: 2, kind: "session_complete", title: "任务《本周工作报告整理》已完成", body: "打开任务查看结果", severity: "info", read: false, sessionId: "review-task", at: "2026-10-18T09:00:00Z" },
+  { id: 3, kind: "mcp_status", title: "文档工具连接失败", body: JSON.stringify({ status: "disconnected", message: "review-technical-details" }), severity: "warn", read: true, at: "2026-10-18T08:00:00Z" },
+  { id: 4, kind: "models_update", title: "模型目录已更新", severity: "info", read: true, at: "2026-10-18T07:00:00Z" },
+] : [];
+
 let automationFlowTask: Automation = { ...buildDraft(undefined, "/review/EchoAgent"), id: "review-automation", name: "保留草稿与通知导航验收任务", prompt: "整理交付报告", status: "PAUSED", createdAt: "2026-10-17T00:00:00Z" };
 let automationFlowRemoved = query.get("state") === "removed";
 if (query.get("surface") === "automation-flow" && automationFlowRemoved) {
@@ -92,6 +111,7 @@ const orgScopes = [
   { id: "mine", kind: "personal", name: "我的空间", canPublishDocuments: true },
   { id: "team", kind: "team", name: "产品研发团队", canPublishDocuments: true },
 ];
+if (query.get("orgName")) orgScopes.push({ id: "org", kind: "org", name: query.get("orgName")!, canPublishDocuments: true });
 const orgDocuments = [
   { id: "review-docx", title: "自动化分析报告功能介绍.docx", sourceType: "docx", status: "ready", byteSize: 453740, scopeId: "team", scopeKind: "team", scopeName: "产品研发团队", ownerId: "another-user", chunkCount: 12, tags: [], updatedAt: 1 },
   { id: "review-xlsx", title: "指标体系模型设计模板.xlsx", sourceType: "xlsx", status: "ready", byteSize: 379494, scopeId: "team", scopeKind: "team", scopeName: "产品研发团队", ownerId: "another-user", chunkCount: 1899, tags: [], updatedAt: 1 },
@@ -219,7 +239,16 @@ Object.assign(window, {
           return trustReviewPending(state as "short" | "long");
         }
         case "folder_trust_respond": trustResolved = true; return true;
-        case "providers_list": return { providers: query.has("modelState") ? [{
+        case "providers_list": if (query.has("settingsDesign")) return {
+          providers: [
+            { id: "review-org", label: "组织提供", providerKind: "custom", source: "organization", managed: true, baseUrl: "https://api.example.test/v1", credentialConfigured: true, syncedAt: "2026-10-18T10:00:00Z" },
+            { id: "review-personal", label: "我的模型连接", providerKind: "custom", source: "personal", baseUrl: "https://api.example.test/v1", credentialConfigured: true },
+          ],
+          models: [
+            { modelId: "review-org/model", remoteModelId: "组织模型", name: "组织模型", providerId: "review-org" },
+            { modelId: "review-personal/model", remoteModelId: "个人模型", name: "个人模型", providerId: "review-personal" },
+          ],
+        }; return { providers: query.has("modelState") ? [{
           id: "review-model-provider", providerKind: "custom", label: "隔离模型连接",
           source: "personal", baseUrl: "https://review.invalid/v1", apiBackend: "chat_completions",
           authScheme: "bearer", credentialConfigured: true,
@@ -234,7 +263,12 @@ Object.assign(window, {
         case "providers_save_connection": throw new Error("隔离验证：保存失败，未写入原生配置");
         case "agents_defaults_get": return { defaultModel: "", defaultPermission: "ask", rememberToolApprovals: true };
         case "agent_auth_status": return { ready: false, providers: [], runtimeReady: false, synchronized: true, runtimeModels: [], reason: "尚未配置可用模型" };
-        case "desktop_preferences_get": return { closeToTray: true, showNotificationTaskTitle: false };
+        case "desktop_preferences_get": return { closeToTray: true, showNotificationTaskTitle: notificationTitlePreview };
+        case "desktop_notification_preview_save": notificationTitlePreview = args.showTaskTitle; return { closeToTray: true, showNotificationTaskTitle: notificationTitlePreview };
+        case "notification_list": return notificationEntries;
+        case "notification_mark_read": notificationEntries = notificationEntries.map(entry => entry.id === args.id ? { ...entry, read: true } : entry); return;
+        case "notification_mark_all_read": notificationEntries = notificationEntries.map(entry => ({ ...entry, read: true })); return;
+        case "notification_clear": notificationEntries = []; return;
         case "subagents_config_get": return { maxDepth: 2 };
         case "automations_snapshot": return { automations: query.get("surface") === "automation-flow" && !automationFlowRemoved ? [automationFlowTask] : [], records: [] };
         case "automations_save": {
@@ -256,8 +290,23 @@ Object.assign(window, {
         case "automation_capabilities": return { browser: { available: true, browserName: "Chrome" }, computer: { available: true, platform: "macos", screenCapture: true, inputControl: true } };
         case "storage_providers_list": return providers;
         case "storage_provider_upsert": providers = [args.config]; return;
-        case "notify_channels_list": return channels;
-        case "notify_channel_upsert": channels = [...channels, args.channel]; return;
+        case "storage_list": return [{ path: "/readme.md", name: "readme.md", isDir: false, size: 256 }];
+        case "storage_read_text": return "隔离 UI 验证内容，不访问真实云存储。";
+        case "storage_provider_test": return;
+        case "notify_desktop_status":
+          if (query.get("notificationState") === "desktop-error" && !notificationDesktopReadFailed) { notificationDesktopReadFailed = true; throw new Error("隔离验证：桌面提醒状态暂时不可读"); }
+          return { enabled: channels.filter(c => c.kind === "desktop").length === 0 || channels.some(c => c.kind === "desktop" && c.enabled), source: channels.some(c => c.kind === "desktop") ? "configured" : "default", permission: "unknown" };
+        case "notify_desktop_set_enabled": channels = [...channels.filter(c => c.kind !== "desktop"), { id: "desktop-review", label: "桌面提醒", kind: "desktop", enabled: args.enabled }]; return;
+        case "notify_desktop_test": return { id: "desktop", ok: true };
+        case "notify_channels_list":
+          if (query.get("notificationState") === "channel-error" && !notificationChannelReadFailed) { notificationChannelReadFailed = true; throw new Error("隔离验证：外部渠道暂时不可读"); }
+          return channels.map(channel => ({ ...channel, endpoint: channel.endpoint ? `${new URL(channel.endpoint).origin}/…` : undefined }));
+        case "notify_channel_upsert": {
+          const previous = channels.find(channel => channel.id === args.channel.id);
+          channels = [...channels.filter(channel => channel.id !== args.channel.id), { ...args.channel, endpoint: args.channel.endpoint ?? previous?.endpoint }]; return;
+        }
+        case "notify_channel_set_enabled": channels = channels.map(channel => channel.id === args.id ? { ...channel, enabled: args.enabled } : channel); return;
+        case "notify_channel_remove": channels = channels.filter(channel => channel.id !== args.id); return;
         case "notify_channel_test": return { ok: true };
         case "weixin_status": return query.get("surface") === "weixin-offline"
           ? { connected: true, botId: "review-bot", activeSession: "review-session-12345678", allowedWorkspaces: ["/review/EchoAgent"], sharedSessions: [{ sessionId: "review-session-12345678", title: "准备发布说明", cwd: "/review/EchoAgent" }], pendingReplies: 3, online: false, lastError: "微信连接超时" }
@@ -330,6 +379,35 @@ function ConversationLayoutFixture() {
     <ChatView onSend={() => {}} onCancel={() => {}} title="聊天布局回归" />
     <TasksPanel sessionId={sessionId ?? undefined} />
   </div>;
+}
+
+function HomeReviewFixture() {
+  const layout = useAppSidebarLayout();
+  const [cwd, setCwd] = useState("/review/EchoAgent");
+  return <div className="app"><SidebarLayoutContext.Provider value={layout.context}>
+    <div ref={layout.bodyRef} style={layout.style} className={"app__body" + (layout.collapsed ? " app__body--collapsed" : "") + (layout.resizing ? " app__body--sidebar-resizing" : "")}>
+      <Sidebar activeNav="新建任务" onNewSession={() => {}} onSelect={() => {}} onNavigate={() => {}} onOpenSettings={() => {}} onOpenSearch={() => {}} onToggleCollapse={() => layout.setCollapsed(true)} />
+      <SidebarResizeHandle layout={layout} />
+      <main className="app__main">
+        {layout.collapsed && <div className="main-page-controls"><button className="main-topbar__btn" aria-label="展开侧边栏" onClick={() => layout.setCollapsed(false)}>展开侧边栏</button></div>}
+        <HomePage onSend={() => {}} streaming={false} apiReady={query.get("state") !== "unconfigured"} creatingSession={query.get("state") === "loading"} sendError={query.get("state") === "error" ? "会话创建失败，请重试" : null} onOpenSettings={() => {}} onPlaceholder={() => {}} models={[{ id: "review/model", label: "评审模型", providerId: "review", providerKind: "custom" }]} modelId="review/model" onModelChange={() => {}} cwd={cwd} workspaces={[{cwd:"/review/EchoAgent",sessionCount:1},{cwd:"/review/Other",sessionCount:1}]} onSelectWorkspace={setCwd} />
+      </main>
+    </div>
+  </SidebarLayoutContext.Provider></div>;
+}
+
+function ManagementReviewFixture({ surface }: { surface: "projects" | "organization-shell" | "automation-templates" }) {
+  const layout = useAppSidebarLayout();
+  return <div className="app"><SidebarLayoutContext.Provider value={layout.context}>
+    <div ref={layout.bodyRef} style={layout.style} className={"app__body" + (layout.collapsed ? " app__body--collapsed" : "") + (layout.resizing ? " app__body--sidebar-resizing" : "")}>
+      <Sidebar activeNav={surface === "projects" ? "项目" : surface === "organization-shell" ? "组织" : "自动化"} onNewSession={() => {}} onSelect={() => {}} onNavigate={() => {}} onOpenSettings={() => {}} onOpenSearch={() => {}} onToggleCollapse={() => layout.setCollapsed(true)} />
+      <SidebarResizeHandle layout={layout} />
+      <main className="app__main">
+        {layout.collapsed && <div className="main-page-controls"><button className="main-topbar__btn" aria-label="展开侧边栏" onClick={() => layout.setCollapsed(false)}>展开侧边栏</button></div>}
+        {surface === "projects" ? <ProjectsPanel /> : surface === "organization-shell" ? <OrganizationMemoryPanel onStartConversation={() => {}} /> : <AutomationPanel cwd="/review/EchoAgent" />}
+      </main>
+    </div>
+  </SidebarLayoutContext.Provider></div>;
 }
 
 function Fixture() {
@@ -407,10 +485,7 @@ function Fixture() {
   if (surface === "details") return <DetailReview />;
   if (surface === "trust") return <TrustReview variant={(query.get("state") ?? "long") as "short" | "long" | "loading" | "error"} />;
   if (surface === "execution" || surface === "runtime") return <ExecutionReviewFixture />;
-  if (surface === "home") return <div style={{ display: "flex", height: "100%" }}>
-    <Sidebar activeNav="新建任务" onNewSession={() => {}} onSelect={() => {}} onNavigate={setLabel} onOpenSettings={() => {}} onOpenSearch={() => {}} />
-    <HomePage onSend={() => {}} streaming={false} apiReady={query.get("state") !== "unconfigured"} creatingSession={query.get("state") === "loading"} sendError={query.get("state") === "error" ? "会话创建失败，请重试" : null} onOpenSettings={() => {}} onPlaceholder={() => {}} models={[{ id: "review/model", label: "评审模型", providerId: "review", providerKind: "custom" }]} modelId="review/model" cwd="/review/EchoAgent" />
-  </div>;
+  if (surface === "home") return <HomeReviewFixture />;
   if (surface === "page") return <PlaceholderPage label={label} onNavigate={setLabel} cwd="/review/EchoAgent" />;
   if (surface === "capabilities") {
     const content = <PlaceholderPage label={label} onNavigate={setLabel} sessionId={extensionCount ? "review-extension-session" : undefined} />;
@@ -429,10 +504,11 @@ function Fixture() {
     ) : <div style={{ padding: 48, fontSize: 32, fontWeight: 700 }}>今天想完成什么？</div>}
     <SecondarySidebar onCreateExpert={() => { setLabel("专家·技能·连接器"); setCreateExpertRequested(true); setExpertPageOpen(true); }} />
   </>;
-  if (surface === "conversation" || surface === "queue") return <div style={{ display: "flex", height: "100%" }}>
+  if (surface === "conversation" || surface === "queue") return <div className="app" style={{ display: "flex", flexDirection: "row", height: "100%" }}>
     <aside style={{ width: "min(250px, 22vw)", flex: "none", borderRight: "1px solid var(--echo-border-default)", background: "var(--echo-bg-secondary)", padding: "24px 16px", boxSizing: "border-box" }}>EchoAgent</aside>
     <ChatView onSend={() => {}} onCancel={() => {}} title="评审投影仪性能与内存泄漏" />
   </div>;
+  if (surface === "projects" || surface === "organization-shell" || surface === "automation-templates") return <ManagementReviewFixture surface={surface} />;
   if (surface === "organization" || surface === "organization-login") return <div style={{ height: "100%", overflow: "auto" }}><OrganizationMemoryPanel onStartConversation={() => {}} /></div>;
   if (surface === "meeting") return <MeetingMinutesPanel modelId="review/MiniMax-M3" models={[{ id: "review/MiniMax-M3", label: "MiniMax M3", providerId: "review", providerKind: "custom", source: "personal" }]} />;
   if (surface === "permission-picker") return <div style={{ position: "relative", height: "100%", background: "var(--echo-bg-secondary)" }}>
@@ -443,7 +519,7 @@ function Fixture() {
       <ProjectSwitcher activeCwd={cwd} projects={[{ cwd: "/review/EchoAgent" }, { cwd: "/review/一个名称很长但仍然可以完整查看路径的项目" }]} onSelect={setCwd} onRemove={() => {}} onOpenFolder={() => {}} />
     </WorkbenchIdentity><div /></header>
     <main className="echo-theia-workspace" />
-    <div className="echo-theia-agent__splitter" />
+    <div className="echo-theia-agent__splitter" role="separator" tabIndex={0} aria-label="调整 Agent 面板宽度" aria-orientation="vertical" />
     <aside className="echo-theia-agent"><div className="echo-theia-agent__heading">
       <TaskSwitcher
         tasks={[

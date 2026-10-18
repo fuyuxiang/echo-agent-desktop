@@ -120,14 +120,14 @@ vi.mock("@/lib/agent-client", async () => {
   mod.agentsList = asyncArr;
   mod.mcpList = asyncArr;
   mod.tasksList = asyncArr;
-  mod.commandsList = asyncArr;
+  mod.commandsList = vi.fn(asyncArr);
   mod.promptHistory = asyncArr;
   return mod;
 });
 
 import { ChatView } from "../ChatView";
 import { ThemeProvider } from "../ThemeProvider";
-import { rewindExecute, rewindPoints, setCodingMode } from "@/lib/agent-client";
+import { rewindExecute, rewindPoints, setCodingMode, commandsList } from "@/lib/agent-client";
 import { useSubagentStore } from "@/stores/subagent-store";
 
 /** 用 ThemeProvider 包裹(ChatView 内的 MessageItem/Markdown 需要 useTheme)。 */
@@ -672,4 +672,25 @@ it("restored native export receipts become reachable after history loading binds
   expect(artifactMocks.load).toHaveBeenCalledWith("export-history");
   fireEvent.click(button);
   expect(await screen.findByText("report.docx")).toBeInTheDocument();
+});
+
+
+it("历史任务使用自己的目录发现命令，新建动作不会重绑旧任务", async () => {
+  storeState = { ...storeState, sessionId: "session-a", messages: [], streaming: false, error: null, plan: null };
+  vi.mocked(commandsList).mockClear();
+  vi.mocked(commandsList).mockResolvedValue([{name:"project-a-skill", description:"A 的技能"}]);
+  const onNewTask = vi.fn();
+  const onSend = vi.fn();
+  const {rerender} = render(<ThemeProvider><ChatView {...baseProps} onSend={onSend} cwd="/workspace/A" onNewTask={onNewTask} /></ThemeProvider>);
+  expect(screen.getByTitle("本任务工作目录：/workspace/A")).toBeInTheDocument();
+  const input = screen.getByRole("textbox");
+  fireEvent.change(input, {target:{value:"/project-a"}});
+  await waitFor(() => expect(commandsList).toHaveBeenLastCalledWith("session-a", "/workspace/A"));
+  fireEvent.click(screen.getByRole("button", {name:"新建任务"}));
+  expect(onNewTask).toHaveBeenCalledOnce();
+  // A future task may choose C, while this mounted historical task stays A.
+  rerender(<ThemeProvider><ChatView {...baseProps} onSend={onSend} cwd="/workspace/A" onNewTask={onNewTask} commandRefreshKey={1} /></ThemeProvider>);
+  await waitFor(() => expect(commandsList).toHaveBeenLastCalledWith("session-a", "/workspace/A"));
+  expect(screen.queryByRole("button", {name:/工作目录/})).toBeNull();
+  expect(await screen.findByText("/project-a-skill")).toBeInTheDocument();
 });

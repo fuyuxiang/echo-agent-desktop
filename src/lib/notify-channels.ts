@@ -50,6 +50,25 @@ export interface DeliveryResult {
   error?: string;
 }
 
+export interface DesktopNotifyStatus {
+  enabled: boolean;
+  source: "default" | "configured" | "policy";
+  permission: "unknown";
+  policyError?: string;
+}
+
+export async function loadDesktopNotifyStatus(): Promise<DesktopNotifyStatus> {
+  return invoke<DesktopNotifyStatus>("notify_desktop_status");
+}
+
+export async function setDesktopNotifyEnabled(enabled: boolean): Promise<void> {
+  await invoke<void>("notify_desktop_set_enabled", { enabled });
+}
+
+export async function testDesktopNotify(sessionId?: string): Promise<DeliveryResult> {
+  return invoke<DeliveryResult>("notify_desktop_test", { sessionId: sessionId ?? null });
+}
+
 /** Persisted backend channel operations. Webhooks are sent by Rust so WebView
  * CORS and background-session filtering cannot silently drop notifications. */
 export async function loadNotifyChannels(): Promise<NotifyChannel[]> {

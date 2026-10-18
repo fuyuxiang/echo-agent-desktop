@@ -4,7 +4,9 @@ import { Button, IconButton } from "@/components/Button";
 
 interface Props {
   title: string;
+  headingLevel?: 1 | 2;
   description?: string;
+  metadata?: ReactNode;
   className?: string;
   search?: {
     value: string;
@@ -19,15 +21,17 @@ interface Props {
 }
 
 /** The extension pages share one toolbar, content gutter and scroll owner. */
-export function CapabilityPage({ title, description, className = "", search, actions, illustration, summary, children }: Props) {
+export function CapabilityPage({ title, headingLevel = 2, description, metadata, className = "", search, actions, illustration, summary, children }: Props) {
   const searchRef = useRef<HTMLInputElement>(null);
+  const Heading = headingLevel === 1 ? "h1" : "h2";
   return (
     <section className={`capability-page ${className}`} aria-label={title}>
       <div className="capability-page__inner">
         <header className={`capability-page__header${illustration ? " capability-page__header--illustrated" : ""}`}>
           <div className="capability-page__heading">
-            <h2 className="capability-page__title">{title}</h2>
+            <Heading className="capability-page__title">{title}</Heading>
             {description && <p className="capability-page__description">{description}</p>}
+            {(metadata || illustration) && <div className="capability-page__metadata" aria-hidden={metadata ? undefined : true}>{metadata}</div>}
           </div>
           <div className="capability-page__controls">
             {search && (

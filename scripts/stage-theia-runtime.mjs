@@ -6,7 +6,8 @@ import { ensureTheiaNodeWritable } from "./ensure-theia-node-writable.mjs";
 import { patchNodePtyConsoleHelper, patchNodePtyPipeErrors, ensureNodePtyConptySourceUnmodified, syncNodePtyPrebuilds, markNodePtyConptyRebuilt } from "./patch-theia-node-pty.mjs";
 import { isTheiaWindowlessRuntime } from "./patch-theia-windowless-helpers.mjs";
 import { createHash } from "node:crypto";
-import { pinnedTheiaPlugins, validateTheiaPlugin, theiaPluginTreeFingerprint } from "./theia-plugin-validation.mjs";
+import { pinnedTheiaPlugins, validateTheiaRuntimePlugin, theiaPluginTreeFingerprint } from "./theia-plugin-validation.mjs";
+import { GIT_WINDOWLESS_PATCH } from "./patch-theia-git-windowless.mjs";
 
 const projectRoot = resolve(import.meta.dirname, "..");
 const sourceRoot = join(projectRoot, "vendor/theia-platform");
@@ -24,7 +25,7 @@ const runtimePlugins = [
     version: "1.0.0",
   },
 ].map(({ id, source, manifestDir, version }) => {
-  validateTheiaPlugin(source, { id, version, manifestDir }, [...pluginSpecs.map(plugin => plugin.id), "echoagent.toml-basics"]);
+  validateTheiaRuntimePlugin(source, { id, version, manifestDir }, [...pluginSpecs.map(plugin => plugin.id), "echoagent.toml-basics"]);
   return { id, source };
 });
 const runtimeFile = (path) => !path.endsWith(".map") && !path.endsWith(".d.ts") && !path.endsWith(".tsbuildinfo");
@@ -74,6 +75,9 @@ const pluginsTarget = join(runtimeRoot, "plugins");
 mkdirSync(pluginsTarget, { recursive: true });
 for (const { id, source } of runtimePlugins) {
   cpSync(source, join(pluginsTarget, id), { recursive: true, filter: runtimeFile });
+  validateTheiaRuntimePlugin(join(pluginsTarget, id),
+    [...pluginSpecs, { id: "echoagent.toml-basics", version: "1.0.0", manifestDir: "" }].find(plugin => plugin.id === id),
+    runtimePlugins.map(plugin => plugin.id));
 }
 
 const stagedManifest = {
@@ -157,6 +161,7 @@ writeFileSync(join(resourcesRoot, "runtime-platform.json"), JSON.stringify({
   node: process.version,
   sourceMtimeMs: latestTheiaSourceMtime(sourceRoot),
   pluginManifestSha256: createHash("sha256").update(readFileSync(join(projectRoot, "vendor/theia-vsix/manifest.json"))).digest("hex"),
+  gitWindowlessPatch: GIT_WINDOWLESS_PATCH,
   pluginTreeSha256: theiaPluginTreeFingerprint(pluginsTarget, runtimePlugins.map(plugin => plugin.id)),
 }, null, 2));
 

@@ -6,7 +6,8 @@ import { ensureTheiaNodeWritable } from "./ensure-theia-node-writable.mjs";
 import { isNodePtyConsoleHelperHidden, isNodePtyPipeErrorsHandled, isNodePtyConptyReady } from "./patch-theia-node-pty.mjs";
 import { isTheiaWindowlessRuntime } from "./patch-theia-windowless-helpers.mjs";
 import { createHash } from "node:crypto";
-import { pinnedTheiaPlugins, validateTheiaPlugin, theiaPluginTreeFingerprint } from "./theia-plugin-validation.mjs";
+import { pinnedTheiaPlugins, validateTheiaRuntimePlugin, theiaPluginTreeFingerprint } from "./theia-plugin-validation.mjs";
+import { GIT_WINDOWLESS_PATCH } from "./patch-theia-git-windowless.mjs";
 
 const root = resolve(import.meta.dirname, "..");
 const major = Number(process.versions.node.split(".")[0]);
@@ -26,7 +27,7 @@ const pluginSpecs = [...pinnedTheiaPlugins(app), { id: "echoagent.toml-basics", 
 const pluginIds = pluginSpecs.map(plugin => plugin.id);
 let pluginsReady = false, pluginTreeSha256;
 try {
-  for (const plugin of pluginSpecs) validateTheiaPlugin(join(resources, "browser/plugins", plugin.id), plugin, pluginIds);
+  for (const plugin of pluginSpecs) validateTheiaRuntimePlugin(join(resources, "browser/plugins", plugin.id), plugin, pluginIds);
   pluginTreeSha256 = theiaPluginTreeFingerprint(join(resources, "browser/plugins"), pluginIds);
   pluginsReady = true;
 } catch { /* Missing or damaged plugins require the ordinary prepare chain. */ }
@@ -49,6 +50,7 @@ if (existsSync(runtime) && existsSync(node)
     && runtimeDependencies.every(path => existsSync(join(resources, path)))
     && pluginsReady && platform?.pluginTreeSha256 === pluginTreeSha256
     && platform?.pluginManifestSha256 === pluginManifestSha256
+    && platform?.gitWindowlessPatch === GIT_WINDOWLESS_PATCH
     && isNodePtyConsoleHelperHidden(join(resources, "browser"))
     && (process.platform !== "win32" || (
       isNodePtyPipeErrorsHandled(join(resources, "browser"))

@@ -21,10 +21,10 @@ describe("SettingsPanel cloud editing guard", () => {
     fireEvent.click(within(dialog).getByRole("button", { name: "取消" }));
     expect(onClose).not.toHaveBeenCalled();
 
-    fireEvent.click(screen.getByRole("button", { name: "个性化" }));
+    fireEvent.click(screen.getByRole("button", { name: "通用" }));
     const switchDialog = await screen.findByRole("alertdialog", { name: "舍弃云端文件未保存的修改？" });
     fireEvent.click(within(switchDialog).getByRole("button", { name: "舍弃修改" }));
-    expect(await screen.findByRole("heading", { name: "个性化" })).toBeInTheDocument();
+    expect(await screen.findByRole("heading", { name: "通用" })).toBeInTheDocument();
     expect(onClose).not.toHaveBeenCalled();
   });
 });

@@ -1,19 +1,22 @@
-/**
- * 通知渠道管理面板 —— IM 渠道替代的 UI。
- *
- * 列出已注册通知渠道(Slack/Discord/webhook/desktop),支持添加/移除/测试发送。
- */
-import { useCallback, useEffect, useRef, useState } from "react";
+/** Everyday notification preferences, with optional external delivery setup. */
+import { useCallback, useEffect, useId, useRef, useState } from "react";
+import { ChevronDown, Plus } from "lucide-react";
 import {
   loadNotifyChannels,
   saveNotifyChannel,
   removeNotifyChannel,
   setNotifyChannelEnabled,
   testNotifyChannel,
+  loadDesktopNotifyStatus,
+  setDesktopNotifyEnabled,
+  testDesktopNotify,
+  type DesktopNotifyStatus,
   type NotifyChannel,
   type ChannelKind,
 } from "@/lib/notify-channels";
 import { useAppDialog } from "./AppDialog";
+import { SettingsGroup } from "./SettingsSections";
+import { desktopPreferencesGet, desktopNotificationPreviewSave } from "@/lib/agent-client";
 
 const KIND_LABELS: Record<ChannelKind, string> = {
   "slack-webhook": "Slack",
@@ -27,11 +30,22 @@ const ADDABLE_KINDS: ChannelKind[] = [
   "slack-webhook",
   "discord-webhook",
   "generic-webhook",
-  "desktop",
 ];
 
-export function NotifyChannelsPanel({ onToast }: { onToast?: (msg: string) => void }) {
+export function NotifyChannelsPanel({ onToast, sessionId }: { onToast?: (msg: string) => void; sessionId?: string }) {
   const [channels, setChannels] = useState<NotifyChannel[]>([]);
+  const [desktop, setDesktop] = useState<DesktopNotifyStatus | null>(null);
+  const [desktopTestResult, setDesktopTestResult] = useState<string | null>(null);
+  const [desktopLoading, setDesktopLoading] = useState(true);
+  const [desktopError, setDesktopError] = useState<string | null>(null);
+  const [showTaskTitle, setShowTaskTitle] = useState(false);
+  const [previewLoading, setPreviewLoading] = useState(true);
+  const [previewSaving, setPreviewSaving] = useState(false);
+  const [previewError, setPreviewError] = useState<string | null>(null);
+  const [previewReload, setPreviewReload] = useState(0);
+  const [advancedOpen, setAdvancedOpen] = useState(false);
+  const [editorOpen, setEditorOpen] = useState(false);
+  const advancedId = useId();
   // 新增和编辑共用表单；编辑时绝不回填后端遮蔽的 Webhook 凭据。
   const [editingId, setEditingId] = useState<string | null>(null);
   const [newKind, setNewKind] = useState<ChannelKind>("slack-webhook");
@@ -42,6 +56,7 @@ export function NotifyChannelsPanel({ onToast }: { onToast?: (msg: string) => vo
   const [loadError, setLoadError] = useState<string | null>(null);
   const [mutating, setMutating] = useState<string | null>(null);
   const loadGeneration = useRef(0);
+  const desktopGeneration = useRef(0);
   const mutationInFlight = useRef(false);
 
   const load = useCallback(async () => {
@@ -56,19 +71,61 @@ export function NotifyChannelsPanel({ onToast }: { onToast?: (msg: string) => vo
       if (loadGeneration.current !== generation) return false;
       const message = String(error).replace(/^Error:\s*/, "");
       setLoadError(message);
-      onToast?.(`读取通知渠道失败：${message}`);
       return false;
     } finally {
       if (loadGeneration.current === generation) setLoading(false);
     }
-  }, [onToast]);
+  }, []);
+
+  const loadDesktop = useCallback(async () => {
+    const generation = ++desktopGeneration.current;
+    setDesktopLoading(true);
+    setDesktopError(null);
+    try {
+      const status = await loadDesktopNotifyStatus();
+      if (desktopGeneration.current === generation) setDesktop(status);
+    } catch (error) {
+      if (desktopGeneration.current === generation) setDesktopError(String(error).replace(/^Error:\s*/, ""));
+    } finally {
+      if (desktopGeneration.current === generation) setDesktopLoading(false);
+    }
+  }, []);
 
   useEffect(() => {
     void load();
+    void loadDesktop();
     return () => {
       loadGeneration.current += 1;
+      desktopGeneration.current += 1;
     };
-  }, [load]);
+  }, [load, loadDesktop]);
+
+  useEffect(() => {
+    let active = true;
+    setPreviewLoading(true);
+    setPreviewError(null);
+    void desktopPreferencesGet().then((preferences) => {
+      if (active) setShowTaskTitle(preferences.showNotificationTaskTitle ?? false);
+    }).catch((error) => {
+      if (active) setPreviewError(String(error).replace(/^Error:\s*/, ""));
+    }).finally(() => {
+      if (active) setPreviewLoading(false);
+    });
+    return () => { active = false; };
+  }, [previewReload]);
+
+  const savePreview = async (enabled: boolean) => {
+    setPreviewSaving(true);
+    setPreviewError(null);
+    try {
+      const saved = await desktopNotificationPreviewSave(enabled);
+      setShowTaskTitle(saved.showNotificationTaskTitle);
+    } catch (error) {
+      setPreviewError(String(error).replace(/^Error:\s*/, ""));
+    } finally {
+      setPreviewSaving(false);
+    }
+  };
 
   const save = async () => {
     if (mutationInFlight.current) return;
@@ -103,6 +160,7 @@ export function NotifyChannelsPanel({ onToast }: { onToast?: (msg: string) => vo
     setNewEndpoint("");
     setNewKind("slack-webhook");
     setEditingId(null);
+    setEditorOpen(false);
     onToast?.(refreshed
       ? `渠道 ${label} 已${editingId ? "更新" : "添加"}`
       : `渠道 ${label} 已保存，但列表刷新失败，请重试`);
@@ -113,6 +171,7 @@ export function NotifyChannelsPanel({ onToast }: { onToast?: (msg: string) => vo
     setNewKind(channel.kind);
     setNewLabel(channel.label);
     setNewEndpoint("");
+    setEditorOpen(true);
   };
 
   const cancelEdit = () => {
@@ -120,6 +179,7 @@ export function NotifyChannelsPanel({ onToast }: { onToast?: (msg: string) => vo
     setNewKind("slack-webhook");
     setNewLabel("");
     setNewEndpoint("");
+    setEditorOpen(false);
   };
 
   const remove = (channel: NotifyChannel) => {
@@ -161,7 +221,7 @@ export function NotifyChannelsPanel({ onToast }: { onToast?: (msg: string) => vo
     setMutating(`test:${id}`);
     try {
       const result = await testNotifyChannel(id);
-      onToast?.(result.ok ? "测试通知已发送" : `发送失败：${result.error ?? "检查 endpoint"}`);
+      onToast?.(result.ok ? "测试通知已向渠道提交" : `发送失败：${result.error ?? "检查渠道地址"}`);
     } catch (error) {
       onToast?.(`发送失败：${String(error).replace(/^Error:\s*/, "")}`);
     } finally {
@@ -170,81 +230,171 @@ export function NotifyChannelsPanel({ onToast }: { onToast?: (msg: string) => vo
     }
   };
 
+  const toggleDesktop = async () => {
+    if (!desktop || mutationInFlight.current) return;
+    mutationInFlight.current = true;
+    setMutating("desktop-toggle");
+    setDesktopTestResult(null);
+    try {
+      await setDesktopNotifyEnabled(!desktop.enabled);
+      await loadDesktop();
+    } catch (error) { onToast?.(`更新桌面提醒失败：${String(error).replace(/^Error:\s*/, "")}`); }
+    finally { mutationInFlight.current = false; setMutating(null); }
+  };
+  const testDesktop = async () => {
+    if (mutationInFlight.current) return;
+    mutationInFlight.current = true;
+    setMutating("desktop-test");
+    setDesktopTestResult(null);
+    try {
+      const result = await testDesktopNotify(sessionId);
+      setDesktopTestResult(result.ok
+        ? `已向系统提交通知。${sessionId ? "点击提醒可返回当前任务。" : ""}若未看到，请检查系统通知设置和勿扰模式。`
+        : `桌面提醒提交失败：${result.error ?? "未知错误"}`);
+    } catch (error) { setDesktopTestResult(`桌面提醒提交失败：${String(error).replace(/^Error:\s*/, "")}`); }
+    finally { mutationInFlight.current = false; setMutating(null); }
+  };
+  const customChannels = channels.filter(channel => channel.kind !== "desktop");
+
   return (
-    <div className="notify-panel" role="region" aria-label="通知渠道">
-      <div className="notify-panel__head">
-        <span className="notify-panel__title">已配置渠道</span>
-        <span className="notify-panel__hint">{loading ? "正在读取…" : loadError ? "读取失败" : `${channels.length} 个渠道`}</span>
-      </div>
-
-      {loadError && (
-        <div className="panel-inline-error" role="alert">
-          <span>通知渠道加载失败：{loadError}</span>
-          <button type="button" onClick={() => void load()} disabled={loading}>
-            {loading ? "重试中…" : "重试"}
-          </button>
+    <div className="notify-panel" role="region" aria-label="通知设置">
+      <SettingsGroup title="桌面提醒" desc="任务需要授权、回复完成或失败时，提醒你回来查看。">
+        <div className="settings-row settings-row--comfortable notify-panel__preference">
+          <div className="settings-row__label settings-row__label--stacked">
+            <span className="settings-row__name">允许桌面提醒</span>
+            <span className="settings-row__description">{desktopLoading ? "正在读取状态…" : desktopError ? "读取失败，请重试" : desktop?.source === "policy" ? "组织策略已限制桌面提醒" : desktop?.enabled ? desktop.source === "default" ? "默认开启，无需添加渠道" : "已开启" : "你已关闭桌面提醒"}。关闭后仍保留应用内通知记录。</span>
+          </div>
+          <label className="sk-toggle">
+            <input type="checkbox" role="switch" aria-label="桌面提醒" checked={desktop?.enabled ?? false}
+              onChange={() => void toggleDesktop()} disabled={desktopLoading || !!desktopError || mutating !== null || !desktop || desktop.source === "policy"} />
+            <span className="sk-toggle-track"><span className="sk-toggle-thumb" /></span>
+          </label>
         </div>
-      )}
-      {loading && channels.length === 0 && <div className="notify-panel__empty">正在加载通知渠道…</div>}
+        {desktopError && <div className="panel-inline-error" role="alert">
+          <span>桌面提醒状态不可用：{desktopError}</span>
+          <button type="button" className="settings-btn" onClick={() => void loadDesktop()} disabled={desktopLoading}>重试读取桌面提醒</button>
+        </div>}
+        {desktop?.policyError && <p className="settings-msg settings-msg--warn">{desktop.policyError}</p>}
+        <div className="notify-panel__test-row">
+          <details className="notify-panel__help">
+            <summary>收不到桌面提醒？</summary>
+            <p>请检查系统通知权限与勿扰模式。macOS：系统设置 → 通知；Windows：设置 → 系统 → 通知，找到 EchoAgent 并允许通知。</p>
+            <p>查看当前任务时，不重复弹出该任务的常规提醒。定时任务按各自的通知设置提醒。</p>
+            <p>应用目前无法读取系统授权状态。测试提交成功表示系统已接收请求，是否弹出仍由系统决定。</p>
+          </details>
+          <button type="button" className="settings-btn" onClick={() => void testDesktop()} disabled={!desktop?.enabled || desktopLoading || !!desktopError || mutating !== null}>{mutating === "desktop-test" ? "正在提交…" : "测试桌面提醒"}</button>
+        </div>
+        {desktopTestResult && <p className="notify-panel__feedback" role="status">{desktopTestResult}</p>}
+      </SettingsGroup>
 
-      {/* 已注册渠道列表 */}
-      {channels.length > 0 ? (
-        <ul className="notify-panel__list">
-          {channels.map((ch) => (
-            <li key={ch.id} className={"notify-panel__row" + (ch.enabled ? "" : " disabled")}>
-              <span className="notify-panel__row-kind">{KIND_LABELS[ch.kind]}</span>
-              <span className="notify-panel__row-label">{ch.label}</span>
-              {ch.endpoint && <span className="notify-panel__row-endpoint" title={ch.endpoint}>{ch.endpoint.slice(0, 40)}{ch.endpoint.length > 40 ? "…" : ""}</span>}
-              <div className="notify-panel__row-actions">
-                {ch.kind !== "email" && <button type="button" className="notify-panel__btn" onClick={() => edit(ch)} disabled={mutating !== null}>编辑</button>}
-                <button type="button" className="notify-panel__btn" onClick={() => void toggle(ch.id)} title={ch.enabled ? "禁用" : "启用"} aria-label={`${ch.enabled ? "禁用" : "启用"} ${ch.label}`} disabled={mutating !== null}>
-                  <span className={ch.enabled ? "notify-dot notify-dot--on" : "notify-dot"} />
-                </button>
-                <button type="button" className="notify-panel__btn" onClick={() => void testSend(ch.id)} disabled={!ch.enabled || mutating !== null} title="测试发送">
-                  测试
-                </button>
-                <button type="button" className="notify-panel__btn notify-panel__btn--danger" onClick={() => remove(ch)} title="移除" aria-label={`移除 ${ch.label}`} disabled={mutating !== null}>
-                  ×
+      <SettingsGroup title="通知内容">
+        <div className="settings-row settings-row--comfortable notify-panel__preference">
+          <div className="settings-row__label settings-row__label--stacked">
+            <span className="settings-row__name">显示任务名称</span>
+            <span className="settings-row__description">默认隐藏，避免任务名称出现在锁屏通知中。点击通知仍可回到关联任务。</span>
+          </div>
+          <label className="sk-toggle">
+            <input type="checkbox" aria-label="桌面通知显示任务名称" checked={showTaskTitle}
+              disabled={previewLoading || previewSaving || Boolean(previewError)}
+              onChange={(event) => void savePreview(event.target.checked)} />
+            <span className="sk-toggle-track"><span className="sk-toggle-thumb" /></span>
+          </label>
+        </div>
+        {previewError && <p className="settings-msg settings-msg--warn" role="alert">
+          通知内容设置不可用：{previewError}
+          <button type="button" className="settings-btn" onClick={() => setPreviewReload((value) => value + 1)}>重试读取通知内容</button>
+        </p>}
+      </SettingsGroup>
+
+      <section className="notify-advanced">
+        <button type="button" className="notify-advanced__toggle" aria-expanded={advancedOpen} aria-controls={advancedId} onClick={() => setAdvancedOpen(!advancedOpen)}>
+          <span className="notify-advanced__heading"><span className="settings-group__title">推送到其他应用</span><span className="settings-group__desc">高级选项 · Slack、Discord 和 Webhook</span></span>
+          <span className="notify-advanced__count">{loading ? "正在读取…" : loadError ? "读取失败" : customChannels.length ? `${customChannels.length} 个已配置` : "未配置"}</span>
+          <ChevronDown size={16} aria-hidden="true" />
+        </button>
+        {advancedOpen && <div className="notify-advanced__content" id={advancedId}>
+          <p className="notify-panel__external-note">将任务事件发送到已配置的外部应用。接收范围遵循各任务的通知设置；远程对话与账号绑定请前往“消息通道”。</p>
+          {loadError && (
+            <div className="panel-inline-error" role="alert">
+              <span>通知渠道加载失败：{loadError}</span>
+              <button type="button" className="settings-btn" onClick={() => void load()} disabled={loading}>
+                {loading ? "重试中…" : "重试"}
+              </button>
+            </div>
+          )}
+          {loading && customChannels.length === 0 && <div className="notify-panel__empty">正在加载通知渠道…</div>}
+
+          {customChannels.length > 0 ? (
+            <ul className="notify-panel__list">
+              {customChannels.map((ch) => (
+                <li key={ch.id} className={"notify-panel__row" + (ch.enabled ? "" : " disabled")}>
+                  <div className="notify-panel__channel-info">
+                    <span className="notify-panel__row-label">{ch.label}</span>
+                    <span className="notify-panel__channel-description">{KIND_LABELS[ch.kind]}{ch.kind === "email" ? " · 仅保留旧配置，可移除" : ch.endpoint ? ` · ${ch.endpoint}` : ""}</span>
+                  </div>
+                  <div className="notify-panel__row-actions">
+                    {ch.kind !== "email" && <>
+                      <button type="button" className="settings-btn settings-btn--compact notify-panel__btn" role="switch" aria-checked={ch.enabled} onClick={() => void toggle(ch.id)} title={ch.enabled ? "禁用" : "启用"} aria-label={`${ch.enabled ? "禁用" : "启用"} ${ch.label}`} disabled={loading || mutating !== null || !!loadError}>
+                        {ch.enabled ? "已开启" : "已关闭"}
+                      </button>
+                      <button type="button" className="settings-btn settings-btn--compact notify-panel__btn" onClick={() => edit(ch)} disabled={loading || mutating !== null || !!loadError}>编辑</button>
+                      <button type="button" className="settings-btn settings-btn--compact notify-panel__btn" onClick={() => void testSend(ch.id)} disabled={!ch.enabled || mutating !== null || !!loadError} title="测试发送">
+                        测试
+                      </button>
+                    </>}
+                    <button type="button" className="settings-btn settings-btn--compact settings-btn--danger notify-panel__btn" onClick={() => remove(ch)} title="移除" aria-label={`移除 ${ch.label}`} disabled={mutating !== null}>
+                      移除
+                    </button>
+                  </div>
+                </li>
+              ))}
+            </ul>
+          ) : !loading && !loadError ? (
+            <div className="notify-panel__empty">尚未添加外部推送，日常桌面提醒无需配置这里。</div>
+          ) : null}
+
+          {!editorOpen && <button type="button" className="settings-btn notify-panel__add-button" onClick={() => { cancelEdit(); setEditorOpen(true); }} disabled={loading || !!loadError || mutating !== null}><Plus size={14} />添加渠道</button>}
+          {editorOpen && <form className="notify-panel__editor" aria-label={editingId ? "编辑通知渠道" : "添加通知渠道"} onSubmit={(event) => { event.preventDefault(); void save(); }}>
+            <h4>{editingId ? "编辑渠道" : "添加渠道"}</h4>
+            {editingId && <p className="notify-panel__edit-hint">正在编辑“{channels.find((item) => item.id === editingId)?.label}”。Webhook 地址已隐藏；留空表示保持原地址。</p>}
+            <div className="notify-panel__add">
+              <label className="notify-panel__field">渠道类型<select className="form-control" autoFocus={!editingId} aria-label="通知渠道类型" value={newKind} disabled={Boolean(editingId) || mutating !== null || loading || Boolean(loadError)} onChange={(e) => setNewKind(e.target.value as ChannelKind)}>
+                {ADDABLE_KINDS.map((kind) => (
+                  <option key={kind} value={kind}>{KIND_LABELS[kind]}</option>
+                ))}
+              </select></label>
+              <label className="notify-panel__field">显示名（可选）<input
+                className="form-control"
+                type="text"
+                autoFocus={Boolean(editingId)}
+                aria-label="通知渠道显示名"
+                placeholder="显示名(可选)"
+                value={newLabel}
+                disabled={mutating !== null || loading || Boolean(loadError)}
+                onChange={(e) => setNewLabel(e.target.value)}
+              /></label>
+              {newKind !== "desktop" && <label className="notify-panel__field notify-panel__field--endpoint">{editingId ? "替换 Webhook URL（留空保留）" : "Webhook URL"}<input
+                className="form-control"
+                type="url"
+                autoComplete="off"
+                spellCheck={false}
+                required={!editingId}
+                aria-label="Webhook URL"
+                placeholder={editingId ? "留空保留现有地址" : "Webhook URL"}
+                value={newEndpoint}
+                onChange={(e) => setNewEndpoint(e.target.value)}
+                disabled={mutating !== null || loading || Boolean(loadError)}
+              /></label>}
+              <div className="notify-panel__form-actions">
+                <button type="button" className="form-button" onClick={cancelEdit} disabled={mutating !== null}>取消</button>
+                <button type="submit" className="form-button form-button--primary" disabled={mutating !== null || loading || Boolean(loadError) || (!editingId && newKind !== "desktop" && !newEndpoint.trim())}>
+                  {mutating === "save" ? "保存中…" : editingId ? "保存修改" : "+ 添加"}
                 </button>
               </div>
-            </li>
-          ))}
-        </ul>
-      ) : !loading && !loadError ? (
-        <div className="notify-panel__empty">暂无通知渠道</div>
-      ) : null}
-
-      {/* 添加新渠道 */}
-      {editingId && <p className="notify-panel__edit-hint">正在编辑“{channels.find((item) => item.id === editingId)?.label}”。Webhook 地址已隐藏；留空表示保持原地址。</p>}
-      <div className="notify-panel__add">
-        <label className="notify-panel__field">渠道类型<select className="form-control" aria-label="通知渠道类型" value={newKind} disabled={Boolean(editingId) || mutating !== null || loading || Boolean(loadError)} onChange={(e) => setNewKind(e.target.value as ChannelKind)}>
-          {ADDABLE_KINDS.map((kind) => (
-            <option key={kind} value={kind}>{KIND_LABELS[kind]}</option>
-          ))}
-        </select></label>
-        <label className="notify-panel__field">显示名（可选）<input
-          className="form-control"
-          type="text"
-          aria-label="通知渠道显示名"
-          placeholder="显示名(可选)"
-          value={newLabel}
-          disabled={mutating !== null || loading || Boolean(loadError)}
-          onChange={(e) => setNewLabel(e.target.value)}
-        /></label>
-        <label className="notify-panel__field notify-panel__field--endpoint">{editingId ? "替换 Webhook URL（留空保留）" : "Webhook URL"}<input
-          className="form-control"
-          type="text"
-          aria-label="Webhook URL"
-          placeholder={newKind === "desktop" ? "桌面通知无需地址" : editingId ? "留空保留现有地址" : "Webhook URL"}
-          value={newEndpoint}
-          onChange={(e) => setNewEndpoint(e.target.value)}
-          disabled={newKind === "desktop" || mutating !== null || loading || Boolean(loadError)}
-        /></label>
-        <button type="button" className="form-button form-button--primary" onClick={() => void save()} disabled={mutating !== null || loading || Boolean(loadError) || (!editingId && newKind !== "desktop" && !newEndpoint.trim())}>
-          {mutating === "save" ? "保存中…" : editingId ? "保存修改" : "+ 添加"}
-        </button>
-        {editingId && <button type="button" className="form-button" onClick={cancelEdit} disabled={mutating !== null}>取消编辑</button>}
-      </div>
+            </div>
+          </form>}
+        </div>}
+      </section>
       {dialog}
     </div>
   );

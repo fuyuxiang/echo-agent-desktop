@@ -1031,7 +1031,7 @@ export function AutomationEditPage({
               <span className="atm-toggle-text">完成后推送到通知渠道</span>
               <span
                 className="atm-push-info-icon"
-                title="开启后，会发送系统桌面通知，并同步到「通知渠道」中已启用的 Slack、Discord 或 Webhook 渠道。"
+                title="开启后，按桌面提醒设置发送系统通知，并同步到「设置 → 通知」中已启用的外部推送渠道。"
               >
                 <svg width="14" height="14" viewBox="0 0 16 16" fill="currentColor" xmlns="http://www.w3.org/2000/svg">
                   <path

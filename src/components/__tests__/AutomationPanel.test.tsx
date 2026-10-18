@@ -316,7 +316,7 @@ describe("AutomationPanel（截图 1/3 空态）", () => {
     render(<AutomationPanel />);
     await waitFor(() => expect(screen.getByText("开启你的第一个自动化任务吧")).toBeInTheDocument());
     expect(screen.getByText("+ 添加自动化")).toBeInTheDocument();
-    expect(screen.getByText("自动化任务模版")).toBeInTheDocument();
+    expect(screen.getByRole("heading", { name: "自动化任务模板" })).toBeInTheDocument();
     expect(screen.getByText("每日 AI 新闻推送")).toBeInTheDocument();
     expect(screen.getByText("可爱萌宠手机壁纸")).toBeInTheDocument();
   });

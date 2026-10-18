@@ -5,6 +5,7 @@ import { createHash } from 'node:crypto';
 import { constants, copyFileSync, createReadStream, existsSync, readFileSync, writeFileSync, mkdirSync, mkdtempSync, renameSync, realpathSync, lstatSync, statSync, linkSync, unlinkSync } from 'node:fs';
 import { resolve, join } from 'node:path';
 import { tmpdir } from 'node:os';
+import { validateGitRuntime } from './validate-theia-git-runtime.mjs';
 
 // A reversible verification wrapper, run only after Cargo and staging finish.
 // Hide exactly the four development entry files to exercise bundle fallbacks.
@@ -43,6 +44,7 @@ const run = (command, args, env, timeout) => new Promise((accept, reject) => {
 });
 const result = { executable, binarySha256: await digest(executable), resources, checks: [], stagedFiles: journal, errors: [] };
 try {
+  result.checks.push({ id: 'bundled-git-windowless', ...validateGitRuntime(join(resources, 'theia/browser')), passed: true });
   for (const relative of ['theia/browser/lib/backend/main.js', 'theia/node/bin/node', 'office/worker.mjs', 'office/fonts/NotoSansCJKsc-Regular.otf']) {
     assert.equal(interrupted, false, 'Package validation interrupted');
     const source = join(repository, 'src-tauri/resources', relative);
@@ -106,7 +108,7 @@ try {
       }
     }
   }
-  result.passed = result.errors.length === 0 && result.checks.length === 2 && result.checks.every((check) => check.passed)
+  result.passed = result.errors.length === 0 && result.checks.length === 3 && result.checks.every((check) => check.passed)
     && journal.length === 4 && journal.every((entry) => entry.restored);
   writeFileSync(join(output, 'package-resource-review.json'), JSON.stringify(result, null, 2));
   console.log(JSON.stringify({ passed: result.passed, checks: result.checks, errors: result.errors,

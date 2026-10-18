@@ -7,10 +7,10 @@
  *  - shortcuts: 当前版本真实生效的快捷键说明
  *  - memory: 记忆行为配置
  *  - help: 版本更新、文档与排查说明
- *  - security: 系统授权、工具规则与诊断
+ *  - security: 系统授权与工具规则
  *  - data: 备份恢复与本地数据目录
- *  - general: 窗口偏好与运行时热重载
- *  - agent-settings: 子代理与 Web 搜索运行时配置
+ *  - general: 窗口与后台运行偏好
+ *  - agent-settings: 子代理、配置重载与诊断
  */
 import { useCallback, useEffect, useState } from "react";
 import {
@@ -21,8 +21,6 @@ import {
   Trash2,
   ExternalLink,
   RefreshCw,
-  Shield,
-  Database,
   Mail,
   CheckCheck,
   Filter,
@@ -34,6 +32,7 @@ import {
   Globe2,
   Monitor,
 } from "lucide-react";
+import { SettingsDisclosure } from "./SettingsDisclosure";
 import { useTheme } from "./ThemeProvider";
 import { exportBackup, inspectBackup, restoreBackup, backupLastError } from "@/lib/backup-client";
 import {
@@ -51,7 +50,6 @@ import {
   echoAgentDataDir,
   desktopPreferencesGet,
   desktopPreferencesSave,
-  desktopNotificationPreviewSave,
   openEchoAgentDataDir,
   openExternalUrl,
   type MemoryConfig,
@@ -163,7 +161,7 @@ export function SettingsGroup({
 
 // ---------- 个性化 ----------
 
-export function PersonalizeSettingsPanel() {
+function AppearanceSettingsGroup() {
   const { theme, preference, setTheme } = useTheme();
   const [fontSize, setFontSize] = useState<number>(readFontSize);
 
@@ -172,67 +170,62 @@ export function PersonalizeSettingsPanel() {
   }, [fontSize]);
 
   return (
-    <SettingsSection
-      title="个性化"
-      desc="调整外观和阅读字号。主题与主要界面文字会立即更新。"
-    >
-      <SettingsGroup title="界面外观" desc="选择适合当前环境的显示主题和阅读字号。">
-        <div className="settings-row settings-row--comfortable">
-          <div className="settings-row__label settings-row__label--stacked">
-            <span className="settings-row__name">
-              {theme === "dark" ? <Moon size={17} /> : <Sun size={17} />}
-              主题
-            </span>
-            <span className="settings-row__description">可固定主题，也可跟随系统外观自动切换</span>
-          </div>
-          <div className="settings-row__control theme-toggle" role="group" aria-label="界面主题">
-            <button
-              className={`theme-toggle__btn ${preference === "system" ? "theme-toggle__btn--active" : ""}`}
-              onClick={() => setTheme("system")}
-              aria-pressed={preference === "system"}
-            >
-              <Monitor size={15} /> 跟随系统
-            </button>
-            <button
-              className={`theme-toggle__btn ${preference === "light" ? "theme-toggle__btn--active" : ""}`}
-              onClick={() => setTheme("light")}
-              aria-pressed={preference === "light"}
-            >
-              <Sun size={15} /> 浅色
-            </button>
-            <button
-              className={`theme-toggle__btn ${preference === "dark" ? "theme-toggle__btn--active" : ""}`}
-              onClick={() => setTheme("dark")}
-              aria-pressed={preference === "dark"}
-            >
-              <Moon size={15} /> 深色
-            </button>
-          </div>
+    <SettingsGroup title="界面外观" desc="选择适合当前环境的显示主题和阅读字号。">
+      <div className="settings-row settings-row--comfortable">
+        <div className="settings-row__label settings-row__label--stacked">
+          <span className="settings-row__name">
+            {theme === "dark" ? <Moon size={17} /> : <Sun size={17} />}
+            主题
+          </span>
+          <span className="settings-row__description">可固定主题，也可跟随系统外观自动切换</span>
         </div>
+        <div className="settings-row__control theme-toggle" role="group" aria-label="界面主题">
+          <button
+            className={`theme-toggle__btn ${preference === "system" ? "theme-toggle__btn--active" : ""}`}
+            onClick={() => setTheme("system")}
+            aria-pressed={preference === "system"}
+          >
+            <Monitor size={15} /> 跟随系统
+          </button>
+          <button
+            className={`theme-toggle__btn ${preference === "light" ? "theme-toggle__btn--active" : ""}`}
+            onClick={() => setTheme("light")}
+            aria-pressed={preference === "light"}
+          >
+            <Sun size={15} /> 浅色
+          </button>
+          <button
+            className={`theme-toggle__btn ${preference === "dark" ? "theme-toggle__btn--active" : ""}`}
+            onClick={() => setTheme("dark")}
+            aria-pressed={preference === "dark"}
+          >
+            <Moon size={15} /> 深色
+          </button>
+        </div>
+      </div>
 
-        <div className="settings-row settings-row--comfortable">
-          <div className="settings-row__label settings-row__label--stacked">
-            <span className="settings-row__name"><Type size={17} />字号</span>
-            <span className="settings-row__description">当前正文大小为 {fontSize}px</span>
-          </div>
-          <div className="settings-row__control settings-font-control">
-            <span className="settings-font-control__sample settings-font-control__sample--small">A</span>
-            <input
-              type="range"
-              min={MIN_FONT_SIZE}
-              max={MAX_FONT_SIZE}
-              value={fontSize}
-              onChange={(e) => setFontSize(Number(e.target.value))}
-              aria-label="界面字号"
-            />
-            <span className="settings-font-control__sample settings-font-control__sample--large">A</span>
-            <button className="settings-reset" onClick={() => setFontSize(DEFAULT_FONT_SIZE)}>
-              重置
-            </button>
-          </div>
+      <div className="settings-row settings-row--comfortable">
+        <div className="settings-row__label settings-row__label--stacked">
+          <span className="settings-row__name"><Type size={17} />字号</span>
+          <span className="settings-row__description">当前正文大小为 {fontSize}px</span>
         </div>
-      </SettingsGroup>
-    </SettingsSection>
+        <div className="settings-row__control settings-font-control">
+          <span className="settings-font-control__sample settings-font-control__sample--small">A</span>
+          <input
+            type="range"
+            min={MIN_FONT_SIZE}
+            max={MAX_FONT_SIZE}
+            value={fontSize}
+            onChange={(e) => setFontSize(Number(e.target.value))}
+            aria-label="界面字号"
+          />
+          <span className="settings-font-control__sample settings-font-control__sample--large">A</span>
+          <button className="settings-btn settings-reset" onClick={() => setFontSize(DEFAULT_FONT_SIZE)}>
+            重置
+          </button>
+        </div>
+      </div>
+    </SettingsGroup>
   );
 }
 
@@ -331,41 +324,40 @@ export function MemorySettingsPanel() {
     { key: "dreamEnabled", name: "自动整理", description: "定期将会话摘要合并为结构化长期记忆" },
   ];
 
+  const renderToggles = (items: typeof toggles) => items.map((toggle) => (
+    <div className="settings-row settings-row--comfortable" key={toggle.key}>
+      <div className="settings-row__label settings-row__label--stacked">
+        <span className="settings-row__name">{toggle.name}</span>
+        <span className="settings-row__description">{toggle.description}</span>
+      </div>
+      <label className="sk-toggle">
+        <input
+          type="checkbox"
+          aria-label={toggle.name}
+          checked={config[toggle.key]}
+          disabled={loading || loadError || busy || (toggle.key !== "enabled" && !config.enabled)}
+          onChange={(event) => void updateConfig(toggle.key, event.target.checked)}
+        />
+        <span className="sk-toggle-track"><span className="sk-toggle-thumb" /></span>
+      </label>
+    </div>
+  ));
+
   return (
     <SettingsSection
       title="记忆"
-      desc="跨会话记忆保存在本机，可随时审阅。会话摘要是自动提取的中间资料，不是完整聊天记录。"
+      desc="让 Agent 在后续任务中参考已有经验。可在“个人记忆”中查看、编辑或删除内容。"
     >
-      {loadError && <div role="alert" className="settings-hint">配置未加载，暂时无法修改。<button className="btn-secondary" onClick={() => setReload((n) => n + 1)}>重新加载</button></div>}
+      {loadError && <div role="alert" className="settings-hint">配置未加载，暂时无法修改。<button className="settings-btn" onClick={() => setReload((n) => n + 1)}>重新加载</button></div>}
       <SettingsGroup title="记忆能力" desc="提取摘要和整理内容会使用当前会话的模型服务。">
-        {toggles.map((toggle) => (
-          <div className="settings-row settings-row--comfortable" key={toggle.key}>
-            <div className="settings-row__label settings-row__label--stacked">
-              <span className="settings-row__name">{toggle.name}</span>
-              <span className="settings-row__description">{toggle.description}</span>
-            </div>
-            <label className="sk-toggle">
-              <input
-                type="checkbox"
-                aria-label={toggle.name}
-                checked={config[toggle.key]}
-                disabled={loading || loadError || busy || (toggle.key !== "enabled" && !config.enabled)}
-                onChange={(event) => void updateConfig(toggle.key, event.target.checked)}
-              />
-              <span className="sk-toggle-track"><span className="sk-toggle-thumb" /></span>
-            </label>
-          </div>
-        ))}
+        {renderToggles(toggles.filter((toggle) => ["enabled", "autoFlushEnabled", "dreamEnabled"].includes(toggle.key)))}
       </SettingsGroup>
-      <SettingsGroup title="存储位置" desc="工作区记忆按项目身份存放在此根目录的独立子目录中。">
-        <div className="settings-row settings-row--comfortable">
-          <div className="settings-row__label settings-row__label--stacked">
-            <span className="settings-row__name"><Database size={17} />本地记忆目录</span>
-            <span className="settings-row__description">可在“设置 → 记忆 → 个人记忆”中查看、编辑和审阅</span>
-          </div>
-          <code className="settings-path-chip">~/.echo-agent/memory/</code>
-        </div>
-      </SettingsGroup>
+      <SettingsDisclosure title="检索与保存策略" description="会话开始、结束时的处理，以及外部文件变更监听">
+        <SettingsGroup title="自动处理策略">
+          {renderToggles(toggles.filter((toggle) => ["initialInjectionEnabled", "saveOnEnd", "watcherEnabled"].includes(toggle.key)))}
+        </SettingsGroup>
+        <p className="settings-hint">记忆保存在本机，可在“个人记忆”中审阅。会话摘要是提取结果，不是完整聊天记录。</p>
+      </SettingsDisclosure>
       {msg && <p className="settings-msg">{msg}</p>}
     </SettingsSection>
   );
@@ -398,7 +390,7 @@ export function HelpSettingsPanel() {
     <SettingsSection title="帮助与更新" desc="检查版本更新，查阅使用文档和常见问题排查步骤。">
       <SettingsGroup
         title="版本升级"
-        desc="启动时会自动检查 EchoAgent 内网上的签名发布版。"
+        desc="启动时自动检查新版本。更新服务需要内网或 VPN。"
         meta={<span>v{APP_VERSION}</span>}
       >
         <div className="settings-action-row">
@@ -449,26 +441,18 @@ export function HelpSettingsPanel() {
             <strong>EchoAgent 文档</strong>
             <span>查看功能说明、配置方法与最佳实践</span>
           </a>
-          <a className="help-card" href={ACP_SPEC_URL} onClick={(event) => { event.preventDefault(); openHelpResource(ACP_SPEC_URL); }}>
-            <ExternalLink size={18} />
-            <strong>ACP 协议规范</strong>
-            <span>了解智能体客户端协议和运行机制</span>
-          </a>
-          <div className="help-card help-card--static">
-            <Database size={18} />
-            <strong>内置运行时</strong>
-            <span>当前使用 EchoAgent Runtime，无需额外安装</span>
-          </div>
+
         </div>
       </SettingsGroup>
       {resourceError && <p className="settings-msg settings-msg--warn" role="alert">{resourceError}</p>}
-      <SettingsGroup title="快速排查" desc="遇到模型不可用或智能体无法启动时，建议按顺序检查。">
+      <SettingsDisclosure title="常见问题与技术信息" description="模型不可用、Agent 无法启动时的排查步骤">
         <ol className="settings-checklist">
           <li><span>1</span><div><strong>确认模型配置</strong><p>在“模型”中确认有可用模型；使用个人服务时，添加连接并填写所需凭据。</p></div></li>
           <li><span>2</span><div><strong>检查配置文件</strong><p>确认 <code>~/.echo-agent/config.toml</code> 可以正常读写。</p></div></li>
-          <li><span>3</span><div><strong>重新加载或重启</strong><p>先在“系统设置”尝试热重载，仍无效时再重启应用。</p></div></li>
+          <li><span>3</span><div><strong>重新加载或重启</strong><p>先在“高级设置”重新加载对应配置，仍无效时再重启应用。</p></div></li>
         </ol>
-      </SettingsGroup>
+      <a className="settings-inline-link" href={ACP_SPEC_URL} onClick={(event) => { event.preventDefault(); openHelpResource(ACP_SPEC_URL); }}>ACP 协议规范 <ExternalLink size={13} /></a>
+      </SettingsDisclosure>
     </SettingsSection>
   );
 }
@@ -487,9 +471,6 @@ export function SecuritySettingsPanel() {
   const [automationBusy, setAutomationBusy] = useState(false);
   const [automationError, setAutomationError] = useState<string | null>(null);
   const [automationFeedback, setAutomationFeedback] = useState("");
-  const [otlpEndpoint, setOtlpEndpoint] = useState(() => {
-    try { return localStorage.getItem("echoagent.otlp.endpoint") ?? ""; } catch { return ""; }
-  });
 
   const loadRules = useCallback(async () => {
     setLoading(true);
@@ -572,25 +553,12 @@ export function SecuritySettingsPanel() {
     }
   };
 
-  const saveOtlp = () => {
-    const endpoint = otlpEndpoint.trim();
-    if (endpoint) {
-      try {
-        localStorage.setItem("echoagent.otlp.endpoint", validateOtlpEndpoint(endpoint));
-      } catch (error) {
-        setFeedback(`OTLP 地址无效：${String(error).replace(/^Error:\s*/, "")}`);
-        return;
-      }
-    } else {
-      localStorage.removeItem("echoagent.otlp.endpoint");
-    }
-    setFeedback(endpoint ? "OTLP 已启用，重启应用后生效。" : "OTLP 已关闭，重启应用后生效。");
-  };
+
 
   return (
     <SettingsSection
-      title="安全中心"
-      desc="管理网页与电脑操作权限、工具授权规则和本地遥测。"
+      title="安全与权限"
+      desc="查看系统授权，管理 Agent 可以使用的操作范围。"
     >
       <SettingsGroup
         title="网页与电脑操作"
@@ -648,87 +616,73 @@ export function SecuritySettingsPanel() {
           </button>
         </div>
       </SettingsGroup>
-      <SettingsGroup
-        title="工具权限规则"
-        desc="规则按 deny、ask、allow 的优先级匹配；保存后重启 Agent 生效。"
-        meta={<span className="settings-status-badge">{loading ? "加载中…" : rulesError ? "加载失败" : `${rules.length} 条规则`}</span>}
-      >
-        {rulesError && (
-          <div className="settings-msg settings-msg--warn" role="alert">
-            <span>权限规则读取失败：{rulesError}。已保留上次数据，修复前不会允许覆盖保存。</span>{" "}
-            <button type="button" className="settings-btn" onClick={() => void loadRules()} disabled={loading}>
-              {loading ? "重试中…" : "重试"}
+      <SettingsDisclosure title="自定义工具规则" description={rulesError ? "读取失败，请展开重试；原有规则不会被覆盖。" : loading ? "正在读取…" : `${rules.length} 条规则 · 按工具或命令细化授权`} defaultOpen={Boolean(rulesError)}>
+        <SettingsGroup
+          title="工具权限规则"
+          desc="拒绝优先于询问，询问优先于允许。保存后重启 Agent 生效。"
+          meta={<span className="settings-status-badge">{loading ? "加载中…" : rulesError ? "加载失败" : `${rules.length} 条规则`}</span>}
+        >
+          {rulesError && (
+            <div className="settings-msg settings-msg--warn" role="alert">
+              <span>权限规则读取失败：{rulesError}。已保留上次数据，修复前不会允许覆盖保存。</span>{" "}
+              <button type="button" className="settings-btn" onClick={() => void loadRules()} disabled={loading}>
+                {loading ? "重试中…" : "重试"}
+              </button>
+            </div>
+          )}
+          {rules.length > 0 ? (
+            <ul className="rules-list">
+              {rules.map((rule, index) => (
+                <li key={`${rule.action}-${rule.tool}-${rule.pattern ?? ""}-${index}`} className={`rules-list__item rules-list__item--${rule.action}`}>
+                  <span className="rules-list__action">{rule.action}</span>
+                  <span className="rules-list__tool">{rule.tool}</span>
+                  <span className="rules-list__pattern">{rule.pattern || "所有调用"}</span>
+                  <button
+                    type="button"
+                    className="settings-btn settings-btn--ghost settings-btn--danger settings-btn--compact settings-btn--icon-only rules-list__remove"
+                    onClick={() => setRules((items) => items.filter((_, itemIndex) => itemIndex !== index))}
+                    aria-label={`删除规则 ${index + 1}`}
+                    disabled={loading || Boolean(rulesError)}
+                  >
+                    ×
+                  </button>
+                </li>
+              ))}
+            </ul>
+          ) : !loading && !rulesError ? (
+            <div className="settings-empty-inline">尚未添加自定义权限规则</div>
+          ) : null}
+
+          <div className="permission-rule-builder">
+            <label className="permission-rule-builder__field">
+              <span>处理方式</span>
+              <select className="form-control" value={draft.action} onChange={(e) => setDraft({ ...draft, action: e.target.value })} aria-label="规则动作" disabled={loading || Boolean(rulesError)}>
+                <option value="deny">拒绝</option>
+                <option value="ask">询问</option>
+                <option value="allow">允许</option>
+              </select>
+            </label>
+            <label className="permission-rule-builder__field">
+              <span>工具类型</span>
+              <select className="form-control" value={draft.tool} onChange={(e) => setDraft({ ...draft, tool: e.target.value })} aria-label="工具类型" disabled={loading || Boolean(rulesError)}>
+                {['bash', 'read', 'edit', 'grep', 'mcp', 'webfetch', 'any'].map((tool) => <option key={tool} value={tool}>{tool}</option>)}
+              </select>
+            </label>
+            <label className="permission-rule-builder__field permission-rule-builder__field--pattern">
+              <span>匹配模式（可选）</span>
+              <input className="form-control" value={draft.pattern ?? ""} onChange={(e) => setDraft({ ...draft, pattern: e.target.value })} placeholder="例如 git *" disabled={loading || Boolean(rulesError)} />
+            </label>
+          </div>
+          <div className="settings-group__footer">
+            <button className="settings-btn" type="button" onClick={addRule} disabled={loading || Boolean(rulesError)}>添加到列表</button>
+            <button className="settings-btn settings-btn--primary" type="button" onClick={() => void saveRules()} disabled={saving || loading || Boolean(rulesError)}>
+              {saving ? "保存中…" : "保存全部规则"}
             </button>
           </div>
-        )}
-        {rules.length > 0 ? (
-          <ul className="rules-list">
-            {rules.map((rule, index) => (
-              <li key={`${rule.action}-${rule.tool}-${rule.pattern ?? ""}-${index}`} className={`rules-list__item rules-list__item--${rule.action}`}>
-                <span className="rules-list__action">{rule.action}</span>
-                <span className="rules-list__tool">{rule.tool}</span>
-                <span className="rules-list__pattern">{rule.pattern || "所有调用"}</span>
-                <button
-                  type="button"
-                  className="rules-list__remove"
-                  onClick={() => setRules((items) => items.filter((_, itemIndex) => itemIndex !== index))}
-                  aria-label={`删除规则 ${index + 1}`}
-                  disabled={loading || Boolean(rulesError)}
-                >
-                  ×
-                </button>
-              </li>
-            ))}
-          </ul>
-        ) : !loading && !rulesError ? (
-          <div className="settings-empty-inline">尚未添加自定义权限规则</div>
-        ) : null}
+        </SettingsGroup>
+        {feedback && <p className="settings-hint" role="status">{feedback}</p>}
+      </SettingsDisclosure>
 
-        <div className="permission-rule-builder">
-          <label className="permission-rule-builder__field">
-            <span>处理方式</span>
-            <select className="form-control" value={draft.action} onChange={(e) => setDraft({ ...draft, action: e.target.value })} aria-label="规则动作" disabled={loading || Boolean(rulesError)}>
-              <option value="deny">拒绝</option>
-              <option value="ask">询问</option>
-              <option value="allow">允许</option>
-            </select>
-          </label>
-          <label className="permission-rule-builder__field">
-            <span>工具类型</span>
-            <select className="form-control" value={draft.tool} onChange={(e) => setDraft({ ...draft, tool: e.target.value })} aria-label="工具类型" disabled={loading || Boolean(rulesError)}>
-              {['bash', 'read', 'edit', 'grep', 'mcp', 'webfetch', 'any'].map((tool) => <option key={tool} value={tool}>{tool}</option>)}
-            </select>
-          </label>
-          <label className="permission-rule-builder__field permission-rule-builder__field--pattern">
-            <span>匹配模式（可选）</span>
-            <input className="form-control" value={draft.pattern ?? ""} onChange={(e) => setDraft({ ...draft, pattern: e.target.value })} placeholder="例如 git *" disabled={loading || Boolean(rulesError)} />
-          </label>
-        </div>
-        <div className="settings-group__footer">
-          <button className="settings-btn" type="button" onClick={addRule} disabled={loading || Boolean(rulesError)}>添加到列表</button>
-          <button className="settings-btn settings-btn--primary" type="button" onClick={() => void saveRules()} disabled={saving || loading || Boolean(rulesError)}>
-            {saving ? "保存中…" : "保存全部规则"}
-          </button>
-        </div>
-      </SettingsGroup>
-      {feedback && <p className="settings-hint" role="status">{feedback}</p>}
-      <SettingsGroup title="遥测与诊断" desc="仅上报运行事件名、级别和技术属性，不包含对话正文。">
-        <div className="settings-row settings-row--comfortable">
-          <div className="settings-row__label settings-row__label--stacked">
-            <span className="settings-row__name"><Shield size={17} />OTLP 遥测端点</span>
-            <span className="settings-row__description">留空表示关闭，修改后重启应用生效</span>
-          </div>
-          <div className="settings-row__control settings-row__control--wide">
-            <input
-              className="settings-input"
-              value={otlpEndpoint}
-              onChange={(event) => setOtlpEndpoint(event.target.value)}
-              placeholder="http://127.0.0.1:4318/v1/logs"
-            />
-            <button type="button" className="settings-btn" onClick={saveOtlp}>保存</button>
-          </div>
-        </div>
-      </SettingsGroup>
     </SettingsSection>
   );
 }
@@ -749,9 +703,9 @@ export function DataSettingsPanel() {
   }, []);
 
   return (
-    <SettingsSection title="数据管理" desc="查看 EchoAgent 在本机保存的数据位置和内容范围。">
-      <SettingsGroup title="备份与恢复" desc="备份会话、项目资料、代码任务记录、记忆、粘贴附件、草稿、队列和本机用量。不包含模型密钥、组织凭据或外部工作目录的文件。">
-        <p className="settings-hint">建议在任务结束后备份。备份包含聊天和资料正文，请保存在可信位置。恢复会替换备份中同名的数据，其他数据保留；历史外部文件仍依赖原工作目录。</p>
+    <SettingsSection title="备份与恢复" desc="导出本机数据备份，或恢复已有备份。已归档任务可在上方单独管理。">
+      <SettingsGroup title="本机数据备份" desc="保存会话、项目资料和应用数据。不包含密钥、组织登录凭据及外部工作目录的文件。">
+        <p className="settings-hint">备份包含聊天和资料正文，请保存在可信位置。建议等待任务结束后操作；恢复前会显示校验结果并再次确认。</p>
         <div className="settings-group__footer">
           <button type="button" className="settings-btn" disabled={busy} onClick={async () => {
             setBusy(true);
@@ -775,29 +729,28 @@ export function DataSettingsPanel() {
           }}>选择备份恢复</button>
         </div>
       </SettingsGroup>
-      <SettingsGroup title="本地数据目录" desc="会话、项目、自动化、通知和配置都保存在此目录。">
-        <div className="settings-row settings-row--comfortable settings-row--path">
-          <div className="settings-row__label settings-row__label--stacked">
-            <span className="settings-row__name"><Folder size={17} />EchoAgent 数据目录</span>
-            <span className="settings-row__description">此位置包含应用的重要本地数据</span>
+      <SettingsDisclosure title="本地数据与备份范围" description="查看存储位置，以及备份包含的内容">
+        <p className="settings-hint">备份包含会话、项目资料、代码任务记录、记忆、粘贴附件、草稿、队列和本机用量。恢复会替换同名记录，其他数据保留。历史外部文件仍依赖原工作目录。</p>
+        <SettingsGroup title="本地数据目录" desc="会话、项目、自动化、通知和配置都保存在此目录。">
+          <div className="settings-row settings-row--comfortable settings-row--path">
+            <div className="settings-row__label settings-row__label--stacked">
+              <span className="settings-row__name"><Folder size={17} />EchoAgent 数据目录</span>
+              <span className="settings-row__description">此位置包含应用的重要本地数据</span>
+            </div>
+            <code className="settings-path-value">{agentHome || "正在读取…"}</code>
           </div>
-          <code className="settings-path-value">{agentHome || "正在读取…"}</code>
-        </div>
-        <div className="settings-group__footer">
-          <button className="settings-btn settings-btn--primary" onClick={() => {
-            void openEchoAgentDataDir().catch((error) => setMessage(`打开失败：${String(error).replace(/^Error:\s*/, "")}`));
-          }}>
-            <Folder size={15} /> 在系统中打开
-          </button>
-        </div>
-      </SettingsGroup>
+          <div className="settings-group__footer">
+            <button className="settings-btn settings-btn--primary" onClick={() => {
+              void openEchoAgentDataDir().catch((error) => setMessage(`打开失败：${String(error).replace(/^Error:\s*/, "")}`));
+            }}>
+              <Folder size={15} /> 在系统中打开
+            </button>
+          </div>
+        </SettingsGroup>
+        <p className="settings-hint">请通过应用管理会话和资料，避免直接删除数据目录中的文件。</p>
+      </SettingsDisclosure>
       {message && <p className="settings-msg" role="status">{message}</p>}
       {dialog}
-      <SettingsGroup title="数据安全" desc="建议通过应用内入口管理数据，避免直接删除目录中的文件。">
-        <div className="settings-info-callout">
-          删除会话请在侧栏对单个会话操作；直接修改或清理目录可能导致项目、通知或配置无法恢复。
-        </div>
-      </SettingsGroup>
     </SettingsSection>
   );
 }
@@ -805,7 +758,6 @@ export function DataSettingsPanel() {
 // ---------- 系统设置 ----------
 
 export function GeneralSettingsPanel() {
-  const [busy, setBusy] = useState(false);
   const [msg, setMsg] = useState<string | null>(null);
   const [closeToTray, setCloseToTray] = useState(true);
   const [loadingDesktopPreferences, setLoadingDesktopPreferences] = useState(true);
@@ -853,23 +805,14 @@ export function GeneralSettingsPanel() {
     }
   };
 
-  const handleReload = async (kind: "mcp_all" | "skills" | "models") => {
-    setBusy(true);
-    try {
-      await internalReload(kind);
-      setMsg(`已触发 ${kind} 热重载`);
-    } catch (e) {
-      setMsg(`失败：${String(e).replace(/^Error:\s*/, "")}`);
-    } finally {
-      setBusy(false);
-    }
-  };
+
 
   return (
     <SettingsSection
-      title="系统设置"
-      desc="管理窗口、后台运行与 EchoAgent 配置重载。"
+      title="通用"
+      desc="设置主题、阅读字号，以及关闭窗口后的运行方式。"
     >
+      <AppearanceSettingsGroup />
       <SettingsGroup title="窗口与后台运行" desc="设置关闭主窗口后是否继续执行任务和自动化调度。">
         <div className="settings-row settings-row--comfortable">
           <div className="settings-row__label settings-row__label--stacked">
@@ -901,7 +844,28 @@ export function GeneralSettingsPanel() {
           </div>
         )}
       </SettingsGroup>
-      <SettingsGroup title="运行时热重载" desc="只刷新对应配置，不关闭当前窗口或中断其他页面。">
+
+      {msg && <p className="settings-msg">{msg}</p>}
+    </SettingsSection>
+  );
+}
+
+function RuntimeReloadSettingsGroup() {
+  const [busy, setBusy] = useState(false);
+  const [msg, setMsg] = useState<string | null>(null);
+  const handleReload = async (kind: "mcp_all" | "skills" | "models") => {
+    setBusy(true);
+    try {
+      await internalReload(kind);
+      setMsg(`已重新加载${{ mcp_all: " MCP 连接器", skills: "技能目录", models: "模型配置" }[kind]}`);
+    } catch (e) {
+      setMsg(`失败：${String(e).replace(/^Error:\s*/, "")}`);
+    } finally {
+      setBusy(false);
+    }
+  };
+  return <>
+      <SettingsGroup title="重新加载配置" desc="只刷新对应配置，不关闭当前窗口或中断其他页面。">
         <div className="settings-action-row">
           <div className="settings-action-row__content"><strong>MCP 连接器</strong><span>重新读取所有 MCP 服务和工具配置。</span></div>
           <button className="settings-btn" onClick={() => handleReload("mcp_all")} disabled={busy}><RefreshCw size={15} />重新加载</button>
@@ -915,9 +879,49 @@ export function GeneralSettingsPanel() {
           <button className="settings-btn" onClick={() => handleReload("models")} disabled={busy}><RefreshCw size={15} />重新加载</button>
         </div>
       </SettingsGroup>
-      {msg && <p className="settings-msg">{msg}</p>}
-    </SettingsSection>
-  );
+    {msg && <p className="settings-msg" role="status">{msg}</p>}
+  </>;
+}
+
+function DiagnosticSettingsGroup() {
+  const [feedback, setFeedback] = useState("");
+  const [savedEndpoint, setSavedEndpoint] = useState(() => {
+    try { return localStorage.getItem("echoagent.otlp.endpoint") ?? ""; } catch { return ""; }
+  });
+  const [otlpEndpoint, setOtlpEndpoint] = useState(savedEndpoint);
+  const saveOtlp = () => {
+    const endpoint = otlpEndpoint.trim();
+    try {
+      if (endpoint) localStorage.setItem("echoagent.otlp.endpoint", validateOtlpEndpoint(endpoint));
+      else localStorage.removeItem("echoagent.otlp.endpoint");
+      setSavedEndpoint(endpoint);
+    } catch (error) {
+      setFeedback(`无法保存诊断配置：${String(error).replace(/^Error:\s*/, "")}`);
+      return;
+    }
+    setFeedback(endpoint ? "OTLP 已启用，重启应用后生效。" : "OTLP 已关闭，重启应用后生效。");
+  };
+  return <SettingsDisclosure title="诊断事件上报" description={savedEndpoint ? "已保存 OTLP 端点 · 重启后生效" : "默认关闭 · 供排查运行问题时使用"}>
+      <SettingsGroup title="遥测与诊断" desc="仅上报运行事件名、级别和技术属性，不包含对话正文。">
+        <div className="settings-row settings-row--comfortable">
+          <div className="settings-row__label settings-row__label--stacked">
+            <span className="settings-row__name">OTLP 遥测端点</span>
+            <span className="settings-row__description">留空表示关闭，修改后重启应用生效</span>
+          </div>
+          <div className="settings-row__control settings-row__control--wide">
+            <input
+              className="settings-input"
+              aria-label="OTLP 遥测端点"
+              value={otlpEndpoint}
+              onChange={(event) => setOtlpEndpoint(event.target.value)}
+              placeholder="http://127.0.0.1:4318/v1/logs"
+            />
+            <button type="button" className="settings-btn" onClick={saveOtlp}>保存</button>
+          </div>
+        </div>
+      </SettingsGroup>
+    {feedback && <p className="settings-hint" role="status">{feedback}</p>}
+  </SettingsDisclosure>;
 }
 
 // ---------- 智能体设置 ----------
@@ -965,7 +969,7 @@ export function AgentSettingsPanel() {
       const clamped = await subagentsConfigSave(requestedDepth);
       setSubagentDepth(clamped);
       setSubagentDraft(String(clamped));
-      setRuntimeMsg(`子代理深度已保存为 ${clamped}（重启 agent 后生效）`);
+      setRuntimeMsg(`子代理深度已保存为 ${clamped}（重启 Agent 后生效）`);
     } catch (e) {
       setRuntimeMsg(`保存失败：${String(e).replace(/^Error:\s*/, "")}`);
     } finally {
@@ -975,8 +979,8 @@ export function AgentSettingsPanel() {
 
   return (
     <SettingsSection
-      title="智能体设置"
-      desc="调整子代理的运行方式。技能、连接器与插件请在左侧「扩展」中管理。"
+      title="高级设置"
+      desc="调整 Agent 执行参数、重新加载配置，或按需开启诊断。通常无需修改。"
       actions={(
         <button className="settings-btn" onClick={reload} disabled={loading}>
           <RefreshCw size={15} /> {loading ? "加载中…" : "刷新状态"}
@@ -993,7 +997,7 @@ export function AgentSettingsPanel() {
       )}
 
       {/* 运行时配置：子代理深度 */}
-      <SettingsGroup title="运行时配置" desc="以下修改需要重启 Agent 后生效。">
+      <SettingsGroup title="子代理" desc="控制任务分派的最大层级，修改后需重启 Agent。">
           {/* 子代理嵌套深度 */}
           <div className="agent-runtime-row">
             <div className="agent-runtime-row__label">
@@ -1036,20 +1040,40 @@ export function AgentSettingsPanel() {
           )}
       </SettingsGroup>
 
+      <RuntimeReloadSettingsGroup />
+      <DiagnosticSettingsGroup />
     </SettingsSection>
   );
 }
 
 // ---------- 通知中心 ----------
 
-const KIND_FILTERS: { key: string; label: string }[] = [
+const KIND_FILTERS = [
   { key: "all", label: "全部" },
-  { key: "permission", label: "权限请求" },
-  { key: "folder_trust", label: "文件夹信任" },
-  { key: "mcp_status", label: "MCP 状态" },
-  { key: "session_complete", label: "任务结果" },
-  { key: "error", label: "错误" },
+  { key: "unread", label: "未读" },
+  { key: "action", label: "需要处理" },
+  { key: "result", label: "任务结果" },
+  { key: "error", label: "异常" },
+  { key: "system", label: "系统事件" },
 ];
+
+function matchesNotificationFilter(entry: NotificationEntry, filter: string): boolean {
+  const actionable = entry.kind === "permission" || entry.kind === "folder_trust";
+  const failed = entry.kind === "error" || entry.severity === "error" || entry.severity === "warn";
+  switch (filter) {
+    case "unread": return !entry.read;
+    case "action": return actionable;
+    case "result": return entry.kind === "session_complete";
+    case "error": return !actionable && failed;
+    case "system": return !actionable && entry.kind !== "session_complete" && !failed;
+    default: return true;
+  }
+}
+
+function isStructuredNotificationBody(body: string): boolean {
+  try { const value: unknown = JSON.parse(body); return value !== null && typeof value === "object"; }
+  catch { return false; }
+}
 
 /** Local inbox for actionable requests, failures, and task results. */
 export function NotificationCenterSettingsPanel({
@@ -1068,11 +1092,6 @@ export function NotificationCenterSettingsPanel({
   const [mutating, setMutating] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [sessionOpenError, setSessionOpenError] = useState<string | null>(null);
-  const [showTaskTitle, setShowTaskTitle] = useState(false);
-  const [previewLoading, setPreviewLoading] = useState(true);
-  const [previewSaving, setPreviewSaving] = useState(false);
-  const [previewError, setPreviewError] = useState<string | null>(null);
-  const [previewReload, setPreviewReload] = useState(0);
   const [filter, setFilter] = useState<string>("all");
   const { requestConfirmation, dialog } = useAppDialog();
 
@@ -1091,33 +1110,6 @@ export function NotificationCenterSettingsPanel({
   useEffect(() => {
     reload();
   }, [reload]);
-
-  useEffect(() => {
-    let active = true;
-    setPreviewLoading(true);
-    setPreviewError(null);
-    void desktopPreferencesGet().then((preferences) => {
-      if (active) setShowTaskTitle(preferences.showNotificationTaskTitle ?? false);
-    }).catch((loadError) => {
-      if (active) setPreviewError(String(loadError).replace(/^Error:\s*/, ""));
-    }).finally(() => {
-      if (active) setPreviewLoading(false);
-    });
-    return () => { active = false; };
-  }, [previewReload]);
-
-  const savePreview = async (enabled: boolean) => {
-    setPreviewSaving(true);
-    setPreviewError(null);
-    try {
-      const saved = await desktopNotificationPreviewSave(enabled);
-      setShowTaskTitle(saved.showNotificationTaskTitle);
-    } catch (saveError) {
-      setPreviewError(String(saveError).replace(/^Error:\s*/, ""));
-    } finally {
-      setPreviewSaving(false);
-    }
-  };
 
   const handleMarkRead = useCallback(
     async (id: number) => {
@@ -1203,14 +1195,14 @@ export function NotificationCenterSettingsPanel({
   };
 
   const filtered = entries.filter(
-    (e) => filter === "all" || String(e.kind) === filter,
+    (entry) => matchesNotificationFilter(entry, filter),
   );
   const unreadCount = entries.filter((e) => !e.read).length;
 
   return (
     <SettingsSection
-      title="通知中心"
-      desc="集中查看待处理请求、连接问题和任务结果。"
+      title="通知记录"
+      desc="查看需要处理的请求、任务结果与异常。记录仅保存在本机。"
       actions={
         <>
           <button className="settings-btn" onClick={reload} disabled={loading || mutating}>
@@ -1241,57 +1233,9 @@ export function NotificationCenterSettingsPanel({
           通知记录不可用：{error}。原文件未被覆盖；你可以修复文件后重试，或点击“清空”重建。
         </p>
       )}
-      <SettingsGroup title="桌面通知预览" desc="控制系统通知是否显示任务名称；任务通知点击后会打开关联任务。">
-        <div className="settings-row settings-row--comfortable">
-          <div className="settings-row__label settings-row__label--stacked">
-            <span className="settings-row__name">显示任务名称</span>
-            <span className="settings-row__description">默认隐藏，避免任务标题出现在锁屏通知中。应用内通知记录仍显示完整信息。</span>
-          </div>
-          <label className="sk-toggle">
-            <input type="checkbox" aria-label="桌面通知显示任务名称" checked={showTaskTitle}
-              disabled={previewLoading || previewSaving || Boolean(previewError)}
-              onChange={(event) => void savePreview(event.target.checked)} />
-            <span className="sk-toggle-track"><span className="sk-toggle-thumb" /></span>
-          </label>
-        </div>
-        {previewError && <p className="settings-msg settings-msg--warn" role="alert">
-          桌面通知偏好不可用：{previewError}
-          <button type="button" className="settings-btn" onClick={() => setPreviewReload((value) => value + 1)}>重试</button>
-        </p>}
-      </SettingsGroup>
       <SettingsGroup
-        title="通知概览"
-        desc="通知仅保存在本机，可随时标记已读或清空。"
-        meta={
-          <span
-            className={`settings-status-badge ${
-              unreadCount > 0 ? "settings-status-badge--accent" : "settings-status-badge--ready"
-            }`}
-          >
-            {unreadCount > 0 ? `${unreadCount} 条未读` : "全部已读"}
-          </span>
-        }
-      >
-        <div className="settings-row settings-row--comfortable">
-          <div className="settings-row__label settings-row__label--stacked">
-            <span className="settings-row__name">
-              <Mail size={16} /> 通知数量
-            </span>
-            <span className="settings-row__description">
-              当前共记录 {entries.length} 条通知，其中 {unreadCount} 条尚未阅读。
-            </span>
-          </div>
-          <div className="settings-row__control">
-            <span className="settings-metric">{unreadCount}</span>
-            <span className="settings-metric__suffix">未读 / {entries.length} 全部</span>
-          </div>
-        </div>
-      </SettingsGroup>
-
-      <SettingsGroup
-        title="通知记录"
-        desc="按事件类型筛选，快速定位需要处理的信息。"
-        meta={<span className="settings-group__count">{filtered.length} 条</span>}
+        title="最近通知"
+        meta={<span className="settings-group__count">{unreadCount} 条未读 · {entries.length} 条记录</span>}
       >
         <div className="notification-filters" aria-label="通知类型筛选">
           <Filter size={13} aria-hidden="true" />
@@ -1333,9 +1277,12 @@ export function NotificationCenterSettingsPanel({
                   <span className="notification-row__title">{entry.title}</span>
                   {!entry.read && <span className="notification-row__unread">未读</span>}
                 </div>
-                {entry.body && (
-                  <pre className="notification-row__body-text">{entry.body}</pre>
-                )}
+                {entry.body && (isStructuredNotificationBody(entry.body) ? (
+                  <details className="notification-row__details">
+                    <summary>查看技术详情</summary>
+                    <pre className="notification-row__body-text">{entry.body}</pre>
+                  </details>
+                ) : <p className="notification-row__description">{entry.body}</p>)}
                 <div className="notification-row__meta">
                   <span>{formatTime(entry.at)}</span>
                   {entry.sessionId && (
@@ -1381,9 +1328,9 @@ function kindLabel(kind: NotificationKind | string): string {
     folder_trust: "文件夹信任",
     task_update: "任务更新",
     plan_mode: "计划模式",
-    mcp_status: "MCP 状态",
+    mcp_status: "工具连接",
     models_update: "模型更新",
-    summary: "会话标题",
+    summary: "任务名称更新",
     session_complete: "任务结果",
     error: "错误",
     info: "信息",

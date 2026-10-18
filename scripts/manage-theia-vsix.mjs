@@ -8,6 +8,7 @@ import {
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { pinnedTheiaPlugins, validateTheiaPlugin } from "./theia-plugin-validation.mjs";
+import { patchGitWindowless } from "./patch-theia-git-windowless.mjs";
 
 const root = resolve(import.meta.dirname, "..");
 const sourceRoot = join(root, "vendor/theia-platform");
@@ -57,6 +58,7 @@ async function stage() {
     const temporary = mkdtempSync(join(pluginRoot, ".echoagent-vsix-"));
     try {
       await extractAndValidate(decompress, join(archiveRoot, plugin.filename), plugin, temporary);
+      patchGitWindowless(temporary, plugin, lock.plugins[plugin.id].sha256);
       rmSync(target, { recursive: true, force: true });
       renameSync(temporary, target);
     } finally {

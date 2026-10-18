@@ -345,20 +345,20 @@ export function ResourcesPanel({ cwd, sessionId, onToast }: ResourcesPanelProps)
         <div className="resources-panel__header-actions">
           {activeTab === "summaries" && sessionId && (
             <>
-              <button className="resources-panel__action-btn" onClick={handleFlush} disabled={busy} title="提取当前会话中的可复用信息并写入会话摘要">
+              <button className="settings-btn resources-panel__action-btn" onClick={handleFlush} disabled={busy} title="提取当前会话中的可复用信息并写入会话摘要">
                 立即提取
               </button>
-              <button className="resources-panel__action-btn" onClick={handleDream} disabled={busy} title="把历史会话摘要归纳为长期记忆">
+              <button className="settings-btn resources-panel__action-btn" onClick={handleDream} disabled={busy} title="把历史会话摘要归纳为长期记忆">
                 <SparklesIcon size="sm" /> 整理到长期记忆
               </button>
             </>
           )}
           {activeTab === "summaries" && sessionCount > 0 && (
-            <button className="resources-panel__action-btn resources-panel__action-btn--danger" onClick={handleClearSummaries} disabled={busy}>
+            <button className="settings-btn settings-btn--danger resources-panel__action-btn" onClick={handleClearSummaries} disabled={busy}>
               清空摘要
             </button>
           )}
-          <button className="resources-panel__action-btn" onClick={() => void reload()} disabled={loading} title="刷新">
+          <button className="settings-btn resources-panel__action-btn" onClick={() => void reload()} disabled={loading} title="刷新">
             <RefreshCwIcon size="sm" /> 刷新
           </button>
         </div>
@@ -374,7 +374,7 @@ export function ResourcesPanel({ cwd, sessionId, onToast }: ResourcesPanelProps)
       <div className="resources-panel__list-controls">
         <div className="resources-panel__search">
           <SearchIcon size="md" className="resources-panel__search-icon" />
-          <input ref={searchInputRef} className="resources-panel__search-input" aria-label="搜索记忆" placeholder={activeTab === "summaries" ? "搜索会话摘要…" : "搜索长期记忆…"} value={query} onChange={(event) => setQuery(event.target.value)} />
+          <input ref={searchInputRef} className="form-control resources-panel__search-input" aria-label="搜索记忆" placeholder={activeTab === "summaries" ? "搜索会话摘要…" : "搜索长期记忆…"} value={query} onChange={(event) => setQuery(event.target.value)} />
         </div>
         <div className="resources-panel__stats">
           {activeTab === "summaries" ? (
@@ -391,7 +391,7 @@ export function ResourcesPanel({ cwd, sessionId, onToast }: ResourcesPanelProps)
       {loadError && (
         <div className="panel-inline-error" role="alert">
           <span>个人记忆加载失败：{loadError}</span>
-          <button type="button" onClick={() => void reload()} disabled={loading}>
+          <button type="button" className="settings-btn" onClick={() => void reload()} disabled={loading}>
             {loading ? "重试中…" : "重试"}
           </button>
         </div>
@@ -399,7 +399,7 @@ export function ResourcesPanel({ cwd, sessionId, onToast }: ResourcesPanelProps)
 
       {activeTab === "longTerm" && (
         <button
-          className="resources-panel__create-btn"
+          className="settings-btn resources-panel__create-btn"
           onClick={() => setEditing({
             cwd,
             sessionId,
@@ -450,13 +450,13 @@ export function ResourcesPanel({ cwd, sessionId, onToast }: ResourcesPanelProps)
             </div>
             <div className="resources-panel__item-actions">
               <button
-                className="resources-panel__icon-btn"
+                className="settings-btn settings-btn--ghost settings-btn--compact settings-btn--icon-only resources-panel__icon-btn"
                 onClick={() => setEditing({ ...entry, cwd, sessionId, content: visibleContent || "旧版摘要没有可展示的内容。", isNew: false })}
                 title={entry.readOnly ? "查看" : "编辑"}
               >
                 <EditToolIcon size="sm" />
               </button>
-              <button className="resources-panel__icon-btn resources-panel__icon-btn--danger" onClick={() => void handleDelete(entry)} title={entry.scope === "session" ? "删除摘要" : "删除"}>
+              <button className="settings-btn settings-btn--ghost settings-btn--danger settings-btn--compact settings-btn--icon-only resources-panel__icon-btn" onClick={() => void handleDelete(entry)} title={entry.scope === "session" ? "删除摘要" : "删除"}>
                 <DeleteIcon size="sm" />
               </button>
             </div>
@@ -520,7 +520,7 @@ function MemoryEditor({
         <div className="memory-editor__meta">
           <label>
             范围
-            <select
+            <select className="form-control"
               value={draft.scope}
               disabled={!draft.isNew || busy}
               onChange={(event) => onChange({ ...draft, scope: event.target.value as EditorState["scope"] })}
@@ -532,12 +532,12 @@ function MemoryEditor({
           </label>
           <label>
             文件
-            <input type="text" value={draft.path} disabled />
+            <input className="form-control" type="text" value={draft.path} disabled />
           </label>
         </div>
         {draft.scope !== "global" && draft.cwd && <p className="resources-panel__notice" role="note">此草稿保存到工作区：{draft.cwd}</p>}
         <textarea
-          className="memory-editor__content"
+          className="form-control memory-editor__content"
           aria-label={draft.isNew ? "记忆内容" : `记忆内容 ${draft.path}`}
           value={draft.content}
           readOnly={draft.readOnly || busy}

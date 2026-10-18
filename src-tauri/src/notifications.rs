@@ -336,7 +336,10 @@ fn validate_entry(entry: &NotificationEntry) -> Result<(), String> {
                 || id.chars().count() > MAX_REQUEST_ID_CHARS
                 || id.chars().any(char::is_control)
         })
-        || entry.dedupe_key.as_deref().is_some_and(|key| key.is_empty() || key.len() > 512)
+        || entry
+            .dedupe_key
+            .as_deref()
+            .is_some_and(|key| key.is_empty() || key.len() > 512)
         || !valid_severity(&entry.severity)
     {
         return Err("通知记录包含超限或非法字段".into());
@@ -708,6 +711,86 @@ struct ChannelStore {
     channels: Vec<NotifyChannel>,
 }
 
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct DesktopNotifyStatus {
+    enabled: bool,
+    source: &'static str,
+    permission: &'static str,
+    policy_error: Option<String>,
+}
+
+fn desktop_status(store: &ChannelStore, policy_error: Option<String>) -> DesktopNotifyStatus {
+    let configured = store
+        .channels
+        .iter()
+        .any(|channel| channel.kind == ChannelKind::Desktop);
+    DesktopNotifyStatus {
+        enabled: policy_error.is_none()
+            && (!configured
+                || store
+                    .channels
+                    .iter()
+                    .any(|channel| channel.kind == ChannelKind::Desktop && channel.enabled)),
+        source: if policy_error.is_some() {
+            "policy"
+        } else if configured {
+            "configured"
+        } else {
+            "default"
+        },
+        // Cross-platform OS permission/banner visibility cannot be queried reliably.
+        permission: "unknown",
+        policy_error,
+    }
+}
+
+#[tauri::command]
+pub fn notify_desktop_status() -> Result<DesktopNotifyStatus, String> {
+    Ok(desktop_status(
+        &read_channels()?,
+        crate::policy::require_feature("notifications").err(),
+    ))
+}
+
+fn set_desktop_enabled(store: &mut ChannelStore, enabled: bool) -> Result<(), String> {
+    if store
+        .channels
+        .iter()
+        .any(|channel| channel.kind == ChannelKind::Desktop)
+    {
+        let mut enabled_once = false;
+        for channel in &mut store.channels {
+            if channel.kind == ChannelKind::Desktop {
+                // Legacy configurations may contain several desktop records.
+                // Preserve them, while delivering a single desktop banner.
+                channel.enabled = enabled && !enabled_once;
+                enabled_once |= channel.enabled;
+            }
+        }
+        Ok(())
+    } else {
+        upsert_channel_in_store(
+            store,
+            NotifyChannel {
+                id: format!("desktop-{}", uuid::Uuid::now_v7()),
+                label: "桌面提醒".into(),
+                kind: ChannelKind::Desktop,
+                endpoint: None,
+                enabled,
+            },
+        )
+    }
+}
+
+#[tauri::command]
+pub fn notify_desktop_set_enabled(enabled: bool) -> Result<(), String> {
+    crate::policy::require_feature("notifications")?;
+    update_channels_at(&channels_path(), |store| {
+        set_desktop_enabled(store, enabled)
+    })
+}
+
 static CHANNEL_ACCESS: OnceLock<Mutex<()>> = OnceLock::new();
 
 fn channel_access() -> &'static Mutex<()> {
@@ -920,14 +1003,23 @@ pub fn notify_channel_remove(id: String) -> Result<(), String> {
     let id = id.trim();
     validate_channel_id(id)?;
     let path = channels_path();
-    update_channels_at(&path, |store| {
-        let before = store.channels.len();
-        store.channels.retain(|channel| channel.id != id);
-        if store.channels.len() == before {
-            return Err(format!("通知渠道 {id} 不存在"));
-        }
-        Ok(())
-    })
+    update_channels_at(&path, |store| remove_channel_in_store(store, id))
+}
+
+fn remove_channel_in_store(store: &mut ChannelStore, id: &str) -> Result<(), String> {
+    if store
+        .channels
+        .iter()
+        .any(|channel| channel.id == id && channel.kind == ChannelKind::Desktop)
+    {
+        return Err("桌面提醒请使用开启/关闭开关，保留显式关闭偏好".into());
+    }
+    let before = store.channels.len();
+    store.channels.retain(|channel| channel.id != id);
+    if store.channels.len() == before {
+        return Err(format!("通知渠道 {id} 不存在"));
+    }
+    Ok(())
 }
 
 #[tauri::command]
@@ -1028,7 +1120,7 @@ pub fn task_title_for_notification(session_id: &str) -> Option<String> {
         .map(|title| truncate_text(&title, 48, 160, false))
 }
 
-fn show_desktop_notification(app: &AppHandle, message: &NotifyMessage) -> Result<(), String> {
+async fn show_desktop_notification(app: &AppHandle, message: &NotifyMessage) -> Result<(), String> {
     if message.background_only
         && message.session_id.as_ref().is_some_and(|session_id| {
             visible_session()
@@ -1074,6 +1166,9 @@ fn show_desktop_notification(app: &AppHandle, message: &NotifyMessage) -> Result
         automation_id: message.automation_id.clone(),
     };
     let app = app.clone();
+    // Acknowledge OS submission before reporting success. Waiting for a click
+    // stays on the blocking worker and never holds up task completion.
+    let (submitted, receipt) = tokio::sync::oneshot::channel();
     tauri::async_runtime::spawn_blocking(move || {
         #[cfg(target_os = "macos")]
         let _ = notify_rust::set_application(if tauri::is_dev() {
@@ -1091,6 +1186,7 @@ fn show_desktop_notification(app: &AppHandle, message: &NotifyMessage) -> Result
         notification.action("default", "打开任务");
         match notification.show() {
             Ok(handle) => {
+                let _ = submitted.send(Ok(()));
                 if let Err(error) = handle.wait_for_response(|response: &notify_rust::NotificationResponse| {
                     if response.is_default_action()
                         || matches!(response, notify_rust::NotificationResponse::Action(action) if action == "default")
@@ -1101,10 +1197,16 @@ fn show_desktop_notification(app: &AppHandle, message: &NotifyMessage) -> Result
                     tracing::warn!(%error, "failed to receive desktop notification click");
                 }
             }
-            Err(error) => tracing::warn!(%error, "failed to show actionable desktop notification"),
+            Err(error) => {
+                tracing::warn!(%error, "failed to show actionable desktop notification");
+                let _ = submitted.send(Err(format!("system notification: {error}")));
+            }
         }
     });
-    Ok(())
+    tokio::time::timeout(Duration::from_secs(10), receipt)
+        .await
+        .map_err(|_| "系统通知提交超时".to_string())?
+        .map_err(|_| "系统通知投递工作进程已结束".to_string())?
 }
 
 async fn send_one(
@@ -1114,7 +1216,7 @@ async fn send_one(
 ) -> Result<(), String> {
     validate_channel(channel)?;
     match channel.kind {
-        ChannelKind::Desktop => show_desktop_notification(app, message),
+        ChannelKind::Desktop => show_desktop_notification(app, message).await,
         ChannelKind::Email => Err("邮件自动投递未配置".into()),
         ChannelKind::SlackWebhook | ChannelKind::DiscordWebhook | ChannelKind::GenericWebhook => {
             let endpoint = channel.endpoint.as_deref().ok_or("missing endpoint")?;
@@ -1262,7 +1364,7 @@ pub async fn dispatch_with_desktop_fallback(
     };
     let mut results = dispatch_external(app, message.clone(), None).await;
     if !desktop_configured {
-        match show_desktop_notification(app, &message) {
+        match show_desktop_notification(app, &message).await {
             Ok(()) => results.push(DeliveryResult {
                 id: "builtin-desktop".into(),
                 ok: true,
@@ -1286,6 +1388,50 @@ pub async fn dispatch_with_desktop_fallback(
         }
     }
     results
+}
+
+#[tauri::command]
+pub async fn notify_desktop_test(
+    app: AppHandle,
+    state: State<'_, AppState>,
+    session_id: Option<String>,
+) -> Result<DeliveryResult, String> {
+    crate::policy::require_feature("notifications")?;
+    if let Some(id) = session_id.as_deref() {
+        // A native test may return to the active task, never an arbitrary target.
+        state.session_workspace(id)?;
+    }
+    if !desktop_status(&read_channels()?, None).enabled {
+        return Err("桌面提醒已关闭，请先开启再测试".into());
+    }
+    let message = NotifyMessage {
+        title: "测试桌面提醒".into(),
+        body: Some(
+            if session_id.is_some() {
+                "来自 EchoAgent，点击返回当前任务"
+            } else {
+                "来自 EchoAgent。系统设置可能影响提醒的显示"
+            }
+            .into(),
+        ),
+        session_id,
+        ..Default::default()
+    };
+    let error = show_desktop_notification(&app, &message).await.err();
+    if let Some(error) = &error {
+        let _ = append(
+            NotificationKind::Error,
+            "通知投递失败",
+            Some(error),
+            message.session_id.as_deref(),
+            "error",
+        );
+    }
+    Ok(DeliveryResult {
+        id: "desktop".into(),
+        ok: error.is_none(),
+        error,
+    })
 }
 
 #[tauri::command]
@@ -1313,6 +1459,77 @@ pub async fn notify_channel_test(app: AppHandle, id: String) -> Result<DeliveryR
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn desktop_default_opt_out_survives_reload_and_cannot_be_deleted_into_fallback() {
+        let home = tempfile::tempdir().unwrap();
+        let path = home.path().join("channels.json");
+        let mut store = read_channels_at(&path).unwrap();
+        let initial = desktop_status(&store, None);
+        assert!(initial.enabled);
+        assert_eq!(initial.source, "default");
+        assert_eq!(initial.permission, "unknown");
+        set_desktop_enabled(&mut store, false).unwrap();
+        write_channels_at(&path, &store).unwrap();
+        let mut loaded = read_channels_at(&path).unwrap();
+        assert!(!desktop_status(&loaded, None).enabled);
+        let id = loaded.channels[0].id.clone();
+        assert!(remove_channel_in_store(&mut loaded, &id).is_err());
+        assert!(!desktop_status(&loaded, None).enabled);
+        set_desktop_enabled(&mut loaded, true).unwrap();
+        assert!(desktop_status(&loaded, None).enabled);
+        assert_eq!(loaded.channels[0].id, id);
+        let blocked = desktop_status(&loaded, Some("blocked by policy".into()));
+        assert!(!blocked.enabled);
+        assert_eq!(blocked.source, "policy");
+    }
+
+    #[test]
+    fn desktop_switch_preserves_custom_channels_and_legacy_records_without_duplicate_banners() {
+        let mut store = ChannelStore {
+            channels: vec![
+                NotifyChannel {
+                    id: "one".into(),
+                    label: "One".into(),
+                    kind: ChannelKind::Desktop,
+                    endpoint: None,
+                    enabled: false,
+                },
+                NotifyChannel {
+                    id: "two".into(),
+                    label: "Two".into(),
+                    kind: ChannelKind::Desktop,
+                    endpoint: None,
+                    enabled: true,
+                },
+                NotifyChannel {
+                    id: "hook".into(),
+                    label: "Hook".into(),
+                    kind: ChannelKind::GenericWebhook,
+                    endpoint: Some("https://example.test/private".into()),
+                    enabled: true,
+                },
+            ],
+        };
+        assert!(desktop_status(&store, None).enabled);
+        set_desktop_enabled(&mut store, false).unwrap();
+        assert!(!desktop_status(&store, None).enabled);
+        set_desktop_enabled(&mut store, true).unwrap();
+        assert_eq!(
+            store
+                .channels
+                .iter()
+                .filter(|channel| channel.kind == ChannelKind::Desktop && channel.enabled)
+                .count(),
+            1
+        );
+        assert_eq!(store.channels.len(), 3);
+        assert_eq!(
+            store.channels[2].endpoint.as_deref(),
+            Some("https://example.test/private")
+        );
+        assert!(store.channels[2].enabled);
+    }
 
     #[test]
     fn native_click_targets_are_drained_once_with_exact_request() {

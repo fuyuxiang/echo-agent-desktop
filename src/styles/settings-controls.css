@@ -1,0 +1,108 @@
+/* Settings use the same teal action palette as the project workspace.
+ * Features own layout; shared controls own button and field appearance. */
+.settings-modal {
+  --echo-button-danger-border: var(--echo-button-secondary-border);
+}
+
+/* Destructive list actions stay secondary. The final confirmation owns the
+ * stronger destructive treatment. Ghost icon actions remain frameless. */
+.settings-modal :is(.settings-btn--danger, .form-button--danger, .echo-button--danger, .btn--danger) {
+  --button-bg: var(--echo-button-secondary-bg);
+}
+.settings-modal :is(.settings-btn--ghost, .form-button--ghost, .echo-button--ghost, .btn--ghost):is(.settings-btn--danger, .form-button--danger, .echo-button--danger, .btn--danger) {
+  --button-bg: transparent;
+}
+
+.settings-modal :is(.form-control, .settings-input) { box-shadow: none; }
+.settings-modal :is(.form-control, .settings-input):disabled {
+  background-color: var(--echo-bg-secondary);
+  color: var(--echo-text-weak);
+}
+.settings-modal :is(input[type="checkbox"], input[type="radio"], input[type="range"]) {
+  accent-color: var(--echo-brand);
+}
+.settings-modal .sk-toggle input:checked + .sk-toggle-track { background: var(--echo-button-primary-bg); }
+.settings-modal .sk-toggle-thumb { background: var(--echo-button-primary-fg); }
+.settings-modal .sk-toggle:has(input:disabled) { opacity: .5; }
+.settings-modal .sk-toggle:has(input:focus-visible) { outline: 2px solid var(--echo-focus-ring); outline-offset: 3px; border-radius: 999px; }
+.settings-modal .notify-panel__btn[role="switch"][aria-checked="true"] {
+  --button-bg: var(--echo-brand-soft);
+  --button-fg: var(--echo-color-text-brand-default);
+}
+
+/* Preserve field adornment and editor layout when using the common controls. */
+.settings-modal .resources-panel__search-input { padding-left: 36px; border-radius: var(--echo-radius-control); }
+.settings-modal .models-settings-panel__input--with-trailing-icon { padding-right: 42px; }
+.settings-modal .models-settings-panel__advanced-toggle { align-self: flex-start; }
+.settings-modal .memory-editor__content { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; }
+.settings-modal .archived-settings__search {
+  min-height: var(--echo-size-control-md);
+  border-color: var(--echo-button-secondary-border);
+  border-radius: var(--echo-radius-control);
+  background: var(--echo-bg-input);
+  box-shadow: none;
+}
+.settings-modal .archived-settings__search:focus-within { border-color: var(--echo-focus-ring); }
+.settings-modal .archived-settings__search input:focus-visible { outline: none; }
+.settings-modal .archived-settings__search:has(input:focus-visible) { outline: 2px solid var(--echo-focus-ring); outline-offset: 2px; }
+.settings-modal .weixin-channel__card { border-radius: var(--echo-radius-card); background: var(--echo-bg-primary); }
+.settings-modal .weixin-channel__code { flex-wrap: wrap; }
+.settings-modal .weixin-channel__code .form-control { flex: 1 1 160px; }
+
+
+/* Optional details share one quiet, keyboard-accessible presentation. */
+.settings-modal .settings-disclosure {
+  min-width: 0;
+  border: 1px solid var(--ui-line);
+  border-radius: 14px;
+  background: var(--ui-surface);
+}
+.settings-disclosure > summary {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  padding: 18px 20px;
+  cursor: pointer;
+  list-style: none;
+  color: var(--echo-text-medium);
+}
+.settings-disclosure > summary::-webkit-details-marker { display: none; }
+.settings-disclosure > summary:focus-visible {
+  outline: 2px solid var(--echo-brand);
+  outline-offset: 3px;
+  border-radius: 12px;
+}
+.settings-disclosure__heading { display: grid; gap: 4px; min-width: 0; }
+.settings-disclosure__heading strong {
+  color: var(--echo-text-strong);
+  font-size: 0.875rem;
+  font-weight: 600;
+  line-height: 1.5;
+}
+.settings-disclosure__heading > span { font-size: 0.75rem; line-height: 1.6; }
+.settings-disclosure > summary > svg { flex-shrink: 0; transition: transform 160ms ease; }
+.settings-disclosure[open] > summary > svg { transform: rotate(180deg); }
+.settings-disclosure[open] > summary { border-bottom: 1px solid var(--ui-line); }
+.settings-disclosure__body { display: flex; flex-direction: column; gap: 18px; min-width: 0; padding: 20px; }
+.settings-disclosure__body > .settings-group > .settings-group__content {
+  padding: 0;
+  border: 0;
+  box-shadow: none;
+}
+.settings-disclosure__body > .settings-hint { margin: 0; overflow-wrap: anywhere; }
+.settings-inline-link { display: inline-flex; align-items: center; gap: 6px; color: var(--echo-text-brand); font-size: .8125rem; }
+.settings-modal .model-connections__detail > .settings-disclosure { margin-top: 24px; }
+.settings-modal .model-connections__facts { margin: 0; }
+.settings-modal .quota-panel__stats { grid-template-columns: repeat(4, minmax(0, 1fr)); }
+.settings-modal .quota-panel__stats--details { grid-template-columns: repeat(3, minmax(0, 1fr)); padding: 0; }
+.settings-modal .quota-panel > .settings-disclosure { margin: 18px 0 0; }
+.settings-disclosure__body > .quota-panel__section { padding: 0; border: 0; }
+.settings-modal .help-grid { grid-template-columns: minmax(0, 1fr); }
+@media (max-width: 800px) {
+  .settings-disclosure > summary, .settings-disclosure__body { padding: 16px; }
+  .settings-modal .quota-panel__stats { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+}
+@media (prefers-reduced-motion: reduce) {
+  .settings-disclosure > summary > svg { transition: none; }
+}

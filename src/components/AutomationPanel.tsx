@@ -1071,7 +1071,7 @@ export function AutomationPanel({
               </div>
             </div>
             <div className="atm-empty-state-templates">
-              <div className="atm-empty-state-templates-title">自动化任务模版</div>
+              <h3 className="project-section__title">自动化任务模板</h3>
               <AutomationTemplateGrid templates={AUTOMATION_TEMPLATES} onSelectTemplate={handleCreate} />
             </div>
           </div>

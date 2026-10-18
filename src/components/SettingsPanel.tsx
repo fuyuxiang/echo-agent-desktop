@@ -2,17 +2,15 @@ import { useEffect, useState } from "react";
 import {
   Settings as SettingsIcon,
   SlidersHorizontal,
-  Keyboard,
   Brain,
   Cpu,
-  Palette,
   Database,
   BarChart3,
   Shield,
   HelpCircle,
   X,
   Cloud,
-  Send,
+  Bell,
   MessageCircle,
   type LucideIcon,
 } from "lucide-react";
@@ -24,7 +22,6 @@ import {
   HelpSettingsPanel,
   MemorySettingsPanel,
   NotificationCenterSettingsPanel,
-  PersonalizeSettingsPanel,
   SecuritySettingsPanel,
   ShortcutsSettingsPanel,
 } from "./SettingsSections";
@@ -79,18 +76,22 @@ interface NavGroup {
   items: NavItem[];
 }
 
+const GENERAL_VIEWS: Array<[SettingsSectionId, string]> = [
+  ["general", "常用偏好"], ["shortcuts", "快捷键"],
+];
 const NOTIFICATION_VIEWS: Array<[SettingsSectionId, string]> = [
-  ["agent-mail", "事件收件箱"], ["notify-channels", "通知渠道"],
+  ["notify-channels", "提醒设置"], ["agent-mail", "通知记录"],
 ];
 const MEMORY_VIEWS: Array<[SettingsSectionId, string]> = [
   ["memory", "记忆行为"], ["personal-memory", "个人记忆"],
 ];
 const DATA_VIEWS: Array<[SettingsSectionId, string]> = [
-  ["data", "备份与目录"], ["archived", "已归档"],
+  ["data", "备份与恢复"], ["archived", "已归档"],
 ];
 
 function isActiveNavItem(active: SettingsSectionId, item: SettingsSectionId): boolean {
-  if (item === "agent-mail") return active === "agent-mail" || active === "notify-channels";
+  if (item === "agent-mail" || item === "notify-channels") return active === "agent-mail" || active === "notify-channels";
+  if (item === "general") return GENERAL_VIEWS.some(([id]) => id === active);
   if (item === "memory") return active === "memory" || active === "personal-memory";
   if (item === "data") return active === "data" || active === "archived";
   return active === item;
@@ -121,43 +122,29 @@ function SettingsViewTabs({
 }
 
 const NAV_GROUPS: NavGroup[] = [
-  {
-    label: "消息与提醒",
-    items: [
-      { id: "agent-mail", label: "通知", icon: Send },
-      { id: "weixin-channel", label: "消息通道", icon: MessageCircle },
-    ],
-  },
-  {
-    label: "智能体",
-    items: [
-      { id: "model", label: "模型", icon: Cpu },
-      { id: "agent-settings", label: "智能体设置", icon: SlidersHorizontal },
-      { id: "memory", label: "记忆", icon: Brain },
-    ],
-  },
-  {
-    label: "应用",
-    items: [
-      { id: "general", label: "系统设置", icon: SettingsIcon },
-      { id: "personalize", label: "个性化", icon: Palette },
-      { id: "shortcuts", label: "快捷键", icon: Keyboard },
-    ],
-  },
-  {
-    label: "数据与支持",
-    items: [
-      { id: "usage", label: "用量统计", icon: BarChart3 },
-      { id: "cloud-storage", label: "云存储", icon: Cloud },
-      { id: "data", label: "数据管理", icon: Database },
-      { id: "security", label: "安全中心", icon: Shield },
-      { id: "help", label: "帮助与更新", icon: HelpCircle },
-    ],
-  },
+  { label: "偏好", items: [
+    { id: "general", label: "通用", icon: SettingsIcon },
+    { id: "notify-channels", label: "通知", icon: Bell },
+  ] },
+  { label: "智能体", items: [
+    { id: "model", label: "模型", icon: Cpu },
+    { id: "memory", label: "记忆", icon: Brain },
+    { id: "security", label: "安全与权限", icon: Shield },
+  ] },
+  { label: "连接与数据", items: [
+    { id: "weixin-channel", label: "微信连接", icon: MessageCircle },
+    { id: "cloud-storage", label: "云存储", icon: Cloud },
+    { id: "usage", label: "用量统计", icon: BarChart3 },
+    { id: "data", label: "数据管理", icon: Database },
+  ] },
+  { label: "支持", items: [
+    { id: "agent-settings", label: "高级设置", icon: SlidersHorizontal },
+    { id: "help", label: "帮助与更新", icon: HelpCircle },
+  ] },
 ];
 
 function settingsSectionTitle(section: SettingsSectionId): string {
-  const subview = [...NOTIFICATION_VIEWS, ...MEMORY_VIEWS, ...DATA_VIEWS]
+  const subview = [...GENERAL_VIEWS, ...NOTIFICATION_VIEWS, ...MEMORY_VIEWS, ...DATA_VIEWS]
     .find(([id]) => id === section);
   return subview?.[1] ?? NAV_GROUPS.flatMap(group => group.items)
     .find(item => item.id === section)?.label ?? "设置";
@@ -169,7 +156,7 @@ export function SettingsPanel({
   onModelsChanged,
   sessionId,
   cwd,
-  initialSection = "model",
+  initialSection = "general",
   onRestoreSession,
   onDeleteSession,
   onOpenSession,
@@ -193,7 +180,7 @@ export function SettingsPanel({
   onOpenAutomation?: (automationId: string) => void | Promise<void>;
   onToast?: (message: string) => void;
 }) {
-  const [active, setActive] = useState<SettingsSectionId>(initialSection);
+  const [active, setActive] = useState<SettingsSectionId>(initialSection === "personalize" ? "general" : initialSection);
   const [cloudDirty, setCloudDirty] = useState(false);
   const { requestConfirmation, dialog } = useAppDialog();
   const confirmLeave = (action: () => void) => {
@@ -216,7 +203,7 @@ export function SettingsPanel({
 
   // Select the caller-requested section every time the dialog opens.
   useEffect(() => {
-    if (open) setActive(initialSection);
+    if (open) setActive(initialSection === "personalize" ? "general" : initialSection);
   }, [initialSection, open]);
 
   if (!open) return null;
@@ -291,10 +278,11 @@ export function SettingsPanel({
           <div className="settings-modal__panel">
             {active === "model" ? (
               <ModelConnectionsPanel onModelsChanged={onModelsChanged} />
-            ) : active === "personalize" ? (
-              <PersonalizeSettingsPanel />
             ) : active === "shortcuts" ? (
-              <ShortcutsSettingsPanel />
+              <div className="settings-subview">
+                <SettingsViewTabs label="通用视图" items={GENERAL_VIEWS} active={active} onSelect={setActive} />
+                <ShortcutsSettingsPanel />
+              </div>
             ) : active === "memory" ? (
               <div className="settings-subview">
                 <SettingsViewTabs label="记忆视图" items={MEMORY_VIEWS} active={active} onSelect={setActive} />
@@ -326,15 +314,18 @@ export function SettingsPanel({
                 />
               </div>
             ) : active === "usage" ? (
-              <SettingsSection title="用量统计" desc="查看 Token 消耗、成本估算和配额策略。"><UsageQuotaPanel /></SettingsSection>
+              <SettingsSection title="用量统计" desc="查看本机记录的模型用量；费用为估算，不代表服务商账单。"><UsageQuotaPanel /></SettingsSection>
             ) : active === "notify-channels" ? (
-              <SettingsSection title="通知渠道" desc="配置任务完成、异常和自动化事件要推送到哪里。" navigation={<SettingsViewTabs label="通知视图" items={NOTIFICATION_VIEWS} active={active} onSelect={setActive} />}><NotifyChannelsPanel onToast={onToast} /></SettingsSection>
+              <SettingsSection title="提醒设置" desc="选择如何接收提醒，以及通知中显示哪些信息。" navigation={<SettingsViewTabs label="通知视图" items={NOTIFICATION_VIEWS} active={active} onSelect={setActive} />}><NotifyChannelsPanel onToast={onToast} sessionId={sessionId} /></SettingsSection>
             ) : active === "weixin-channel" ? (
-              <SettingsSection title="消息通道" desc="连接消息应用，在外出时继续桌面任务并管理访问范围。"><WeixinChannelPanel onToast={onToast} /></SettingsSection>
+              <SettingsSection title="微信连接" desc="在微信继续已授权的桌面任务。使用期间请保持电脑开机、联网并运行 EchoAgent。"><WeixinChannelPanel onToast={onToast} /></SettingsSection>
             ) : active === "cloud-storage" ? (
-              <SettingsSection title="云存储" desc="管理 WebDAV 连接，并手动浏览、上传和下载云端文件；不会自动同步。"><CloudStoragePanel onToast={onToast} onUnsavedChange={setCloudDirty} /></SettingsSection>
+              <SettingsSection title="云存储" desc="连接 WebDAV 存储，按需浏览和传输文件。此功能不会自动同步本地资料。"><CloudStoragePanel onToast={onToast} onUnsavedChange={setCloudDirty} /></SettingsSection>
             ) : active === "general" ? (
-              <GeneralSettingsPanel />
+              <div className="settings-subview">
+                <SettingsViewTabs label="通用视图" items={GENERAL_VIEWS} active={active} onSelect={setActive} />
+                <GeneralSettingsPanel />
+              </div>
             ) : active === "agent-settings" ? (
               <AgentSettingsPanel />
             ) : active === "agent-mail" ? (

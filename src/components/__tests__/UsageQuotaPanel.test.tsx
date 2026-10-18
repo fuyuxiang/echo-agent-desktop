@@ -1,4 +1,4 @@
-import { describe, it, expect, beforeEach } from "vitest";
+import { describe, it, expect, beforeEach, vi } from "vitest";
 import { act, render, screen, fireEvent } from "@testing-library/react";
 import { UsageQuotaPanel } from "../UsageQuotaPanel";
 import { recordUsage, clearUsage, saveQuotaConfig, todayKey, type UsageRecord } from "@/lib/usage-quota";
@@ -41,6 +41,24 @@ describe("UsageQuotaPanel", () => {
     render(<UsageQuotaPanel />);
     // 1000 token used = 1000, limit 1000 → pct 100
     expect(screen.getByText(/1,000 \/ 1,000/)).toBeInTheDocument();
+  });
+
+  it("切换统计视图不改变已配置限额的计算周期", () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2026-10-18T12:00:00"));
+    try {
+      recordUsage([{ date: "2026-10-17", modelId: "gpt-4", promptTokens: 900, completionTokens: 0, ts: new Date("2026-10-17T12:00:00").getTime() }], { modelId: "gpt-4", promptTokens: 100, completionTokens: 0 });
+      saveQuotaConfig({ period: "daily", tokenLimit: 500 });
+      render(<UsageQuotaPanel />);
+      expect(screen.getByText("每日配额")).toBeInTheDocument();
+      expect(screen.getByText("100 / 500 (20%)")).toBeInTheDocument();
+      fireEvent.click(screen.getByText("本月"));
+      expect(screen.getByText("每日配额")).toBeInTheDocument();
+      expect(screen.getByText("100 / 500 (20%)")).toBeInTheDocument();
+      expect(screen.getByText("仅限制本机手动发送；自动化和其他客户端不受此限制。")).toBeInTheDocument();
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it("按模型分组显示", () => {

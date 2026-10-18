@@ -544,8 +544,21 @@ export function Composer({
   useEffect(() => {
     const el = ref.current;
     if (!el) return;
-    el.style.height = "auto";
-    el.style.height = Math.min(el.scrollHeight, 160) + "px";
+    const resize = () => {
+      el.style.height = "0px";
+      // CSS owns the viewport-dependent maximum; scrollHeight measures the
+      // entire draft, so deleting text also shrinks the field correctly.
+      el.style.height = `${el.scrollHeight}px`;
+    };
+    resize();
+    let width = el.getBoundingClientRect().width;
+    const observer = typeof ResizeObserver === "undefined" ? null : new ResizeObserver(() => {
+      const next = el.getBoundingClientRect().width;
+      if (next !== width) { width = next; resize(); }
+    });
+    observer?.observe(el);
+    window.addEventListener("resize", resize);
+    return () => { observer?.disconnect(); window.removeEventListener("resize", resize); };
   }, [text]);
 
   // Restore before applying explicit template/edit commands. A same-scope
@@ -1095,6 +1108,7 @@ export function Composer({
   const [cursorPos, setCursorPos] = useState(0);
   const slashCommandsRef = useRef<SlashCommandsHandle>(null);
   const atMenuRef = useRef<AtMentionHandle>(null);
+  const composingRef = useRef(false);
   // Slash completion is limited to the first token, matching runtime command
   // resolution. The shared parser supports qualified names such as
   // `/plugin-name:skill-name`.
@@ -1133,8 +1147,14 @@ export function Composer({
       {Object.keys(storageErrors).length > 0 && <div role="alert" className="composer-storage-error">本机保存失败，当前输入仍保留在窗口中。请先复制内容或到「设置 → 数据管理 → 备份与目录」导出备份，再重试保存。{Object.values(storageErrors)[0]}</div>}
       <section
         className={composerCls}
-        onClick={() => {
-          if (!apiReady) onOpenSettings?.();
+        onClick={(event) => {
+          if (!apiReady) { onOpenSettings?.(); return; }
+          const target = event.target as Element;
+          if (target.closest('button, input, textarea, select, a, [role="button"], [role="menu"], [role="listbox"], [contenteditable], .composer-attachments, .composer-blocks')) return;
+          const input = ref.current;
+          if (!input || input.disabled || input.selectionStart !== input.selectionEnd) return;
+          if (window.getSelection()?.isCollapsed === false) return;
+          input.focus({ preventScroll: true });
         }}
         onDragOver={(event) => {
           // SP4: HTML5 fallback for in-webview drag from the file tree.
@@ -1298,6 +1318,9 @@ export function Composer({
             setCursorPos((e.target as HTMLTextAreaElement).selectionStart ?? cursorPos)
           }
           onPaste={handlePaste}
+          onCompositionStart={() => { composingRef.current = true; }}
+          onCompositionEnd={() => { composingRef.current = false; }}
+          onBlur={() => { composingRef.current = false; }}
           onClick={(e) =>
             setCursorPos((e.target as HTMLTextAreaElement).selectionStart ?? cursorPos)
           }
@@ -1305,6 +1328,10 @@ export function Composer({
             setCursorPos((e.target as HTMLTextAreaElement).selectionStart ?? cursorPos)
           }
           onKeyDown={(e) => {
+            // WebView2 can report the IME's final Enter with isComposing=false
+            // and keyCode=229. Do not send, choose a menu row or navigate
+            // history until composition has actually finished.
+            if (composingRef.current || e.nativeEvent.isComposing || e.nativeEvent.keyCode === 229) return;
             if (
               !e.nativeEvent.isComposing
               && atMenuRef.current?.handleKeyDown(e as unknown as KeyboardEvent)

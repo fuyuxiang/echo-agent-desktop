@@ -152,6 +152,7 @@ log_ok "Vendored Runtime source is complete"
 log_step "Building and staging Echo Code IDE"
 pnpm ide:build
 pnpm ide:stage
+node scripts/validate-theia-git-runtime.mjs
 log_ok "Vendored Theia IDE and Node runtime staged"
 
 # ---------------------------------------------------------------------------

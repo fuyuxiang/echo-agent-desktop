@@ -327,14 +327,8 @@
 [data-theme="dark"] .atm-empty-action-btn { background: var(--atm-toolbar-pill-bg); }
 .atm-empty-action-btn:hover:not(:disabled) { background: var(--echo-palette-gray-4); }
 [data-theme="dark"] .atm-empty-action-btn:hover:not(:disabled) { background: var(--atm-toolbar-pill-bg-hover); }
-.atm-empty-state-templates { width: 100%; flex-shrink: 0; display: flex; flex-direction: column; gap: 12px; }
+.atm-empty-state-templates { width: 100%; flex-shrink: 0; display: flex; flex-direction: column; gap: 14px; }
 .atm-empty-state-templates .atm-template-section { margin: 0; }
-.atm-empty-state-templates-title {
-  color: var(--atm-text-primary);
-  font-size: 1rem;
-  font-weight: 600;
-  line-height: 22px;
-}
 
 .atm-panel-empty {
   display: flex;
@@ -363,66 +357,6 @@
   color: var(--atm-text-secondary);
   padding: 16px 0 8px;
 }
-.atm-template-list--compact {
-  display: grid;
-  grid-template-columns: repeat(3, minmax(0, 1fr));
-  gap: 12px;
-}
-@media (max-width: 1100px) {
-  .atm-template-list--compact { grid-template-columns: repeat(2, minmax(0, 1fr)); }
-}
-@media (max-width: 760px) {
-  .atm-template-list--compact { grid-template-columns: minmax(0, 1fr); }
-}
-.atm-template-card--compact {
-  width: 100%;
-  min-width: 0;
-  display: flex;
-  align-items: center;
-  gap: 12px;
-  padding: 16px;
-  border: none;
-  border-radius: 16px;
-  background: var(--atm-surface);
-  box-shadow: 0 16px 32px -8px rgba(0, 0, 0, 0.03);
-  cursor: pointer;
-  transition: background 0.15s ease, box-shadow 0.15s ease;
-  text-align: left;
-}
-.atm-template-card--compact:hover {
-  background: var(--atm-surface-hover);
-  box-shadow: 0 16px 32px -8px rgba(0, 0, 0, 0.08);
-}
-.atm-template-compact-avatar {
-  flex-shrink: 0;
-  width: 32px;
-  height: 32px;
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  color: var(--atm-text-primary);
-}
-.atm-template-compact-icon { width: 20px; height: 20px; }
-.atm-template-compact-texts { flex: 1; min-width: 0; display: flex; flex-direction: column; }
-.atm-template-compact-title {
-  font-size: 0.875rem;
-  font-weight: 500;
-  line-height: 22px;
-  color: var(--atm-text-primary);
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
-}
-.atm-template-compact-desc {
-  font-size: 0.75rem;
-  font-weight: 400;
-  line-height: 20px;
-  color: var(--atm-text-secondary);
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
-}
-
 /* ---------- 任务列表（当前 / 已暂停） ---------- */
 .atm-task-list {
   display: flex;

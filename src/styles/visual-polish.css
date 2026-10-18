@@ -1064,17 +1064,19 @@ button,
 .home {
   position: relative;
   isolation: isolate;
-  justify-content: center;
-  max-width: 840px;
+  min-height: 0;
+  max-width: none;
   overflow-x: hidden;
-  padding: 40px clamp(24px, 4vw, 40px) 56px;
+  padding: 48px clamp(24px, 4cqi, 64px);
 }
 
 .home__inner {
-  max-width: 760px;
-  justify-content: center;
-  gap: 18px;
-  margin-block: auto;
+  max-width: 880px;
+  flex: 0 0 auto;
+  gap: 28px;
+  /* Auto margins center the whole task entry. When content outgrows the
+     window they resolve to zero, keeping the title reachable by scrolling. */
+  margin: auto;
 }
 
 .home__header {
@@ -1083,9 +1085,9 @@ button,
 }
 
 .home__title {
-  font-size: clamp(1.875rem, 3vw, 2.25rem);
-  font-weight: 650;
-  line-height: 1.25;
+  font-size: clamp(1.75rem, 3cqi, 2rem);
+  font-weight: 600;
+  line-height: 1.35;
   letter-spacing: -0.025em;
   text-align: center;
 }
@@ -1116,9 +1118,36 @@ button,
   box-shadow: 0 20px 54px color-mix(in srgb, var(--echo-brand) 10%, rgba(18, 30, 28, 0.1));
 }
 
-.echo-composer :where(textarea, input):focus-visible {
-  outline: none;
+.home .echo-composer {
+  padding: 16px 16px 0;
+  border-radius: 20px;
+  box-shadow: 0 8px 28px -8px rgba(18, 30, 28, 0.1), 0 2px 6px rgba(18, 30, 28, 0.025);
 }
+
+.home .echo-composer:focus-within {
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--echo-brand) 7%, transparent), 0 8px 28px -8px rgba(18, 30, 28, 0.1);
+}
+
+.home .echo-composer-meta {
+  margin-top: 8px;
+}
+
+.echo-composer__input { max-height: min(32vh, 280px); overflow-y: auto; }
+.echo-composer--home .echo-composer__input {
+  min-height: clamp(88px, 11vh, 120px);
+  max-height: clamp(160px, 36vh, 420px);
+}
+@media (max-height: 640px) {
+  .home { padding-block: 24px; }
+  .echo-composer--home .echo-composer__input { min-height: 80px; }
+}
+
+.chatview__workspace-label { display: inline-flex; align-items: center; gap: 6px; min-width: 0; color: var(--echo-text-medium); font-size: 0.75rem; }
+.chatview__workspace-label > span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.chatview__workspace-label > svg { flex: none; }
+.chatview__new-task { display: inline-flex; align-items: center; gap: 4px; padding: 4px 8px; border: 1px solid var(--ui-line); border-radius: 6px; background: var(--ui-surface); color: var(--echo-text-medium); font: inherit; font-size: 0.75rem; white-space: nowrap; cursor: pointer; }
+.chatview__new-task:hover { background: var(--echo-bg-hover); }
+.workspace-picker__error { max-width: 360px; padding: 8px 12px; color: var(--echo-status-error); white-space: normal; overflow-wrap: anywhere; font-size: 0.75rem; }
 
 /* 拖拽图片时的全卡片覆盖提示。Tauri onDragDropEvent 在 enter/over 期间触发,
    半透明遮罩 + 居中文案给用户一个明确的释放目标。
@@ -1543,6 +1572,9 @@ button,
 }
 
 .chatview__utility-bar .chatview__workspace-bar {
+  display: flex;
+  align-items: center;
+  gap: 8px;
   min-width: 0;
   z-index: auto;
 }
@@ -1662,7 +1694,8 @@ button,
   box-shadow: 0 0 0 3px var(--ui-brand-soft);
 }
 
-.project-grid {
+.project-grid,
+.template-grid {
   gap: 20px;
 }
 
@@ -1718,7 +1751,8 @@ button,
 
 .automation-panel .atm-template-page,
 .automation-panel .atm-empty-state {
-  padding-inline: var(--ui-page-gutter);
+  width: min(100%, var(--echo-page-width));
+  padding-inline: var(--echo-page-gutter);
 }
 
 .automation-panel .atm-task-list,
@@ -1726,25 +1760,16 @@ button,
   padding-inline: var(--ui-page-gutter);
 }
 
+@container app-main (max-width: 520px) {
+  .automation-panel .atm-template-page,
+  .automation-panel .atm-empty-state { padding-inline: 16px; }
+}
+
 .atm-segmented,
 .atm-toolbar-btn,
 .atm-search-input {
   border: 1px solid var(--ui-line);
   background: color-mix(in srgb, var(--ui-surface) 74%, transparent);
-}
-
-.atm-template-card--compact {
-  border: 1px solid var(--ui-line);
-  background: var(--ui-surface);
-  box-shadow: var(--ui-shadow-xs);
-  transition: transform 160ms ease, box-shadow 160ms ease, border-color 160ms ease;
-}
-
-.atm-template-card--compact:hover {
-  transform: translateY(-2px);
-  border-color: var(--ui-brand-line);
-  background: var(--ui-surface);
-  box-shadow: var(--ui-shadow-sm);
 }
 
 .atm-row {
@@ -1854,7 +1879,6 @@ button,
   font-size: 0.8125rem;
   line-height: 1.55;
 }
-.resources-panel__action-btn,
 .plugins-panel__action-btn {
   height: var(--ui-control-md);
   border-color: var(--ui-line-strong);
@@ -1953,6 +1977,96 @@ button,
   background: var(--ui-surface-raised);
   box-shadow: var(--ui-shadow-sm);
   backdrop-filter: blur(18px);
+}
+
+/* Connected organizations share the project page's hero, gutter and type scale. */
+.org-memory.org-memory--connected {
+  padding: 0;
+  background: transparent;
+}
+
+.org-memory--connected .capability-page__inner {
+  display: flex;
+  flex-direction: column;
+  min-height: 100%;
+  padding-bottom: 16px;
+}
+
+.org-memory--connected .capability-page__header {
+  flex: none;
+}
+
+.org-memory--connected .capability-page__content {
+  flex: 1 0 auto;
+}
+
+.org-memory--connected .org-memory__capability {
+  margin-top: 0;
+  font-size: inherit;
+}
+
+.org-memory--connected .org-memory__identity {
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.org-memory--connected .org-memory__workspace {
+  flex: 1 0 auto;
+  width: 100%;
+  max-width: none;
+  min-height: 0;
+  border-radius: var(--echo-radius-card);
+  box-shadow: none;
+}
+
+.org-memory--connected .org-memory__nav {
+  background: var(--echo-bg-primary);
+}
+
+.org-memory--connected .org-memory__page-header h2 {
+  font-size: 1.125rem;
+  font-weight: 700;
+  line-height: 1.4;
+  letter-spacing: -0.015em;
+}
+
+.org-memory--connected .org-memory__page-header p {
+  font-size: .8125rem;
+}
+
+.org-memory--connected .org-overview p,
+.org-memory--connected .org-overview__metrics span {
+  font-size: .75rem;
+}
+
+.org-memory--connected .org-overview__metrics small,
+.org-memory--connected .org-memory__nav-label {
+  font-size: .6875rem;
+}
+
+.org-memory--connected .org-overview__metrics button {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+@container capability-page (max-width: 820px) {
+  .org-memory--connected .org-memory__workspace {
+    grid-template-columns: 160px minmax(0, 1fr);
+  }
+  .org-memory--connected .org-memory__content { padding: 20px 18px 28px; }
+  .org-memory--connected .org-memory__page-header { flex-wrap: wrap; }
+  .org-memory--connected .org-overview__hero { grid-template-columns: 42px minmax(0, 1fr); }
+  .org-memory--connected .org-overview__hero > .org-memory__primary { grid-column: 2; justify-self: start; }
+}
+
+@container capability-page (max-width: 620px) {
+  .org-memory--connected .org-memory__workspace { display: block; min-height: 0; }
+  .org-memory--connected .org-memory__nav { flex-direction: row; gap: 4px; overflow-x: auto; border-right: 0; border-bottom: 1px solid var(--ui-line); padding: 9px; }
+  .org-memory--connected .org-memory__nav-label { display: none; }
+  .org-memory--connected .org-memory__nav button { display: flex; flex: none; width: auto; }
+  .org-memory--connected .org-memory__nav button em { display: none; }
 }
 
 /* ---------- Utility pages ---------- */
@@ -2443,10 +2557,6 @@ button,
     padding-right: 32px;
   }
 
-  .home__title {
-    font-size: clamp(1.8125rem, 4.5cqi, 2.125rem);
-  }
-
   .um-topbar {
     align-items: stretch;
     flex-wrap: wrap;
@@ -2687,13 +2797,14 @@ button,
 
 @container app-main (max-width: 760px) {
   .home {
-    padding: 28px 24px 44px;
+    padding: 32px 24px;
   }
 
   .home__title {
-    font-size: clamp(1.75rem, 7cqi, 2rem);
+    font-size: clamp(1.5rem, 4.5cqi, 1.875rem);
   }
 .project-grid,
+.template-grid,
 .quota-panel__stats {
     grid-template-columns: minmax(0, 1fr);
   }
@@ -2835,6 +2946,7 @@ button,
   }
 
   .project-grid,
+  .template-grid,
   .quota-panel__stats {
     grid-template-columns: minmax(0, 1fr);
   }
@@ -2846,15 +2958,11 @@ button,
   }
 
   .home {
-    padding: 28px 28px 44px;
+    padding-inline: 28px;
   }
 
   .home__inner {
-    gap: 16px;
-  }
-
-  .home__title {
-    font-size: clamp(1.75rem, 4vw, 2rem);
+    gap: 24px;
   }
 
   .echo-composer--home .echo-composer__input {
@@ -2891,8 +2999,7 @@ button,
   }
 
   .home {
-    justify-content: flex-start;
-    padding: 24px 24px 40px;
+    padding-inline: 24px;
   }
 
   .home__title {
@@ -3020,15 +3127,6 @@ button,
  * Keep this block last: app.css still contains the legacy compact settings
  * rules, while this file is the final visual layer loaded by main.tsx.
  * ===================================================================== */
-
-.notify-panel__edit-hint {
-  margin: 0;
-  padding: 12px 16px;
-  border-top: 1px solid var(--ui-line);
-  color: var(--echo-text-medium);
-  font-size: 0.75rem;
-  line-height: 1.5;
-}
 
 .settings-subview {
   display: flex;
@@ -3676,16 +3774,9 @@ button,
   white-space: nowrap;
 }
 
-.archived-settings__bulk-delete {
-  border-color: color-mix(in srgb, #e5484d 32%, var(--ui-line));
-  color: #d83b40;
-}
 
-.archived-settings__bulk-delete:hover:not(:disabled) {
-  border-color: color-mix(in srgb, #e5484d 48%, var(--ui-line));
-  background: color-mix(in srgb, #e5484d 9%, transparent);
-  color: #c83338;
-}
+
+
 
 .archived-settings__error {
   padding: 10px 12px;
@@ -3808,30 +3899,11 @@ button,
   padding: 4px 10px;
 }
 
-.archived-settings__delete {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  width: 34px;
-  height: 34px;
-  padding: 0;
-  border: 1px solid transparent;
-  border-radius: 8px;
-  background: transparent;
-  color: var(--echo-text-weak);
-  cursor: pointer;
-}
 
-.archived-settings__delete:hover:not(:disabled) {
-  border-color: color-mix(in srgb, #e5484d 24%, transparent);
-  background: color-mix(in srgb, #e5484d 8%, transparent);
-  color: #e5484d;
-}
 
-.archived-settings__delete:disabled {
-  cursor: default;
-  opacity: 0.45;
-}
+
+
+
 
 .archived-settings__empty {
   display: flex;
@@ -4120,7 +4192,7 @@ a.help-card:hover {
 
 .rules-list__item {
   display: grid;
-  grid-template-columns: 58px minmax(72px, 0.35fr) minmax(120px, 1fr) 30px;
+  grid-template-columns: 58px minmax(72px, 0.35fr) minmax(120px, 1fr) var(--echo-size-control-sm);
   gap: 10px;
   min-height: 40px;
   padding: 7px 9px;
@@ -4136,25 +4208,9 @@ a.help-card:hover {
   white-space: nowrap;
 }
 
-.rules-list__remove {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  width: 28px;
-  height: 28px;
-  padding: 0;
-  border: 0;
-  border-radius: 7px;
-  background: transparent;
-  color: var(--echo-text-weak);
-  cursor: pointer;
-  font-size: 1.125rem;
-}
 
-.rules-list__remove:hover {
-  background: rgba(229, 72, 72, 0.1);
-  color: #e54848;
-}
+
+
 
 .permission-rule-builder {
   display: grid;
@@ -4803,4 +4859,104 @@ a.help-card:hover {
   .toast__actions {
     justify-content: flex-end;
   }
+}
+
+/* Notifications use the same settings rows as the rest of the preferences. */
+.notify-panel {
+  display: flex;
+  flex-direction: column;
+  gap: 24px;
+  min-width: 0;
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+  box-shadow: none;
+  overflow: visible;
+}
+
+.notify-panel__preference {
+  display: flex;
+  flex-direction: row;
+  align-items: center;
+  justify-content: space-between;
+  gap: 24px;
+}
+
+.notify-panel__preference .settings-row__label { flex: 1; min-width: 0; }
+.notify-panel__preference .sk-toggle { flex: none; }
+.notify-panel__test-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 20px;
+  padding: 12px;
+  border-top: 1px solid var(--ui-line);
+}
+.notify-panel__test-row p, .notify-panel__feedback, .notify-panel__help p,
+.notify-panel__external-note, .notify-panel__edit-hint {
+  margin: 0;
+  color: var(--echo-text-medium);
+  font-size: 0.75rem;
+  line-height: 1.6;
+  overflow-wrap: anywhere;
+}
+.notify-panel__test-row .settings-btn { flex: none; }
+.notify-panel__feedback { padding: 0 12px 12px; }
+.notify-panel__help { flex: 1; min-width: 0; padding: 7px 0; font-size: 0.75rem; color: var(--echo-text-medium); }
+.notify-panel__help summary, .notification-row__details summary { width: fit-content; cursor: pointer; }
+.notify-panel__help p { margin-top: 8px; }
+.notify-advanced { border: 1px solid var(--ui-line); border-radius: 14px; background: var(--ui-surface); overflow: hidden; }
+.notify-advanced__toggle {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  width: 100%;
+  min-height: 80px;
+  padding: 18px 20px;
+  border: 0;
+  background: transparent;
+  color: var(--echo-text-medium);
+  text-align: left;
+  font: inherit;
+  cursor: pointer;
+}
+.notify-advanced__toggle:hover { background: var(--ui-surface-muted); }
+.notify-advanced__heading { display: flex; flex: 1; min-width: 0; flex-direction: column; }
+.notify-advanced__toggle > svg { flex: none; transition: transform 150ms ease; }
+.notify-advanced__toggle[aria-expanded="true"] > svg { transform: rotate(180deg); }
+.notify-advanced__count { flex: none; font-size: 0.75rem; }
+.notify-advanced__content { min-width: 0; padding: 0 20px 20px; border-top: 1px solid var(--ui-line); }
+.notify-panel__external-note { padding: 16px 0; }
+.notify-panel__list { padding: 0; }
+.notify-panel__row { gap: 16px; padding: 14px 0; border-bottom: 1px solid var(--ui-line); border-radius: 0; }
+.notify-panel__row.disabled { opacity: 1; }
+.notify-panel__channel-info { display: flex; flex: 1 1 180px; flex-direction: column; gap: 5px; min-width: 0; }
+.notify-panel__row-label { min-width: 0; overflow-wrap: anywhere; }
+.notify-panel__channel-description { color: var(--echo-text-medium); font-size: 0.75rem; overflow-wrap: anywhere; }
+.notify-panel__row-actions { flex-wrap: wrap; gap: 6px; }
+
+
+.notify-panel__empty { padding: 4px 0 16px; text-align: left; font-size: 0.75rem; line-height: 1.6; }
+.notify-panel__add-button { margin-top: 12px; }
+.notify-panel__editor { margin-top: 16px; padding: 16px; border: 1px solid var(--ui-line); border-radius: 12px; background: var(--ui-surface-muted); }
+.notify-panel__editor h4 { margin: 0 0 14px; color: var(--echo-text-strong); font-size: 0.875rem; font-weight: 600; }
+.notify-panel__edit-hint { padding: 0 0 12px; }
+.notify-panel__add { padding: 0; border: 0; grid-template-columns: repeat(2, minmax(0, 1fr)); }
+.notify-panel__field--endpoint, .notify-panel__form-actions { grid-column: 1 / -1; }
+.notify-panel__form-actions { display: flex; justify-content: flex-end; flex-wrap: wrap; gap: 8px; padding-top: 4px; }
+.notify-advanced__toggle:focus-visible, .notify-panel__btn:focus-visible,
+.notify-panel__help summary:focus-visible, .notification-row__details summary:focus-visible { outline: 2px solid var(--echo-brand); outline-offset: -3px; border-radius: 8px; }
+.notification-row__description { margin: 8px 0; font-size: 0.8125rem; line-height: 1.6; white-space: pre-wrap; overflow-wrap: anywhere; }
+.notification-row__details { margin: 8px 0; color: var(--echo-text-medium); font-size: 0.75rem; }
+.notification-row__details pre { max-width: 100%; overflow: auto; }
+
+@media (max-width: 680px) {
+  .notify-panel__test-row { align-items: flex-start; flex-direction: column; gap: 12px; }
+  .notify-advanced__toggle { padding: 16px; flex-wrap: wrap; }
+  .notify-advanced__heading { flex-basis: calc(100% - 30px); }
+  .notify-advanced__count { order: 1; }
+  .notify-advanced__content { padding-inline: 16px; }
+  .notify-panel__row { align-items: flex-start; flex-wrap: wrap; }
+  .notify-panel__row-actions { flex: 1 1 100%; }
+  .notify-panel__add { grid-template-columns: minmax(0, 1fr); }
 }

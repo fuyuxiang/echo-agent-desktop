@@ -173,6 +173,8 @@ if ($LASTEXITCODE -ne 0 -or $stagedNodeArch -ne "x64") {
     Log-Err "Staged Node.js architecture is $stagedNodeArch; the Windows installer requires x64."
     exit 1
 }
+& $stagedNode (Join-Path $ProjectRoot "scripts\validate-theia-git-runtime.mjs")
+if ($LASTEXITCODE -ne 0) { throw "Theia Git windowless plugin validation failed" }
 Log-Ok "Vendored Theia IDE and Node runtime staged"
 Log-Step "Checking Windows IDE terminal lifecycle"
 & $stagedNode (Join-Path $ProjectRoot "scripts\validate-theia-pty.mjs") (Join-Path $ProjectRoot "src-tauri\resources\theia\browser")

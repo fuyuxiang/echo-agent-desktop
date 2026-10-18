@@ -418,3 +418,42 @@ describe("Composer", () => {
     expect(onSend).toHaveBeenCalledWith("请继续优化", ["/tmp/方案.docx"]);
   });
 });
+
+it("输入卡空白可聚焦，按钮和已有选区保持各自交互", () => {
+  const {container} = render(<Composer {...base} />);
+  const input = screen.getByRole("textbox") as HTMLTextAreaElement;
+  const card = container.querySelector(".echo-composer")!;
+  fireEvent.click(card);
+  expect(input).toHaveFocus();
+  fireEvent.change(input, {target:{value:"保留选中的中文"}});
+  input.setSelectionRange(0, 2);
+  input.blur();
+  fireEvent.click(card);
+  expect(input).not.toHaveFocus();
+  expect(input.selectionStart).toBe(0);
+  expect(input.selectionEnd).toBe(2);
+});
+
+it("中文组合输入 Enter 不发送，Shift+Enter 不发送", () => {
+  const onSend = vi.fn();
+  render(<Composer {...base} onSend={onSend} />);
+  const input = screen.getByRole("textbox");
+  fireEvent.change(input, {target:{value:"中文输入"}});
+  fireEvent.keyDown(input, {key:"Enter", isComposing:true});
+  fireEvent.keyDown(input, {key:"Enter", shiftKey:true});
+  expect(onSend).not.toHaveBeenCalled();
+});
+
+it("WebView2 组合状态与最终 229 Enter 都不误发送或选择命令", () => {
+  const onSend = vi.fn();
+  render(<Composer {...base} onSend={onSend} />);
+  const input = screen.getByRole("textbox");
+  fireEvent.change(input, {target:{value:"中文候选"}});
+  fireEvent.compositionStart(input);
+  fireEvent.keyDown(input, {key:"Enter", isComposing:false});
+  fireEvent.compositionEnd(input);
+  fireEvent.keyDown(input, {key:"Enter", keyCode:229});
+  expect(onSend).not.toHaveBeenCalled();
+  fireEvent.keyDown(input, {key:"Enter"});
+  expect(onSend).toHaveBeenCalledWith("中文候选", []);
+});

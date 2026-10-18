@@ -12,8 +12,6 @@ const primarySelector = [
   ".coding-primary-btn", ".pd-invite", ".pd-btn--primary", ".pd-pill--on",
   ".echo-composer__send", ".context-menu__rename-save", ".coding-agent__send",
   ".coding-agent__decision button.is-primary", ".automation-approval__approve",
-  ".weixin-channel__code button",
-  ".weixin-channel__card button:not(.weixin-channel__secondary):not(.weixin-channel__shared button)",
 ].join(",");
 
 export async function inspectButtonBackgrounds(page, theme) {

@@ -59,7 +59,7 @@ describe("WeixinChannelPanel", () => {
     render(<WeixinChannelPanel onToast={onToast} />);
 
     expect(await screen.findByRole("heading", { name: "授权工作区" })).toBeInTheDocument();
-    expect(screen.getByRole("heading", { name: "微信远程对话" })).toBeInTheDocument();
+    expect(screen.getByRole("heading", { name: "已连接" })).toBeInTheDocument();
     expect(backend.status).toHaveBeenCalledOnce();
     expect(backend.invoke).toHaveBeenCalledWith("agent_list_workspaces");
     expect(screen.getByRole("checkbox", { name: /\/repo\/A/ })).toBeChecked();

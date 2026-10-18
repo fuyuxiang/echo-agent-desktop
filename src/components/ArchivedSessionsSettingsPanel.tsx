@@ -408,7 +408,7 @@ export function ArchivedSessionsSettingsPanel({
             </button>
             <button
               type="button"
-              className="settings-btn archived-settings__bulk-delete"
+              className="settings-btn settings-btn--danger archived-settings__bulk-delete"
               onClick={requestBulkDelete}
               disabled={!onDeleteSession || selectedEntries.length === 0 || bulkBusy}
             >
@@ -485,7 +485,7 @@ export function ArchivedSessionsSettingsPanel({
                   </button>
                   <button
                     type="button"
-                    className="archived-settings__delete"
+                    className="settings-btn settings-btn--ghost settings-btn--danger settings-btn--compact settings-btn--icon-only archived-settings__delete"
                     aria-label={`永久删除 ${entry.title}`}
                     title="永久删除"
                     onClick={() => requestDelete(entry)}

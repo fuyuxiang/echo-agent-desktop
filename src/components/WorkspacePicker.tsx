@@ -2,6 +2,7 @@ import { useCallback, useEffect, useId, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import { ChevronDown, Check, Folder, FolderOpen } from "lucide-react";
 import { filesystemPickDirectory, type WorkspaceInfo } from "@/lib/agent-client";
+import { displayPath, shortWorkspacePath } from "@/lib/display-path";
 import {
   useAnchoredFloating,
   type FloatingAlignment,
@@ -31,6 +32,9 @@ export function WorkspacePicker({
   menuAlign?: FloatingAlignment;
 }) {
   const [open, setOpen] = useState(false);
+  const [pickError, setPickError] = useState<string | null>(null);
+  const [picking, setPicking] = useState(false);
+  const pickingRef = useRef(false);
   const reactId = useId();
   const menuId = `workspace-picker-${reactId.replace(/:/g, "")}`;
   const ref = useRef<HTMLDivElement>(null);
@@ -114,22 +118,26 @@ export function WorkspacePicker({
   };
 
   // Shorten a cwd for display: show last 2 path segments.
-  const shortName = (p: string) => {
-    const parts = p.replace(/\\/g, "/").split("/").filter(Boolean);
-    return parts.slice(-2).join("/") || p;
-  };
+  const shortName = shortWorkspacePath;
 
   const triggerLabel = cwd ? shortName(cwd) : "选择工作目录";
 
   // 打开系统目录选择框，切换到任意文件夹（不限于历史目录）。
   const pickFolder = async () => {
+    if (pickingRef.current) return;
+    pickingRef.current = true;
+    setPicking(true);
+    setPickError(null);
     try {
       const selected = await filesystemPickDirectory();
       if (!selected) return;
       onSelectWorkspace(selected);
       close();
-    } catch {
-      // dialog plugin not available in non-Tauri env (vitest) — no-op.
+    } catch (error) {
+      setPickError(`无法选择文件夹：${String(error).replace(/^Error:\s*/, "")}`);
+    } finally {
+      pickingRef.current = false;
+      setPicking(false);
     }
   };
 
@@ -142,11 +150,11 @@ export function WorkspacePicker({
           setOpen((value) => !value);
         }}
         type="button"
-        aria-label={cwd ? `工作目录：${cwd}。点击切换` : "选择工作目录"}
+        aria-label={cwd ? `工作目录：${displayPath(cwd)}。点击切换` : "选择工作目录"}
         aria-haspopup="menu"
         aria-expanded={open}
         aria-controls={open ? menuId : undefined}
-        data-tip={cwd ? `当前工作目录：${cwd}` : "选择工作目录"}
+        data-tip={cwd ? `当前工作目录：${displayPath(cwd)}` : "选择工作目录"}
         ref={triggerRef}
         onKeyDown={(event) => {
           if (event.key === "ArrowDown" || event.key === "ArrowUp") {
@@ -178,11 +186,13 @@ export function WorkspacePicker({
               className="workspace-picker__item workspace-picker__item--browse"
               onClick={pickFolder}
               role="menuitem"
+              disabled={picking}
             >
               <FolderOpen size={14} />
-              <span className="workspace-picker__item-name">选择文件夹…</span>
+              <span className="workspace-picker__item-name">{picking ? "正在选择…" : pickError ? "重试选择文件夹…" : "选择文件夹…"}</span>
             </button>
           </li>
+          {pickError && <li role="none" className="workspace-picker__error"><span role="alert">{pickError}</span></li>}
           {workspaces.length === 0 && (
             <li className="workspace-picker__empty">暂无历史工作目录</li>
           )}
@@ -200,7 +210,7 @@ export function WorkspacePicker({
                 }}
                 role="menuitemradio"
                 aria-checked={w.cwd === cwd}
-                title={w.cwd}
+                title={displayPath(w.cwd)}
               >
                 <span className="workspace-picker__item-name">{shortName(w.cwd)}</span>
                 <span className="workspace-picker__item-meta">

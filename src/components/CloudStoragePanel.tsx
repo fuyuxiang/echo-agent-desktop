@@ -1,3 +1,4 @@
+import { SettingsDisclosure } from "./SettingsDisclosure";
 /**
  * 云存储浏览面板 —— 腾讯 Drive/文档 替代的 UI。
  *
@@ -20,6 +21,7 @@ import {
   type StorageEntry,
   type StorageProviderConfig,
 } from "@/lib/cloud-storage";
+import { ArrowUp, Download, Eye, FileText, Folder, Trash2 } from "lucide-react";
 import { useAppDialog } from "./AppDialog";
 
 export function CloudStoragePanel({ onToast, onUnsavedChange }: {
@@ -465,6 +467,7 @@ export function CloudStoragePanel({ onToast, onUnsavedChange }: {
         )}
         <div className="storage-panel__head-actions">
           <button type="button" className="form-button form-button--primary" onClick={beginNewConfig} disabled={configLoading || Boolean(configError) || configSaving}>添加存储源</button>
+          {selectedProvider && selectedEnabled && <button type="button" className="form-button" onClick={() => void testStorageProviderConfig(selectedProvider).then(() => onToast?.("连接正常")).catch((e) => onToast?.(`连接失败：${String(e).replace(/^Error:\s*/, "")}`))}>测试连接</button>}
           {selectedProvider && <button type="button" className="form-button" onClick={editSelectedConfig} disabled={configSaving}>编辑配置</button>}
           {selectedProvider && <button type="button" className="form-button form-button--danger" onClick={() => void removeConfig()} disabled={configSaving}>移除配置</button>}
         </div>
@@ -473,7 +476,7 @@ export function CloudStoragePanel({ onToast, onUnsavedChange }: {
       {configError && (
         <div className="panel-inline-error" role="alert">
           <span>读取存储配置失败：{configError}</span>
-          <button type="button" onClick={() => void loadConfigs()} disabled={configLoading}>
+          <button type="button" className="form-button" onClick={() => void loadConfigs()} disabled={configLoading}>
             {configLoading ? "重试中…" : "重试"}
           </button>
         </div>
@@ -496,11 +499,19 @@ export function CloudStoragePanel({ onToast, onUnsavedChange }: {
         </div>
       )}
 
+      {/* 文件列表 */}
+      {!configLoading && !configError && !selectedProvider && !showConfig && (
+        <div className="storage-panel__empty">{providerOptions.length ? "选择存储源以管理连接，或展开文件浏览。" : "连接 WebDAV 存储源，即可浏览、上传和下载云端文件。"}</div>
+      )}
+      {selectedProvider && !selectedEnabled && (
+        <div className="storage-panel__empty">此存储源已禁用，可编辑配置重新启用或移除配置。</div>
+      )}
+      {selectedEnabled && <SettingsDisclosure title="浏览云端文件" description="查看目录，上传、下载或编辑文件" defaultOpen={Boolean(preview || browseError)}>
       {/* 面包屑 */}
       {selectedProvider && selectedEnabled && (
         <div className="storage-panel__breadcrumb">
           {currentPath !== "/" && (
-            <button type="button" onClick={goUp} className="storage-panel__up">↑ 上级</button>
+            <button type="button" onClick={goUp} className="form-button form-button--compact storage-panel__up"><ArrowUp size={14} />上级</button>
           )}
           <span className="storage-panel__path">{currentPath}</span>
           <button type="button" className="form-button form-button--compact" onClick={() => void createFolder()}>新建文件夹</button>
@@ -508,33 +519,25 @@ export function CloudStoragePanel({ onToast, onUnsavedChange }: {
           <button type="button" className="form-button form-button--compact" onClick={() => void uploadFiles()} disabled={!!busyAction}>
             {busyAction === "上传中…" ? busyAction : "上传文件"}
           </button>
-          <button type="button" className="form-button form-button--compact" onClick={() => void testStorageProviderConfig(selectedProvider).then(() => onToast?.("连接正常")).catch((e) => onToast?.(`连接失败：${String(e).replace(/^Error:\s*/, "")}`))}>测试连接</button>
         </div>
       )}
 
       {browseError && selectedProvider && selectedEnabled && (
         <div className="panel-inline-error" role="alert">
           <span>目录加载失败：{browseError}</span>
-          <button type="button" onClick={() => void browse(selectedProvider, currentPath)} disabled={loading}>
+          <button type="button" className="form-button" onClick={() => void browse(selectedProvider, currentPath)} disabled={loading}>
             {loading ? "重试中…" : "重试"}
           </button>
         </div>
       )}
 
-      {/* 文件列表 */}
-      {!configLoading && !configError && !selectedProvider && !showConfig && (
-        <div className="storage-panel__empty">{providerOptions.length ? "选择一个存储源以浏览文件。" : "连接 WebDAV 存储源，即可浏览、上传和下载云端文件。"}</div>
-      )}
-      {selectedProvider && !selectedEnabled && (
-        <div className="storage-panel__empty">此存储源已禁用，可编辑配置重新启用或移除配置。</div>
-      )}
       {selectedEnabled && loading ? (
         <div className="storage-panel__loading">加载中…</div>
       ) : selectedEnabled && entries.length > 0 ? (
         <ul className="storage-panel__list">
           {entries.map((e) => (
             <li key={e.path} className={"storage-panel__entry" + (e.isDir ? " dir" : "") + (preview?.providerId === selectedProvider && preview.path === e.path ? " storage-panel__entry--selected" : "")}>
-              <span className="storage-panel__entry-icon">{e.isDir ? "📁" : "📄"}</span>
+              <span className="storage-panel__entry-icon">{e.isDir ? <Folder size={18} /> : <FileText size={18} />}</span>
               {e.isDir ? (
                 <button
                   type="button"
@@ -552,12 +555,12 @@ export function CloudStoragePanel({ onToast, onUnsavedChange }: {
               )}
               <div className="storage-panel__entry-actions">
                 {!e.isDir && (
-                  <button type="button" onClick={() => void readFile(e)} title={readingPath === e.path ? "读取中…" : "读取"} aria-label={readingPath === e.path ? `正在读取 ${e.name}` : `读取 ${e.name}`} disabled={readingPath === e.path}>{readingPath === e.path ? "读取中…" : "👁"}</button>
+                  <button type="button" className="form-button form-button--compact form-button--ghost" onClick={() => void readFile(e)} title={readingPath === e.path ? "读取中…" : "读取"} aria-label={readingPath === e.path ? `正在读取 ${e.name}` : `读取 ${e.name}`} disabled={readingPath === e.path}>{readingPath === e.path ? "读取中…" : <Eye size={16} />}</button>
                 )}
                 {!e.isDir && (
-                  <button type="button" onClick={() => void downloadFile(e)} title="下载" aria-label={`下载 ${e.name}`} disabled={!!busyAction}>↓</button>
+                  <button type="button" className="form-button form-button--compact form-button--ghost form-button--icon-only" onClick={() => void downloadFile(e)} title="下载" aria-label={`下载 ${e.name}`} disabled={!!busyAction}><Download size={16} /></button>
                 )}
-                <button type="button" onClick={() => void deleteEntry(e)} title="删除" aria-label={`删除 ${e.name}`} className="danger">🗑</button>
+                <button type="button" onClick={() => void deleteEntry(e)} title="删除" aria-label={`删除 ${e.name}`} className="form-button form-button--compact form-button--ghost form-button--danger form-button--icon-only"><Trash2 size={16} /></button>
               </div>
             </li>
           ))}
@@ -574,9 +577,10 @@ export function CloudStoragePanel({ onToast, onUnsavedChange }: {
               <button type="button" className="form-button" onClick={() => leavePreview(() => {})}>关闭</button>
             </span>
           </div>
-          <textarea value={preview.content} onChange={(event) => setPreview({ ...preview, content: event.target.value })} aria-label={`编辑 ${preview.name}`} />
+          <textarea className="form-control" value={preview.content} onChange={(event) => setPreview({ ...preview, content: event.target.value })} aria-label={`编辑 ${preview.name}`} />
         </div>
       )}
+      </SettingsDisclosure>}
       {dialog}
     </div>
   );

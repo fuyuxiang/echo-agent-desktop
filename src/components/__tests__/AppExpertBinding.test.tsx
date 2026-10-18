@@ -13,6 +13,9 @@ vi.mock("@/stores/projects-store", async (original) => ({
 vi.mock("../ThemeProvider", () => ({ ThemeProvider: ({ children }: { children: ReactNode }) => children }));
 vi.mock("../TitleBar", () => ({ TitleBar: () => null }));
 vi.mock("../HomePage", () => ({ HomePage: (props: ComponentProps<typeof import("../HomePage").HomePage>) => <div>首页
+  <span data-testid="new-task-cwd">{props.cwd}</span>
+  <button onClick={() => props.onSelectWorkspace?.("/workspace/B")}>新任务选择 B</button>
+  <button onClick={() => props.onSelectWorkspace?.("/workspace/C")}>新任务选择 C</button>
   <button onClick={() => props.onSelectExpert?.({name:"Review",description:"review",scope:"user",path:"/fixture/agents/review.md",raw:"---\nname: Review\n---\nVerify the task"})}>输入菜单选择专家</button>
   <button onClick={() => void props.onSend("my unsent task")}>发送专家任务</button>
   {props.sendError && <div role="alert">{props.sendError}</div>}
@@ -22,8 +25,8 @@ vi.mock("../TasksPanel", () => ({ TasksPanel: () => null }));
 vi.mock("../SecondarySidebar", () => ({ SecondarySidebar: () => null }));
 vi.mock("../TopbarActions", () => ({ TopbarActions: () => null }));
 vi.mock("../FolderTrustDialog", () => ({ FolderTrustDialog: () => null }));
-vi.mock("../Sidebar", () => ({ Sidebar: () => null }));
-vi.mock("../ChatView", () => ({ ChatView: () => <div>已进入会话</div> }));
+vi.mock("../Sidebar", () => ({ Sidebar: (props: ComponentProps<typeof import("../Sidebar").Sidebar>) => <aside><button onClick={() => void props.onSelect("history-A", "/workspace/A")}>打开历史 A</button><button onClick={() => props.onNewSession()}>返回首页新建</button></aside> }));
+vi.mock("../ChatView", () => ({ ChatView: (props: ComponentProps<typeof import("../ChatView").ChatView>) => <div>已进入会话<span data-testid="session-cwd">{props.cwd}</span><button onClick={props.onNewTask}>从任务新建</button></div> }));
 vi.mock("@/lib/agent-client", async (original) => ({
   ...await original<object>(), agentInit: vi.fn(), agentAuthStatus: vi.fn(), providersList: vi.fn(),
   agentListAllSessions: vi.fn(), agentListWorkspaces: vi.fn(async () => []),
@@ -75,4 +78,25 @@ describe("expert task persistent binding admission", () => {
     expect(client.agentSend).not.toHaveBeenCalled(); expect(usePendingExpertStore.getState().expert?.name).toBe("Review");
     expect(screen.getAllByRole("alert").some(alert => alert.textContent?.includes("专家配置已更新"))).toBe(true);
   });
+});
+
+
+it("历史 A 与下一任务 B/C 分离，最终新任务真正绑定 C", async () => {
+  vi.mocked(client.agentListAllSessions).mockResolvedValue([{sessionId:"history-A",title:"History",cwd:"/workspace/A",currentModelId:"model-a"}]);
+  await start();
+  fireEvent.click(screen.getByRole("button", {name:"新任务选择 B"}));
+  expect(screen.getByTestId("new-task-cwd")).toHaveTextContent("/workspace/B");
+  fireEvent.click(screen.getByRole("button", {name:"打开历史 A"}));
+  expect(await screen.findByTestId("session-cwd")).toHaveTextContent("/workspace/A");
+  await waitFor(() => expect(client.agentLoadSession).toHaveBeenLastCalledWith("history-A", "/workspace/A"));
+  fireEvent.click(screen.getByRole("button", {name:"从任务新建"}));
+  expect(await screen.findByTestId("new-task-cwd")).toHaveTextContent("/workspace/B");
+  fireEvent.click(screen.getByRole("button", {name:"新任务选择 C"}));
+  fireEvent.click(screen.getByRole("button", {name:"打开历史 A"}));
+  expect(await screen.findByTestId("session-cwd")).toHaveTextContent("/workspace/A");
+  fireEvent.click(screen.getByRole("button", {name:"从任务新建"}));
+  expect(await screen.findByTestId("new-task-cwd")).toHaveTextContent("/workspace/C");
+  fireEvent.click(screen.getByRole("button", {name:"发送专家任务"}));
+  await waitFor(() => expect(client.agentNewSession).toHaveBeenLastCalledWith("/workspace/C", "model-a", "ask"));
+  expect(useSessionsStore.getState().independent.find(item => item.sessionId === "new-session")?.cwd).toBe("/workspace/C");
 });

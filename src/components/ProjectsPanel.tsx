@@ -19,6 +19,7 @@ import {
 import { createPortal } from "react-dom";
 import { AddIcon, MoreDotsIcon, ChevronDownIcon } from "@/foundation/components/Icon/icons";
 import { Button } from "./Button";
+import { TemplateCard } from "./TemplateCard";
 import { CapabilityPage, CapabilityEmptyState } from "./experts-panel/shared/CapabilityPage";
 import heroImg from "@/assets/landing-hero.png";
 import { useProjectsStore, type ProjectMeta, type RefItem } from "@/stores/projects-store";
@@ -195,7 +196,8 @@ export function ProjectsPanel({
   return (
     <CapabilityPage title="项目" className="project-management"
       description="集中管理项目资料、任务对话和交付成果"
-      illustration={<img src={heroImg} alt="项目工作台插画" draggable={false} />}
+      metadata={<><span>已创建 {projects.length} 个项目</span><span>提供 {FROM_TEMPLATES.length} 个常用模板</span></>}
+      illustration={<img src={heroImg} width={2172} height={724} alt="项目工作台插画" draggable={false} />}
       search={{ value: query, onChange: setQuery, label: "搜索项目" }}
       actions={<Button ref={createButtonRef} variant="primary" onClick={() => setCreate({})}><AddIcon size="sm" />新建项目</Button>}>
       {persistError && (
@@ -234,22 +236,15 @@ export function ProjectsPanel({
         <div className="project-section__head">
           <h3 className="project-section__title">从模板创建</h3>
         </div>
-        <div className="project-grid">
+        <div className="template-grid">
           {FROM_TEMPLATES.map((t) => (
-            <button
+            <TemplateCard
               key={t.id}
-              type="button"
-              className="project-card2"
-              onClick={() => setCreate({ templateId: t.id })}
-            >
-              <span className="project-card2__glyph">
-                <ProjectGlyph />
-              </span>
-              <span className="project-card2__body">
-                <span className="project-card2__name">{t.title}</span>
-                <span className="project-card2__desc">{t.desc}</span>
-              </span>
-            </button>
+              icon={<ProjectGlyph />}
+              title={t.title}
+              description={t.desc}
+              onSelect={() => setCreate({ templateId: t.id })}
+            />
           ))}
         </div>
       </section>

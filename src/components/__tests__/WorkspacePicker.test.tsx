@@ -7,6 +7,7 @@ vi.mock("@/lib/agent-client", () => ({
 }));
 
 import { WorkspacePicker } from "../WorkspacePicker";
+import { filesystemPickDirectory } from "@/lib/agent-client";
 import { GlobalTooltip } from "../GlobalTooltip";
 
 describe("WorkspacePicker", () => {
@@ -140,5 +141,23 @@ describe("WorkspacePicker", () => {
     expect(firstId).toBeTruthy();
     expect(secondId).toBeTruthy();
     expect(firstId).not.toBe(secondId);
+  });
+});
+
+
+describe("目录选择的失败与取消", () => {
+  it("取消不改变有效目录；失败可见，重试保留原始路径", async () => {
+    const select = vi.fn();
+    vi.mocked(filesystemPickDirectory).mockResolvedValueOnce(null).mockRejectedValueOnce(new Error("权限不足")).mockResolvedValueOnce("C:\\work\\new");
+    render(<WorkspacePicker cwd="C:\\work\\old" workspaces={[]} onSelectWorkspace={select} />);
+    fireEvent.click(screen.getByRole("button", {name:/工作目录/}));
+    fireEvent.click(screen.getByRole("menuitem", {name:"选择文件夹…"}));
+    await waitFor(() => expect(screen.getByRole("menuitem", {name:"选择文件夹…"})).toBeEnabled());
+    expect(select).not.toHaveBeenCalled();
+    fireEvent.click(screen.getByRole("menuitem", {name:"选择文件夹…"}));
+    expect(await screen.findByRole("alert")).toHaveTextContent("权限不足");
+    expect(screen.getByRole("button", {name:/工作目录/})).toHaveTextContent("work/old");
+    fireEvent.click(screen.getByRole("menuitem", {name:"重试选择文件夹…"}));
+    await waitFor(() => expect(select).toHaveBeenCalledWith("C:\\work\\new"));
   });
 });
