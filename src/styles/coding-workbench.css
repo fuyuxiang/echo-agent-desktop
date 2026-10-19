@@ -476,6 +476,7 @@
   flex: 0 0 auto;
   flex-direction: column;
   gap: 7px;
+  min-width: 0;
   max-height: min(44%, 330px);
   padding: 10px 12px 12px;
   border-top: 1px solid var(--echo-border-subtle);
@@ -529,19 +530,24 @@
 }
 
 .echo-theia-agent__composer-box {
+  display: flex;
+  flex-direction: column;
   min-height: 0;
-  overflow: auto;
+  overflow: hidden;
   border: 1px solid var(--echo-border-default);
-  border-radius: 9px;
+  border-radius: 12px;
   background: var(--echo-bg-primary);
 }
 
 .echo-theia-agent__composer-box textarea {
   display: block;
+  flex: 1 1 auto;
   width: 100%;
-  min-height: 72px;
-  max-height: 170px;
-  padding: 10px 11px;
+  box-sizing: border-box;
+  min-height: 76px;
+  max-height: min(190px, 28vh);
+  padding: 12px 13px 10px;
+  overflow-y: auto;
   border: 0;
   outline: none;
   resize: none;
@@ -553,13 +559,86 @@
 }
 
 .echo-theia-agent__composer-box:focus-within {
-  border-color: var(--echo-brand);
+  border-color: color-mix(in srgb, var(--echo-brand) 65%, var(--echo-border-default));
+  box-shadow: 0 0 0 2px color-mix(in srgb, var(--echo-brand) 8%, transparent);
 }
 
-.echo-theia-agent__composer-box > .coding-agent__composer-tools {
-  min-height: 38px;
-  padding: 5px 8px;
+.echo-theia-agent__composer-tools {
+  display: flex;
+  flex: none;
+  align-items: center;
+  flex-wrap: nowrap;
+  gap: 6px;
+  min-width: 0;
+  min-height: 44px;
+  padding: 6px 8px;
   border-top: 1px solid var(--echo-border-subtle);
+}
+
+.echo-theia-agent__composer-tools .permission-picker {
+  flex: 0 1 auto;
+  min-width: 0;
+  max-width: 48%;
+}
+
+.echo-theia-agent__composer-tools .echo-composer-meta__btn {
+  width: 100%;
+  min-width: 0;
+  height: 32px;
+  padding: 0 5px;
+  font-size: 0.75rem;
+  white-space: nowrap;
+}
+
+.echo-theia-agent__composer-tools .permission-picker__label {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.echo-theia-agent__composer-tools .model-selector {
+  flex: 1 1 0;
+  min-width: 0;
+}
+
+.echo-theia-agent__composer-tools .model-selector__trigger {
+  min-width: 0;
+  max-width: 100%;
+  padding: 0 5px;
+  font-size: 0.75rem;
+}
+
+.echo-theia-agent__composer-tools .model-selector__label { min-width: 0; }
+
+.echo-theia-agent__send {
+  display: grid;
+  flex: 0 0 32px;
+  width: 32px;
+  height: 32px;
+  margin-left: auto;
+  padding: 0;
+  place-items: center;
+  border: 0;
+  border-radius: 9px;
+  background: var(--echo-button-primary-bg);
+  color: var(--echo-button-primary-fg);
+  cursor: pointer;
+}
+
+.echo-theia-agent__send:hover:not(:disabled) { background: var(--echo-button-primary-bg-hover); }
+.echo-theia-agent__send:active:not(:disabled) { background: var(--echo-button-primary-bg-active); }
+.echo-theia-agent__send:disabled {
+  background: var(--echo-bg-tertiary);
+  color: var(--echo-text-disable);
+  cursor: default;
+}
+
+.echo-theia-agent__composer-box > .coding-agent__warning {
+  flex: 0 1 auto;
+  min-height: 0;
+  max-height: 80px;
+  overflow: auto;
+  overflow-wrap: anywhere;
 }
 
 .coding-workbench--theia .coding-agent__panel-head {

@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { agentsList, onTeamsChanged, teamCreate, teamDisband, teamSnapshot, type RuntimeTeamInfo } from "@/lib/agent-client";
-import { deriveTeams, isTeamTool } from "@/lib/team-derive";
+import { deriveTeams, isTeamTool, latestTeamAttempts } from "@/lib/team-derive";
 import { deriveSubagents } from "@/lib/subagents";
 import { teamProgress, teamTasks } from "@/lib/team-progress";
 import { useSubagentStore, type SubagentRuntime } from "@/stores/subagent-store";
@@ -131,7 +131,7 @@ export function TeamStatusView({ sessionId, messages = EMPTY_MESSAGES, onUseTeam
     finally { if (activeSession.current === target) setMutationBusy(false); }
   };
 
-  const transient = transcriptTeams.filter((team) => team.status !== "completed" && !teams.some((saved) => saved.teamId === team.teamId));
+  const transient = latestTeamAttempts(transcriptTeams).filter((team) => team.status !== "completed" && !teams.some((saved) => saved.teamId === team.teamId));
   return <div className="team-status-view" role="region" aria-label="团队状态">
     <div className="team-status-view__head">
       <span className="team-status-view__title">本会话团队 {teams.length > 0 && <span className="team-status-view__summary">{teams.length} 个 · {teams.reduce((count, team) => count + team.members.length, 0)} 名成员</span>}</span>
@@ -164,7 +164,7 @@ export function TeamStatusView({ sessionId, messages = EMPTY_MESSAGES, onUseTeam
         {!recovery && (activities.length > 0 || live.length > 0) && <p>已有专家任务可在“子代理”中查看。</p>}
       </>}
     </div>}
-    {transient.map((team) => <p className="team-status-view__notice" role={team.status === "failed" ? "alert" : "status"} key={team.id}>{team.teamId || "团队"}：{team.status === "failed" ? "创建失败，请查看对话中的工具错误，或使用“创建团队”重新选择专家。" : "正在创建…"}</p>)}
+    {transient.map((team) => <p className="team-status-view__notice" role={team.status === "failed" ? "alert" : "status"} key={team.id}>{team.teamId || "团队"}：{team.status === "failed" ? "创建失败" : "正在创建…"}{team.attempts > 1 && `（已尝试 ${team.attempts} 次）`}{team.status === "failed" && `：${team.error || "请展开对话中的团队工具，查看错误并修正后重试。"}`}</p>)}
     {teams.length > 0 && <ul className="team-status-view__list">{teams.map((team) => {
       const tasks = teamTasks(team, live, activities);
       const progress = teamProgress(team, tasks);

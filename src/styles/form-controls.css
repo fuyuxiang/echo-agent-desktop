@@ -159,7 +159,7 @@ select.form-control {
     .org-memory, .org-document-modal, .meeting-panel, .conversation-search-modal,
     .create-colleague-dialog, .about-dialog, .feedback-dialog, .update-dialog, .trust-dialog, .coding-workbench, .echo-coding-portal,
     .capability-page, .placeholder-page, .project-page, .pd-page)
-  :is(button, input, select, textarea, a, summary, [role="button"], [tabindex]):not(:where(.monaco-editor *, .xterm *, .markdown-body *, .md-content *, [contenteditable="true"], .echo-composer__input, .echo-theia-agent__splitter)):focus-visible {
+  :is(button, input, select, textarea, a, summary, [role="button"], [tabindex]):not(:where(.monaco-editor *, .xterm *, .markdown-body *, .md-content *, [contenteditable="true"], .echo-composer__input, .echo-theia-agent__input, .echo-theia-agent__splitter)):focus-visible {
   outline: 2px solid var(--echo-focus-ring);
   outline-offset: 2px;
 }
@@ -167,6 +167,7 @@ select.form-control {
  * Keep every other control on the fallback ring, including toolbar buttons. */
 @media (forced-colors: active) {
   .echo-composer:focus-within { outline: 2px solid Highlight; outline-offset: 2px; }
+  .echo-theia-agent__composer-box:focus-within { outline: 2px solid Highlight; outline-offset: 2px; }
   .echo-theia-agent__splitter:focus-visible { outline: 1px solid Highlight; }
 }
 @media (prefers-reduced-motion: reduce) {

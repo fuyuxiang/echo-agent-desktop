@@ -3,6 +3,21 @@ import { describe, expect, it, vi } from "vitest";
 import { ModelSelector } from "../ModelSelector";
 
 describe("ModelSelector", () => {
+  it("长名称省略显示时仍能通过提示和菜单确认完整模型，切换保留真实 id", () => {
+    const models = [
+      { id: "connection/MiniMax-M3.1-Flash-20261019", label: "MiniMax-M3.1-Flash-超长模型名称" },
+      { id: "another/actual-model", label: "另一个模型" },
+    ];
+    const change = vi.fn();
+    render(<ModelSelector models={models} modelId={models[0].id} onModelChange={change} ariaLabel="开发任务模型" />);
+    const trigger = screen.getByRole("button", { name: `开发任务模型：${models[0].label}` });
+    expect(trigger).toHaveAttribute("title", `${models[0].label} · ${models[0].id}`);
+    fireEvent.click(trigger);
+    expect(screen.getByRole("option", { name: new RegExp(models[0].label) })).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("option", { name: /另一个模型/ }));
+    expect(change).toHaveBeenCalledWith("another/actual-model");
+  });
+
   it("菜单通过 body portal 渲染并在上方空间不足时向下翻转", () => {
     render(
       <div data-testid="clipping-card" style={{ overflow: "hidden" }}>

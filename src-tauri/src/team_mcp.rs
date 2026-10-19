@@ -41,6 +41,9 @@ use std::path::{Path, PathBuf};
 use std::sync::{Mutex, OnceLock};
 use tauri::{Emitter, Manager};
 
+mod create_input;
+pub use create_input::{CreateTeamInput, CreateTeamMember};
+
 #[cfg(unix)]
 use std::os::unix::fs::OpenOptionsExt;
 
@@ -992,7 +995,7 @@ fn rpc_error(id: serde_json::Value, code: i64, message: String) -> Response {
 fn tools_list_result() -> serde_json::Value {
     serde_json::json!({
         "tools": [
-            tool_def("create_team", CREATE_TEAM_DESC, schema_for::<CreateTeamInput>()),
+            tool_def("create_team", CREATE_TEAM_DESC, create_input::input_schema()),
             tool_def("team_status", TEAM_STATUS_DESC, schema_for::<TeamStatusInput>()),
             tool_def("team_delete", TEAM_DELETE_DESC, schema_for::<TeamDeleteInput>()),
         ]
@@ -1003,7 +1006,7 @@ fn tool_def(name: &str, description: &str, schema: serde_json::Value) -> serde_j
     serde_json::json!({ "name": name, "description": description, "inputSchema": schema })
 }
 
-const CREATE_TEAM_DESC: &str = "Create a team (团队) persisted within the current session using existing local experts. This does not create an independent group chat (专家团). Use their exact, case-sensitive names. A directory or a task prompt does not create a team. After success, delegate actual work with the task tool using each member name as subagent_type.";
+const CREATE_TEAM_DESC: &str = "Create a team (团队) persisted within the current session using existing local experts. This does not create an independent group chat (专家团). Use their exact, case-sensitive names. Pass members as a JSON array of objects, e.g. {\"team_id\":\"review-team\",\"members\":[{\"name\":\"existing-expert-name\",\"role\":\"review\"}]}. A directory or a task prompt does not create a team. After success, delegate actual work with the task tool using each member name as subagent_type. If arguments fail validation, correct the reported field instead of retrying the same arguments.";
 const TEAM_STATUS_DESC: &str =
     "Check the status of agent teams. Returns registered team members and their agent file paths.";
 const TEAM_DELETE_DESC: &str =
@@ -1039,30 +1042,6 @@ fn tool_error_result(message: &str) -> serde_json::Value {
 }
 
 // ---------- 工具实现（自 team_tools.rs 移植，逻辑不变）----------
-
-#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
-#[serde(deny_unknown_fields)]
-pub struct CreateTeamInput {
-    #[schemars(description = "Unique team identifier (e.g. 'trading-team')")]
-    pub team_id: String,
-    #[schemars(
-        description = "Team members. Each member's agent .md must already exist in ~/.echo-agent/agents/."
-    )]
-    pub members: Vec<CreateTeamMember>,
-    #[schemars(description = "Optional team description")]
-    pub description: Option<String>,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
-#[serde(deny_unknown_fields)]
-pub struct CreateTeamMember {
-    #[schemars(
-        description = "Exact case-sensitive name of an existing local expert (the name in its agent definition)"
-    )]
-    pub name: String,
-    #[schemars(description = "Member role, e.g. 'code reviewer'")]
-    pub role: String,
-}
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct CreateTeamOutput {
@@ -1135,7 +1114,7 @@ async fn tools_call_for_session(
     }
     match name {
         "create_team" => {
-            let input: CreateTeamInput = parse_args(&args)?;
+            let input = create_input::parse_input(&args)?;
             let out = create_team_for_session(input, Some(session_id))?;
             Ok(tool_text_result(&out))
         }
@@ -1749,7 +1728,7 @@ mod tests {
     #[test]
     fn tool_schemas_are_sane() {
         for (name, schema) in [
-            ("create_team", schema_for::<CreateTeamInput>()),
+            ("create_team", create_input::input_schema()),
             ("team_status", schema_for::<TeamStatusInput>()),
             ("team_delete", schema_for::<TeamDeleteInput>()),
         ] {
@@ -1887,6 +1866,35 @@ mod tests {
                 team_snapshot("mcp-session".into()).unwrap()[0].team_id,
                 "mcp-team"
             );
+            // Conversation retries use the same persistence and session scope
+            // as canonical calls; compatibility must not duplicate a team.
+            for members in [
+                serde_json::json!({"name":"代码专家","role":"实现代码"}),
+                serde_json::json!([{ "name":"代码专家","role":"实现代码" }])
+                    .to_string()
+                    .into(),
+            ] {
+                let retried = tools_call_for_session(
+                    &serde_json::json!({"name":"create_team","arguments":{
+                        "team_id":"mcp-team","members":members
+                    }}),
+                    Some("mcp-session"),
+                )
+                .await
+                .unwrap();
+                assert_eq!(retried["isError"], false);
+                assert_eq!(team_snapshot("mcp-session".into()).unwrap().len(), 1);
+            }
+            assert!(tools_call_for_session(
+                &serde_json::json!({"name":"create_team","arguments":{
+                    "team_id":"bad-input","members":{"type":"array","items":[]}
+                }}),
+                Some("mcp-session"),
+            )
+            .await
+            .unwrap_err()
+            .contains(create_input::INPUT_EXAMPLE));
+            assert_eq!(team_snapshot("mcp-session".into()).unwrap().len(), 1);
             let other = tools_call_for_session(
                 &serde_json::json!({ "name": "team_status", "arguments": {} }),
                 Some("other-session"),

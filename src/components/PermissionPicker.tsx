@@ -270,7 +270,7 @@ export function PermissionPicker({
         aria-controls={open ? popoverId : undefined}
       >
         <ShieldCheckIcon size="sm" />
-        {triggerLabel ?? current.label}
+        <span className="permission-picker__label">{triggerLabel ?? current.label}</span>
         <ChevronDownIcon size="sm" />
       </button>
       {open && typeof document !== "undefined" && createPortal(

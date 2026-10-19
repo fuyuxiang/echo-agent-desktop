@@ -155,7 +155,7 @@ export function ModelSelector({
         disabled={disabled || modelLoading || !hasModels}
         aria-busy={modelLoading}
         aria-label={ariaLabel ? `${ariaLabel}：${triggerLabel}` : undefined}
-        title={!hasModels ? "请先在设置中配置模型" : undefined}
+        title={!hasModels ? "请先在设置中配置模型" : current && !modelLoading ? `${current.label || current.id}${current.label && current.label !== current.id ? ` · ${current.id}` : ""}` : triggerLabel}
         aria-haspopup="listbox"
         aria-expanded={open}
         aria-controls={open ? listboxId : undefined}

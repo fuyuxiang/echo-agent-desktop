@@ -1,5 +1,5 @@
-import { useEffect, useRef, useState } from "react";
-import { AlertTriangle, LoaderCircle, Send, X } from "lucide-react";
+import { useEffect, useLayoutEffect, useRef, useState } from "react";
+import { AlertTriangle, ArrowUp, LoaderCircle, X } from "lucide-react";
 
 import { ModelSelector, type ModelOption } from "@/components/ModelSelector";
 import { PermissionPicker } from "@/components/PermissionPicker";
@@ -71,8 +71,38 @@ export function TheiaAgentComposer({
   const [text, setText] = useState(() => readDraft(key));
   const [submitting, setSubmitting] = useState(false);
   const submittingRef = useRef(false);
+  const inputRef = useRef<HTMLTextAreaElement>(null);
   const queuedDraft = useAiDraftStore((state) => state.draft);
   const consumeDraft = useAiDraftStore((state) => state.consume);
+
+  useLayoutEffect(() => {
+    const input = inputRef.current;
+    if (!input) return;
+    const resize = () => {
+      input.style.height = "0px";
+      // CSS bounds the field; measuring the draft also lets it shrink after
+      // deleting text. Only the input scrolls, keeping the toolbar visible.
+      input.style.height = `${input.scrollHeight}px`;
+    };
+    resize();
+    let width = input.getBoundingClientRect().width;
+    const observer = typeof ResizeObserver === "undefined" ? null : new ResizeObserver(() => {
+      const next = input.getBoundingClientRect().width;
+      if (next !== width) { width = next; resize(); }
+    });
+    observer?.observe(input);
+    // Settings changes rem-based typography without changing the field width.
+    // Watch the root style used by applyFontSize so an existing draft resizes
+    // before the next paint, preserving the textarea's focus and selection.
+    const typographyObserver = new MutationObserver(resize);
+    typographyObserver.observe(document.documentElement, { attributes: true, attributeFilter: ["style"] });
+    window.addEventListener("resize", resize);
+    return () => {
+      observer?.disconnect();
+      typographyObserver.disconnect();
+      window.removeEventListener("resize", resize);
+    };
+  }, [text]);
 
   useEffect(() => {
     if (suggestedPrompt && !task) setText(suggestedPrompt);
@@ -97,6 +127,7 @@ export function TheiaAgentComposer({
 
   const sessionUnavailable = Boolean(task && (!sessionId || task.sessionId !== sessionId));
   const verifying = task?.phase === "verifying";
+  const busy = submitting || sending || (!task && starting);
   const canSend = !submitting && Boolean(text.trim()) && (task
     ? !sessionUnavailable && !sending && !streaming && !verifying
     : !starting && apiReady && Boolean(modelId));
@@ -112,7 +143,7 @@ export function TheiaAgentComposer({
         return;
       }
       const accepted = await onSend(prompt);
-      if (accepted !== false) setText("");
+      if (accepted !== false) setText((current) => current === text ? "" : current);
     } catch (error) {
       onToast?.(`发送失败：${String(error).replace(/^Error:\s*/, "")}`);
     } finally {
@@ -135,10 +166,12 @@ export function TheiaAgentComposer({
       )}
       <div className="echo-theia-agent__composer-box">
         <textarea
+          ref={inputRef}
+          className="echo-theia-agent__input"
           value={text}
           onChange={(event) => setText(event.target.value)}
           onKeyDown={(event) => {
-            if ((event.metaKey || event.ctrlKey) && event.key === "Enter") {
+            if (!event.nativeEvent.isComposing && event.nativeEvent.keyCode !== 229 && (event.metaKey || event.ctrlKey) && event.key === "Enter") {
               event.preventDefault();
               void submit();
             }
@@ -165,11 +198,11 @@ export function TheiaAgentComposer({
         {startError && (
           <div className="coding-agent__warning" role="alert"><AlertTriangle size={13} />{startError}</div>
         )}
-        <div className="coding-agent__composer-tools">
+        <div className="echo-theia-agent__composer-tools" role="group" aria-label="开发任务输入选项">
           <PermissionPicker onToast={onToast} sessionId={sessionId ?? undefined} />
-          <ModelSelector modelId={modelId} models={models} onModelChange={onModelChange} />
-          <button type="button" className="coding-agent__send" disabled={!canSend} onClick={() => void submit()} aria-label={task ? "发送给 Agent" : "开始 Agent 任务"} title={`${shortcutLabel("⌘ Enter", "Ctrl+Enter")} 发送`}>
-            {starting && !task ? <LoaderCircle size={14} className="is-spinning" /> : <Send size={14} />}
+          <ModelSelector modelId={modelId} models={models} onModelChange={onModelChange} ariaLabel="开发任务模型" disabled={busy || sessionUnavailable} />
+          <button type="button" className="echo-theia-agent__send" disabled={!canSend} onClick={() => void submit()} aria-label={task ? "发送给 Agent" : "开始 Agent 任务"} aria-busy={busy} title={busy ? "正在发送…" : `${shortcutLabel("⌘ Enter", "Ctrl+Enter")} 发送；Enter 换行`}>
+            {busy ? <LoaderCircle size={16} className="is-spinning" /> : <ArrowUp size={17} />}
           </button>
         </div>
       </div>

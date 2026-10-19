@@ -8,13 +8,13 @@
  * rawInput + content（工具结果）派生出「当前已创建的团队列表」供
  * TeamStatusView 展示。纯函数、无副作用。
  */
-import type { ChatMessage } from "@/stores/session-store";
+import type { ChatMessage, ToolCallView } from "@/stores/session-store";
 
 /** 一个已创建的团队。 */
 export interface TeamInfo {
   /** toolCallId（去重 key）。 */
   id: string;
-  /** 团队 ID（来自 create_team 的 rawInput.team_id）。 */
+  /** 团队 ID（来自 rawInput.team_id，按后端规则去除首尾空白）。 */
   teamId: string;
   /** 成员名称列表。 */
   members: string[];
@@ -22,21 +22,25 @@ export interface TeamInfo {
   createdAt?: number;
   /** 工具调用状态。 */
   status: "in_progress" | "completed" | "failed";
+  /** Latest tool failure, if present in the transcript. */
+  error?: string;
+}
+
+function inputObject(raw: unknown): Record<string, unknown> | undefined {
+  if (typeof raw === "string") { try { raw = JSON.parse(raw); } catch { return undefined; } }
+  return raw && typeof raw === "object" && !Array.isArray(raw) ? raw as Record<string, unknown> : undefined;
 }
 
 /** Unwrap the MCP dispatcher used by current runtimes. */
 export function teamToolInput(tc: { rawInput?: unknown }): Record<string, unknown> | undefined {
-  let raw = tc.rawInput;
-  if (typeof raw === "string") { try { raw = JSON.parse(raw); } catch { return undefined; } }
-  if (!raw || typeof raw !== "object") return undefined;
-  const object = raw as Record<string, unknown>;
+  const object = inputObject(tc.rawInput);
+  if (!object) return undefined;
   const input = object.tool_input ?? object.arguments;
-  if (typeof input === "string") { try { return JSON.parse(input); } catch { return undefined; } }
-  return input && typeof input === "object" ? input as Record<string, unknown> : object;
+  return input === undefined ? object : inputObject(input);
 }
 
 export function isTeamTool(tc: { kind: string; title: string; rawInput?: unknown; toolCallId: string }): boolean {
-  const raw = tc.rawInput && typeof tc.rawInput === "object" ? tc.rawInput as Record<string, unknown> : undefined;
+  const raw = inputObject(tc.rawInput);
   const dispatchedName = typeof raw?.tool_name === "string" ? raw.tool_name : "";
   return isCreateTeamTool(tc) || /(?:^|__|\s)team_(?:delete|status)(?:$|\s)/i.test(`${tc.kind} ${tc.title} ${dispatchedName}`);
 }
@@ -59,6 +63,17 @@ export function deriveTeams(messages: ChatMessage[]): TeamInfo[] {
   return out;
 }
 
+/** Keep conversation history intact; the status panel shows one latest attempt
+ * per named team, including retries that are still running or later succeed. */
+export function latestTeamAttempts(teams: TeamInfo[]): Array<TeamInfo & { attempts: number }> {
+  const latest = new Map<string, TeamInfo & { attempts: number }>();
+  for (const team of teams) {
+    const key = team.teamId ? `team:${team.teamId}` : `call:${team.id}`;
+    latest.set(key, { ...team, attempts: (latest.get(key)?.attempts ?? 0) + 1 });
+  }
+  return [...latest.values()];
+}
+
 /** 判断一个 tool_call 是否为 create_team。 */
 export function isCreateTeamTool(tc: {
   kind: string;
@@ -67,7 +82,7 @@ export function isCreateTeamTool(tc: {
   rawInput?: unknown;
 }): boolean {
   const k = (tc.kind || "").toLowerCase();
-  const dispatcher = tc.rawInput && typeof tc.rawInput === "object" ? tc.rawInput as Record<string, unknown> : undefined;
+  const dispatcher = inputObject(tc.rawInput);
   if (typeof dispatcher?.tool_name === "string" && /(?:^|__)create_team$/.test(dispatcher.tool_name)) return true;
   // 原生名（旧会话）或 MCP 限定名 echoagent__create_team（现行路径）。
   if (k === "create_team" || k === "team_create" || k === "echoagent__create_team") return true;
@@ -81,15 +96,21 @@ export function isCreateTeamTool(tc: {
 }
 
 /** 从 create_team 工具调用解析团队信息。 */
-function parseTeamFromToolCall(tc: {
-  toolCallId: string;
-  rawInput?: unknown;
-  status: "in_progress" | "completed" | "failed";
-}): TeamInfo | null {
+function parseTeamFromToolCall(tc: ToolCallView): TeamInfo | null {
   const raw = teamToolInput(tc);
   if (!raw) return null;
-  const teamId = typeof raw.team_id === "string" ? raw.team_id : "";
-  const membersRaw = raw.members;
+  // Rust str::trim uses Unicode White_Space; JS trim differs for NEL and BOM.
+  // Normalize here so retries, recovery and persisted snapshots share one ID.
+  const teamId = typeof raw.team_id === "string"
+    ? raw.team_id.replace(/^\p{White_Space}+|\p{White_Space}+$/gu, "")
+    : "";
+  let membersRaw = raw.members;
+  if (typeof membersRaw === "string") {
+    try { membersRaw = JSON.parse(membersRaw); } catch { membersRaw = undefined; }
+  }
+  // Match the backend's unambiguous singleton compatibility without inventing
+  // names from schema objects or dictionaries. Legacy string arrays still work.
+  if (inputObject(membersRaw)?.name) membersRaw = [membersRaw];
   let members: string[] = [];
   if (Array.isArray(membersRaw)) {
     members = membersRaw
@@ -108,6 +129,9 @@ function parseTeamFromToolCall(tc: {
     teamId,
     members,
     status: tc.status,
+    error: tc.status === "failed" ? tc.content
+      .flatMap((part) => part.type === "text" && part.text.trim() ? [part.text.trim()] : [])
+      .join("\n").slice(0, 2000) || undefined : undefined,
   };
 }
 

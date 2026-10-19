@@ -1,7 +1,7 @@
 import { act, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
-vi.mock("@/components/ModelSelector", () => ({ ModelSelector: () => <div data-testid="model-selector" /> }));
+vi.mock("@/components/ModelSelector", () => ({ ModelSelector: ({ disabled }: { disabled: boolean }) => <button data-testid="model-selector" disabled={disabled}>模型</button> }));
 vi.mock("@/components/PermissionPicker", () => ({ PermissionPicker: () => <div data-testid="permission-picker" /> }));
 
 import { TheiaAgentComposer } from "../agent/TheiaAgentComposer";
@@ -77,5 +77,64 @@ describe("TheiaAgentComposer", () => {
     expect(input.onDraftContextPaths).toHaveBeenCalledWith(["src/order.ts"]);
     fireEvent.click(screen.getByRole("button", { name: "移除上下文 src/order.ts" }));
     expect(input.onRemoveContext).toHaveBeenCalledWith("src/order.ts");
+  });
+
+  it("Ctrl/Cmd+Enter sends once, while Enter and IME confirmation do not submit", async () => {
+    const input = props();
+    render(<TheiaAgentComposer {...input} />);
+    const editor = screen.getByRole("textbox", { name: "任务描述" });
+    fireEvent.change(editor, { target: { value: "检查中文输入" } });
+    fireEvent.keyDown(editor, { key: "Enter" });
+    fireEvent.keyDown(editor, { key: "Enter", metaKey: true, isComposing: true });
+    fireEvent.keyDown(editor, { key: "Enter", ctrlKey: true, keyCode: 229 });
+    expect(input.onStart).not.toHaveBeenCalled();
+    fireEvent.keyDown(editor, { key: "Enter", ctrlKey: true });
+    expect(input.onStart).toHaveBeenCalledTimes(1);
+    await waitFor(() => expect(screen.getByRole("button", { name: "开始 Agent 任务" })).toBeEnabled());
+    fireEvent.keyDown(editor, { key: "Enter", metaKey: true });
+    expect(input.onStart).toHaveBeenCalledTimes(2);
+    await waitFor(() => expect(screen.getByRole("button", { name: "开始 Agent 任务" })).toBeEnabled());
+  });
+
+  it("shows pending submission and keeps edits made before the accepted reply", async () => {
+    let finish: ((accepted: boolean) => void) | undefined;
+    const onSend = vi.fn(() => new Promise<boolean>((resolve) => { finish = resolve; }));
+    render(<TheiaAgentComposer {...props({ task, sessionId: "session-1", onSend })} />);
+    const editor = screen.getByRole("textbox", { name: "补充开发要求" });
+    fireEvent.change(editor, { target: { value: "第一条补充" } });
+    fireEvent.click(screen.getByRole("button", { name: "发送给 Agent" }));
+    expect(screen.getByRole("button", { name: "发送给 Agent" })).toHaveAttribute("aria-busy", "true");
+    expect(screen.getByTestId("model-selector")).toBeDisabled();
+    fireEvent.change(editor, { target: { value: "下一条草稿" } });
+    await act(async () => finish?.(true));
+    expect(editor).toHaveValue("下一条草稿");
+    expect(screen.getByTestId("model-selector")).toBeEnabled();
+  });
+
+  it.each([false, new Error("临时发送失败")])("keeps a follow-up when submission is rejected or fails (%s)", async (result) => {
+    const onToast = vi.fn();
+    const input = props({ task, sessionId: "session-1", onToast, onSend: vi.fn(async () => {
+      if (result instanceof Error) throw result;
+      return result;
+    }) });
+    render(<TheiaAgentComposer {...input} />);
+    fireEvent.change(screen.getByRole("textbox", { name: "补充开发要求" }), { target: { value: "保留草稿" } });
+    fireEvent.click(screen.getByRole("button", { name: "发送给 Agent" }));
+    await waitFor(() => expect(screen.getByRole("button", { name: "发送给 Agent" })).toBeEnabled());
+    expect(screen.getByRole("textbox", { name: "补充开发要求" })).toHaveValue("保留草稿");
+    if (result instanceof Error) expect(onToast).toHaveBeenCalledWith("发送失败：临时发送失败");
+  });
+
+  it("verification and a mismatched session cannot send; verification still accepts drafts", () => {
+    const input = props({ task: { ...task, phase: "verifying" }, sessionId: "session-1" });
+    const { rerender } = render(<TheiaAgentComposer {...input} />);
+    const editor = screen.getByRole("textbox", { name: "补充开发要求" });
+    fireEvent.change(editor, { target: { value: "验证后发送" } });
+    expect(editor).toBeEnabled();
+    expect(screen.getByRole("button", { name: "发送给 Agent" })).toBeDisabled();
+    rerender(<TheiaAgentComposer {...input} sessionId="unrelated-session" />);
+    expect(editor).toBeDisabled();
+    expect(screen.getByTestId("model-selector")).toBeDisabled();
+    expect(input.onSend).not.toHaveBeenCalled();
   });
 });

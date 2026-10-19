@@ -50,6 +50,52 @@ describe("TeamStatusView", () => {
     expect(teamSnapshot).toHaveBeenCalledWith("session-a");
   });
 
+  it("持久化团队会消除带首尾空白的历史创建失败提示", async () => {
+    vi.mocked(teamSnapshot).mockResolvedValue([{ teamId: "release-team", members: ["planner"], createdAt: 1 }]);
+    const message = teamMessage("completed");
+    const part = message.parts[0];
+    if (part.kind !== "tool_call") throw new Error("fixture");
+    part.toolCall.status = "failed";
+    part.toolCall.rawInput = { team_id: " \u0085release-team\u3000", members: ["planner"] };
+    part.toolCall.content = [{ type: "text", text: "旧创建错误" }];
+    render(<TeamStatusView sessionId="session-a" messages={[message]} />);
+    expect(await screen.findByText("待派发任务")).toBeInTheDocument();
+    expect(screen.queryByRole("alert")).not.toBeInTheDocument();
+    expect(screen.queryByText(/旧创建错误/)).not.toBeInTheDocument();
+  });
+
+  it("对话内连续九次创建失败合并成一条，并显示真实原因；重试成功后消除失败提示", async () => {
+    vi.mocked(teamSnapshot).mockResolvedValue([]);
+    const messages = Array.from({ length: 9 }, (_, index): ChatMessage => ({
+      id: `attempt-${index}`, role: "assistant", complete: true,
+      parts: [{ kind: "tool_call", toolCall: {
+        toolCallId: `create-${index}`, kind: "use_tool", title: "echoagent__create_team", status: "failed",
+        rawInput: { tool_name: "echoagent__create_team", tool_input: { team_id: index % 2 ? "tianya-shentie" : " \u0085tianya-shentie\u3000", members: { name: "代码专家", role: "分析" } } },
+        content: [{ type: "text", text: index === 8 ? "members[0]: missing field `role`" : "invalid type: map, expected a sequence" }],
+      } }],
+    }));
+    const { rerender } = render(<TeamStatusView sessionId="session-a" messages={messages} />);
+    await waitFor(() => expect(teamSnapshot).toHaveBeenCalledTimes(1));
+    expect(screen.getAllByRole("alert")).toHaveLength(1);
+    expect(screen.getByRole("alert")).toHaveTextContent("tianya-shentie：创建失败（已尝试 9 次）");
+    expect(screen.getByRole("alert")).toHaveTextContent("members[0]: missing field `role`");
+    expect(screen.queryByText(/invalid type: map/)).not.toBeInTheDocument();
+
+    const retry: ChatMessage = { id: "retry", role: "assistant", complete: false, parts: [{ kind: "tool_call", toolCall: {
+      toolCallId: "retry", kind: "echoagent__create_team", title: "create_team", status: "in_progress",
+      rawInput: { team_id: "tianya-shentie", members: [{ name: "代码专家", role: "分析" }] }, content: [],
+    } }] };
+    rerender(<TeamStatusView sessionId="session-a" messages={[...messages, retry]} />);
+    expect(screen.queryByRole("alert")).not.toBeInTheDocument();
+    expect(screen.getByText(/正在创建…（已尝试 10 次）/)).toBeInTheDocument();
+    vi.mocked(teamSnapshot).mockResolvedValue([{ teamId: "tianya-shentie", members: ["代码专家"], createdAt: 1 }]);
+    const success = { ...retry, complete: true, parts: retry.parts.map((part) => part.kind === "tool_call" ? { ...part, toolCall: { ...part.toolCall, status: "completed" as const } } : part) };
+    rerender(<TeamStatusView sessionId="session-a" messages={[...messages, success]} />);
+    expect(await screen.findByText("待派发任务")).toBeInTheDocument();
+    expect(screen.queryByRole("alert")).not.toBeInTheDocument();
+    expect(teamCreate).not.toHaveBeenCalled();
+  });
+
   it("区分创建独立专家团和打开已关联记录，归档记录也可打开", async () => {
     const team={teamId:"delivery",members:["代码专家"],createdAt:1};
     vi.mocked(teamSnapshot).mockResolvedValue([team]);
