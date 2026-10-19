@@ -783,6 +783,7 @@ pub(crate) async fn spawn_session_actor(
             tool_context.cwd.as_path(),
             mc.root_dir_override.as_deref(),
         )
+        .with_personal_policy(mc.root_dir_override.is_none())
     });
     let memory_initial_injection_config = memory_config
         .as_ref()
@@ -1952,11 +1953,7 @@ pub(crate) async fn spawn_session_actor(
             actor.recover_pending_memories().await;
         });
     }
-    if let Some(storage) = session
-        .memory
-        .storage()
-        .filter(|_| echo_agent_memory::records::setting("memory", None, "enabled", true))
-    {
+    if let Some(storage) = session.memory.storage().filter(|storage| storage.enabled()) {
         crate::session::memory::init_sqlite_vec();
         let index_config = memory_config
             .as_ref()
@@ -2015,6 +2012,7 @@ pub(crate) async fn spawn_session_actor(
                             api_key,
                         )
                     {
+                        let provider = provider.with_request_permit(storage.request_permit());
                         crate::session::memory::embed_missing_chunks(&index, &provider).await
                     } else {
                         0

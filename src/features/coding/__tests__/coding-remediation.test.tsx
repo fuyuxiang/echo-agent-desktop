@@ -90,6 +90,8 @@ import { CodingWorkbench } from "@/features/coding/CodingWorkbench";
 import type { CodingTask } from "@/features/coding/lib/types";
 import { useAiDraftStore } from "@/features/coding/store/ai-draft-store";
 import { useTaskStore } from "@/features/coding/store/task-store";
+import { codingRuntimeKey, useCodingRuntimeStore } from "@/features/coding/lib/coding-task-runtime";
+import { registerWorkspaceEditor } from "@/features/coding/lib/workspace-editor";
 
 function verificationTask(overrides: Partial<CodingTask> = {}): CodingTask {
   return {
@@ -110,7 +112,7 @@ function verificationTask(overrides: Partial<CodingTask> = {}): CodingTask {
 
 
 
-function readyEditor(frame: HTMLIFrameElement, initialDirty = 0, saveFailure = false) {
+function readyEditor(frame: HTMLIFrameElement, initialDirty = 0, saveFailure = false, onSave?: () => Promise<void>) {
   let dirty = initialDirty;
   const origin = new URL(frame.src).origin;
   const token = JSON.parse(frame.name.slice("echo-embed:".length)).bridgeToken;
@@ -118,7 +120,8 @@ function readyEditor(frame: HTMLIFrameElement, initialDirty = 0, saveFailure = f
   const post = vi.spyOn(frame.contentWindow!, "postMessage").mockImplementation((data: unknown) => {
     const message = data as {type: string; id: string};
     if (!["echo/get-dirty", "echo/save-all"].includes(message.type)) return;
-    queueMicrotask(() => {
+    queueMicrotask(async () => {
+      if (message.type === "echo/save-all") await onSave?.();
       if (message.type === "echo/save-all" && saveFailure) send({type: "echo/response", id: message.id, ok: false, error: "disk full"});
       else { if (message.type === "echo/save-all") dirty = 0; send({type: "echo/response", id: message.id, ok: true, value: dirty}); }
     });
@@ -174,6 +177,58 @@ describe("coding remediation: editor ownership and delivery evidence", () => {
     expect(post.mock.calls.filter(([data]) => (data as {type: string}).type === "echo/get-dirty")).toHaveLength(2);
     expect(post.mock.calls.some(([data]) => (data as {type: string}).type === "echo/save-all")).toBe(true);
   });
+  it("reads the revision after the real before/after mutation save bridge", async () => {
+    let latest = verificationTask({phase: "verifying"});
+    installApi(latest);
+    const ordinary = invoke.getMockImplementation()!;
+    invoke.mockImplementation(async (command, args) => {
+      if (command === "coding_task_report_interrupted") { latest = {...latest,phase:"paused",updatedAt:"paused-before-save"}; return latest; }
+      if (command === "coding_task_begin_followup") { latest = {...latest,phase:"implementing",updatedAt:"followup"}; return latest; }
+      if (command === "coding_orchestrator_report_implementation") { latest = {...latest,phase:"verifying",updatedAt:"saved-by-bridge"}; return latest; }
+      if (command === "coding_task_get") return latest;
+      if (command === "coding_orchestrator_state") return {task:latest,problems:[],repairRounds:[],changedFileCount:1,maxRepairRounds:3};
+      return ordinary(command,args);
+    });
+    useTaskStore.setState({root:"/repo",task:latest});
+    render(<CodingWorkbench cwd="/repo" />);
+    const frame = await screen.findByTitle("Echo Code IDE") as HTMLIFrameElement;
+    const origin = new URL(frame.src).origin;
+    const token = JSON.parse(frame.name.slice("echo-embed:".length)).bridgeToken;
+    const send = (data: object) => act(() => window.dispatchEvent(new MessageEvent("message",{origin,source:frame.contentWindow,data:{...data,token}})));
+    const post = readyEditor(frame,1,false,async () => {
+      send({type:"echo/before-mutation",id:"save-before",operation:"write",paths:["/repo/src/a.ts"]});
+      await waitFor(() => expect(post).toHaveBeenCalledWith(expect.objectContaining({id:"save-before",ok:true}),origin));
+      const response = post.mock.calls.map(([value]) => value as {id:string;value:unknown}).find(value => value.id === "save-before")!;
+      send({type:"echo/after-mutation",id:"save-after",ticket:response.value,success:true});
+      await waitFor(() => expect(post).toHaveBeenCalledWith(expect.objectContaining({id:"save-after",ok:true}),origin));
+    });
+    await userEvent.click(screen.getByRole("tab",{name:"验证"}));
+    await userEvent.click(await screen.findByRole("button",{name:"运行全部验证"}));
+    await userEvent.click(await screen.findByRole("button",{name:"保存并继续"}));
+    await waitFor(() => expect(invoke).toHaveBeenCalledWith("coding_task_begin_verification",expect.objectContaining({expectedUpdatedAt:"saved-by-bridge"})));
+    expect(invoke).toHaveBeenCalledWith("coding_task_report_interrupted",expect.objectContaining({interruption:"paused"}));
+  });
+
+  it("preserves the other task editor block when a clean editor reply arrives late", async () => {
+    const original = verificationTask({id:"original",phase:"paused",sessionId:"bound"}); installApi(original);
+    useTaskStore.setState({root:"/repo",task:original});
+    render(<CodingWorkbench cwd="/repo" sessionId="bound" onSendMessage={vi.fn()} />);
+    readyEditor(await screen.findByTitle("Echo Code IDE") as HTMLIFrameElement);
+    let finish!: (value:number) => void;
+    const getDirtyCount = vi.fn(() => new Promise<number>(resolve => {finish=resolve;}));
+    const unregister = registerWorkspaceEditor("/repo",{getDirtyCount,saveAll:async()=>true});
+    await userEvent.click(screen.getByRole("button",{name:"继续执行"}));
+    await waitFor(() => expect(getDirtyCount).toHaveBeenCalledOnce());
+    act(() => {
+      useTaskStore.setState({task:verificationTask({id:"other",phase:"paused"})});
+      useCodingRuntimeStore.getState().setEditorBlock("/repo","other","保留另一任务的保存错误");
+    });
+    await act(async () => {finish(0);});
+    expect(useCodingRuntimeStore.getState().editorBlocks[codingRuntimeKey("/repo","other")]).toBe("保留另一任务的保存错误");
+    expect(invoke).not.toHaveBeenCalledWith("coding_task_resume",expect.anything());
+    unregister();
+  });
+
   it("does not claim delivery before current gates are satisfied and offers the pending action", async () => {
     const task = verificationTask({phase: "delivered"}); const onOpenReport = vi.fn();
     invoke.mockResolvedValue({task, deliverable: false, gates: [{id: "acceptance", title: "人工验收", summary: "确认原始需求", status: "not_satisfied"}, {id: "test", status: "not_applicable"}]});
@@ -245,6 +300,24 @@ describe("coding remediation: editor ownership and delivery evidence", () => {
     await userEvent.click(await screen.findByRole("button", {name: "保存并继续"}));
     await waitFor(() => expect(screen.getByRole("button", {name: "继续执行"})).not.toBeDisabled());
     expect(invoke).not.toHaveBeenCalledWith("coding_task_resume", expect.anything()); expect(onSendMessage).not.toHaveBeenCalled();
+  });
+
+  it("does not dispatch a late resume after selecting another task in the same workspace", async () => {
+    const original = verificationTask({id:"original",phase:"paused",sessionId:"bound"}); installApi(original);
+    const ordinary = invoke.getMockImplementation()!;
+    let complete!: (value: unknown) => void;
+    invoke.mockImplementation(async (command,args) => command === "coding_task_resume" ? new Promise(resolve => {complete=resolve;}) : ordinary(command,args));
+    useTaskStore.setState({root:"/repo",task:original});
+    const onSendMessage = vi.fn();
+    const view = render(<CodingWorkbench cwd="/repo" sessionId="bound" onSendMessage={onSendMessage} />);
+    readyEditor(await screen.findByTitle("Echo Code IDE") as HTMLIFrameElement);
+    await userEvent.click(screen.getByRole("button",{name:"继续执行"}));
+    await waitFor(() => expect(invoke).toHaveBeenCalledWith("coding_task_resume",{root:"/repo",taskId:"original"}));
+    act(() => useTaskStore.setState({task:verificationTask({id:"other",phase:"paused",sessionId:"other-bound"})}));
+    view.rerender(<CodingWorkbench cwd="/repo" sessionId="other-bound" onSendMessage={onSendMessage} />);
+    await act(async () => {complete({...original,phase:"implementing"});});
+    expect(onSendMessage).not.toHaveBeenCalled();
+    await waitFor(() => expect(invoke).toHaveBeenCalledWith("coding_task_report_interrupted",{root:"/repo",taskId:"original",interruption:"paused"}));
   });
 
 });

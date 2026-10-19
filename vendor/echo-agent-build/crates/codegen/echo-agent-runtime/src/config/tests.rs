@@ -367,7 +367,7 @@ fn memory_config_defaults_are_correct() {
         assert_eq!(mem.embedding.model, None);
         assert_eq!(mem.embedding.dimensions, 1024);
         assert_eq!(mem.search.max_results, 6);
-        assert!((mem.search.min_score - 0.7).abs() < f32::EPSILON);
+        assert!((mem.search.min_score - 0.45).abs() < f32::EPSILON);
         assert!((mem.search.vector_weight - 0.7).abs() < f32::EPSILON);
         assert!((mem.search.text_weight - 0.3).abs() < f32::EPSILON);
         assert!((mem.search.recency_decay - 0.95).abs() < f32::EPSILON);
@@ -379,7 +379,7 @@ fn memory_config_defaults_are_correct() {
         assert!((mem.search.source_weights["session"] - 1.0).abs() < f32::EPSILON);
         assert!((mem.search.source_weights["global"] - 1.0).abs() < f32::EPSILON);
         assert!(mem.initial_injection.enabled);
-        assert_eq!(mem.initial_injection.min_score, Some(0.9));
+        assert_eq!(mem.initial_injection.min_score, Some(0.45));
         assert!(mem.session.save_on_end);
         assert!(mem.flush.enabled);
         assert_eq!(mem.flush.soft_threshold_tokens, 4000);
@@ -396,7 +396,7 @@ fn memory_config_defaults_are_correct() {
         assert_eq!(mem.watcher.stale_claim_secs, 60);
         assert!(mem.dream.enabled);
         assert_eq!(mem.dream.min_hours, 24);
-        assert_eq!(mem.dream.min_sessions, 5);
+        assert_eq!(mem.dream.min_sessions, 1);
         assert_eq!(mem.dream.stale_lock_secs, 3600);
         assert_eq!(mem.dream.check_interval_secs, Some(3600));
     });
@@ -722,7 +722,7 @@ fn memory_dream_config_defaults() {
         let mem = MemoryConfig::resolve(false, false, &config, None);
         assert!(mem.dream.enabled);
         assert_eq!(mem.dream.min_hours, 24);
-        assert_eq!(mem.dream.min_sessions, 5);
+        assert_eq!(mem.dream.min_sessions, 1);
         assert_eq!(mem.dream.stale_lock_secs, 3600);
         assert_eq!(mem.dream.check_interval_secs, Some(3600));
     });

@@ -87,7 +87,8 @@ pub enum FlushResult {
 /// 1. Empty/whitespace-only → `NothingToStore`
 /// 2. Matches `NO_REPLY` pattern → `NothingToStore`
 /// 3. Exceeds `max_flush_write_chars` → truncated
-/// 4. Must contain at least one markdown header (`##`) → `Rejected` if not
+/// 4. Structured JSON must contain a memories array; legacy Markdown must have
+///    at least one header. Unstructured text is rejected.
 pub fn process_flush_response(response: &str, config: &MemoryFlushConfig) -> FlushResult {
     let cleaned = strip_reasoning_blocks(response);
     let trimmed = cleaned.trim();
@@ -445,28 +446,38 @@ mod tests {
 
     #[test]
     fn test_flush_system_prompt_content() {
-        assert!(FLUSH_SYSTEM_PROMPT.contains("markdown"));
-        assert!(FLUSH_SYSTEM_PROMPT.contains("NO_REPLY"));
+        assert!(FLUSH_SYSTEM_PROMPT.contains("Return ONLY JSON"));
+        assert!(
+            FLUSH_SYSTEM_PROMPT.contains(r#"Empty result: {"memories":[],"completedKeys":[]}."#)
+        );
         assert!(
             !FLUSH_SYSTEM_PROMPT.contains("Always write something"),
             "old bias toward always writing should be removed"
         );
         assert!(
-            FLUSH_SYSTEM_PROMPT.contains("genuinely useful"),
-            "prompt should bias toward NO_REPLY for low-value sessions"
+            FLUSH_SYSTEM_PROMPT.contains("actual user statements or verified outcomes"),
+            "only supported facts should be extracted"
         );
+        assert!(FLUSH_SYSTEM_PROMPT.contains("short verbatim quote from this conversation"));
+        assert!(FLUSH_SYSTEM_PROMPT.contains("secrets"));
+        assert!(FLUSH_SYSTEM_PROMPT.contains("manual/pinned rules"));
         assert!(!FLUSH_SYSTEM_PROMPT.contains("User preferences"));
     }
 
     #[test]
     fn test_delta_system_prompt_content() {
-        assert!(FLUSH_DELTA_SYSTEM_PROMPT.contains("incremental update"));
-        assert!(FLUSH_DELTA_SYSTEM_PROMPT.contains("NO_REPLY"));
-        assert!(FLUSH_DELTA_SYSTEM_PROMPT.contains("Previous flush content"));
+        assert_eq!(FLUSH_DELTA_SYSTEM_PROMPT, FLUSH_SYSTEM_PROMPT);
+        assert!(
+            FLUSH_DELTA_SYSTEM_PROMPT
+                .contains("Use stable keys from existing memories to update facts")
+        );
+        assert!(
+            FLUSH_DELTA_SYSTEM_PROMPT.contains(r#"Empty result: {"memories":[],"completedKeys":[]}."#)
+        );
         assert!(!FLUSH_DELTA_SYSTEM_PROMPT.contains("User preferences"));
         assert!(
-            FLUSH_DELTA_SYSTEM_PROMPT.contains("genuinely new and useful"),
-            "delta prompt should use same selectivity standard as primary prompt"
+            FLUSH_DELTA_SYSTEM_PROMPT.contains("Prioritize new or changed facts that are not already stored"),
+            "delta extraction must still avoid rewriting unchanged facts"
         );
     }
 

@@ -140,3 +140,24 @@ it("allows only explicitly authorized exit without saving, and revokes that on a
   store.editMinutes(source, "继续编辑");
   expect(() => store.ensureDurable()).toThrow();
 });
+
+it("retries a transient initial read and preserves both recovered and current drafts", () => {
+  const data = new Map<string, string>();
+  const source = record([segment(0, "原始转写")]);
+  const other = { ...source, id: "other" };
+  const storage = { getItem: (key: string) => data.get(key) ?? null, setItem: (key: string, value: string) => { data.set(key, value); } };
+  const previous = createMeetingDraftStore(storage);
+  previous.editMinutes(source, "原有草稿"); previous.editMinutes(other, "另一会议草稿");
+  const original = data.get("echo.meeting-drafts.v1");
+  let failed = true;
+  const current = createMeetingDraftStore({ ...storage, getItem: key => { if (failed) throw new Error("temporary read error"); return storage.getItem(key); } });
+  current.editMinutes(source, "当前窗口新编辑");
+  expect(() => current.ensureDurable()).toThrow();
+  failed = false;
+  current.ensureDurable();
+  expect(current.persistenceError()).toBeNull();
+  expect(current.minutes(source).value).toBe("当前窗口新编辑");
+  expect(current.minutes(other).value).toBe("另一会议草稿");
+  expect(data.get("echo.meeting-drafts.v1.recovery")).toBe(original);
+  expect(createMeetingDraftStore(storage).minutes(source).value).toBe("当前窗口新编辑");
+});

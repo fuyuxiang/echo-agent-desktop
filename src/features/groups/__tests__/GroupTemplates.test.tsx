@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
-import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
+import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { agentsList } from "@/lib/agent-client";
 import type { AgentEntry } from "@/lib/types";
 import { GroupTeams, TemplatePicker } from "../GroupManagement";
@@ -160,4 +160,26 @@ it("专家读取失败不会误判模板成员失效，重读成功后保留选�
   fireEvent.click(screen.getByRole("button", { name: "重新读取专家" }));
   expect(await screen.findByRole("checkbox", { name: /代码专家/ })).toBeChecked();
   expect(screen.getByRole("button", { name: "创建并进入专家团" })).toBeEnabled();
+});
+
+it("ignores a late creation response after leaving and reuses the request identity on retry", async () => {
+  let reject!: (reason: Error) => void;
+  vi.mocked(groupCreate).mockImplementationOnce(() => new Promise((_resolve, fail) => { reject = fail; }));
+  mountWorkspace(); fireEvent.click(screen.getByRole("button", {name: "创建专家团"}));
+  await screen.findByRole("checkbox", {name: /代码专家/});
+  fireEvent.change(screen.getByRole("textbox", {name: "专家团名称"}), {target:{value:"retry"}});
+  fireEvent.click(screen.getByRole("checkbox", {name: /代码专家/}));
+  fireEvent.click(screen.getByRole("button", {name: "创建并进入专家团"}));
+  await waitFor(() => expect(groupCreate).toHaveBeenCalledTimes(1));
+  const requestId = vi.mocked(groupCreate).mock.calls[0][0].requestId;
+  expect(requestId).toBeTruthy();
+  await act(async () => { reject(new Error("response lost")); });
+  let resolve!: (value: Awaited<ReturnType<typeof groupCreate>>) => void;
+  vi.mocked(groupCreate).mockImplementationOnce(() => new Promise(done => { resolve = done; }));
+  fireEvent.click(screen.getByRole("button", {name: "创建并进入专家团"}));
+  await waitFor(() => expect(groupCreate).toHaveBeenCalledTimes(2));
+  expect(vi.mocked(groupCreate).mock.calls[1][0].requestId).toBe(requestId);
+  fireEvent.click(screen.getByRole("button", {name: "返回专家团"}));
+  await act(async () => { resolve({id:"late"} as Awaited<ReturnType<typeof groupCreate>>); });
+  expect(useGroupStore.getState().currentId).not.toBe("late");
 });

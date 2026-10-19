@@ -1510,3 +1510,73 @@ async fn await_event_matching(
         }
     }
 }
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn live_preflight_is_reapplied_after_a_transport_retry() {
+    #[derive(Debug)]
+    struct LivePolicy(Arc<std::sync::atomic::AtomicBool>);
+    impl echo_agent_sampling_types::ConversationRequestPreflight for LivePolicy {
+        fn apply(&self, request: &mut ConversationRequest) -> Result<(), &'static str> {
+            if !self.0.load(Ordering::SeqCst) {
+                request
+                    .items
+                    .retain(|item| !matches!(item, ConversationItem::System(_)));
+            }
+            Ok(())
+        }
+    }
+    let enabled = Arc::new(std::sync::atomic::AtomicBool::new(true));
+    let bodies = Arc::new(std::sync::Mutex::new(Vec::<String>::new()));
+    let live = enabled.clone();
+    let captured = bodies.clone();
+    let app = Router::new().route(
+        "/v1/chat/completions",
+        post(move |body: String| {
+            let captured = captured.clone();
+            let live = live.clone();
+            async move {
+                let first = {
+                    let mut bodies = captured.lock().unwrap();
+                    bodies.push(body);
+                    bodies.len() == 1
+                };
+                if first {
+                    live.store(false, Ordering::SeqCst);
+                    Err::<Sse<_>, (StatusCode, String)>((
+                        StatusCode::INTERNAL_SERVER_ERROR,
+                        json!({"error":{"message":"retry"}}).to_string(),
+                    ))
+                } else {
+                    Ok(Sse::new(stream::iter(
+                        sse::chat_completion_events("ok", "test-model")
+                            .into_iter()
+                            .map(Ok::<_, std::convert::Infallible>),
+                    )))
+                }
+            }
+        }),
+    );
+    let server = MockServer::spawn(app).await;
+    let (tx, mut rx) = mpsc::unbounded_channel();
+    let handle = SamplerActor::spawn(
+        test_config(server.base_url(), "test-model"),
+        RetryPolicy::default(),
+        tx,
+    );
+    let mut request = user_request("hi");
+    request
+        .items
+        .insert(0, ConversationItem::system("private-memory-marker"));
+    request.preflight = Some(Arc::new(LivePolicy(enabled)));
+    handle.submit(RequestId::from("live-preflight"), request);
+    let events = drain_until_terminal(&mut rx, Duration::from_secs(15)).await;
+    server.shutdown();
+    assert!(matches!(
+        events.last(),
+        Some(SamplingEvent::Completed { .. })
+    ));
+    let bodies = bodies.lock().unwrap();
+    assert!(bodies[0].contains("private-memory-marker"));
+    assert!(bodies.len() >= 2);
+    assert!(!bodies[1].contains("private-memory-marker"));
+}

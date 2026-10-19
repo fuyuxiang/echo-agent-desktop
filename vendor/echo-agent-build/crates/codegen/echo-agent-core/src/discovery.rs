@@ -228,6 +228,26 @@ pub(crate) fn user_agent_dirs(
     dirs
 }
 
+/// Every configured discovery directory, including absent paths, so callers
+/// can distinguish an absent definition from a directory read failure.
+pub fn agent_scan_directories(cwd: &Path) -> Vec<PathBuf> {
+    let mut dirs = Vec::new();
+    for parent in crate::repo::RepoDirChain::resolve(cwd).dirs {
+        for subdir in PROJECT_AGENT_SUBDIRS {
+            dirs.push(parent.join(subdir));
+        }
+    }
+    dirs.extend(
+        user_agent_dirs(
+            echo_agent_config::discovery_home_dir().as_deref(),
+            echo_agent_config::user_echo_agent_home().as_deref(),
+        )
+        .into_iter()
+        .map(|(path, _)| path),
+    );
+    dirs
+}
+
 pub fn discover(cwd: &Path) -> Vec<AgentDefinition> {
     let echoagent = echo_agent_config::user_echo_agent_home();
     discover_with_home(cwd, echo_agent_config::discovery_home_dir().as_deref(), echoagent.as_deref())

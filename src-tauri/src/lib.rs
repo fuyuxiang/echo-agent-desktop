@@ -984,6 +984,7 @@ pub fn run() {
             knowledge_traces::knowledge_traces_load,
             knowledge_traces::knowledge_trace_save,
             session_artifacts::session_exports_list,
+            session_artifacts::session_exports_catalog,
             session_artifacts::session_export_authorize,
             expert_avatar::expert_avatar,
             // Safe, bounded previews for local chat image attachments.

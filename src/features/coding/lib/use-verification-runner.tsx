@@ -22,7 +22,7 @@ interface VerificationRunnerOptions {
   detectedReady: boolean;
   setCommandOutput: Dispatch<SetStateAction<string>>;
   requestConfirmation: (options: ConfirmationOptions) => void;
-  prepareEditor?: () => Promise<void>;
+  prepareEditor?: () => Promise<string | void>;
   onToast?: (message: string) => void;
 }
 
@@ -77,10 +77,10 @@ export function useVerificationRunner({
         if (selected.root === cwd && selected.task?.id === taskId) await selected.refreshTaskState();
       };
       try {
-        await prepareEditor?.();
+        const savedRevision = await prepareEditor?.();
         if (!isCurrent() || !allowed()) { useCodingRuntimeStore.getState().releaseVerificationBatch(cwd, taskId, owner); return; }
         useCodingRuntimeStore.getState().setEditorBlock(cwd, taskId, null);
-        const startedTask = await codingApi.beginVerification(cwd, taskId, task.updatedAt);
+        const startedTask = await codingApi.beginVerification(cwd, taskId, savedRevision || task.updatedAt);
         if (isCurrent()) autoVerificationRef.current = `${cwd}:${taskId}:${startedTask.updatedAt}`;
         await refreshCurrent();
       } catch (error) {

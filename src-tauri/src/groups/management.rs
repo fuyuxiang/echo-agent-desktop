@@ -30,7 +30,7 @@ pub async fn group_member_change(
                     .and_then(|m| m.expert.clone())
             })
             .ok_or("请选择本地专家")?;
-        let entry = crate::agents_store::team_agents()
+        let entry = crate::agents_store::team_agents()?
             .into_iter()
             .find(|m| m.name == expert)
             .ok_or("本地专家已不存在，请先恢复专家配置")?;

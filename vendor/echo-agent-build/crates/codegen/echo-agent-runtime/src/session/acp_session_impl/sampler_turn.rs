@@ -1215,7 +1215,7 @@ impl SessionActor {
     }
     async fn submit_turn_request(
         self: &Arc<Self>,
-        request: ConversationRequest,
+        mut request: ConversationRequest,
     ) -> Result<SamplerTurnOutcome, echo_agent_sampler::SamplingErrorInfo> {
         struct DrainBarrier<'a>(&'a parking_lot::Mutex<Option<tokio::sync::oneshot::Sender<()>>>);
         impl Drop for DrainBarrier<'_> {
@@ -1230,6 +1230,14 @@ impl SessionActor {
         };
         let request_id = echo_agent_sampler::RequestId::random();
         let request_id_str = request_id.as_str().to_string();
+        if let Some(storage) = self.memory.storage() {
+            request.preflight = Some(Arc::new(
+                crate::session::memory_state::MemoryRequestPolicy {
+                    storage,
+                    extraction: false,
+                },
+            ));
+        }
         let submit_outcome = {
             let _permit = acquire_subagent_sampling_permit(&self.sampling_gate).await;
             self.sampler_handle

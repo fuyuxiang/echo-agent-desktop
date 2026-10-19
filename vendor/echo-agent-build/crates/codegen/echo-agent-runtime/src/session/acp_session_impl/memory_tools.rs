@@ -101,10 +101,10 @@ impl Tool for ManageMemoryTool {
         }
     }
     fn should_list(&self, _: &ListToolsContext) -> bool {
-        records::setting("memory", None, "enabled", true)
+        self.storage.enabled()
     }
     async fn run(&self, _: ToolCallContext, input: Self::Args) -> Result<Self::Output, ToolError> {
-        if !records::setting("memory", None, "enabled", true) {
+        if !self.storage.enabled() {
             return Err(error("memory_manage", "记忆已关闭，请先在设置中开启"));
         }
         if input.id.is_some() && input.expected_revision.is_none() {

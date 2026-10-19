@@ -4485,7 +4485,9 @@ impl MvpAgent {
             let gid = group.get("groupId").and_then(serde_json::Value::as_str).filter(|s| valid(s));
             let mid = group.get("memberId").and_then(serde_json::Value::as_str).filter(|s| valid(s));
             match (gid, mid) {
-                (Some(gid), Some(mid)) => if let Some(config) = session_memory_config.as_mut() {
+                (Some(gid), Some(mid)) => {
+                    let config = session_memory_config.get_or_insert_with(Default::default);
+                    config.enabled = true;
                     config.root_dir_override = Some(echo_agent_config::echo_agent_home().join("group-memory").join(gid).join(mid).join(format!("generation-{}", group.get("generation").and_then(serde_json::Value::as_u64).unwrap_or(0))));
                     config.flat_memory_root = true;
                 },

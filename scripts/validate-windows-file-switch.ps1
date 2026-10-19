@@ -15,7 +15,7 @@ $node = Join-Path (Split-Path $TheiaBrowser -Parent) 'node\node.exe'
 if ($LASTEXITCODE -ne 0) { throw 'Installed Git plugin failed fingerprint verification' }
 $testRoot = Join-Path ([IO.Path]::GetTempPath()) ('echo-windows-switch-' + [Guid]::NewGuid())
 New-Item -ItemType Directory -Path $testRoot | Out-Null
-$home = New-Item -ItemType Directory -Path (Join-Path $testRoot 'home')
+$reviewHome = New-Item -ItemType Directory -Path (Join-Path $testRoot 'home')
 $legacy = New-Item -ItemType Directory -Path (Join-Path $testRoot 'empty-legacy')
 $emptyGitConfig = Join-Path $testRoot 'empty.gitconfig'
 [IO.File]::WriteAllText($emptyGitConfig, '')
@@ -94,7 +94,7 @@ try {
     $start.EnvironmentVariables['ECHO_AGENT_REVIEW_ISOLATED'] = '1'
     $start.EnvironmentVariables['ECHO_AGENT_TELEMETRY_ENABLED'] = 'false'
     $start.EnvironmentVariables['ECHO_AGENT_TELEMETRY_TRACE_UPLOAD'] = 'false'
-    $start.EnvironmentVariables['ECHO_AGENT_HOME'] = $home.FullName
+    $start.EnvironmentVariables['ECHO_AGENT_HOME'] = $reviewHome.FullName
     $start.EnvironmentVariables['GROK_HOME'] = $legacy.FullName
     $start.EnvironmentVariables['GIT_CONFIG_NOSYSTEM'] = '1'
     $start.EnvironmentVariables['GIT_CONFIG_GLOBAL'] = $emptyGitConfig

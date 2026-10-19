@@ -1052,8 +1052,8 @@ pub(crate) async fn run_shell_child(
         if verbatim_mirror_fork {
             None
         } else if let Some(scope) = agent_memory_scope {
-            ctx.memory_config.as_ref().map(|mc| {
-                let mut c = mc.clone();
+            Some({
+                let mut c = ctx.memory_config.clone().unwrap_or_default();
                 let resolved = scope.resolve_dir(&agent_name_for_memory, &ctx.parent_cwd);
                 c.enabled = true;
                 c.root_dir_override = Some(resolved.path);

@@ -195,7 +195,7 @@ pub(crate) fn prepare_prompt(
 ) -> Result<String, String> {
     validate_session_id(session_id)?;
     validate_session_id(prompt_id)?;
-    let agents = crate::agents_store::team_agents();
+    let agents = crate::agents_store::team_agents()?;
     let names = agents
         .iter()
         .map(|agent| agent.name.clone())
@@ -1224,7 +1224,7 @@ pub(crate) fn create_team_for_session(
 
     let canonical_agents_dir = canonical_agents_directory(&agents_dir)?;
     let workspace = team_workspace(session_id)?;
-    let definitions = crate::agents_store::team_agents();
+    let definitions = crate::agents_store::team_agents()?;
     let mut registered = Vec::new();
     let mut team_members = Vec::new();
     for member in &input.members {
@@ -1318,11 +1318,11 @@ pub(crate) fn create_team_for_session(
             if existing
                 .members
                 .iter()
-                .map(|member| &member.name)
+                .map(|member| (&member.name, std::path::Path::new(&member.file)))
                 .collect::<Vec<_>>()
                 == team_members
                     .iter()
-                    .map(|member| &member.name)
+                    .map(|member| (&member.name, std::path::Path::new(&member.file)))
                     .collect::<Vec<_>>()
             {
                 return Ok(());
@@ -1897,6 +1897,52 @@ mod tests {
                 serde_json::from_str(other["content"][0]["text"].as_str().unwrap()).unwrap();
             assert_eq!(output["teams"].as_array().unwrap().len(), 0);
         });
+    }
+
+    #[test]
+    fn renamed_expert_cannot_satisfy_an_old_team_identity_by_reusing_its_name() {
+        if std::env::var_os("ECHO_REVIEW_TEAM_IDENTITY_TEST").is_none() {
+            let dir = tempfile::tempdir().unwrap();
+            let status = std::process::Command::new(std::env::current_exe().unwrap())
+                .args(["--exact", "team_mcp::tests::renamed_expert_cannot_satisfy_an_old_team_identity_by_reusing_its_name"])
+                .env("ECHO_AGENT_HOME", dir.path()).env("ECHO_REVIEW_TEAM_IDENTITY_TEST", "1").status().unwrap();
+            assert!(status.success());
+            return;
+        }
+        let dir = crate::agents_store::user_agents_dir_pub();
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(
+            dir.join("alpha.md"),
+            "---\nname: Alpha\ndescription: original\n---\noriginal",
+        )
+        .unwrap();
+        let input = || CreateTeamInput {
+            team_id: "identity".into(),
+            members: vec![CreateTeamMember {
+                name: "Alpha".into(),
+                role: "work".into(),
+            }],
+            description: None,
+        };
+        create_team_for_session(input(), Some("source")).unwrap();
+        std::fs::write(
+            dir.join("alpha.md"),
+            "---\nname: Beta\ndescription: renamed\n---\noriginal",
+        )
+        .unwrap();
+        std::fs::write(
+            dir.join("alpha-new.md"),
+            "---\nname: Alpha\ndescription: replacement\n---\nreplacement",
+        )
+        .unwrap();
+        assert!(create_team_for_session(input(), Some("source"))
+            .unwrap_err()
+            .contains("已存在"));
+        assert!(
+            read_teams_from_disk().unwrap()[&team_key(Some("source"), "identity")].members[0]
+                .file
+                .ends_with("alpha.md")
+        );
     }
 
     /// create_team 的成员名校验：路径分隔符 / `..` / `.md` 后缀 / 重复名。

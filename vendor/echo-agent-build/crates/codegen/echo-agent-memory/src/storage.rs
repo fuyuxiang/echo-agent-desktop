@@ -43,6 +43,7 @@ pub struct MemoryStorage {
     workspace_path: PathBuf,
     /// When true, workspace writes are silently skipped (temp-dir CWDs).
     ephemeral: bool,
+    personal_policy: bool,
 }
 
 impl MemoryStorage {
@@ -82,6 +83,7 @@ impl MemoryStorage {
             workspace_dir,
             workspace_path: cwd.to_path_buf(),
             ephemeral,
+            personal_policy: use_workspace_hash,
         }
     }
 
@@ -93,7 +95,37 @@ impl MemoryStorage {
             workspace_dir,
             workspace_path: PathBuf::from("/test/workspace"),
             ephemeral: false,
+            personal_policy: true,
         }
+    }
+
+    /// Independent expert/knowledge roots never inherit personal memory policy.
+    pub fn with_personal_policy(mut self, personal: bool) -> Self {
+        self.personal_policy = personal;
+        self
+    }
+    pub fn follows_personal_policy(&self) -> bool {
+        self.personal_policy
+    }
+
+    pub fn request_permit(&self) -> crate::embedding::MemoryRequestPermit {
+        let storage = self.clone();
+        std::sync::Arc::new(move |texts| {
+            storage.enabled()
+                && texts
+                    .iter()
+                    .all(|text| crate::records::permitted(&storage, text).unwrap_or(false))
+        })
+    }
+    pub fn setting(&self, section: &str, child: Option<&str>, key: &str, fallback: bool) -> bool {
+        if self.personal_policy {
+            crate::records::setting(section, child, key, fallback)
+        } else {
+            fallback
+        }
+    }
+    pub fn enabled(&self) -> bool {
+        self.setting("memory", None, "enabled", true)
     }
 
     /// Returns the global memory directory path.
@@ -1776,6 +1808,7 @@ mod tests {
             workspace_dir: workspace_dir.clone(),
             workspace_path: PathBuf::from("/tmp/test"),
             ephemeral: true,
+            personal_policy: true,
         };
 
         // write_daily_log returns Ok but must not create the file
@@ -1808,6 +1841,7 @@ mod tests {
             workspace_dir: workspace_dir.clone(),
             workspace_path: PathBuf::from("/tmp/test"),
             ephemeral: true,
+            personal_policy: true,
         };
 
         // Workspace append should be skipped
@@ -1834,6 +1868,7 @@ mod tests {
             workspace_dir: workspace_dir.clone(),
             workspace_path: PathBuf::from("/tmp/test"),
             ephemeral: true,
+            personal_policy: true,
         };
 
         storage.ensure_initialized().unwrap();

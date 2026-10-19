@@ -1155,3 +1155,31 @@ fn template_library_only_contains_explicit_saves_and_is_independent_of_session_t
     assert!(management::group_team_templates().unwrap().is_empty());
     assert!(store.get(&original.id).is_ok());
 }
+
+#[test]
+fn source_creation_is_atomic_idempotent_and_includes_archived_groups() {
+    let dir = tempfile::tempdir().unwrap();
+    let store = store::Store::open(&dir.path().join("groups.sqlite")).unwrap();
+    let mut original = group();
+    original.source_session_id = Some("source".into());
+    original.source_team_id = Some("team".into());
+    original.archived = true;
+    let attempts: Vec<_> = (0..6)
+        .map(|_| {
+            let store = store.clone();
+            let mut candidate = original.clone();
+            candidate.id = id();
+            std::thread::spawn(move || store.create(&candidate).unwrap().id)
+        })
+        .collect();
+    let ids: Vec<_> = attempts.into_iter().map(|a| a.join().unwrap()).collect();
+    assert!(ids.iter().all(|id| id == &ids[0]));
+    assert_eq!(store.list().unwrap().len(), 1);
+    let existing = store.get(&ids[0]).unwrap();
+    assert!(existing.archived);
+    assert_eq!(store.create(&existing).unwrap().id, existing.id);
+    let mut other = original;
+    other.source_session_id = Some("other-source".into());
+    store.create(&other).unwrap();
+    assert_eq!(store.list().unwrap().len(), 2);
+}

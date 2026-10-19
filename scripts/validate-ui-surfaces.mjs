@@ -237,6 +237,9 @@ page.setDefaultNavigationTimeout(60000);
       await page.screenshot({ path: join(output, `${surface}-${width}-${theme}.png`) });
       layouts += 1;
       if (surface === "weixin-connected" || surface === "weixin-offline") {
+        const disclosure = page.locator(".settings-disclosure").filter({has: page.getByText("单独交接的任务", {exact:true})});
+        await disclosure.waitFor();
+        if (!await disclosure.evaluate(element => element.open)) await disclosure.locator(":scope > summary").click();
         const sharedRow = page.locator(".weixin-channel__shared").last();
         if (await sharedRow.count()) await sharedRow.scrollIntoViewIfNeeded();
         await page.screenshot({ path: join(output, `${surface}-shared-${width}-${theme}.png`) });
@@ -286,6 +289,7 @@ page.setDefaultNavigationTimeout(60000);
   await page.getByRole("textbox", { name: "WebDAV 地址" }).fill("https://example.com/dav");
   await page.getByRole("button", { name: "保存", exact: true }).click();
   await page.getByRole("combobox", { name: "选择云存储源" }).selectOption({ label: "测试网盘" });
+  await page.getByText("浏览云端文件", { exact: true }).click();
   await page.getByText("空目录", { exact: true }).waitFor();
 
   await page.goto("http://127.0.0.1:1439/__ui-review?surface=capabilities");

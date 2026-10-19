@@ -152,6 +152,49 @@ pub fn session_exports_list(
     read_at(&crate::paths::echo_agent_home_dir(), &session_id).map(published_entries)
 }
 
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CatalogExport {
+    pub session_id: String,
+    pub session_title: String,
+    pub cwd: String,
+    #[serde(flatten)]
+    pub export: SessionExport,
+}
+
+fn catalog_at(
+    home: &Path,
+    sessions: &[(String, String, String)],
+) -> Result<Vec<CatalogExport>, String> {
+    let _guard = WRITES.lock().map_err(|_| "成果存储锁已损坏")?;
+    let mut result = Vec::new();
+    for (session_id, title, cwd) in sessions {
+        for export in published_entries(read_at(home, session_id)?) {
+            result.push(CatalogExport {
+                session_id: session_id.clone(),
+                session_title: title.clone(),
+                cwd: cwd.clone(),
+                export,
+            });
+        }
+    }
+    Ok(result)
+}
+
+/// Read-only catalog; only an explicit open verifies and grants the exact file.
+#[tauri::command]
+pub async fn session_exports_catalog() -> Result<Vec<CatalogExport>, String> {
+    tauri::async_runtime::spawn_blocking(|| {
+        let sessions = crate::sessions::list_all_sessions(true)?
+            .into_iter()
+            .map(|session| (session.session_id, session.title, session.cwd))
+            .collect::<Vec<_>>();
+        catalog_at(&crate::paths::echo_agent_home_dir(), &sessions)
+    })
+    .await
+    .map_err(|e| format!("读取成果目录失败：{e}"))?
+}
+
 /// Grant a single output only after an explicit click and verification against
 /// the native export ledger. Renderer paths and cached catalog rows grant nothing.
 #[tauri::command]
@@ -351,5 +394,30 @@ mod tests {
             std::fs::read(store_path(home.path(), "session").unwrap()).unwrap(),
             b"broken"
         );
+    }
+    #[test]
+    fn catalog_reads_archived_session_receipts_without_live_session_or_ui_cache() {
+        let home = tempfile::tempdir().unwrap();
+        record_at(
+            home.path(),
+            "archived",
+            DocumentExportReceipt {
+                path: "/output.docx".into(),
+                format: "docx".into(),
+                byte_size: 42,
+                sha256: "a".repeat(64),
+            },
+            "export",
+            false,
+        )
+        .unwrap();
+        let catalog = catalog_at(
+            home.path(),
+            &[("archived".into(), "old task".into(), "/old".into())],
+        )
+        .unwrap();
+        assert_eq!(catalog.len(), 1);
+        assert_eq!(catalog[0].session_id, "archived");
+        assert_eq!(catalog[0].export.receipt.path, "/output.docx");
     }
 }

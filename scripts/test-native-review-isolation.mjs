@@ -6,6 +6,7 @@ import { cleanNativeReviewEnvironment } from './lib/native-review-isolation.mjs'
 
 test('native acceptance strips inherited credentials, discovery overrides, and review switches without changing HOME', () => {
   const inherited = { HOME: '/synthetic/foreign-home', PATH: '/synthetic/bin',
+    OpenAI_API_KEY: 'mixed-case-marker', Echo_Agent_Config_Path: '/synthetic/config', Node_Options: '--require synthetic',
     ECHO_AGENT_HOME: '/synthetic/foreign-data', ECHO_AGENT_AUTH_PATH: '/synthetic/private-auth',
     ECHO_AGENT_AUTH: 'private-marker', ECHO_AGENT_AUTH_PROVIDER_COMMAND: 'foreign-command',
     ECHO_AGENT_CONFIG_PATH: '/synthetic/private-config', OTEL_EXPORTER_OTLP_ENDPOINT: 'https://foreign.invalid',

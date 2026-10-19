@@ -93,6 +93,7 @@ fn text(value: &str, limit: usize, label: &str) -> Result<String, String> {
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct CreateInput {
+    pub request_id: Option<String>,
     pub name: String,
     pub goal: Option<String>,
     pub cwd: String,
@@ -113,9 +114,19 @@ pub fn group_create(
     state: State<'_, crate::commands::AppState>,
     input: CreateInput,
 ) -> Result<Group, String> {
+    let request_id = input
+        .request_id
+        .as_deref()
+        .map(|value| {
+            uuid::Uuid::parse_str(value)
+                .map(|id| id.to_string())
+                .map_err(|_| "创建请求标识无效".to_string())
+        })
+        .transpose()?;
+    if input.source_session_id.is_some() != input.source_team_id.is_some() {
+        return Err("来源会话与任务编组必须同时指定".into());
+    }
     crate::policy::require_feature("sessions")?;
-    crate::commands::require_runtime_ready(Some(&app), &state, Some(&input.model_id))?;
-    crate::policy::require_model(&input.model_id)?;
     let cwd = app
         .state::<crate::shell_fs::FilesystemAccess>()
         .require_workspace(&input.cwd)?
@@ -132,7 +143,16 @@ pub fn group_create(
     {
         return Err("专家团工作区与来源会话不一致".into());
     }
-    let definitions = crate::agents_store::team_agents();
+    if let Some(existing) = db()?.find_creation(
+        request_id.as_deref(),
+        input.source_session_id.as_deref(),
+        input.source_team_id.as_deref(),
+    )? {
+        return Ok(existing);
+    }
+    crate::commands::require_runtime_ready(Some(&app), &state, Some(&input.model_id))?;
+    crate::policy::require_model(&input.model_id)?;
+    let definitions = crate::agents_store::team_agents()?;
     let name = text(&input.name, 80, "专家团名称")?;
     let goal = input.goal.unwrap_or_default();
     if goal.chars().count() > 4096 {
@@ -166,6 +186,9 @@ pub fn group_create(
         } else {
             None
         };
+    if input.source_team_id.is_some() && source_team.is_none() {
+        return Err("来源任务编组已不存在，请从当前会话重新选择".into());
+    }
     for expert in input.members {
         if !names.insert(expert.clone()) {
             return Err("不能重复添加同一专家".into());
@@ -244,7 +267,7 @@ pub fn group_create(
             .role = role;
     }
     let mut g = Group {
-        id: id(),
+        id: request_id.unwrap_or_else(id),
         name,
         goal,
         cwd,
@@ -274,7 +297,7 @@ pub fn group_create(
             g.post(None, "reference", reference, None);
         }
     }
-    db()?.create(&g)?;
+    let g = db()?.create(&g)?;
     changed(&g.id);
     Ok(g)
 }

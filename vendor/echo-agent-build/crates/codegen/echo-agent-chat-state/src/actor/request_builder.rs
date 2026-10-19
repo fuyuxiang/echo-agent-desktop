@@ -102,6 +102,7 @@ impl ChatStateActor {
 
         // Step 4: Assemble request
         ConversationRequest {
+            preflight: None,
             items,
             tools: tool_definitions,
             hosted_tools: vec![],

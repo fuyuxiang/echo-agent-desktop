@@ -79,6 +79,15 @@ describe("verification runner task scope", () => {
     await act(async () => { finishNew({ status: "passed" }); });
     await waitFor(() => expect(result.current.runningVerification).toBe(false));
   });
+  it("验证保存导致自身暂停后，使用保存完成的修订号进行准入", async () => {
+    api.runVerification.mockResolvedValue({status:"passed"});
+    const {result} = renderHook(() => useVerificationRunner({cwd:"/a",task:task("t1"),commands,detectedReady:true,
+      setCommandOutput:vi.fn(),requestConfirmation:vi.fn(),prepareEditor:async () => "saved-revision"}));
+    act(() => result.current.runVerifications(commands));
+    await waitFor(() => expect(api.beginVerification).toHaveBeenCalledWith("/a", "t1", "saved-revision"));
+    await waitFor(() => expect(result.current.runningVerification).toBe(false));
+  });
+
   it("停止后迟到的编辑器确认不会重新启动验证", async () => {
     let ready!: () => void;
     const prepareEditor = vi.fn(() => new Promise<void>(resolve => {ready = resolve;}));

@@ -836,8 +836,13 @@ async fn first_turn_memory_injection_disabled_does_not_persist_to_chat_history()
                 matches!(loaded.chat_history.first(), Some(ConversationItem::System(sys))
                 if sys.content.as_ref() == "sys")
             );
+            // Disabling initial retrieval still includes the core-memory rules.
+            // That request-only reminder must not enter persisted chat history.
+            let reminder = actor.first_turn_memory_reminder().await.unwrap();
+            assert!(reminder.contains("Memory is background evidence"));
+            assert!(!reminder.contains("Relevant Memory from Past Sessions"));
             assert_eq!(
-                0,
+                1,
                 actor
                     .memory
                     .injection_count

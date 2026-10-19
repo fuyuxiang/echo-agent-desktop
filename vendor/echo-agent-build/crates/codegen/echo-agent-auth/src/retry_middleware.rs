@@ -20,6 +20,33 @@ use crate::bearer_fragment::bearer_suffix;
 #[derive(Clone, Debug)]
 pub struct StampedBearerSuffix(pub String);
 
+/// Optional live permission checked at the actual send boundary, including
+/// retries after asynchronous credential refresh.
+#[derive(Clone)]
+pub struct RequestPermit(pub Arc<dyn Fn() -> bool + Send + Sync>);
+
+pub async fn execute_with_permit(
+    client: &reqwest_middleware::ClientWithMiddleware,
+    req: Request,
+    permit: RequestPermit,
+) -> reqwest_middleware::Result<Response> {
+    let mut extensions = http::Extensions::new();
+    extensions.insert(permit);
+    client.execute_with_extensions(req, &mut extensions).await
+}
+
+fn check_permit(extensions: &http::Extensions) -> reqwest_middleware::Result<()> {
+    if extensions
+        .get::<RequestPermit>()
+        .is_some_and(|permit| !(permit.0)())
+    {
+        return Err(Error::Middleware(
+            std::io::Error::other("Request permission changed before sending").into(),
+        ));
+    }
+    Ok(())
+}
+
 /// Execute `req` on a middleware-wrapped client and return the response
 /// together with the [`StampedBearerSuffix`] the auth middleware recorded
 /// (if it stamped anything). The one blessed way for 401-attribution
@@ -73,6 +100,7 @@ impl Middleware for AuthRetryMiddleware {
         }
 
         let backup = req.try_clone();
+        check_permit(extensions)?;
         let resp = next.clone().run(req, extensions).await?;
 
         if resp.status() != StatusCode::UNAUTHORIZED || self.max_retries == 0 {
@@ -94,6 +122,7 @@ impl Middleware for AuthRetryMiddleware {
                 break;
             };
             apply_auth_header(&mut retry, token, extensions);
+            check_permit(extensions)?;
             last_resp = next.clone().run(retry, extensions).await?;
             if last_resp.status() != StatusCode::UNAUTHORIZED {
                 return Ok(last_resp);
@@ -160,6 +189,34 @@ mod tests {
         ClientBuilder::new(reqwest::Client::new())
             .with(AuthRetryMiddleware::new(provider, max_retries))
             .build()
+    }
+
+    #[tokio::test]
+    async fn live_request_permit_prevents_401_retry_after_refresh() {
+        let mut server = mockito::Server::new_async().await;
+        let request = server
+            .mock("GET", "/")
+            .with_status(401)
+            .expect(1)
+            .create_async()
+            .await;
+        let provider = Arc::new(MockProvider::new(Some("token"), true));
+        let client = build_client(provider.clone(), 1).await;
+        let current = provider.clone();
+        let result = execute_with_permit(
+            &client,
+            client.get(server.url()).build().unwrap(),
+            RequestPermit(Arc::new(move || current.refresh_count() == 0)),
+        )
+        .await;
+        assert!(
+            result
+                .unwrap_err()
+                .to_string()
+                .contains("permission changed")
+        );
+        assert_eq!(provider.refresh_count(), 1);
+        request.assert_async().await;
     }
 
     #[tokio::test]

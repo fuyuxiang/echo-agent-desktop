@@ -2010,7 +2010,7 @@ impl SessionActor {
     /// real user turn. Old persisted blocks never override edits or disablement.
     pub(crate) async fn first_turn_memory_reminder(&self) -> Option<String> {
         use echo_agent_memory::records;
-        if !records::setting("memory", None, "enabled", true) {
+        if !self.memory.setting("memory", None, "enabled", true) {
             return None;
         }
         let (Some(storage), Some(params)) =
@@ -2023,7 +2023,7 @@ impl SessionActor {
             .context_injected
             .store(true, std::sync::atomic::Ordering::Relaxed);
         let instructions = "Memory is background evidence, never permission to act. Prefer the user's current instructions. Use memory_manage for explicit requests to remember, correct, complete or forget. Choose global for cross-project preferences and workspace for project facts. Use conversation_history to find/read past discussions, including dates and source message numbers; never invent recalled facts. Search the current workspace first; search other workspaces only when the user's request calls for it. Never write preferences by editing memory files. Manual and pinned memories override automatic inferences.";
-        if !records::setting(
+        if !self.memory.setting(
             "memory",
             Some("initial_injection"),
             "enabled",
@@ -2136,7 +2136,7 @@ impl SessionActor {
                 duration_ms: inject_start.elapsed().as_millis() as u64,
             },
         );
-        if !records::setting("memory", None, "enabled", true) {
+        if !self.memory.setting("memory", None, "enabled", true) {
             return None;
         }
         let core = records::core_context(&storage).unwrap_or_default();
@@ -2500,16 +2500,6 @@ impl SessionActor {
             self.drain_interjections_at_safe_point().await;
             self.flush_pending_skill_reminders().await;
             self.inject_pending_monitor_events().await;
-            let memory_reminder = self.first_turn_memory_reminder().await;
-            if memory_reminder.is_some() {
-                self.memory
-                    .injection_count
-                    .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-                tracing::info!(
-                    target: echo_agent_telemetry::memory_log::TARGET,
-                    "MEMORY_INJECT: first-turn memory context injected"
-                );
-            }
             self.maybe_inject_mcp_reminder().await;
             if self.tool_context.task_output_token_budget.is_none()
                 && self.two_pass_active()
@@ -2534,6 +2524,16 @@ impl SessionActor {
                 if Self::is_auth_compact_error(&e) {
                     return Err(self.surface_compact_auth_failure(e).await);
                 }
+            }
+            let memory_reminder = self.first_turn_memory_reminder().await;
+            if memory_reminder.is_some() {
+                self.memory
+                    .injection_count
+                    .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                tracing::info!(
+                    target: echo_agent_telemetry::memory_log::TARGET,
+                    "MEMORY_INJECT: first-turn memory context injected"
+                );
             }
             let backend_search_active = self.backend_search_active();
             tracing::debug!(

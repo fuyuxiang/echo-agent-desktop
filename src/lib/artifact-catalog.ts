@@ -189,3 +189,14 @@ export async function authorizeDocumentArtifact(sessionId: string, artifact: Ses
     sessionId, path: artifact.path, sha256: artifact.toolCallId.slice("document-export:".length),
   });
 }
+
+/** Recover native exports independently of localStorage and loaded transcripts. */
+export async function loadDocumentArtifactCatalog(): Promise<TaskArtifact[]> {
+  const entries = await invoke<(DurableSessionExport & { sessionId: string; sessionTitle: string; cwd: string })[]>("session_exports_catalog");
+  return (entries ?? []).map(({ receipt, title, createdAt, sessionId, sessionTitle, cwd }) => ({
+    id: `document-export:${receipt.sha256}:${receipt.path}`, path: receipt.path,
+    kind: "document_export", title: `${title} · ${receipt.format.toUpperCase()}`,
+    toolCallId: `document-export:${receipt.sha256}`, status: "completed", verifiedOutput: true,
+    updatedAt: createdAt, sessionId, sessionTitle, cwd,
+  }));
+}

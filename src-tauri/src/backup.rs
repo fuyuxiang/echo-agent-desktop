@@ -583,19 +583,6 @@ fn prepare_file(
             }
         }
     }
-    if name == "echoagent-automation-records.json" {
-        if let Some(items) = value.get_mut("records").and_then(|v| v.as_array_mut()) {
-            for item in items {
-                if matches!(item["status"].as_str(), Some("queued" | "running")) {
-                    item["status"] = serde_json::json!("failed");
-                    item["error"] =
-                        serde_json::json!("由备份恢复，未重新执行；请检查历史结果后手动运行");
-                    item["finishedAt"] = serde_json::json!(chrono::Utc::now().to_rfc3339());
-                    item["automationSnapshot"] = serde_json::Value::Null;
-                }
-            }
-        }
-    }
     crate::paths::write_private_file(
         path,
         &serde_json::to_vec(&value).map_err(|e| e.to_string())?,
@@ -695,7 +682,66 @@ fn apply_pending_at(home: &Path, app_data: &Path) -> Result<(), String> {
         return Ok(());
     }
     let staging = tempfile::tempdir_in(home).map_err(|e| e.to_string())?;
-    let manifest = unpack(&pending, staging.path())?;
+    let mut manifest = unpack(&pending, staging.path())?;
+    let retaining_target_history = !manifest
+        .files
+        .iter()
+        .any(|entry| entry.name == "echoagent-automation-records.json")
+        && home.join("echoagent-automation-records.json").exists();
+    // Overlay backups can predate the first automation. Existing target work
+    // still needs the same pause/close treatment as work in the archive.
+    for name in [
+        "echoagent-automations.json",
+        "echoagent-automation-records.json",
+    ] {
+        let target = home.join(name);
+        if !manifest.files.iter().any(|entry| entry.name == name) && target.exists() {
+            let bytes = crate::shell_fs::read_regular_file_bounded(&target, 64 * 1024 * 1024)?;
+            crate::paths::write_private_file(&staging.path().join(name), &bytes)?;
+            manifest.files.push(Entry {
+                name: name.into(),
+                bytes: bytes.len() as u64,
+                sha256: format!("{:x}", Sha256::digest(&bytes)),
+            });
+        }
+    }
+    if retaining_target_history && home.join("automation-terminal-outbox").exists() {
+        let history: serde_json::Value =
+            serde_json::from_slice(&crate::shell_fs::read_regular_file_bounded(
+                &staging.path().join("echoagent-automation-records.json"),
+                64 * 1024 * 1024,
+            )?)
+            .map_err(|e| e.to_string())?;
+        let names: HashSet<String> = history["records"]
+            .as_array()
+            .ok_or("自动化历史格式无效")?
+            .iter()
+            .filter_map(|record| record["id"].as_str())
+            .map(|id| format!("{:x}.json", Sha256::digest(id.as_bytes())))
+            .collect();
+        for entry in
+            fs::read_dir(home.join("automation-terminal-outbox")).map_err(|e| e.to_string())?
+        {
+            let entry = entry.map_err(|e| e.to_string())?;
+            let filename = entry
+                .file_name()
+                .into_string()
+                .map_err(|_| "无效完成事实文件名")?;
+            let name = format!("automation-terminal-outbox/{filename}");
+            if !names.contains(&filename) || manifest.files.iter().any(|file| file.name == name) {
+                continue;
+            }
+            // Retained target history has the same authoritative terminal
+            // facts as archived history. Reconcile before closing its queue.
+            let bytes = crate::shell_fs::read_regular_file_bounded(&entry.path(), 4 * 1024 * 1024)?;
+            crate::paths::write_private_file(&staging.path().join(&name), &bytes)?;
+            manifest.files.push(Entry {
+                name,
+                bytes: bytes.len() as u64,
+                sha256: format!("{:x}", Sha256::digest(&bytes)),
+            });
+        }
+    }
     let previous_name = format!("restore-previous-{}", uuid::Uuid::now_v7());
     let previous = home.join(&previous_name);
     let ui_path = home.join("restore-ui.json");
@@ -724,6 +770,29 @@ fn apply_pending_at(home: &Path, app_data: &Path) -> Result<(), String> {
         )?;
         journal.files.push((entry.name.clone(), existed));
     }
+    crate::automations::prepare_restored_terminals(staging.path())?;
+    // Overlay restore must not leave target-only completion jobs available to
+    // the next scheduler. Include removals in the existing rollback journal.
+    let mut obsolete_terminals = Vec::new();
+    let old_outbox = home.join("automation-terminal-outbox");
+    if old_outbox.exists() {
+        for entry in fs::read_dir(&old_outbox).map_err(|e| e.to_string())? {
+            let entry = entry.map_err(|e| e.to_string())?;
+            let name = format!(
+                "automation-terminal-outbox/{}",
+                entry.file_name().to_str().ok_or("无效完成事实文件名")?
+            );
+            if manifest.files.iter().any(|file| file.name == name) {
+                continue;
+            }
+            if !entry.file_type().map_err(|e| e.to_string())?.is_file() {
+                return Err("自动化完成事实目录存在非普通文件".into());
+            }
+            atomic_copy(&entry.path(), &previous.join(&name))?;
+            journal.files.push((name.clone(), true));
+            obsolete_terminals.push(name);
+        }
+    }
     let restoring_groups = manifest
         .files
         .iter()
@@ -744,6 +813,9 @@ fn apply_pending_at(home: &Path, app_data: &Path) -> Result<(), String> {
         &serde_json::to_vec(&journal).map_err(|e| e.to_string())?,
     )?;
     let result = (|| {
+        for name in &obsolete_terminals {
+            fs::remove_file(destination(home, app_data, name)?).map_err(|e| e.to_string())?;
+        }
         if restoring_groups {
             for name in ["collaboration.sqlite-wal", "collaboration.sqlite-shm"] {
                 let target = destination(home, app_data, name)?;
@@ -1137,6 +1209,101 @@ pub fn backup_last_error() -> Result<Option<String>, String> {
 #[cfg(test)]
 mod recovery_tests {
     use super::*;
+    #[test]
+    fn overlay_without_automation_files_pauses_existing_target_work() {
+        let source = tempfile::tempdir().unwrap();
+        let target = tempfile::tempdir().unwrap();
+        fs::write(
+            target.path().join("echoagent-automations.json"),
+            r#"{"automations":[{"id":"keep","status":"ACTIVE"}]}"#,
+        )
+        .unwrap();
+        fs::write(target.path().join("echoagent-automation-records.json"), r#"{"records":[{"id":"queued","status":"queued","automationSnapshot":{}},{"id":"completed","status":"success"},{"id":"durable","automationId":"keep","automationName":"finished","status":"running","startedAt":"start","sessionId":"session","promptId":"prompt"}]}"#).unwrap();
+        fs::create_dir_all(target.path().join("automation-terminal-outbox")).unwrap();
+        let fact_name = format!("{:x}.json", Sha256::digest(b"durable"));
+        fs::write(target.path().join("automation-terminal-outbox").join(&fact_name), r#"{"record_id":"durable","session_id":"session","prompt_id":"prompt","ok":true,"error":null,"finished_at":"original-end"}"#).unwrap();
+        export(
+            source.path(),
+            source.path(),
+            &target.path().join("restore-pending.zip"),
+            BTreeMap::new(),
+        )
+        .unwrap();
+        apply_pending_at(target.path(), target.path()).unwrap();
+        let schedules: serde_json::Value = serde_json::from_slice(
+            &fs::read(target.path().join("echoagent-automations.json")).unwrap(),
+        )
+        .unwrap();
+        let records: serde_json::Value = serde_json::from_slice(
+            &fs::read(target.path().join("echoagent-automation-records.json")).unwrap(),
+        )
+        .unwrap();
+        assert_eq!(schedules["automations"][0]["id"], "keep");
+        assert_eq!(schedules["automations"][0]["status"], "PAUSED");
+        assert_eq!(records["records"][0]["status"], "failed");
+        assert_eq!(records["records"][1]["status"], "success");
+        assert_eq!(records["records"][2]["status"], "success");
+        assert_eq!(records["records"][2]["finishedAt"], "original-end");
+        let fact: serde_json::Value = serde_json::from_slice(
+            &fs::read(
+                target
+                    .path()
+                    .join("automation-terminal-outbox")
+                    .join(fact_name),
+            )
+            .unwrap(),
+        )
+        .unwrap();
+        assert_eq!(fact["external_claimed"], true);
+        assert_eq!(fact["completion"]["push"], false);
+    }
+
+    #[test]
+    fn zip_restore_retains_completed_fact_and_removes_target_only_jobs() {
+        let source = tempfile::tempdir().unwrap();
+        let target = tempfile::tempdir().unwrap();
+        fs::write(source.path().join("echoagent-automation-records.json"), serde_json::to_vec(&serde_json::json!({"records":[{
+            "id":"run", "automationId":"automation", "automationName":"finished", "status":"running", "startedAt":"start", "sessionId":"session", "promptId":"prompt"
+        }]})).unwrap()).unwrap();
+        let outbox = source.path().join("automation-terminal-outbox");
+        fs::create_dir_all(&outbox).unwrap();
+        let name = format!("{:x}.json", Sha256::digest(b"run"));
+        fs::write(outbox.join(&name), serde_json::to_vec(&serde_json::json!({"record_id":"run","session_id":"session","prompt_id":"prompt","ok":true,"error":null,"finished_at":"original-end"})).unwrap()).unwrap();
+        fs::create_dir_all(target.path().join("automation-terminal-outbox")).unwrap();
+        fs::write(
+            target
+                .path()
+                .join("automation-terminal-outbox/obsolete.json"),
+            b"old-target-job",
+        )
+        .unwrap();
+        export(
+            source.path(),
+            source.path(),
+            &target.path().join("restore-pending.zip"),
+            BTreeMap::new(),
+        )
+        .unwrap();
+        apply_pending_at(target.path(), target.path()).unwrap();
+        assert!(!target
+            .path()
+            .join("automation-terminal-outbox/obsolete.json")
+            .exists());
+        let history: serde_json::Value = serde_json::from_slice(
+            &fs::read(target.path().join("echoagent-automation-records.json")).unwrap(),
+        )
+        .unwrap();
+        assert_eq!(history["records"][0]["status"], "success");
+        assert_eq!(history["records"][0]["finishedAt"], "original-end");
+        let fact: serde_json::Value = serde_json::from_slice(
+            &fs::read(target.path().join("automation-terminal-outbox").join(name)).unwrap(),
+        )
+        .unwrap();
+        assert_eq!(fact["external_claimed"], true);
+        assert_eq!(fact["completion"]["push"], false);
+        apply_pending_at(target.path(), target.path()).unwrap();
+    }
+
     #[test]
     fn restore_is_committed_once_and_pauses_work_without_replaying_it() {
         let source = tempfile::tempdir().unwrap();

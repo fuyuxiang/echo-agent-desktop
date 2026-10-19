@@ -86,3 +86,17 @@ describe("MyFilesPanel", () => {
     expect(await screen.findByText("暂无文件")).toBeInTheDocument();
   });
 });
+
+it("reads native receipts after cache loss without loading the original transcript, and retries failures", async () => {
+  const receipt = { path: "/outside/native.docx", format: "docx", byteSize: 10, sha256: "c".repeat(64) };
+  vi.mocked(invoke).mockRejectedValueOnce(new Error("ledger unavailable")).mockResolvedValueOnce([
+    { sessionId: "archived", sessionTitle: "已归档任务", cwd: "/old", receipt, title: "原生文档", createdAt: 1 },
+  ]).mockResolvedValue(undefined);
+  render(<MyFilesPanel cwd="/new" />);
+  expect(await screen.findByRole("alert")).toHaveTextContent("ledger unavailable");
+  fireEvent.click(screen.getByRole("button", {name: "重试"}));
+  const row = await screen.findByRole("button", {name: "打开成果 /outside/native.docx"});
+  fireEvent.click(row);
+  await waitFor(() => expect(openLocalPath).toHaveBeenCalledWith(receipt.path, "/old"));
+  expect(invoke).toHaveBeenCalledWith("session_export_authorize", {sessionId: "archived", path: receipt.path, sha256: receipt.sha256});
+});

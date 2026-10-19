@@ -48,6 +48,24 @@ export function createMeetingDraftStore(storage?: DraftStorage) {
   const snapshot = () => JSON.stringify({ version: 1, transcripts: [...transcripts], minutes: [...minutes] });
   const ensureDurable = () => {
     if (!storage || exitWithoutSaving) return;
+    if (unreadable && originalBytes === null) {
+      // A transient read error must be retryable. Validate recovered bytes and
+      // keep an exact recovery copy before merging with newer in-memory edits.
+      const recovered = storage.getItem(MEETING_DRAFTS_KEY);
+      if (recovered) {
+        const checked = createMeetingDraftStore({ getItem: () => recovered, setItem: () => {} });
+        if (checked.persistenceError()) { originalBytes = recovered; throw new Error(checked.persistenceError()!); }
+        const previousRecovery = storage.getItem(`${MEETING_DRAFTS_KEY}.recovery`);
+        const recovery = previousRecovery && previousRecovery !== recovered
+          ? JSON.stringify({ version: 1, recoveries: [previousRecovery, recovered] }) : recovered;
+        storage.setItem(`${MEETING_DRAFTS_KEY}.recovery`, recovery);
+        if (storage.getItem(`${MEETING_DRAFTS_KEY}.recovery`) !== recovery) throw new Error("恢复副本写入校验失败");
+        const data = JSON.parse(recovered);
+        for (const [key, value] of data.transcripts) if (!transcripts.has(key)) Map.prototype.set.call(transcripts, key, value);
+        for (const [key, value] of data.minutes) if (!minutes.has(key)) Map.prototype.set.call(minutes, key, value);
+      }
+      unreadable = false;
+    }
     if (unreadable) throw new Error(persistenceError ?? "会议草稿无法读取，请先恢复本地存储");
     try {
       const content = snapshot();

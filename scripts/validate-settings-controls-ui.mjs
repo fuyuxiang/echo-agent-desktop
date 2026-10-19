@@ -47,7 +47,7 @@ async function inspect(page, context) {
         clipped:element.scrollWidth > element.clientWidth + 2,
       };
     });
-    const exceptions = ".settings-navigation__item,.settings-view-tabs__item,.settings-modal__close,.model-connections__source,.models-settings-panel__editor-close,.model-connection-editor__chips button,.models-settings-panel__advanced-toggle,.theme-toggle__btn,.resources-panel__tab,.memory-editor__close,.archived-settings__scope,.notification-filter,.notification-row__mark,.notification-row__session,.notify-advanced__toggle,.quota-panel__period-btn,.storage-panel__entry-name--button,.help-card";
+    const exceptions = ".personal-memory__toolbar [role=tab],.settings-navigation__item,.settings-view-tabs__item,.settings-modal__close,.model-connections__source,.models-settings-panel__editor-close,.model-connection-editor__chips button,.models-settings-panel__advanced-toggle,.theme-toggle__btn,.resources-panel__tab,.memory-editor__close,.archived-settings__scope,.notification-filter,.notification-row__mark,.notification-row__session,.notify-advanced__toggle,.quota-panel__period-btn,.storage-panel__entry-name--button,.help-card";
     const unmanaged = [...root.querySelectorAll("button")].filter(visible).filter(element => !element.matches(`.settings-btn,.form-button,.echo-button,.btn,${exceptions}`)).map(element => ({name:element.textContent.trim(),classes:element.className}));
     const fields = [...root.querySelectorAll("input:not([type=checkbox]):not([type=radio]):not([type=range]):not([type=hidden]),select,textarea")].filter(visible).filter(element => !element.closest(".archived-settings__search")).map(element => {
       const css = getComputedStyle(element);
@@ -107,7 +107,7 @@ try {
       }
       const secondarySelector = {
         model: ".model-connections__facts",
-        memory: '.settings-disclosure .settings-row:has(input[aria-label="监听外部修改"])',
+        memory: ".personal-memory__legacy .resources-panel",
         security: ".permission-rule-builder",
         data: ".settings-path-value",
         "agent-settings": 'input[aria-label="OTLP 遥测端点"]',
@@ -115,11 +115,13 @@ try {
         "cloud-storage": ".storage-panel__breadcrumb",
       }[surface];
       if (secondarySelector) assert.equal(await page.locator(secondarySelector).isVisible(),false,`${surface}: secondary details crowd the initial page`);
+      if (surface === "memory") await page.getByText("高级：记忆文档与会话摘要", {exact:true}).click();
       const disclosures = page.locator(".settings-disclosure");
       for (let index = 0; index < await disclosures.count(); index += 1) {
         const details = disclosures.nth(index);
         if (!await details.evaluate(element => element.open)) await details.locator(":scope > summary").click();
       }
+      if (secondarySelector) await page.locator(secondarySelector).waitFor({state:"visible"});
       if (secondarySelector) assert.equal(await page.locator(secondarySelector).isVisible(),true,`${surface}: secondary controls cannot be reached`);
       if (await disclosures.count()) await inspect(page,{surface:`${surface}-details`,width,height,theme,font});
       if(surface==="model") {
@@ -138,8 +140,11 @@ try {
         await inspect(page,{surface:"notify-editor",width,height,theme,font});
       }
       if(surface==="personal-memory") {
-        await page.getByRole("button",{name:"追加记忆到文档",exact:true}).click();
+        await page.getByRole("button",{name:"添加记忆",exact:true}).click();
         await inspect(page,{surface:"memory-editor",width,height,theme,font});
+        await page.getByText("更多选项", {exact:true}).click();
+        await page.getByLabel("主题（可选）").waitFor();
+        await inspect(page,{surface:"memory-editor-advanced",width,height,theme,font});
       }
     }
     assert.deepEqual(errors,[]);

@@ -821,6 +821,7 @@ fn record_run_finished(
         local_notification_id: None,
         external_claimed: false,
         external_result: None,
+        restored_orphan: false,
     };
     match persist_terminal(fact) {
         Ok(completion) => completion.is_some(),
@@ -864,6 +865,108 @@ struct TerminalFact {
     external_claimed: bool,
     #[serde(default)]
     external_result: Option<String>,
+    #[serde(default)]
+    restored_orphan: bool,
+}
+
+/// Reconcile a staged backup before any service can retry an outbox. Restored
+/// work never runs again and external delivery is never replayed by restore.
+pub(crate) fn prepare_restored_terminals(home: &Path) -> Result<(), String> {
+    let history_path = home.join("echoagent-automation-records.json");
+    let mut history: serde_json::Value = if history_path.exists() {
+        serde_json::from_slice(&crate::shell_fs::read_regular_file_bounded(
+            &history_path,
+            64 * 1024 * 1024,
+        )?)
+        .map_err(|e| e.to_string())?
+    } else {
+        serde_json::json!({"records":[]})
+    };
+    let records = history
+        .get_mut("records")
+        .and_then(|v| v.as_array_mut())
+        .ok_or("自动化历史格式无效")?;
+    let directory = home.join("automation-terminal-outbox");
+    if directory.exists() {
+        for entry in std::fs::read_dir(&directory).map_err(|e| e.to_string())? {
+            let entry = entry.map_err(|e| e.to_string())?;
+            if entry.path().extension().is_none_or(|e| e != "json") {
+                continue;
+            }
+            let bytes = crate::shell_fs::read_regular_file_bounded(&entry.path(), 4 * 1024 * 1024)?;
+            let mut fact: TerminalFact =
+                serde_json::from_slice(&bytes).map_err(|e| format!("自动化完成事实损坏：{e}"))?;
+            let expected_name = format!("{:x}.json", Sha256::digest(fact.record_id.as_bytes()));
+            if entry.file_name() != std::ffi::OsStr::new(&expected_name) {
+                return Err("自动化完成事实文件身份不一致".into());
+            }
+            let Some(value) = records
+                .iter_mut()
+                .find(|v| v["id"].as_str() == Some(&fact.record_id))
+            else {
+                // A deleted terminal history can legitimately leave a pending
+                // fact. Preserve it, but never resurrect or publish that run.
+                fact.restored_orphan = true;
+                fact.external_claimed = true;
+                fact.external_result = Some("由备份恢复，历史已删除，未重建或补发".into());
+                crate::paths::write_private_file(
+                    &entry.path(),
+                    &serde_json::to_vec(&fact).map_err(|e| e.to_string())?,
+                )?;
+                continue;
+            };
+            let mut record: AutomationRunRecord =
+                serde_json::from_value(value.clone()).map_err(|e| e.to_string())?;
+            if fact
+                .session_id
+                .as_ref()
+                .is_some_and(|id| record.session_id.as_ref() != Some(id))
+                || fact
+                    .prompt_id
+                    .as_ref()
+                    .is_some_and(|id| record.prompt_id.as_ref() != Some(id))
+            {
+                return Err("自动化恢复事实轮次不一致".into());
+            }
+            finalize_from_fact(&mut record, &fact);
+            let expected_status = if fact.interrupted {
+                "interrupted"
+            } else if fact.ok {
+                "success"
+            } else {
+                "failed"
+            };
+            if record.status != expected_status {
+                return Err("自动化恢复事实与终态历史冲突，原数据已保留".into());
+            }
+            record.automation_snapshot = None;
+            let mut completion = completion_for_record(&record);
+            completion.push = false;
+            fact.completion = Some(completion);
+            fact.external_claimed = true;
+            fact.external_result = Some("由备份恢复，仅恢复本地结果，未补发外部通知".into());
+            crate::paths::write_private_file(
+                &entry.path(),
+                &serde_json::to_vec(&fact).map_err(|e| e.to_string())?,
+            )?;
+            *value = serde_json::to_value(record).map_err(|e| e.to_string())?;
+        }
+    }
+    for record in records {
+        if matches!(record["status"].as_str(), Some("queued" | "running")) {
+            record["status"] = serde_json::json!("failed");
+            record["error"] = serde_json::json!("由备份恢复，未重新执行；请检查历史结果后手动运行");
+            record["finishedAt"] = serde_json::json!(chrono::Utc::now().to_rfc3339());
+            record["automationSnapshot"] = serde_json::Value::Null;
+        }
+    }
+    if history_path.exists() {
+        crate::paths::write_private_file(
+            &history_path,
+            &serde_json::to_vec(&history).map_err(|e| e.to_string())?,
+        )?;
+    }
+    Ok(())
 }
 
 fn active_run_prompts() -> &'static Mutex<HashMap<(String, String), String>> {
@@ -1071,6 +1174,7 @@ fn complete_run_prompt(
         local_notification_id: None,
         external_claimed: false,
         external_result: None,
+        restored_orphan: false,
     };
     match persist_terminal(fact) {
         Ok(Some(completion)) => AutomationCompletionOutcome::Persisted(Box::new(completion)),
@@ -1090,7 +1194,9 @@ fn retry_terminal_completions(app: &AppHandle) {
             }
             if let Ok(Some(body)) = read_bounded_string(&path, 64 * 1024) {
                 if let Ok(fact) = serde_json::from_str::<TerminalFact>(&body) {
-                    if terminal_path(&fact.record_id).ok().as_ref() == Some(&path) {
+                    if !fact.restored_orphan
+                        && terminal_path(&fact.record_id).ok().as_ref() == Some(&path)
+                    {
                         pending_terminals()
                             .lock()
                             .unwrap()
@@ -4266,8 +4372,99 @@ mod tests {
             local_notification_id: None,
             external_claimed: false,
             external_result: None,
+            restored_orphan: false,
         };
         (records, fact)
+    }
+
+    #[test]
+    fn restore_reconciles_a_durable_fact_after_history_failure_without_external_replay() {
+        let home = tempfile::tempdir().unwrap();
+        let (mut records, mut fact) = terminal_fixture();
+        let history = serde_json::to_vec(&records).unwrap();
+        let mut durable_fact = Vec::new();
+        assert!(persist_terminal_transition(
+            &mut records,
+            &mut fact,
+            |fact| {
+                durable_fact = serde_json::to_vec(fact).unwrap();
+                Ok(())
+            },
+            |_| Err("injected history failure".into())
+        )
+        .is_err());
+        let outbox = home.path().join("automation-terminal-outbox");
+        std::fs::create_dir_all(&outbox).unwrap();
+        let path = outbox.join(format!(
+            "{:x}.json",
+            Sha256::digest(fact.record_id.as_bytes())
+        ));
+        std::fs::write(&path, durable_fact).unwrap();
+        std::fs::write(
+            home.path().join("echoagent-automation-records.json"),
+            history,
+        )
+        .unwrap();
+        prepare_restored_terminals(home.path()).unwrap();
+        let records: RunRecordStore = serde_json::from_slice(
+            &std::fs::read(home.path().join("echoagent-automation-records.json")).unwrap(),
+        )
+        .unwrap();
+        assert_eq!(records.records[0].status, "success");
+        assert_eq!(records.records[0].finished_at.as_deref(), Some("end"));
+        assert!(records.records[0].automation_snapshot.is_none());
+        assert!(scheduled_runs_in_flight(&records).is_empty());
+        let mut fact: TerminalFact =
+            serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();
+        assert_eq!(fact.completion.as_ref().unwrap().event.status, "success");
+        assert!(!fact.completion.as_ref().unwrap().push);
+        assert!(!claim_external_attempt(&mut fact, true, |_| Ok(())).unwrap());
+        prepare_restored_terminals(home.path()).unwrap();
+    }
+
+    #[test]
+    fn restore_accepts_unbound_failure_facts_and_suppresses_deleted_history() {
+        let home = tempfile::tempdir().unwrap();
+        let (records, mut fact) = terminal_fixture();
+        fact.ok = false;
+        fact.error = Some("execution timeout".into());
+        fact.session_id = None;
+        fact.prompt_id = None;
+        let outbox = home.path().join("automation-terminal-outbox");
+        std::fs::create_dir_all(&outbox).unwrap();
+        let path = outbox.join(format!(
+            "{:x}.json",
+            Sha256::digest(fact.record_id.as_bytes())
+        ));
+        std::fs::write(&path, serde_json::to_vec(&fact).unwrap()).unwrap();
+        let history_path = home.path().join("echoagent-automation-records.json");
+        std::fs::write(&history_path, serde_json::to_vec(&records).unwrap()).unwrap();
+        prepare_restored_terminals(home.path()).unwrap();
+        let restored: RunRecordStore =
+            serde_json::from_slice(&std::fs::read(&history_path).unwrap()).unwrap();
+        assert_eq!(restored.records[0].status, "failed");
+        assert_eq!(
+            restored.records[0].error.as_deref(),
+            Some("execution timeout")
+        );
+        let saved: TerminalFact = serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();
+        assert!(!saved.completion.unwrap().push);
+        std::fs::write(
+            &history_path,
+            serde_json::to_vec(&RunRecordStore::default()).unwrap(),
+        )
+        .unwrap();
+        prepare_restored_terminals(home.path()).unwrap();
+        let mut orphan: TerminalFact =
+            serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();
+        assert!(orphan.restored_orphan);
+        assert!(!claim_external_attempt(&mut orphan, true, |_| Ok(())).unwrap());
+        assert!(
+            serde_json::from_slice::<RunRecordStore>(&std::fs::read(&history_path).unwrap())
+                .unwrap()
+                .records
+                .is_empty()
+        );
     }
 
     #[test]

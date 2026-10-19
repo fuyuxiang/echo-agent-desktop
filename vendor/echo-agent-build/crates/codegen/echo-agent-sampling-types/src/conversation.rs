@@ -591,9 +591,16 @@ impl From<ToolDefinition> for ToolSpec {
 // Conversation Request
 // ============================================================================
 
+/// Live, caller-owned policy applied immediately before each transport attempt.
+/// The sampler stays independent of the caller's configuration and storage.
+pub trait ConversationRequestPreflight: std::fmt::Debug + Send + Sync {
+    fn apply(&self, request: &mut ConversationRequest) -> Result<(), &'static str>;
+}
+
 /// A complete conversation request that can be sent to either API.
 #[derive(Debug, Clone, Default)]
 pub struct ConversationRequest {
+    pub preflight: Option<Arc<dyn ConversationRequestPreflight>>,
     /// The conversation items (messages)
     pub items: Vec<ConversationItem>,
     /// Available tools (client-side, sent as Function definitions)

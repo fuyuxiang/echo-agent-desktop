@@ -590,7 +590,7 @@ export function SecuritySettingsPanel() {
           </button>
         </div>
       </SettingsGroup>
-      <SettingsDisclosure title="自定义工具规则" description={rulesError ? "读取失败，请展开重试；原有规则不会被覆盖。" : loading ? "正在读取…" : `${rules.length} 条规则 · 按工具或命令细化授权`} defaultOpen={Boolean(rulesError)}>
+      <SettingsDisclosure title="自定义工具规则" description={feedback.startsWith("保存失败") ? feedback : rulesError ? "读取失败，请展开重试；原有规则不会被覆盖。" : loading ? "正在读取…" : `${rules.length} 条规则 · 按工具或命令细化授权`} defaultOpen={Boolean(rulesError) || feedback.startsWith("保存失败")}>
         <SettingsGroup
           title="工具权限规则"
           desc="拒绝优先于询问，询问优先于允许。保存后重启 Agent 生效。"
@@ -654,7 +654,7 @@ export function SecuritySettingsPanel() {
             </button>
           </div>
         </SettingsGroup>
-        {feedback && <p className="settings-hint" role="status">{feedback}</p>}
+        {feedback && <p className="settings-hint" role={feedback.startsWith("保存失败") ? "alert" : "status"}>{feedback}</p>}
       </SettingsDisclosure>
 
     </SettingsSection>
@@ -894,7 +894,7 @@ function DiagnosticSettingsGroup() {
           </div>
         </div>
       </SettingsGroup>
-    {feedback && <p className="settings-hint" role="status">{feedback}</p>}
+    {feedback && <p className="settings-hint" role={feedback.startsWith("保存失败") ? "alert" : "status"}>{feedback}</p>}
   </SettingsDisclosure>;
 }
 

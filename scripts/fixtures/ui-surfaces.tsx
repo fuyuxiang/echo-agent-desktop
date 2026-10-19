@@ -299,7 +299,7 @@ Object.assign(window, {
         case "automation_capabilities": return { browser: { available: true, browserName: "Chrome" }, computer: { available: true, platform: "macos", screenCapture: true, inputControl: true } };
         case "storage_providers_list": return providers;
         case "storage_provider_upsert": providers = [args.config]; return;
-        case "storage_list": return [{ path: "/readme.md", name: "readme.md", isDir: false, size: 256 }];
+        case "storage_list": return args.id === "review-dav" ? [{ path: "/readme.md", name: "readme.md", isDir: false, size: 256 }] : [];
         case "storage_read_text": return "隔离 UI 验证内容，不访问真实云存储。";
         case "storage_provider_test": return;
         case "notify_desktop_status":

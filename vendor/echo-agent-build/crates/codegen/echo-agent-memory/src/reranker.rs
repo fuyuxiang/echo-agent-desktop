@@ -12,6 +12,7 @@ pub struct ApiReranker {
     endpoint: String,
     model: String,
     api_key: Option<String>,
+    request_permit: Option<super::embedding::MemoryRequestPermit>,
 }
 
 impl ApiReranker {
@@ -23,7 +24,13 @@ impl ApiReranker {
             endpoint: config.endpoint.clone()?,
             model: config.model.clone()?,
             api_key: config.api_key.clone().filter(|key| !key.trim().is_empty()),
+            request_permit: None,
         })
+    }
+
+    pub fn with_request_permit(mut self, permit: super::embedding::MemoryRequestPermit) -> Self {
+        self.request_permit = Some(permit);
+        self
     }
 
     fn request_body(&self, query: &str, documents: &[&str], count: usize) -> serde_json::Value {
@@ -61,6 +68,13 @@ impl ApiReranker {
                 tokio::time::sleep(std::time::Duration::from_millis(delay)).await;
             }
 
+            if self
+                .request_permit
+                .as_ref()
+                .is_some_and(|permit| !permit(&documents))
+            {
+                return Err("Memory changed or was disabled before reranking".into());
+            }
             let mut request =
                 echo_agent_http::shared_client().post(self.endpoint.trim_end_matches('/'));
             if let Some(key) = self.api_key.as_deref() {

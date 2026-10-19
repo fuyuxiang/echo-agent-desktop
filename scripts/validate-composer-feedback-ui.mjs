@@ -107,7 +107,8 @@ try {
   await page.getByText("默认开启，无需添加渠道").waitFor();
   await page.getByRole("button",{name:"测试桌面提醒"}).click();
   await page.getByRole("status").filter({hasText:"已向系统提交通知"}).waitFor();
-  await page.getByRole("switch",{name:"桌面提醒"}).click();
+  // The native checkbox is visually replaced by its labelled switch track.
+  await page.getByRole("switch",{name:"桌面提醒"}).locator("..").click();
   await page.getByText("你已关闭桌面提醒").waitFor();
   assert(await page.getByRole("button",{name:"测试桌面提醒"}).isDisabled());
   await page.screenshot({path:join(output,"notifications.png")});

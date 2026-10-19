@@ -67,8 +67,23 @@ pub(crate) struct SessionMemory {
 impl SessionMemory {
     /// Whether memory is enabled for this session.
     pub(crate) fn is_enabled(&self) -> bool {
-        self.storage.borrow().is_some()
-            && echo_agent_memory::records::setting("memory", None, "enabled", true)
+        self.storage
+            .borrow()
+            .as_ref()
+            .is_some_and(|storage| storage.enabled())
+    }
+
+    pub(crate) fn setting(
+        &self,
+        section: &str,
+        child: Option<&str>,
+        key: &str,
+        fallback: bool,
+    ) -> bool {
+        self.storage
+            .borrow()
+            .as_ref()
+            .is_some_and(|storage| storage.setting(section, child, key, fallback))
     }
 
     /// Clone the storage out of the `RefCell`, dropping the borrow immediately.
@@ -166,6 +181,7 @@ impl SessionMemory {
             if let Some(ref params) = self.backend_params
                 && let Some(provider) = params.make_embedding_provider().await
             {
+                let provider = provider.with_request_permit(storage.request_permit());
                 crate::session::memory::embed_missing_chunks(&index, &provider).await;
             }
         }
@@ -243,4 +259,150 @@ pub(crate) struct MemoryTelemetry {
     pub dream_count: u64,
     pub dream_success_count: u64,
     pub dream_error_count: u64,
+}
+
+#[derive(Debug)]
+pub(crate) struct MemoryRequestPolicy {
+    pub storage: crate::session::memory::MemoryStorage,
+    pub extraction: bool,
+}
+impl echo_agent_sampling_types::ConversationRequestPreflight for MemoryRequestPolicy {
+    fn apply(
+        &self,
+        request: &mut echo_agent_sampling_types::ConversationRequest,
+    ) -> Result<(), &'static str> {
+        let enabled = self.storage.enabled();
+        if self.extraction && !enabled {
+            return Err("Memory was disabled before the request could be sent");
+        }
+        for item in &mut request.items {
+            if let echo_agent_sampling_types::ConversationItem::System(system) = item {
+                let mut cursor = 0;
+                while let Some(offset) = system.content[cursor..].find("<memory-context>") {
+                    let start = cursor + offset;
+                    let end = system.content[start..]
+                        // Treat embedded closing markers as memory data too.
+                        // An early marker must not leave private text outside
+                        // the span removed when memory is disabled/forgotten.
+                        .rfind("</memory-context>")
+                        .map(|offset| start + offset + "</memory-context>".len())
+                        .unwrap_or(system.content.len());
+                    if enabled
+                        && echo_agent_memory::records::permitted(
+                            &self.storage,
+                            &system.content[start..end],
+                        )
+                        .unwrap_or(false)
+                    {
+                        cursor = end;
+                    } else {
+                        system.content =
+                            format!("{}{}", &system.content[..start], &system.content[end..])
+                                .into();
+                        cursor = start;
+                    }
+                }
+            }
+        }
+        Ok(())
+    }
+}
+
+#[cfg(test)]
+mod live_policy_tests {
+    use super::*;
+    use echo_agent_sampling_types::{
+        ConversationItem, ConversationRequest, ConversationRequestPreflight,
+    };
+    #[test]
+    fn disabled_personal_memory_is_removed_at_submission_without_affecting_independent_roots() {
+        if std::env::var_os("ECHO_MEMORY_PREFLIGHT_TEST").is_none() {
+            let dir = tempfile::tempdir().unwrap();
+            let status = std::process::Command::new(std::env::current_exe().unwrap())
+                .args(["--exact", "session::memory_state::live_policy_tests::disabled_personal_memory_is_removed_at_submission_without_affecting_independent_roots"])
+                .env("ECHO_AGENT_HOME",dir.path()).env("ECHO_MEMORY_PREFLIGHT_TEST","1").status().unwrap();
+            assert!(status.success());
+            return;
+        }
+        let home = std::path::PathBuf::from(std::env::var_os("ECHO_AGENT_HOME").unwrap());
+        let storage = crate::session::memory::MemoryStorage::new(
+            std::path::Path::new("/fixture"),
+            Some(&home.join("memory")),
+        );
+        let policy = MemoryRequestPolicy {
+            storage: storage.clone(),
+            extraction: false,
+        };
+        std::fs::write(home.join("config.toml"), "[memory]\nenabled = true\n").unwrap();
+        let original = ConversationRequest {
+            items: vec![ConversationItem::system(
+                "instructions<memory-context>private fact</memory-context>keep",
+            )],
+            ..Default::default()
+        };
+        assert!(
+            storage.enabled(),
+            "enabled config must be visible to the request policy"
+        );
+        assert!(echo_agent_memory::records::permitted(&storage, "private fact").unwrap());
+        let mut initial = original.clone();
+        policy.apply(&mut initial).unwrap();
+        assert!(
+            initial.items[0].text_content().contains("private fact"),
+            "enabled request: {:?}",
+            initial.items
+        );
+        let record = echo_agent_memory::records::remember(
+            &storage,
+            echo_agent_memory::records::RecordInput {
+                scope: "global".into(),
+                kind: "user".into(),
+                key: "privacy".into(),
+                content: "private fact".into(),
+                ..Default::default()
+            },
+            None,
+            false,
+        )
+        .unwrap()
+        .unwrap();
+        echo_agent_memory::records::retire(
+            &storage,
+            "global",
+            &record.id,
+            Some(record.revision),
+            false,
+        )
+        .unwrap();
+        let mut forgotten = original.clone();
+        policy.apply(&mut forgotten).unwrap();
+        assert_eq!(forgotten.items[0].text_content(), "instructionskeep");
+        std::fs::write(home.join("config.toml"), "[memory]\nenabled = false\n").unwrap();
+        let mut retry = original.clone();
+        policy.apply(&mut retry).unwrap();
+        assert_eq!(retry.items[0].text_content(), "instructionskeep");
+        let mut embedded_marker = ConversationRequest {
+            items: vec![ConversationItem::system(
+                "before<memory-context>first</memory-context>private tail</memory-context>after",
+            )],
+            ..Default::default()
+        };
+        policy.apply(&mut embedded_marker).unwrap();
+        assert_eq!(embedded_marker.items[0].text_content(), "beforeafter");
+        let extraction = MemoryRequestPolicy {
+            storage: storage.clone(),
+            extraction: true,
+        };
+        assert!(extraction.apply(&mut original.clone()).is_err());
+        let independent = MemoryRequestPolicy {
+            storage: storage.with_personal_policy(false),
+            extraction: false,
+        };
+        let mut group = original;
+        group.items = vec![ConversationItem::system(
+            "<memory-context>independent fact</memory-context>",
+        )];
+        independent.apply(&mut group).unwrap();
+        assert!(group.items[0].text_content().contains("independent fact"));
+    }
 }

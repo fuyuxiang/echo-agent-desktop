@@ -21,6 +21,7 @@ import {
   type TaskArtifact,
   artifactsFromTranscripts,
   loadTaskArtifacts,
+  loadDocumentArtifactCatalog,
   mergeTaskArtifacts,
 } from "@/lib/artifact-catalog";
 import { useSessionStore } from "@/stores/session-store";
@@ -154,6 +155,20 @@ function ArtifactsTab({
   const transcripts = useSessionStore((state) => state.transcripts);
   const independent = useSessionsStore((state) => state.independent);
   const [catalogVersion, setCatalogVersion] = useState(0);
+  const [nativeExports, setNativeExports] = useState<TaskArtifact[]>([]);
+  const [nativeError, setNativeError] = useState<string | null>(null);
+  const [nativeLoading, setNativeLoading] = useState(true);
+  useEffect(() => {
+    let active = true;
+    setNativeLoading(true);
+    void loadDocumentArtifactCatalog().then(items => {
+      if (active) { setNativeExports(items); setNativeError(null); }
+    }).catch(error => { if (active) setNativeError(errorMessage(error)); })
+      .finally(() => { if (active) setNativeLoading(false); });
+    return () => { active = false; };
+  }, [catalogVersion, independent]);
+  const nativeStatus = nativeError ? <div role="alert">读取已保存成果失败：{nativeError}<button onClick={() => setCatalogVersion(value => value + 1)}>重试</button></div>
+    : nativeLoading ? <p role="status">正在读取已保存成果…</p> : null;
 
   useEffect(() => {
     const refresh = () => setCatalogVersion((version) => version + 1);
@@ -171,10 +186,11 @@ function ArtifactsTab({
       },
     ]));
     return mergeTaskArtifacts(
+      nativeExports,
       artifactsFromTranscripts(transcripts, meta),
       loadTaskArtifacts(),
     );
-  }, [catalogVersion, independent, transcripts]);
+  }, [catalogVersion, independent, transcripts, nativeExports]);
 
   const filtered = entries.filter((e) => {
     if (searchQuery) {
@@ -194,6 +210,7 @@ function ArtifactsTab({
   if (filtered.length === 0) {
     return (
       <div className="myfiles-empty">
+        {nativeStatus}
         <MyFilesIconV2 size="xl" />
         <p>{entries.length === 0 ? "尚未发现任务生成的文件" : "没有匹配的任务成果"}</p>
         <span className="myfiles-empty-hint">完成文件写入或编辑任务后，成果会自动收录。打开历史会话可回填旧成果。</span>
@@ -206,6 +223,7 @@ function ArtifactsTab({
 
   return (
     <div className="myfiles-table">
+      {nativeStatus}
       <div className="myfiles-table-head">
         <span className="myfiles-col-name">名称</span>
         <span className="myfiles-col-task">所属任务</span>

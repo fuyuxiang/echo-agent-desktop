@@ -159,13 +159,14 @@ export function CodingWorkbench({
   const startGeneration = useRef(0);
   useEffect(() => { startGeneration.current += 1; setStarting(false); setSending(false); setStartError(null); }, [cwd]);
   const prepareEditor = useCallback(async () => {
+    const expectedTask = useTaskStore.getState().task?.id;
     await prepareWorkspaceEditor(cwd, async (count) => {
       const confirmed = await confirmTaskAction({
         title: `保存 ${count} 个文件后继续？`,
         description: "任务、验证和回滚将使用已保存的磁盘内容。取消会保留编辑内容；保存失败时不会继续。",
         confirmLabel: "保存并继续",
       });
-      if (!confirmed || !isWorkspaceCurrent()) return false;
+      if (!confirmed || !isWorkspaceCurrent() || useTaskStore.getState().task?.id !== expectedTask) return false;
       const selected = useTaskStore.getState();
       // A queued verification phase forbids manual file writes. Pause the
       // scheduler before saving, while retaining the foreground batch claim.
@@ -177,10 +178,17 @@ export function CodingWorkbench({
       }
       return true;
     });
-    if (isWorkspaceCurrent()) {
-      const selected = useTaskStore.getState();
-      if (selected.root === cwd && selected.task) useCodingRuntimeStore.getState().setEditorBlock(cwd, selected.task.id, null);
-    }
+    const taskIsCurrent = () => isWorkspaceCurrent()
+      && (expectedTask
+        ? useTaskStore.getState().root === cwd && useTaskStore.getState().task?.id === expectedTask
+        : !useTaskStore.getState().task);
+    if (!taskIsCurrent()) throw new Error("任务已切换，请在当前任务重试");
+    // The save bridge itself advances the task revision. Read after save and
+    // the final dirty ACK, then recheck ownership before changing task state.
+    const saved = expectedTask ? await codingApi.getTask(cwd, expectedTask) : undefined;
+    if (!taskIsCurrent()) throw new Error("任务已切换，请在当前任务重试");
+    if (expectedTask) useCodingRuntimeStore.getState().setEditorBlock(cwd, expectedTask, null);
+    return saved?.updatedAt;
   }, [cwd, confirmTaskAction, isWorkspaceCurrent]);
   const taskSessionId = useTaskStore((state) => state.task?.sessionId);
   // Never fall back to an unrelated current chat when a coding task has no
@@ -260,6 +268,8 @@ export function CodingWorkbench({
   const previousContextScopeRef = useRef<string | null>(null);
 
   const task = useTaskStore((state) => state.task);
+  const isTaskCurrent = useCodingActionScope(cwd, task?.id);
+  useEffect(() => { setSending(false); }, [task?.id]);
   const lifecycleSettling = useCodingRuntimeStore((state) => task ? Boolean(state.settling[codingRuntimeKey(cwd, task.id)]) : false);
   const stopping = useCodingRuntimeStore(state => task ? Boolean(state.stopping[codingRuntimeKey(cwd, task.id)]) : false);
   const editorBlock = useCodingRuntimeStore((state) => task ? state.editorBlocks[codingRuntimeKey(cwd, task.id)] : undefined);
@@ -749,13 +759,15 @@ export function CodingWorkbench({
       setSending(true);
       let reopened = false;
       try {
-        if (mutating) { await prepareEditor(); if (!isWorkspaceCurrent()) return false; }
+        if (mutating) { await prepareEditor(); if (!isTaskCurrent()) return false; }
         if (mutating && task) {
           if (["paused", "stopped", "blocked", "delivered"].includes(task.phase)) {
             if (!cwd) return false;
             await codingApi.beginFollowup(cwd, task.id, text);
-            await useTaskStore.getState().refreshTaskState();
             reopened = true;
+            if (!isTaskCurrent()) throw new EditorPreparationCancelled("任务已切换，补充要求未发送");
+            await useTaskStore.getState().refreshTaskState();
+            if (!isTaskCurrent()) throw new EditorPreparationCancelled("任务已切换，补充要求未发送");
           } else if (
             !["discovering", "implementing", "repairing"].includes(task.phase)
           ) {
@@ -773,6 +785,7 @@ export function CodingWorkbench({
               true,
             )
           : undefined);
+        if (!isTaskCurrent()) return false;
         const accepted = await onSendMessage(text, promptTextOverride);
         if (accepted === false && reopened) {
           await blockInterruptedManualMutation(
@@ -792,7 +805,7 @@ export function CodingWorkbench({
         onToast?.(`无法继续当前任务：${message}`);
         return false;
       } finally {
-        setSending(false);
+        if (isTaskCurrent()) setSending(false);
       }
     },
     [
@@ -804,7 +817,7 @@ export function CodingWorkbench({
       onSendMessage,
       onToast,
       prepareEditor,
-      isWorkspaceCurrent,
+      isTaskCurrent,
       task,
     ],
   );
@@ -965,12 +978,12 @@ export function CodingWorkbench({
     setSending(true);
     try {
       await prepareEditor();
-      if (!isWorkspaceCurrent()) return;
+      if (!isTaskCurrent()) return;
       const resumedTask = await codingApi.resumeTask(cwd, task.id);
       resumed = true;
-      if (!isWorkspaceCurrent()) throw new EditorPreparationCancelled("项目已切换，继续执行已取消");
+      if (!isTaskCurrent()) throw new EditorPreparationCancelled("项目已切换，继续执行已取消");
       await useTaskStore.getState().refreshTaskState();
-      if (!isWorkspaceCurrent()) throw new EditorPreparationCancelled("项目已切换，继续执行已取消");
+      if (!isTaskCurrent()) throw new EditorPreparationCancelled("项目已切换，继续执行已取消");
       const activeNode = resumedTask.taskNodes.find((node) => node.status === "running");
       const basePrompt = activeNode
         ? buildNodeContinuationInstruction(resumedTask, activeNode)
@@ -981,7 +994,7 @@ export function CodingWorkbench({
         : red?.waiverReason
           ? `${basePrompt}\n\n本轮已记录测试先行不适用原因：${red.waiverReason}。按原始需求完成实现并运行适用验证，不要伪称已观察 RED。`
           : basePrompt;
-      if (!isWorkspaceCurrent()) throw new EditorPreparationCancelled("项目已切换，继续执行已取消");
+      if (!isTaskCurrent()) throw new EditorPreparationCancelled("项目已切换，继续执行已取消");
       const accepted = await onSendMessage("继续执行当前开发任务", prompt);
       if (accepted === false) throw new Error("Agent 未接收继续执行请求");
     } catch (error) {
@@ -989,11 +1002,11 @@ export function CodingWorkbench({
         await codingApi
           .reportInterrupted(cwd, task.id, interruptedAs)
           .catch(() => undefined);
-        if (isWorkspaceCurrent()) await useTaskStore.getState().refreshTaskState().catch(() => undefined);
+        if (isTaskCurrent()) await useTaskStore.getState().refreshTaskState().catch(() => undefined);
       }
-      if (isWorkspaceCurrent()) onToast?.(`无法继续当前任务：${String(error).replace(/^Error:\s*/, "")}`);
+      if (isTaskCurrent()) onToast?.(`无法继续当前任务：${String(error).replace(/^Error:\s*/, "")}`);
     } finally {
-      if (isWorkspaceCurrent()) setSending(false);
+      if (isTaskCurrent()) setSending(false);
     }
   }, [
     activeSessionId,
@@ -1003,7 +1016,7 @@ export function CodingWorkbench({
     lifecycleSettling,
     onSendMessage,
     prepareEditor,
-    isWorkspaceCurrent,
+    isTaskCurrent,
     onToast,
     sending,
     streaming,

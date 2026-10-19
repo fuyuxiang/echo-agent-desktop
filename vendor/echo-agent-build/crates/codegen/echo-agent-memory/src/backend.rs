@@ -338,6 +338,15 @@ impl MemoryBackendImpl {
             &self.embed_base_url,
         )
         .await
+        .map(|provider| provider.with_request_permit(self.request_permit()))
+    }
+
+    fn request_permit(&self) -> super::embedding::MemoryRequestPermit {
+        if self.embed_chunks_on_search {
+            self.storage.request_permit()
+        } else {
+            std::sync::Arc::new(|_| true)
+        }
     }
 
     /// Build a fully configured backend for a live session.
@@ -389,7 +398,7 @@ impl MemoryBackend for MemoryBackendImpl {
         let search_start = std::time::Instant::now();
         let query_length = query.len();
         let personal_memory = self.embed_chunks_on_search;
-        if personal_memory && !crate::records::setting("memory", None, "enabled", true) {
+        if personal_memory && !self.storage.enabled() {
             return Ok(Vec::new());
         }
         if personal_memory {
@@ -577,7 +586,8 @@ impl MemoryBackend for MemoryBackendImpl {
         // ── Sync phase 2: FTS search ──
         let mut search_config = self.search_config.clone();
         let mmr_fallback_config = search_config.mmr.clone();
-        let reranker = super::reranker::ApiReranker::from_config(&search_config.reranker);
+        let reranker = super::reranker::ApiReranker::from_config(&search_config.reranker)
+            .map(|reranker| reranker.with_request_permit(self.request_permit()));
         search_config.max_results = if reranker.is_some() {
             // Feed the model a broader coarse-retrieval pool than the final
             // result count. hybrid_search_merge truncates to this value.
@@ -681,7 +691,7 @@ impl MemoryBackend for MemoryBackendImpl {
         }
 
         if personal_memory {
-            if !crate::records::setting("memory", None, "enabled", true) {
+            if !self.storage.enabled() {
                 return Ok(Vec::new());
             }
             // Edits, expiry or disablement can occur while embedding/reranking
@@ -777,7 +787,7 @@ impl MemoryBackend for MemoryBackendImpl {
         if !self.embed_chunks_on_search {
             return Ok(self.storage.read_file(Path::new(path), from, lines)?);
         }
-        if !crate::records::setting("memory", None, "enabled", true) {
+        if !self.storage.enabled() {
             return Err("Memory is disabled".into());
         }
         let requested = if path == "MEMORY.md" {

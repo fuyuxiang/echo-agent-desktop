@@ -1047,7 +1047,10 @@ pub fn memory_records_get(
         .unwrap_or(0);
     Ok(PersonalMemorySnapshot {
         records,
-        extraction: echo_agent_memory::records::activity(&storage),
+        extraction: {
+            echo_agent_memory::records::recover_extraction_activity(&storage);
+            echo_agent_memory::records::activity(&storage)
+        },
         retrieval: echo_agent_memory::records::retrieval(&storage),
         pending_count,
         enabled: crate::agent_config::memory_config_get()?.enabled,

@@ -95,13 +95,28 @@ pub fn now() -> i64 {
 /// Read settings on use, so turning memory off stops running sessions too.
 /// A malformed settings file fails closed instead of silently enabling memory.
 pub fn setting(section: &str, child: Option<&str>, key: &str, default: bool) -> bool {
-    let path = echo_agent_config_home().join("config.toml");
+    setting_from_path(
+        &echo_agent_config_home().join("config.toml"),
+        section,
+        child,
+        key,
+        default,
+    )
+}
+
+fn setting_from_path(
+    path: &Path,
+    section: &str,
+    child: Option<&str>,
+    key: &str,
+    default: bool,
+) -> bool {
     let raw = match std::fs::read_to_string(path) {
         Ok(value) => value,
         Err(e) if e.kind() == io::ErrorKind::NotFound => return default,
         Err(_) => return false,
     };
-    let Ok(config) = raw.parse::<toml::Value>() else {
+    let Ok(config) = toml::from_str::<toml::Value>(&raw) else {
         return false;
     };
     let mut value = config.get(section);
@@ -228,39 +243,53 @@ fn related(a: &str, b: &str) -> bool {
     common >= 2 && common as f64 / ta.len().min(tb.len()).max(1) as f64 >= 0.65
 }
 
+#[derive(Debug)]
+struct MemoryProjectionError(io::Error);
+impl std::fmt::Display for MemoryProjectionError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "记忆事实已保存，但检索副本尚未更新：{}", self.0)
+    }
+}
+impl std::error::Error for MemoryProjectionError {}
+
 fn save(storage: &MemoryStorage, scope: &str, ledger: &Ledger) -> io::Result<()> {
     let dir = root(storage, scope)?;
     // Commit truth first. Search filters against this ledger even if projection
     // writing fails; the next index refresh regenerates it.
     write_json(&dir.join("records.json"), ledger)?;
-    let mut document = String::from("# Saved memories\n\n");
-    for record in &ledger.records {
-        if active(record) {
-            document.push_str(&format!(
-                "## {} · {}\n\n{}\n\nSource: {}\nUpdated: {}\n\n",
-                record.kind,
-                record.key,
-                record.content,
-                record.sources.join(", "),
-                record.updated_at
-            ));
+    (|| -> io::Result<()> {
+        let mut document = String::from("# Saved memories\n\n");
+        for record in &ledger.records {
+            if active(record) {
+                document.push_str(&format!(
+                    "## {} · {}\n\n{}\n\nSource: {}\nUpdated: {}\n\n",
+                    record.kind,
+                    record.key,
+                    record.content,
+                    record.sources.join(", "),
+                    record.updated_at
+                ));
+            }
         }
-    }
-    let path = dir.join(RECORD_DOCUMENT);
-    if std::fs::symlink_metadata(&path).is_ok_and(|m| m.file_type().is_symlink() || !m.is_file()) {
-        return Err(io::Error::other("invalid memory projection"));
-    }
-    if std::fs::read_to_string(&path).ok().as_deref() == Some(document.as_str()) {
-        return Ok(());
-    }
-    // This is a disposable projection. Its old contents must never become a
-    // second source of forgotten/expired records.
-    use std::io::Write;
-    let mut file = tempfile::NamedTempFile::new_in(&dir)?;
-    file.write_all(document.as_bytes())?;
-    file.as_file().sync_all()?;
-    file.persist(path).map_err(|error| error.error)?;
-    Ok(())
+        let path = dir.join(RECORD_DOCUMENT);
+        if std::fs::symlink_metadata(&path)
+            .is_ok_and(|m| m.file_type().is_symlink() || !m.is_file())
+        {
+            return Err(io::Error::other("invalid memory projection"));
+        }
+        if std::fs::read_to_string(&path).ok().as_deref() == Some(document.as_str()) {
+            return Ok(());
+        }
+        // This is a disposable projection. Its old contents must never become a
+        // second source of forgotten/expired records.
+        use std::io::Write;
+        let mut file = tempfile::NamedTempFile::new_in(&dir)?;
+        file.write_all(document.as_bytes())?;
+        file.as_file().sync_all()?;
+        file.persist(path).map_err(|error| error.error)?;
+        Ok(())
+    })()
+    .map_err(|error| io::Error::other(MemoryProjectionError(error)))
 }
 
 pub fn active(record: &MemoryRecord) -> bool {
@@ -322,12 +351,10 @@ pub fn permitted(storage: &MemoryStorage, content: &str) -> io::Result<bool> {
     Ok(true)
 }
 
-pub fn remember(
-    storage: &MemoryStorage,
-    mut input: RecordInput,
-    source: Option<&str>,
-    automatic: bool,
-) -> io::Result<Option<MemoryRecord>> {
+fn validate_input(input: &mut RecordInput) -> io::Result<()> {
+    if !matches!(input.scope.as_str(), "global" | "workspace") {
+        return Err(io::Error::other("无效记忆范围"));
+    }
     input.content = strip_reasoning_blocks(&input.content).trim().to_owned();
     input.key = input.key.trim().to_owned();
     if !["user", "feedback", "project", "reference", "task"].contains(&input.kind.as_str())
@@ -344,11 +371,21 @@ pub fn remember(
     if input.kind == "task" && input.valid_until.is_none() {
         input.valid_until = Some(now() + 30 * 86400);
     }
+    Ok(())
+}
+
+pub fn remember(
+    storage: &MemoryStorage,
+    mut input: RecordInput,
+    source: Option<&str>,
+    automatic: bool,
+) -> io::Result<Option<MemoryRecord>> {
+    validate_input(&mut input)?;
     let _guard = crate::storage::memory_mutation_lock()
         .lock()
         .map_err(|_| io::Error::other("memory lock poisoned"))?;
     let _file_lock = lock_storage(storage)?;
-    if automatic && !setting("memory", None, "enabled", true) {
+    if automatic && !storage.enabled() {
         return Ok(None);
     }
     if automatic
@@ -379,6 +416,22 @@ pub fn remember(
             return Err(io::Error::other("已有同主题和类型的记忆，请更正原条目"));
         }
         let previous = &mut ledger.records[index];
+        if !automatic && input.id.is_none() {
+            if previous.content == input.content
+                && previous.key == input.key
+                && previous.kind == input.kind
+                && previous.valid_until == input.valid_until
+                && previous.pinned == input.pinned
+                && previous.status == "active"
+            {
+                let record = previous.clone();
+                save(storage, &input.scope, &ledger)?;
+                return Ok(Some(record));
+            }
+            return Err(io::Error::other(
+                "已有同主题和类型的记忆，请更正原条目；已有内容未修改",
+            ));
+        }
         if automatic && input.observed_at.unwrap_or_else(now) < previous.observed_at {
             return Ok(None);
         }
@@ -404,11 +457,9 @@ pub fn remember(
             && new_source.is_none()
             && (!automatic || previous.observed_at == input.observed_at.unwrap_or_else(now))
         {
-            return Ok(if automatic {
-                None
-            } else {
-                Some(previous.clone())
-            });
+            let record = previous.clone();
+            save(storage, &input.scope, &ledger)?;
+            return Ok(if automatic { None } else { Some(record) });
         }
         // Old facts are excluded from legacy summaries and historical reads too.
         if previous.content != input.content {
@@ -499,7 +550,7 @@ fn retire_with_policy(
         .lock()
         .map_err(|_| io::Error::other("memory lock poisoned"))?;
     let _file_lock = lock_storage(storage)?;
-    if automatic && !setting("memory", None, "enabled", true) {
+    if automatic && !storage.enabled() {
         return Ok(());
     }
     let mut ledger = load(storage, scope)?;
@@ -650,6 +701,89 @@ pub fn activity(storage: &MemoryStorage) -> MemoryActivity {
 pub fn set_activity(storage: &MemoryStorage, value: &MemoryActivity) -> io::Result<()> {
     write_json(&storage.workspace_dir().join("activity.json"), value)
 }
+fn extraction_owners() -> &'static std::sync::Mutex<HashSet<PathBuf>> {
+    static OWNERS: std::sync::OnceLock<std::sync::Mutex<HashSet<PathBuf>>> =
+        std::sync::OnceLock::new();
+    OWNERS.get_or_init(Default::default)
+}
+
+pub struct ExtractionActivityGuard(MemoryStorage);
+impl Drop for ExtractionActivityGuard {
+    fn drop(&mut self) {
+        let mut owners = extraction_owners()
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
+        let current = activity(&self.0);
+        if current.outcome == "running" {
+            let _ = set_activity(
+                &self.0,
+                &MemoryActivity {
+                    outcome: "failed".into(),
+                    detail: "提取已中断，待处理内容会在后续恢复时重试".into(),
+                    ..current
+                },
+            );
+        }
+        owners.remove(self.0.workspace_dir());
+    }
+}
+
+pub fn begin_extraction_activity(
+    storage: &MemoryStorage,
+) -> io::Result<Option<ExtractionActivityGuard>> {
+    let mut owners = extraction_owners()
+        .lock()
+        .map_err(|_| io::Error::other("memory activity lock poisoned"))?;
+    if owners.contains(storage.workspace_dir()) {
+        return Ok(None);
+    }
+    set_activity(
+        storage,
+        &MemoryActivity {
+            attempted_at: Some(now()),
+            outcome: "running".into(),
+            detail: String::new(),
+            records_written: 0,
+            ..activity(storage)
+        },
+    )?;
+    owners.insert(storage.workspace_dir().to_owned());
+    Ok(Some(ExtractionActivityGuard(storage.clone())))
+}
+
+pub fn record_extraction_recovery_error(storage: &MemoryStorage, detail: String) {
+    let owners = extraction_owners()
+        .lock()
+        .unwrap_or_else(|e| e.into_inner());
+    if !owners.contains(storage.workspace_dir()) {
+        let _ = set_activity(
+            storage,
+            &MemoryActivity {
+                outcome: "failed".into(),
+                detail,
+                ..activity(storage)
+            },
+        );
+    }
+}
+
+pub fn recover_extraction_activity(storage: &MemoryStorage) {
+    let owners = extraction_owners()
+        .lock()
+        .unwrap_or_else(|e| e.into_inner());
+    let current = activity(storage);
+    if !owners.contains(storage.workspace_dir()) && current.outcome == "running" {
+        let _ = set_activity(
+            storage,
+            &MemoryActivity {
+                outcome: "failed".into(),
+                detail: "上次提取已中断，待处理内容会保留并重试".into(),
+                ..current
+            },
+        );
+    }
+}
+
 pub fn retrieval(storage: &MemoryStorage) -> RetrievalActivity {
     read_json(&storage.workspace_dir().join("retrieval.json")).unwrap_or_default()
 }
@@ -724,13 +858,47 @@ pub fn apply_extraction_at(
     source: &str,
     observed_at: i64,
 ) -> io::Result<String> {
-    let extraction: Extraction = serde_json::from_str(json).map_err(io::Error::other)?;
+    let mut extraction: Extraction = serde_json::from_str(json).map_err(io::Error::other)?;
     if extraction.memories.len() > 20 || extraction.completed_keys.len() > 20 {
         return Err(io::Error::other("too many extracted memories"));
+    }
+    for input in &mut extraction.memories {
+        validate_input(input)?;
+    }
+    for completion in &extraction.completed_keys {
+        if !matches!(completion.scope.as_str(), "global" | "workspace")
+            || completion.key.trim().is_empty()
+            || completion.key.chars().count() > 160
+            || completion.evidence.chars().count() > 2000
+        {
+            return Err(io::Error::other("无效完成事项"));
+        }
     }
     if source_blocked(storage, source)? {
         return Ok(String::new());
     }
+    let partial_error = |written: usize, completed: usize, completing: bool, error: io::Error| {
+        let committed = usize::from(
+            error
+                .get_ref()
+                .is_some_and(|error| error.is::<MemoryProjectionError>()),
+        );
+        let written = written + if completing { 0 } else { committed };
+        let completed = completed + if completing { committed } else { 0 };
+        let detail = format!(
+            "已保存 {written} 条，已完成 {completed} 项，其余尚未完成；可安全重试：{error}"
+        );
+        let _ = set_activity(
+            storage,
+            &MemoryActivity {
+                outcome: "failed".into(),
+                detail: detail.clone(),
+                records_written: written,
+                ..activity(storage)
+            },
+        );
+        io::Error::other(detail)
+    };
     let mut summary = String::new();
     let mut written = 0;
     for mut input in extraction.memories {
@@ -741,22 +909,29 @@ pub fn apply_extraction_at(
         if input.evidence.trim().is_empty() {
             continue;
         }
-        if let Some(record) = remember(storage, input, Some(source), true)? {
+        if let Some(record) = remember(storage, input, Some(source), true)
+            .map_err(|e| partial_error(written, 0, false, e))?
+        {
             summary.push_str(&format!("## {}\n\n{}\n\n", record.key, record.content));
             written += 1;
         }
     }
+    let mut completed = 0;
     for completion in extraction.completed_keys {
         if completion.evidence.trim().is_empty() {
             continue;
         }
-        for record in list(storage, true)?.into_iter().filter(|r| {
-            active(r)
-                && r.kind == "task"
-                && r.key == completion.key
-                && r.scope == completion.scope
-                && r.observed_at <= observed_at
-        }) {
+        for record in list(storage, true)
+            .map_err(|e| partial_error(written, completed, true, e))?
+            .into_iter()
+            .filter(|r| {
+                active(r)
+                    && r.kind == "task"
+                    && r.key == completion.key
+                    && r.scope == completion.scope
+                    && r.observed_at <= observed_at
+            })
+        {
             retire_with_policy(
                 storage,
                 &record.scope,
@@ -764,7 +939,9 @@ pub fn apply_extraction_at(
                 Some(record.revision),
                 true,
                 true,
-            )?;
+            )
+            .map_err(|e| partial_error(written, completed, true, e))?;
+            completed += 1;
             summary.push_str(&format!("## 已完成\n\n{}\n\n", record.key));
         }
     }
@@ -793,6 +970,208 @@ mod tests {
             ..Default::default()
         }
     }
+    #[test]
+    fn live_settings_parse_complete_toml_documents_and_fail_closed() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("config.toml");
+        assert!(setting_from_path(&path, "memory", None, "enabled", true));
+        assert!(!setting_from_path(&path, "memory", None, "enabled", false));
+        std::fs::write(
+            &path,
+            "[memory]\nenabled = true\n[memory.flush]\nenabled = false\n",
+        )
+        .unwrap();
+        assert!(setting_from_path(&path, "memory", None, "enabled", false));
+        assert!(!setting_from_path(
+            &path,
+            "memory",
+            Some("flush"),
+            "enabled",
+            true
+        ));
+        assert!(setting_from_path(
+            &path,
+            "memory",
+            Some("dream"),
+            "enabled",
+            true
+        ));
+        std::fs::write(&path, "[memory]\nenabled = false\n").unwrap();
+        assert!(!setting_from_path(&path, "memory", None, "enabled", true));
+        std::fs::write(&path, "[invalid").unwrap();
+        assert!(!setting_from_path(&path, "memory", None, "enabled", true));
+        std::fs::remove_file(&path).unwrap();
+        std::fs::create_dir(&path).unwrap();
+        assert!(!setting_from_path(&path, "memory", None, "enabled", true));
+    }
+
+    #[test]
+    fn extraction_prevalidates_the_entire_batch_and_manual_add_never_overwrites() {
+        let dir = tempfile::tempdir().unwrap();
+        let storage =
+            MemoryStorage::with_paths(dir.path().join("global"), dir.path().join("workspace"));
+        let json = r#"{"memories":[{"scope":"global","kind":"user","key":"first","content":"first fact","evidence":"first fact"},{"scope":"global","kind":"invalid","key":"second","content":"bad","evidence":"bad"}]}"#;
+        assert!(apply_extraction(&storage, json, "source").is_err());
+        assert!(list(&storage, true).unwrap().is_empty());
+        let original = remember(&storage, input("global", "original"), None, false)
+            .unwrap()
+            .unwrap();
+        assert!(remember(&storage, input("global", "different"), None, false).is_err());
+        assert_eq!(
+            remember(&storage, input("global", "original"), None, false)
+                .unwrap()
+                .unwrap()
+                .revision,
+            original.revision
+        );
+        assert_eq!(list(&storage, true).unwrap()[0].content, "original");
+    }
+
+    #[test]
+    fn projection_failure_counts_the_committed_fact_and_retry_repairs_the_projection() {
+        let dir = tempfile::tempdir().unwrap();
+        let storage =
+            MemoryStorage::with_paths(dir.path().join("global"), dir.path().join("workspace"));
+        let projection = storage.global_dir().join(RECORD_DOCUMENT);
+        std::fs::create_dir_all(&projection).unwrap();
+        let json = r#"{"memories":[{"scope":"global","kind":"user","key":"first","content":"first fact","evidence":"first fact"}]}"#;
+        assert!(
+            apply_extraction_at(&storage, json, "source", 123)
+                .unwrap_err()
+                .to_string()
+                .contains("已保存 1 条")
+        );
+        assert_eq!(activity(&storage).records_written, 1);
+        std::fs::remove_dir(&projection).unwrap();
+        apply_extraction_at(&storage, json, "source", 123).unwrap();
+        assert_eq!(list(&storage, true).unwrap().len(), 1);
+        assert!(
+            std::fs::read_to_string(projection)
+                .unwrap()
+                .contains("first fact")
+        );
+    }
+
+    #[test]
+    fn manual_retry_repairs_projection_without_revising_truth() {
+        let dir = tempfile::tempdir().unwrap();
+        let storage =
+            MemoryStorage::with_paths(dir.path().join("global"), dir.path().join("workspace"));
+        let projection = storage.global_dir().join(RECORD_DOCUMENT);
+        std::fs::create_dir_all(&projection).unwrap();
+        assert!(remember(&storage, input("global", "manual fact"), None, false).is_err());
+        let committed = list(&storage, true).unwrap()[0].clone();
+        assert!(remember(&storage, input("global", "manual fact"), None, false).is_err());
+        std::fs::remove_dir(&projection).unwrap();
+        let retried = remember(&storage, input("global", "manual fact"), None, false)
+            .unwrap()
+            .unwrap();
+        assert_eq!(retried.revision, committed.revision);
+        assert!(
+            std::fs::read_to_string(projection)
+                .unwrap()
+                .contains("manual fact")
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn partial_completion_reports_committed_progress() {
+        use std::os::unix::fs::PermissionsExt;
+        let dir = tempfile::tempdir().unwrap();
+        let storage =
+            MemoryStorage::with_paths(dir.path().join("global"), dir.path().join("workspace"));
+        for scope in ["global", "workspace"] {
+            remember(
+                &storage,
+                RecordInput {
+                    scope: scope.into(),
+                    kind: "task".into(),
+                    key: scope.into(),
+                    content: format!("task in {scope}"),
+                    ..Default::default()
+                },
+                None,
+                false,
+            )
+            .unwrap();
+        }
+        std::fs::set_permissions(
+            storage.workspace_dir(),
+            std::fs::Permissions::from_mode(0o500),
+        )
+        .unwrap();
+        let result = apply_extraction(
+            &storage,
+            r#"{"memories":[],"completedKeys":[{"scope":"global","key":"global","evidence":"done global"},{"scope":"workspace","key":"workspace","evidence":"done workspace"}]}"#,
+            "source",
+        );
+        std::fs::set_permissions(
+            storage.workspace_dir(),
+            std::fs::Permissions::from_mode(0o700),
+        )
+        .unwrap();
+        assert!(result.unwrap_err().to_string().contains("已完成 1 项"));
+        assert_eq!(
+            load(&storage, "global").unwrap().records[0].status,
+            "completed"
+        );
+        assert_eq!(
+            load(&storage, "workspace").unwrap().records[0].status,
+            "active"
+        );
+    }
+
+    #[test]
+    fn activity_ownership_recovers_cancellation_and_stale_process_state() {
+        let dir = tempfile::tempdir().unwrap();
+        let storage =
+            MemoryStorage::with_paths(dir.path().join("global"), dir.path().join("workspace"));
+        let owner = begin_extraction_activity(&storage).unwrap().unwrap();
+        assert_eq!(activity(&storage).outcome, "running");
+        assert!(begin_extraction_activity(&storage).unwrap().is_none());
+        recover_extraction_activity(&storage);
+        assert_eq!(activity(&storage).outcome, "running");
+        drop(owner);
+        assert_eq!(activity(&storage).outcome, "failed");
+        set_activity(
+            &storage,
+            &MemoryActivity {
+                outcome: "running".into(),
+                ..Default::default()
+            },
+        )
+        .unwrap();
+        recover_extraction_activity(&storage);
+        assert_eq!(activity(&storage).outcome, "failed");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn extraction_disk_failure_reports_partial_progress_and_retry_is_idempotent() {
+        use std::os::unix::fs::PermissionsExt;
+        let dir = tempfile::tempdir().unwrap();
+        let storage =
+            MemoryStorage::with_paths(dir.path().join("global"), dir.path().join("workspace"));
+        std::fs::create_dir_all(storage.workspace_dir()).unwrap();
+        std::fs::set_permissions(
+            storage.workspace_dir(),
+            std::fs::Permissions::from_mode(0o500),
+        )
+        .unwrap();
+        let json = r#"{"memories":[{"scope":"global","kind":"user","key":"first","content":"first fact","evidence":"first fact"},{"scope":"workspace","kind":"project","key":"second","content":"second fact","evidence":"second fact"}]}"#;
+        let failed = apply_extraction_at(&storage, json, "source", 123);
+        std::fs::set_permissions(
+            storage.workspace_dir(),
+            std::fs::Permissions::from_mode(0o700),
+        )
+        .unwrap();
+        assert!(failed.unwrap_err().to_string().contains("已保存 1 条"));
+        assert_eq!(list(&storage, true).unwrap().len(), 1);
+        apply_extraction_at(&storage, json, "source", 123).unwrap();
+        assert_eq!(list(&storage, true).unwrap().len(), 2);
+    }
+
     #[test]
     fn correction_forgetting_and_source_deletion_survive_reopen() {
         let temp = tempfile::tempdir().unwrap();

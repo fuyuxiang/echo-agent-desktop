@@ -172,38 +172,42 @@ pub fn user_agents_dir_pub() -> PathBuf {
     user_agents_dir()
 }
 
-/// Scan one directory for `*.md` agent files. Best-effort: unreadable entries
-/// are skipped.
-fn scan_dir(dir: &Path, scope: &str) -> Vec<AgentEntry> {
+/// Missing directories mean no experts; every real I/O failure remains visible.
+fn scan_dir_all(dir: &Path, scope: &str) -> Result<Vec<AgentEntry>, String> {
     let mut out = Vec::new();
-    let Ok(root) = dir.canonicalize() else {
-        return out;
+    let root = match dir.canonicalize() {
+        Ok(root) => root,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(out),
+        Err(error) => return Err(format!("读取专家目录 {} 失败：{error}", dir.display())),
     };
-    let Ok(entries) = std::fs::read_dir(dir) else {
-        return out;
-    };
-    let mut paths = entries
-        .flatten()
-        .take(MAX_SCANNED_DIRECTORY_ENTRIES)
-        .filter_map(|entry| {
-            let file_type = entry.file_type().ok()?;
-            if !file_type.is_file() || file_type.is_symlink() {
-                return None;
-            }
-            let path = entry.path().canonicalize().ok()?;
-            if path.parent() != Some(root.as_path()) {
-                return None;
-            }
-            (path.extension().and_then(|extension| extension.to_str()) == Some("md"))
-                .then_some(path)
-        })
-        .collect::<Vec<_>>();
-    paths.sort();
-    paths.truncate(MAX_AGENT_FILES);
-    for path in paths {
-        let Ok(raw) = read_agent_file(&path) else {
+    let entries =
+        std::fs::read_dir(dir).map_err(|e| format!("读取专家目录 {} 失败：{e}", dir.display()))?;
+    let mut paths = Vec::new();
+    for (index, entry) in entries.enumerate() {
+        if index >= MAX_SCANNED_DIRECTORY_ENTRIES {
+            return Err("专家目录条目过多，请整理后重试".into());
+        }
+        let entry = entry.map_err(|e| format!("读取专家目录条目失败：{e}"))?;
+        let kind = entry
+            .file_type()
+            .map_err(|e| format!("读取专家文件类型失败：{e}"))?;
+        if !kind.is_file()
+            || kind.is_symlink()
+            || entry.path().extension().and_then(|e| e.to_str()) != Some("md")
+        {
             continue;
-        };
+        }
+        let path = entry
+            .path()
+            .canonicalize()
+            .map_err(|e| format!("读取专家路径失败：{e}"))?;
+        if path.parent() == Some(root.as_path()) {
+            paths.push(path);
+        }
+    }
+    paths.sort();
+    for path in paths {
+        let raw = read_agent_file(&path)?;
         let fm = parse_frontmatter(&raw);
         let name = fm
             .name
@@ -220,7 +224,13 @@ fn scan_dir(dir: &Path, scope: &str) -> Vec<AgentEntry> {
             raw,
         });
     }
-    out
+    Ok(out)
+}
+
+fn scan_dir(dir: &Path, scope: &str) -> Result<Vec<AgentEntry>, String> {
+    let mut entries = scan_dir_all(dir, scope)?;
+    entries.truncate(MAX_AGENT_FILES);
+    Ok(entries)
 }
 
 /// Extract the YAML frontmatter block (`---\n...\n---`) and parse the few
@@ -309,19 +319,25 @@ fn parse_frontmatter(raw: &str) -> AgentFrontmatter {
 
 /// List all agent definitions visible to EchoAgent. Combines user-scope and
 /// project-scope (for the given cwd), using the Runtime's effective identity.
-fn collect_agents(cwd: Option<&str>) -> Vec<AgentEntry> {
+fn collect_agents(cwd: Option<&str>) -> Result<Vec<AgentEntry>, String> {
     if let Some(cwd) = cwd {
         // Use exactly the runtime resolver, including project ancestors,
         // compatibility directories and built-in shadowing rules.
         let root = Path::new(cwd);
+        for directory in echo_agent_core::discovery::agent_scan_directories(root) {
+            scan_dir_all(&directory, "project")?;
+        }
         return echo_agent_core::discovery::all_subagents(root, &Default::default())
             .into_iter()
             .filter_map(|entry| {
                 let definition = echo_agent_core::discovery::by_name_in_cwd(&entry.name, root)?;
                 let path = definition.source_path?;
-                let raw = read_agent_file(&path).ok()?;
+                let raw = match read_agent_file(&path) {
+                    Ok(raw) => raw,
+                    Err(error) => return Some(Err(error)),
+                };
                 let fm = parse_frontmatter(&raw);
-                Some(AgentEntry {
+                Some(Ok(AgentEntry {
                     name: entry.name,
                     description: Some(definition.description),
                     scope: match definition.scope {
@@ -334,20 +350,20 @@ fn collect_agents(cwd: Option<&str>) -> Vec<AgentEntry> {
                     raw,
                     avatar: fm.avatar,
                     model_tags: fm.model_tags,
-                })
+                }))
             })
             .take(MAX_AGENT_FILES)
             .collect();
     }
-    let mut out = scan_dir(&user_agents_dir(), "user");
+    let mut out = scan_dir(&user_agents_dir(), "user")?;
     // Global management shows user definitions, independent of workspace overrides.
     let mut seen = std::collections::HashSet::new();
     out.retain(|a| seen.insert(a.name.clone()));
     out.truncate(MAX_AGENT_FILES);
-    out
+    Ok(out)
 }
 
-pub(crate) fn team_agents() -> Vec<AgentEntry> {
+pub(crate) fn team_agents() -> Result<Vec<AgentEntry>, String> {
     collect_agents(None)
 }
 
@@ -437,7 +453,7 @@ pub fn agents_list(
         ),
         None => None,
     };
-    let agents = collect_agents(cwd.as_deref());
+    let agents = collect_agents(cwd.as_deref())?;
     remember_local_agents(&agents)?;
     Ok(agents)
 }
@@ -603,7 +619,8 @@ fn save_agent_with_registry_at(
             return Err("专家配置已被其他操作修改，请重新打开后再保存".into());
         }
     }
-    for existing in scan_dir(&root, "user") {
+    let existing_agents = scan_dir_all(&root, "user")?;
+    for existing in &existing_agents {
         if previous.is_some_and(|(original, _)| Path::new(&existing.path) == original) {
             continue;
         }
@@ -615,6 +632,11 @@ fn save_agent_with_registry_at(
                 existing.name
             ));
         }
+    }
+    if previous.is_none() && existing_agents.len() >= MAX_AGENT_FILES {
+        return Err(format!(
+            "最多保存 {MAX_AGENT_FILES} 个本地专家，请整理后重试；已有配置未修改"
+        ));
     }
     // Hold the registry reservation through publication. Any fallible lock or
     // capacity check happens before disk commit; a saved file must not be
@@ -910,7 +932,7 @@ mod tests {
         let error =
             save_agent_with_registry_at(home.path(), "New", raw, None, &registry, 1).unwrap_err();
         assert!(error.contains("已有配置未修改"));
-        assert!(scan_dir(home.path(), "user").is_empty());
+        assert!(scan_dir(home.path(), "user").unwrap().is_empty());
         assert!(!home.path().join("new.md").exists());
         assert_eq!(registry.lock().unwrap().len(), 1);
         let raw =
@@ -1183,6 +1205,37 @@ mod tests {
     }
 
     #[test]
+    fn scan_propagates_real_read_failures_and_capacity_precedes_writes() {
+        let dir = tempfile::tempdir().unwrap();
+        assert!(scan_dir(&dir.path().join("absent"), "test")
+            .unwrap()
+            .is_empty());
+        std::fs::write(dir.path().join("not-directory"), b"file").unwrap();
+        assert!(scan_dir(&dir.path().join("not-directory"), "test").is_err());
+        std::fs::write(dir.path().join("bad.md"), [0xff]).unwrap();
+        assert!(scan_dir(dir.path(), "test").unwrap_err().contains("UTF-8"));
+        std::fs::remove_file(dir.path().join("bad.md")).unwrap();
+        for index in 0..=MAX_AGENT_FILES {
+            std::fs::write(
+                dir.path().join(format!("agent-{index:04}.md")),
+                format!("---\nname: agent-{index:04}\n---\nbody"),
+            )
+            .unwrap();
+        }
+        let registry = Mutex::new(HashSet::new());
+        let raw =
+            agents_template("agent-0256".into(), "test".into(), "new".into(), None, None).unwrap();
+        assert!(
+            save_agent_with_registry_at(dir.path(), "agent-0256", raw, None, &registry, 512)
+                .unwrap_err()
+                .contains("已存在")
+        );
+        let raw = agents_template("new".into(), "test".into(), "new".into(), None, None).unwrap();
+        assert!(save_agent_with_registry_at(dir.path(), "new", raw, None, &registry, 512).is_err());
+        assert!(!dir.path().join("new.md").exists());
+    }
+
+    #[test]
     fn directory_scan_has_a_stable_file_count_limit() {
         let dir = tempfile::tempdir().unwrap();
         for index in 0..(MAX_AGENT_FILES + 5) {
@@ -1192,7 +1245,7 @@ mod tests {
             )
             .unwrap();
         }
-        let agents = scan_dir(dir.path(), "test");
+        let agents = scan_dir(dir.path(), "test").unwrap();
         assert_eq!(agents.len(), MAX_AGENT_FILES);
         assert_eq!(agents.first().unwrap().name, "agent-0000");
         assert_eq!(agents.last().unwrap().name, "agent-0255");
@@ -1207,7 +1260,7 @@ mod tests {
         let outside = tempfile::NamedTempFile::new().unwrap();
         std::fs::write(outside.path(), "---\nname: escaped\n---\nsecret").unwrap();
         symlink(outside.path(), dir.path().join("escaped.md")).unwrap();
-        assert!(scan_dir(dir.path(), "test").is_empty());
+        assert!(scan_dir(dir.path(), "test").unwrap().is_empty());
     }
 
     #[test]

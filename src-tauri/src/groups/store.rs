@@ -242,7 +242,21 @@ impl Store {
         }
         Ok(())
     }
-    pub fn create(&self, g: &Group) -> Result<(), String> {
+    pub fn find_creation(
+        &self,
+        request_id: Option<&str>,
+        source_session: Option<&str>,
+        source_team: Option<&str>,
+    ) -> Result<Option<Group>, String> {
+        let c = self.connect()?;
+        let existing: Option<String> = c.query_row(
+            "SELECT id FROM groups WHERE id=?1 OR (json_extract(data,'$.sourceSessionId')=?2 AND json_extract(data,'$.sourceTeamId')=?3) ORDER BY CASE WHEN id=?1 THEN 0 ELSE 1 END,json_extract(data,'$.createdAt'),id LIMIT 1",
+            params![request_id, source_session, source_team], |row| row.get(0),
+        ).optional().map_err(|e| e.to_string())?;
+        existing.map(|id| Self::read(&c, &id)).transpose()
+    }
+
+    pub fn create(&self, g: &Group) -> Result<Group, String> {
         let mut c = self.connect()?;
         let tx = c
             .transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)
@@ -253,10 +267,22 @@ impl Store {
             .map_err(|e| e.to_string())?
             .is_some()
         {
-            return Err("专家团已存在".into());
+            return Self::read(&tx, &g.id);
+        }
+        if let (Some(session), Some(team)) = (&g.source_session_id, &g.source_team_id) {
+            let existing: Option<String> = tx.query_row(
+                "SELECT id FROM groups WHERE json_extract(data,'$.sourceSessionId')=?1 AND json_extract(data,'$.sourceTeamId')=?2 ORDER BY json_extract(data,'$.createdAt'),id LIMIT 1",
+                params![session, team], |row| row.get(0),
+            ).optional().map_err(|e| e.to_string())?;
+            if let Some(id) = existing {
+                // Include archived groups: restoring or viewing that group is
+                // preferable to silently making a second source association.
+                return Self::read(&tx, &id);
+            }
         }
         Self::write(&tx, g, None)?;
-        tx.commit().map_err(|e| e.to_string())
+        tx.commit().map_err(|e| e.to_string())?;
+        Ok(g.clone())
     }
     pub fn update<T>(
         &self,

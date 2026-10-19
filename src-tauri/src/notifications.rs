@@ -705,7 +705,7 @@ pub struct DeliveryResult {
     pub error: Option<String>,
 }
 
-#[derive(Debug, Default, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
 struct ChannelStore {
     #[serde(default)]
     channels: Vec<NotifyChannel>,
@@ -1273,14 +1273,7 @@ pub async fn dispatch_external(
         }];
     }
     let message = normalize_message(message);
-    let channels = read_channels().map(|store| {
-        store
-            .channels
-            .into_iter()
-            .filter(|channel| channel.enabled)
-            .filter(|channel| only_id.map(|id| channel.id == id).unwrap_or(true))
-            .collect::<Vec<_>>()
-    });
+    let channels = read_channels().map(|store| eligible_channels(store, only_id));
     let channels = match channels {
         Ok(channels) => channels,
         Err(error) => {
@@ -1323,6 +1316,24 @@ pub async fn dispatch_external(
         }
     }
     results
+}
+
+fn eligible_channels(store: ChannelStore, only_id: Option<&str>) -> Vec<NotifyChannel> {
+    let mut desktop_selected = false;
+    store
+        .channels
+        .into_iter()
+        .filter(|channel| channel.enabled)
+        .filter(|channel| only_id.map(|id| channel.id == id).unwrap_or(true))
+        .filter(|channel| {
+            if !matches!(channel.kind, ChannelKind::Desktop) {
+                return true;
+            }
+            let first = !desktop_selected;
+            desktop_selected = true;
+            first
+        })
+        .collect::<Vec<_>>()
 }
 
 /// Deliver an actionable event with a built-in desktop fallback. An explicit
@@ -1511,6 +1522,9 @@ mod tests {
                 },
             ],
         };
+        store.channels[0].enabled = true;
+        assert_eq!(eligible_channels(store.clone(), None).len(), 2);
+        assert_eq!(eligible_channels(store.clone(), Some("two"))[0].id, "two");
         assert!(desktop_status(&store, None).enabled);
         set_desktop_enabled(&mut store, false).unwrap();
         assert!(!desktop_status(&store, None).enabled);

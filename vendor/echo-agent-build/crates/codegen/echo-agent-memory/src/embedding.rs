@@ -8,6 +8,8 @@
 
 use async_trait::async_trait;
 
+pub type MemoryRequestPermit = std::sync::Arc<dyn Fn(&[&str]) -> bool + Send + Sync>;
+
 /// Maximum retry attempts for transient API errors (429, 5xx).
 const MAX_RETRIES: usize = 3;
 /// Initial backoff delay in milliseconds (doubles on each retry: 1s, 2s, 4s).
@@ -72,6 +74,7 @@ pub struct ApiEmbeddingProvider {
     client: reqwest_middleware::ClientWithMiddleware,
     max_batch_size: usize,
     send_dimensions: bool,
+    request_permit: Option<MemoryRequestPermit>,
 }
 
 impl ApiEmbeddingProvider {
@@ -88,7 +91,14 @@ impl ApiEmbeddingProvider {
             client,
             max_batch_size: 32,
             send_dimensions: true,
+            request_permit: None,
         }
+    }
+
+    /// Recheck live memory policy immediately before every batch and retry.
+    pub fn with_request_permit(mut self, permit: MemoryRequestPermit) -> Self {
+        self.request_permit = Some(permit);
+        self
     }
 
     pub fn from_config(
@@ -188,6 +198,13 @@ impl EmbeddingProvider for ApiEmbeddingProvider {
                     tokio::time::sleep(std::time::Duration::from_millis(delay)).await;
                 }
 
+                if self
+                    .request_permit
+                    .as_ref()
+                    .is_some_and(|permit| !permit(batch))
+                {
+                    return Err("Memory changed or was disabled before embedding".into());
+                }
                 let request = echo_agent_http::shared_client()
                     .post(self.endpoint_url())
                     .json(&body_json)
@@ -200,7 +217,23 @@ impl EmbeddingProvider for ApiEmbeddingProvider {
                         return Err(format!("failed to build embedding request: {e}").into());
                     }
                 };
-                let response = match self.client.execute(req).await {
+                let response = match if let Some(permit) = &self.request_permit {
+                    let permit = permit.clone();
+                    let texts: Vec<String> = batch.iter().map(|text| (*text).to_owned()).collect();
+                    echo_agent_auth::retry_middleware::execute_with_permit(
+                        &self.client,
+                        req,
+                        echo_agent_auth::retry_middleware::RequestPermit(std::sync::Arc::new(
+                            move || {
+                                let refs: Vec<&str> = texts.iter().map(String::as_str).collect();
+                                permit(&refs)
+                            },
+                        )),
+                    )
+                    .await
+                } else {
+                    self.client.execute(req).await
+                } {
                     Ok(r) => r,
                     Err(e) => {
                         last_err = format!("request failed: {e}");
@@ -338,6 +371,116 @@ impl EmbeddingProvider for MockEmbeddingProvider {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[tokio::test]
+    async fn live_policy_blocks_later_embedding_batches_and_embedding_rerank_retries() {
+        use std::io::{Read, Write};
+        use std::sync::{
+            Arc,
+            atomic::{AtomicBool, AtomicUsize, Ordering},
+        };
+        for mode in ["embedding-retry", "embedding-batch", "rerank-retry"] {
+            let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+            listener.set_nonblocking(true).unwrap();
+            let endpoint = format!("http://{}", listener.local_addr().unwrap());
+            let allowed = Arc::new(AtomicBool::new(true));
+            let stopped = Arc::new(AtomicBool::new(false));
+            let received = Arc::new(AtomicUsize::new(0));
+            let (live, stop, count) = (allowed.clone(), stopped.clone(), received.clone());
+            let server = std::thread::spawn(move || {
+                while !stop.load(Ordering::Acquire) {
+                    let Ok((mut stream, _)) = listener.accept() else {
+                        std::thread::sleep(std::time::Duration::from_millis(2));
+                        continue;
+                    };
+                    stream.set_nonblocking(false).unwrap();
+                    stream
+                        .set_read_timeout(Some(std::time::Duration::from_secs(2)))
+                        .unwrap();
+                    let mut bytes = Vec::new();
+                    let mut buffer = [0; 2048];
+                    loop {
+                        let size = stream.read(&mut buffer).unwrap();
+                        assert!(size > 0);
+                        bytes.extend_from_slice(&buffer[..size]);
+                        if let Some(start) = bytes.windows(4).position(|v| v == b"\r\n\r\n") {
+                            let headers = String::from_utf8_lossy(&bytes[..start]);
+                            let length: usize = headers
+                                .lines()
+                                .find_map(|line| {
+                                    let (key, value) = line.split_once(':')?;
+                                    key.eq_ignore_ascii_case("content-length")
+                                        .then(|| value.trim().parse().unwrap())
+                                })
+                                .unwrap();
+                            if bytes.len() >= start + 4 + length {
+                                break;
+                            }
+                        }
+                    }
+                    count.fetch_add(1, Ordering::AcqRel);
+                    live.store(false, Ordering::Release);
+                    let (status, body) = if mode == "embedding-batch" {
+                        ("200 OK", r#"{"data":[{"index":0,"embedding":[1.0,0.0]}]}"#)
+                    } else {
+                        ("500 Internal Server Error", "{}")
+                    };
+                    write!(stream, "HTTP/1.1 {status}\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}", body.len()).unwrap();
+                }
+            });
+            let permit: MemoryRequestPermit = Arc::new(move |_| allowed.load(Ordering::Acquire));
+            let error = if mode == "rerank-retry" {
+                let config = echo_agent_config_types::MemoryRerankerConfig {
+                    enabled: true,
+                    endpoint: Some(endpoint),
+                    model: Some("test".into()),
+                    ..Default::default()
+                };
+                let provider = crate::reranker::ApiReranker::from_config(&config)
+                    .unwrap()
+                    .with_request_permit(permit);
+                provider
+                    .rerank(
+                        "query",
+                        &[crate::search::SearchResult {
+                            chunk_id: "fact".into(),
+                            path: "memory.md".into(),
+                            start_line: 1,
+                            end_line: 1,
+                            score: 1.0,
+                            snippet: "fact".into(),
+                            source: "global".into(),
+                            created_at: 0,
+                        }],
+                        1,
+                    )
+                    .await
+                    .unwrap_err()
+                    .to_string()
+            } else {
+                let mut provider = ApiEmbeddingProvider::new(
+                    endpoint,
+                    "test".into(),
+                    2,
+                    build_static_middleware_client(None),
+                )
+                .with_request_permit(permit);
+                provider.max_batch_size = 1;
+                provider
+                    .embed_batch(&["first", "second"])
+                    .await
+                    .unwrap_err()
+                    .to_string()
+            };
+            stopped.store(true, Ordering::Release);
+            server.join().unwrap();
+            assert!(
+                error.contains("Memory changed or was disabled"),
+                "{mode}: {error}"
+            );
+            assert_eq!(received.load(Ordering::Acquire), 1, "{mode}");
+        }
+    }
 
     #[tokio::test]
     async fn test_mock_embedding_deterministic() {

@@ -1983,6 +1983,11 @@ impl SamplingClient {
 
     /// Apply default configuration to a ConversationRequest.
     fn apply_conversation_defaults(&self, request: &mut ConversationRequest) -> Result<()> {
+        if let Some(policy) = request.preflight.clone() {
+            policy
+                .apply(request)
+                .map_err(SamplingError::InvalidConfiguration)?;
+        }
         if request.model.is_none() {
             request.model = Some(self.defaults.model.clone());
         }

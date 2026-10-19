@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 import { describe, expect, it, vi } from "vitest";
-import { fireEvent, render, screen, waitFor, within } from "@testing-library/react";
+import { act, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import "@testing-library/jest-dom/vitest";
 
 vi.mock("@/lib/agent-client", () => ({
@@ -567,6 +567,21 @@ describe("SettingsPanel", () => {
     await waitFor(() => expect(screen.queryByRole("alert")).not.toBeInTheDocument());
     expect(screen.getByText("rm *")).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "保存全部规则" })).toBeEnabled();
+  });
+
+  it("保存规则后收起面板仍会展开失败提示并保留规则", async () => {
+    vi.mocked(permissionList).mockResolvedValue([{action:"deny",tool:"bash",pattern:"rm *"}]);
+    let fail!: (error: Error) => void;
+    vi.mocked(permissionSave).mockImplementationOnce(() => new Promise((_resolve, reject) => { fail = reject; }));
+    render(<ThemeProvider><SettingsPanel open initialSection="security" onClose={() => {}} /></ThemeProvider>);
+    const summary = await screen.findByText("自定义工具规则", {exact:true});
+    fireEvent.click(summary);
+    fireEvent.click(await screen.findByRole("button", {name:"保存全部规则"}));
+    fireEvent.click(summary);
+    await act(async () => { fail(new Error("disk unavailable")); });
+    expect(await screen.findByRole("alert")).toHaveTextContent("保存失败");
+    expect(summary.closest("details")).toHaveAttribute("open");
+    expect(screen.getByText("rm *")).toBeVisible();
   });
 
   it("在设置中集中查看、恢复并打开归档会话", async () => {

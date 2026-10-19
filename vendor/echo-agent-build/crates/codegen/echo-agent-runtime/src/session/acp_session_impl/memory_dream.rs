@@ -32,8 +32,10 @@ impl SessionActor {
     pub(super) async fn queue_memory_extraction(self: &std::sync::Arc<Self>) {
         use echo_agent_memory::records;
         if self.startup_hints.is_subagent
-            || !records::setting("memory", None, "enabled", true)
-            || !records::setting("compaction", Some("memory_flush"), "enabled", true)
+            || !self.memory.setting("memory", None, "enabled", true)
+            || !self
+                .memory
+                .setting("compaction", Some("memory_flush"), "enabled", true)
         {
             return;
         }
@@ -71,39 +73,27 @@ impl SessionActor {
     }
 
     pub(super) async fn recover_pending_memories(&self) {
-        use echo_agent_memory::records;
         if self.startup_hints.is_subagent
-            || !records::setting("memory", None, "enabled", true)
-            || !records::setting("compaction", Some("memory_flush"), "enabled", true)
+            || !self.memory.setting("memory", None, "enabled", true)
+            || !self
+                .memory
+                .setting("compaction", Some("memory_flush"), "enabled", true)
         {
             return;
         }
         let Some(storage) = self.memory.storage() else {
             return;
         };
-        for _pass in 0..3 {
-            let Ok(entries) = std::fs::read_dir(storage.workspace_dir().join("pending")) else {
-                return;
-            };
-            for entry in entries.take(32).flatten() {
-                let path = entry.path();
-                if !entry.file_type().is_ok_and(|kind| kind.is_file())
-                    || path.extension().is_none_or(|v| v != "json")
-                {
-                    continue;
-                }
-                if !entry
-                    .metadata()
-                    .is_ok_and(|meta| meta.len() <= 8 * 1024 * 1024)
-                {
-                    continue;
-                }
-                let Ok(bytes) = std::fs::read(&path) else {
-                    continue;
-                };
-                let Ok(job) = serde_json::from_slice::<PendingMemory>(&bytes) else {
-                    continue;
-                };
+        recover_pending_jobs(
+            &storage,
+            || {
+                self.memory.is_enabled()
+                    && !self
+                        .memory
+                        .is_flushing
+                        .load(std::sync::atomic::Ordering::Relaxed)
+            },
+            |job| async move {
                 let counts = echo_agent_chat_state::ConversationCounts {
                     total: job.history.len(),
                     user: job
@@ -122,9 +112,7 @@ impl SessionActor {
                         .filter(|i| matches!(i, ConversationItem::ToolResult(_)))
                         .count(),
                 };
-                let completed_len = job.conversation_len;
-                let same_session = job.source_id == self.session_info.id.to_string();
-                if self
+                let completed = self
                     .run_memory_flush_for_source(
                         "task_completed",
                         Some(MemoryFlushSnapshot {
@@ -134,22 +122,135 @@ impl SessionActor {
                         &job.source_id,
                         Some(job.queued_at),
                     )
-                    .await
-                {
-                    if same_session {
-                        self.last_idle_flush_conversation_len
-                            .store(completed_len, std::sync::atomic::Ordering::Relaxed);
-                    }
-                    // A newer completed turn may have replaced the same job while
-                    // the model was running. Never discard that newer checkpoint.
-                    if std::fs::read(&path).is_ok_and(|current| current == bytes) {
-                        let _ = std::fs::remove_file(&path);
-                    }
-                } else {
-                    return;
+                    .await;
+                if completed && job.source_id == self.session_info.id.to_string() {
+                    self.last_idle_flush_conversation_len
+                        .store(job.conversation_len, std::sync::atomic::Ordering::Relaxed);
                 }
+                completed
+            },
+        )
+        .await;
+    }
+}
+
+/// Durable checkpoint traversal is independent of a model/provider failure.
+async fn recover_pending_jobs<F, Fut>(
+    storage: &crate::session::memory::MemoryStorage,
+    allowed: impl Fn() -> bool,
+    mut run: F,
+) where
+    F: FnMut(PendingMemory) -> Fut,
+    Fut: std::future::Future<Output = bool>,
+{
+    use echo_agent_memory::records;
+    records::recover_extraction_activity(storage);
+    let mut attempted = std::collections::HashSet::new();
+    for _pass in 0..3 {
+        let entries = match std::fs::read_dir(storage.workspace_dir().join("pending")) {
+            Ok(entries) => entries,
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => return,
+            Err(error) => {
+                tracing::warn!(%error, "memory checkpoint directory unavailable");
+                return;
+            }
+        };
+        let mut processed = 0;
+        for entry in entries.flatten() {
+            if !allowed() {
+                return;
+            }
+            let path = entry.path();
+            if !entry.file_type().is_ok_and(|kind| kind.is_file())
+                || path.extension().is_none_or(|v| v != "json")
+            {
+                continue;
+            }
+            if !entry
+                .metadata()
+                .is_ok_and(|meta| meta.len() <= 8 * 1024 * 1024)
+            {
+                continue;
+            }
+            let Ok(bytes) = std::fs::read(&path) else {
+                continue;
+            };
+            let identity = (path.clone(), blake3::hash(&bytes));
+            if attempted.contains(&identity) {
+                continue;
+            }
+            let job = match serde_json::from_slice::<PendingMemory>(&bytes) {
+                Ok(job) => job,
+                Err(error) => {
+                    attempted.insert(identity);
+                    tracing::warn!(%error, path = %path.display(), "invalid memory checkpoint retained");
+                    records::record_extraction_recovery_error(
+                        storage,
+                        format!("待提取记录损坏，原文件已保留：{}", path.display()),
+                    );
+                    continue;
+                }
+            };
+            if processed >= 32 {
+                break;
+            }
+            processed += 1;
+            attempted.insert(identity);
+            if run(job).await && std::fs::read(&path).is_ok_and(|current| current == bytes) {
+                // Completion cannot delete a newer turn's replacement checkpoint.
+                let _ = std::fs::remove_file(&path);
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod pending_recovery_tests {
+    use super::*;
+    #[tokio::test]
+    async fn corrupt_and_failed_jobs_do_not_starve_valid_or_newer_checkpoints() {
+        let dir = tempfile::tempdir().unwrap();
+        let storage = crate::session::memory::MemoryStorage::new_flat(dir.path(), dir.path());
+        let pending = dir.path().join("pending");
+        std::fs::create_dir_all(&pending).unwrap();
+        for n in 0..40 {
+            std::fs::write(pending.join(format!("corrupt-{n}.json")), b"invalid").unwrap();
+        }
+        for source in ["failed", "success", "updated"] {
+            std::fs::write(
+                pending.join(format!("{source}.json")),
+                serde_json::to_vec(&PendingMemory {
+                    source_id: source.into(),
+                    history: vec![],
+                    conversation_len: 0,
+                    queued_at: 1,
+                })
+                .unwrap(),
+            )
+            .unwrap();
+        }
+        let seen = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
+        recover_pending_jobs(
+            &storage,
+            || true,
+            |job| {
+                seen.lock().unwrap().push(job.source_id.clone());
+                if job.source_id == "updated" {
+                    std::fs::write(pending.join("updated.json"), b"new checkpoint").unwrap();
+                }
+                async move { job.source_id != "failed" }
+            },
+        )
+        .await;
+        let seen = seen.lock().unwrap();
+        assert_eq!(seen.iter().filter(|s| *s == "failed").count(), 1);
+        assert!(seen.contains(&"success".to_string()));
+        assert!(!pending.join("success.json").exists());
+        assert!(pending.join("failed.json").exists());
+        assert_eq!(
+            std::fs::read(pending.join("updated.json")).unwrap(),
+            b"new checkpoint"
+        );
     }
 }
 
@@ -212,11 +313,11 @@ impl SessionActor {
     /// `log_suffix` is appended to the `MEMORY_SESSION_END:` log line so each
     /// arm keeps a distinct reason string in logs.
     pub(super) async fn run_session_end_memory_pipeline(&self, log_suffix: &str) {
-        if !echo_agent_memory::records::setting("memory", None, "enabled", true) {
+        if !self.memory.setting("memory", None, "enabled", true) {
             return;
         }
         if !self.startup_hints.is_subagent
-            && echo_agent_memory::records::setting(
+            && self.memory.setting(
                 "memory",
                 Some("session"),
                 "save_on_end",
@@ -242,7 +343,7 @@ impl SessionActor {
                     &storage,
                     &conversation,
                     &self.session_info.id.0,
-                    echo_agent_memory::records::setting(
+                    self.memory.setting(
                         "memory",
                         Some("session"),
                         "save_on_end",
@@ -335,8 +436,8 @@ impl SessionActor {
     /// Uses the same sampling client infrastructure as flush but sends
     /// the dream prompt instead. The model call has a 60s timeout.
     pub(super) async fn maybe_run_dream(&self) {
-        if !echo_agent_memory::records::setting("memory", None, "enabled", true)
-            || !echo_agent_memory::records::setting(
+        if !self.memory.setting("memory", None, "enabled", true)
+            || !self.memory.setting(
                 "memory",
                 Some("dream"),
                 "enabled",
@@ -446,7 +547,7 @@ impl SessionActor {
     ) -> Result<bool, String> {
         use crate::session::memory::dream::*;
 
-        if !echo_agent_memory::records::setting("memory", None, "enabled", true) {
+        if !self.memory.setting("memory", None, "enabled", true) {
             return Ok(false);
         }
         let existing_memory = std::fs::read_to_string(storage.workspace_memory_file()).ok();
@@ -511,7 +612,7 @@ impl SessionActor {
             }
         };
 
-        if !echo_agent_memory::records::setting("memory", None, "enabled", true)
+        if !self.memory.setting("memory", None, "enabled", true)
             || !echo_agent_memory::records::permitted(storage, &model_response).unwrap_or(false)
         {
             return Ok(false);
@@ -592,6 +693,13 @@ impl SessionActor {
             .unwrap_or_default();
         let session_id = self.session_info.id.to_string();
         let request = ConversationRequest {
+            preflight: self.memory.storage().map(|storage| {
+                std::sync::Arc::new(crate::session::memory_state::MemoryRequestPolicy {
+                    storage,
+                    extraction: true,
+                })
+                    as std::sync::Arc<dyn echo_agent_sampling_types::ConversationRequestPreflight>
+            }),
             items: vec![
                 ConversationItem::system(format!(
                     "{}\nCurrent local date: {}",
@@ -644,10 +752,12 @@ impl SessionActor {
         let observed_at = source_at
             .filter(|at| *at > 0 && *at <= records::now())
             .unwrap_or_else(records::now);
-        if !records::setting("memory", None, "enabled", true)
+        if !self.memory.setting("memory", None, "enabled", true)
             || (trigger != "user_requested"
                 && trigger != "slash_command"
-                && !records::setting("compaction", Some("memory_flush"), "enabled", true))
+                && !self
+                    .memory
+                    .setting("compaction", Some("memory_flush"), "enabled", true))
         {
             return false;
         }
@@ -657,16 +767,6 @@ impl SessionActor {
         if records::source_blocked(&storage_for_records, source_id).unwrap_or(true) {
             return true;
         }
-        let previous_activity = records::activity(&storage_for_records);
-        let _ = records::set_activity(
-            &storage_for_records,
-            &records::MemoryActivity {
-                attempted_at: Some(records::now()),
-                outcome: "running".into(),
-                ..previous_activity
-            },
-        );
-
         // Atomically acquire the flushing lock. If another flush is already
         // running (idle timer, pre-compaction, or user-requested), skip.
         if !self.memory.try_acquire_flush_lock() {
@@ -678,6 +778,10 @@ impl SessionActor {
         }
 
         let _flush_guard = FlushLockGuard(&self.memory);
+        let Ok(Some(_activity_guard)) = records::begin_extraction_activity(&storage_for_records)
+        else {
+            return false;
+        };
         tracing::info!(target: echo_agent_telemetry::memory_log::TARGET, "MEMORY_FLUSH: starting");
         let flush_start = std::time::Instant::now();
 
@@ -743,6 +847,7 @@ impl SessionActor {
             );
             let session_id = self.session_info.id.to_string();
             let request = ConversationRequest {
+                preflight: Some(std::sync::Arc::new(crate::session::memory_state::MemoryRequestPolicy { storage: storage_for_records.clone(), extraction: true })),
                 items,
                 model: Some(model),
                 x_echo_agent_conv_id: Some(format!("flush-{}", uuid::Uuid::new_v4())),
@@ -783,10 +888,12 @@ impl SessionActor {
         }
         .await;
 
-        if !records::setting("memory", None, "enabled", true)
+        if !self.memory.setting("memory", None, "enabled", true)
             || (trigger != "user_requested"
                 && trigger != "slash_command"
-                && !records::setting("compaction", Some("memory_flush"), "enabled", true))
+                && !self
+                    .memory
+                    .setting("compaction", Some("memory_flush"), "enabled", true))
             || records::source_blocked(&storage_for_records, source_id).unwrap_or(true)
         {
             return false;
@@ -830,7 +937,7 @@ impl SessionActor {
                                             attempted_at: Some(records::now()),
                                             outcome: "failed".into(),
                                             detail: error.to_string(),
-                                            ..Default::default()
+                                            ..records::activity(&storage_for_records)
                                         },
                                     );
                                     return false;
@@ -850,7 +957,9 @@ impl SessionActor {
                             if let Some(index) = self.memory.open_index(&storage) {
                                 let provider = if let Some(ref params) = self.memory.backend_params
                                 {
-                                    params.make_embedding_provider().await
+                                    params.make_embedding_provider().await.map(|provider| {
+                                        provider.with_request_permit(storage.request_permit())
+                                    })
                                 } else {
                                     None
                                 };

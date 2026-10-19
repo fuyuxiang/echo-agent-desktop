@@ -15,9 +15,8 @@ export function SettingsDisclosure({ title, description, children, defaultOpen =
     if (defaultOpen) setExpanded(true);
   }, [defaultOpen]);
   return (
-    <details className="settings-disclosure" open={expanded}
-      onToggle={(event) => setExpanded(event.currentTarget.open)}>
-      <summary>
+    <details className="settings-disclosure" open={expanded}>
+      <summary onClick={(event) => { event.preventDefault(); setExpanded(value => !value); }}>
         <span className="settings-disclosure__heading">
           <strong>{title}</strong>
           {description && <span>{description}</span>}
