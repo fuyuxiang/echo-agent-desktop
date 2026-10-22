@@ -8,12 +8,10 @@ import { isTheiaWindowlessRuntime } from "./patch-theia-windowless-helpers.mjs";
 import { createHash } from "node:crypto";
 import { pinnedTheiaPlugins, validateTheiaRuntimePlugin, theiaPluginTreeFingerprint } from "./theia-plugin-validation.mjs";
 import { GIT_WINDOWLESS_PATCH } from "./patch-theia-git-windowless.mjs";
+import { assertSupportedNodeVersion } from "./node-runtime-version.mjs";
 
 const root = resolve(import.meta.dirname, "..");
-const major = Number(process.versions.node.split(".")[0]);
-if (major !== 22 && major !== 24) {
-  throw new Error("Echo Code IDE is validated with Node.js 22 or 24. Select one of those versions and retry.");
-}
+assertSupportedNodeVersion();
 const resources = join(root, "src-tauri/resources/theia");
 const runtime = join(resources, "browser/lib/backend/main.js");
 const runtimeDependencies = [

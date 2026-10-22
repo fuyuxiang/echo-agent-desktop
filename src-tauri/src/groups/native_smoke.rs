@@ -4,7 +4,10 @@ use super::*;
 use axum::{extract::State as AxumState, response::IntoResponse, routing::post, Json, Router};
 use std::sync::{Arc, Mutex};
 
-static PROBE_INTERJECTION_QUEUED: tokio::sync::Notify = tokio::sync::Notify::const_new();
+// Several inference/background requests can contain the same history. This
+// event stays set after delivery so every request observes the acknowledgement.
+static PROBE_INTERJECTION_QUEUED: std::sync::LazyLock<tokio::sync::watch::Sender<bool>> =
+    std::sync::LazyLock::new(|| tokio::sync::watch::channel(false).0);
 
 #[test]
 fn native_runtime_group_contract() {
@@ -44,12 +47,14 @@ async fn model(
         if request_text.contains("INTERJECTION_CORRECTION") {
             "CORRECTION_APPLIED"
         } else {
+            let mut queued = PROBE_INTERJECTION_QUEUED.subscribe();
             tokio::time::timeout(
                 std::time::Duration::from_secs(15),
-                PROBE_INTERJECTION_QUEUED.notified(),
+                queued.wait_for(|queued| *queued),
             )
             .await
-            .expect("host did not deliver the scoped interjection");
+            .expect("host did not deliver the scoped interjection")
+            .expect("interjection acknowledgement channel closed");
             "INITIAL_PASS"
         }
     } else if request_text.contains("MEMORY_PROBE") {
@@ -189,7 +194,7 @@ paths = ["{relative_plugin}"]
                             .is_some_and(|text| text.contains("INTERJECTION_CORRECTION"))
                             && params.get("interjectionId").is_some()
                         {
-                            PROBE_INTERJECTION_QUEUED.notify_one();
+                            PROBE_INTERJECTION_QUEUED.send_replace(true);
                         }
                         if let (Some(session), Some(update)) = (
                             params.get("sessionId").and_then(Value::as_str),

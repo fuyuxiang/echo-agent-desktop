@@ -436,7 +436,7 @@ pub(super) fn work_prompt(
         .filter(|m| !m.removed)
         .map(|m| json!({"id":m.id,"name":m.name,"role":m.role}))
         .collect::<Vec<_>>();
-    let decisions = decision_context(&latest)?;
+    let decisions = decision_context(latest)?;
     let voided_decisions = latest
         .decisions
         .iter()

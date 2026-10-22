@@ -18,7 +18,8 @@
 
 import { OVSXApiFilterImpl, OVSXClient, VSXTargetPlatform } from '@theia/ovsx-client';
 import * as chalk from 'chalk';
-import * as decompress from 'decompress';
+// The maintained archive reader is ESM; Node 22 exposes its default via require().
+const decompress: typeof import('decompress') = require('decompress').default;
 import { promises as fs } from 'fs';
 import * as path from 'path';
 import * as temp from 'temp';

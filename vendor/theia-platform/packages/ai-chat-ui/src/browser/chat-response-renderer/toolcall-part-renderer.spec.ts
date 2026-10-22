@@ -14,12 +14,24 @@
 // SPDX-License-Identifier: EPL-2.0 OR GPL-2.0-only WITH Classpath-exception-2.0
 // *****************************************************************************
 
+import { enableJSDOM } from '@theia/core/lib/browser/test/jsdom';
+let disableJSDOM = enableJSDOM();
+
+import { FrontendApplicationConfigProvider } from '@theia/core/lib/browser/frontend-application-config-provider';
+FrontendApplicationConfigProvider.set({});
+
 import { expect } from 'chai';
-import { ToolCallChatResponseContent } from '@theia/ai-chat/lib/common';
+import { ToolCallChatResponseContent, ToolCallChatResponseContentImpl } from '@theia/ai-chat/lib/common';
+import { ToolConfirmationMode } from '@theia/ai-chat/lib/common/chat-tool-preferences';
+import { createToolCallError } from '@theia/ai-core';
 import { OpenerService } from '@theia/core/lib/browser';
 import { ReactNode } from '@theia/core/shared/react';
+import { renderToStaticMarkup } from 'react-dom/server';
 import { ToolCallPartRenderer } from './toolcall-part-renderer';
 import { condenseArguments, formatArgsForTooltip } from './toolcall-utils';
+import { ResponseNode } from '../chat-tree-view';
+
+disableJSDOM();
 
 describe('condenseArguments', () => {
 
@@ -298,6 +310,12 @@ class TestableToolCallPartRenderer extends ToolCallPartRenderer {
     callRenderResult(response: ToolCallChatResponseContent): ReactNode {
         return this.renderResult(response);
     }
+    renderCard(response: ToolCallChatResponseContent, isCanceled = false): string {
+        this.toolConfirmationManager = { getConfirmationMode: () => ToolConfirmationMode.CONFIRM } as unknown as typeof this.toolConfirmationManager;
+        this.toolInvocationRegistry = { getFunction: () => undefined } as unknown as typeof this.toolInvocationRegistry;
+        this.keybindingRegistry = { getKeybindingsForCommand: () => [] } as unknown as typeof this.keybindingRegistry;
+        return renderToStaticMarkup(this.render(response, { sessionId: 'test', response: { isCanceled } } as unknown as ResponseNode));
+    }
 }
 
 interface RenderedNode {
@@ -405,4 +423,35 @@ describe('ToolCallPartRenderer.renderResult', () => {
         expect(node.props.children).to.equal(JSON.stringify(result, undefined, 2));
     });
 
+});
+
+describe('ToolCallPartRenderer terminal states', () => {
+    before(() => disableJSDOM = enableJSDOM());
+    after(() => disableJSDOM());
+    for (const encoded of [false, true]) {
+        it(`shows a failed tool with its error expanded (${encoded ? 'persisted JSON' : 'structured result'})`, () => {
+            const result = createToolCallError('Lookup service unavailable');
+            const response = new ToolCallChatResponseContentImpl('call-1', 'lookup', '{}', true, encoded ? JSON.stringify(result) : result);
+            const html = new TestableToolCallPartRenderer().renderCard(response);
+            expect(html).to.contain('theia-toolCall-failed');
+            expect(html).to.contain('Execution failed');
+            expect(html).to.contain('open=""');
+            expect(html).to.contain('Lookup service unavailable');
+            expect(html).not.to.contain('theia-animation-spin');
+        });
+    }
+
+    it('keeps successful results collapsed and labeled as completed', () => {
+        const html = new TestableToolCallPartRenderer().renderCard(new ToolCallChatResponseContentImpl('call-1', 'lookup', '{}', true, 'found'));
+        expect(html).to.contain('Ran');
+        expect(html).not.to.contain('theia-toolCall-failed');
+        expect(html).not.to.contain('open=""');
+    });
+
+    it('labels settled tools as canceled when the user stopped the request', () => {
+        const response = new ToolCallChatResponseContentImpl('call-1', 'lookup', '{}', true, createToolCallError('Tool execution canceled.'));
+        const html = new TestableToolCallPartRenderer().renderCard(response, true);
+        expect(html).to.contain('Execution canceled');
+        expect(html).not.to.contain('theia-animation-spin');
+    });
 });

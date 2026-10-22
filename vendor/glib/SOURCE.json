@@ -1,0 +1,16 @@
+{
+  "upstream": "https://crates.io/crates/glib/0.18.5",
+  "version": "0.18.5",
+  "license": "MIT",
+  "patches": [
+    {
+      "advisory": "RUSTSEC-2024-0429",
+      "upstream_fix": "https://github.com/gtk-rs/gtk-rs-core/pull/1343",
+      "file": "src/variant_iter.rs",
+      "change": "Pass a mutable out pointer to g_variant_get_child; preserve GTK3 ABI required by Tauri."
+    }
+  ],
+  "patchedSha256": {
+    "src/variant_iter.rs": "a0f5ee8acb8faa089bcdfbc9a57372609fce7654026ccef7d9a224d05a654ccc"
+  }
+}

@@ -14,7 +14,7 @@
 // SPDX-License-Identifier: EPL-2.0 OR GPL-2.0-only WITH Classpath-exception-2.0
 // *****************************************************************************
 
-import { LanguageModelV1 } from '@ai-sdk/provider';
+import { LanguageModelV2 } from '@ai-sdk/provider';
 import {
     LanguageModel,
     LanguageModelMessage,
@@ -26,33 +26,30 @@ import {
     LanguageModelStreamResponsePart,
     LanguageModelTextResponse,
     ToolCall,
+    ToolCallResult,
     UserRequest,
+    createToolCallError,
 } from '@theia/ai-core';
 import { CancellationToken, Disposable, ILogger } from '@theia/core';
 import {
-    CoreMessage,
+    ModelMessage,
     generateObject,
     generateText,
     jsonSchema,
     streamText,
     TextStreamPart,
     tool,
-    ToolExecutionOptions,
-    ToolResultPart,
-    ToolSet
+    ToolSet,
+    stepCountIs
 } from 'ai';
 import { VercelAiLanguageModelFactory, VercelAiProviderConfig } from './vercel-ai-language-model-factory';
 
-type StreamPart = ToolResultPart | {
-    type: string;
-    textDelta?: string;
-    toolCallId?: string;
-    toolName?: string;
-    args?: object | string;
-    argsTextDelta?: string;
-    usage?: { promptTokens: number; completionTokens: number };
-    signature?: string;
-};
+function toolErrorMessage(error: unknown): string {
+    if (error instanceof Error && error.message) {
+        return error.message;
+    }
+    return typeof error === 'string' && error.trim() ? error : 'Tool execution failed. Please retry.';
+}
 
 interface VercelCancellationToken extends Disposable {
     signal: AbortSignal;
@@ -77,60 +74,68 @@ export class VercelAiStreamTransformer {
         protected readonly context: StreamContext
     ) { }
 
-    private isToolResultPart(part: StreamPart): part is ToolResultPart {
-        return part.type === 'tool-result';
-    }
-
     async *transform(): AsyncGenerator<LanguageModelStreamResponsePart> {
         this.toolCallsMap.clear();
+        let aborted = false;
         try {
             for await (const part of this.fullStream) {
                 this.context.logger.trace('Received stream part:', part);
                 if (this.context.cancellationToken?.isCancellationRequested) {
                     this.context.logger.debug('Cancellation requested, stopping stream');
-                    this.fullStream.cancel();
+                    await this.fullStream.cancel();
+                    break;
+                }
+                if (part.type === 'abort') {
+                    aborted = true;
                     break;
                 }
 
                 let toolCallUpdated = false;
 
                 switch (part.type) {
+                    case 'error':
+                        throw part.error;
+
                     case 'text-delta':
-                        if (part.textDelta) {
-                            yield { content: part.textDelta };
+                        if (part.text) {
+                            yield { content: part.text };
                         }
                         break;
 
                     case 'tool-call':
                         if (part.toolCallId && part.toolName) {
-                            const args = typeof part.args === 'object' ? JSON.stringify(part.args) : (part.args || '');
+                            const args = typeof part.input === 'object' ? JSON.stringify(part.input) : (part.input || '');
                             toolCallUpdated = this.updateToolCall(part.toolCallId, part.toolName, args);
                         }
                         break;
 
-                    case 'tool-call-streaming-start':
-                        if (part.toolCallId && part.toolName) {
-                            toolCallUpdated = this.updateToolCall(part.toolCallId, part.toolName);
+                    case 'tool-input-start':
+                        if (part.id && part.toolName) {
+                            toolCallUpdated = this.updateToolCall(part.id, part.toolName);
                         }
                         break;
 
-                    case 'tool-call-delta':
-                        if (part.toolCallId && part.argsTextDelta) {
-                            toolCallUpdated = this.appendToToolCallArgs(part.toolCallId, part.argsTextDelta);
+                    case 'tool-input-delta':
+                        if (part.id && part.delta) {
+                            toolCallUpdated = this.appendToToolCallArgs(part.id, part.delta);
                         }
                         break;
 
-                    case 'step-finish': {
+                    case 'tool-result':
+                        toolCallUpdated = this.finishToolCall(part.toolCallId,
+                            typeof part.output === 'string' ? part.output : JSON.stringify(part.output),
+                            part.toolName, !part.preliminary);
+                        break;
+
+                    case 'tool-error':
+                        toolCallUpdated = this.finishToolCall(part.toolCallId,
+                            createToolCallError(toolErrorMessage(part.error)), part.toolName);
+                        break;
+
+                    case 'finish-step': {
                         const { usage } = part;
-                        if (usage && !isNaN(usage.promptTokens) && !isNaN(usage.completionTokens)) {
-                            yield { input_tokens: usage.promptTokens, output_tokens: usage.completionTokens };
-                        }
-                        break;
-                    }
-
-                    default: {
-                        if (this.isToolResultPart(part)) {
-                            toolCallUpdated = this.processToolResult(part);
+                        if (usage && typeof usage.inputTokens === 'number' && typeof usage.outputTokens === 'number') {
+                            yield { input_tokens: usage.inputTokens, output_tokens: usage.outputTokens };
                         }
                         break;
                     }
@@ -141,7 +146,19 @@ export class VercelAiStreamTransformer {
                 }
             }
         } catch (error) {
-            this.context.logger.error('Error in AI SDK stream:', error);
+            const canceled = this.context.cancellationToken?.isCancellationRequested;
+            if (this.finishPendingToolCalls(canceled ? 'Tool execution canceled.' : 'Tool execution interrupted. Please retry.')) {
+                yield { tool_calls: Array.from(this.toolCallsMap.values()) };
+            }
+            if (!canceled) {
+                this.context.logger.error('Error in AI SDK stream:', error);
+                throw error;
+            }
+            return;
+        }
+        if (this.finishPendingToolCalls(aborted || this.context.cancellationToken?.isCancellationRequested
+            ? 'Tool execution canceled.' : 'Tool execution interrupted before returning a result. Please retry.')) {
+            yield { tool_calls: Array.from(this.toolCallsMap.values()) };
         }
     }
 
@@ -158,25 +175,39 @@ export class VercelAiStreamTransformer {
     private appendToToolCallArgs(id: string, argsTextDelta: string): boolean {
         const existingCall = this.toolCallsMap.get(id);
         if (existingCall?.function) {
-            existingCall.function.arguments = (existingCall.function.arguments || '') + argsTextDelta;
+            this.toolCallsMap.set(id, {
+                ...existingCall,
+                function: { ...existingCall.function, arguments: (existingCall.function.arguments || '') + argsTextDelta }
+            });
             return true;
         }
         return false;
     }
 
-    private processToolResult(part: ToolResultPart): boolean {
-        if (!part.toolCallId) {
+    private finishToolCall(id: string, result: ToolCallResult, name?: string, finished = true): boolean {
+        if (!id) {
             return false;
         }
-
-        const completedCall = this.toolCallsMap.get(part.toolCallId);
-        if (!completedCall) {
-            return false;
-        }
-
-        completedCall.result = part.result as string;
-        completedCall.finished = true;
+        const existingCall = this.toolCallsMap.get(id);
+        this.toolCallsMap.set(id, {
+            ...existingCall,
+            id,
+            function: existingCall?.function ?? { name, arguments: '' },
+            result,
+            finished
+        });
         return true;
+    }
+
+    private finishPendingToolCalls(message: string): boolean {
+        let updated = false;
+        for (const [id, call] of this.toolCallsMap) {
+            if (!call.finished) {
+                this.finishToolCall(id, createToolCallError(message));
+                updated = true;
+            }
+        }
+        return updated;
     }
 
 }
@@ -197,7 +228,12 @@ export class VercelAiModel implements LanguageModel {
     ) { }
 
     protected getSettings(request: LanguageModelRequest): Record<string, unknown> {
-        return request.settings ?? {};
+        const settings = { ...request.settings };
+        if (settings.maxOutputTokens === undefined && typeof settings.maxTokens === 'number') {
+            settings.maxOutputTokens = settings.maxTokens;
+        }
+        delete settings.maxTokens;
+        return settings;
     }
 
     async request(request: UserRequest, cancellationToken?: CancellationToken): Promise<LanguageModelResponse> {
@@ -215,20 +251,23 @@ export class VercelAiModel implements LanguageModel {
             this.providerConfig()
         );
         const cancel = this.createCancellationToken(cancellationToken);
+        let streamOwnsCancellation = false;
 
         try {
             if (request.response_format?.type === 'json_schema' && this.supportsStructuredOutput) {
-                return this.handleStructuredOutputRequest(model, request, cancel);
+                return await this.handleStructuredOutputRequest(model, request, cancel);
             }
             if (!this.enableStreaming || (typeof settings.stream === 'boolean' && !settings.stream)) {
-                return this.handleNonStreamingRequest(model, request, cancel);
+                return await this.handleNonStreamingRequest(model, request, cancel);
             }
-            return this.handleStreamingRequest(model, request, cancel);
+            const response = await this.handleStreamingRequest(model, request, cancel);
+            streamOwnsCancellation = true;
+            return response;
         } catch (error) {
             this.logger.error('Error in Vercel AI model request:', error);
             throw error;
         } finally {
-            cancel.dispose();
+            if (!streamOwnsCancellation) cancel.dispose();
         }
     }
 
@@ -253,7 +292,7 @@ export class VercelAiModel implements LanguageModel {
     }
 
     protected async handleNonStreamingRequest(
-        model: LanguageModelV1,
+        model: LanguageModelV2,
         request: UserRequest,
         cancellationToken?: VercelCancellationToken
     ): Promise<LanguageModelTextResponse> {
@@ -272,10 +311,10 @@ export class VercelAiModel implements LanguageModel {
         });
 
         const result: LanguageModelTextResponse = { text: response.text };
-        if (!isNaN(response.usage.completionTokens) && !isNaN(response.usage.promptTokens)) {
+        if (typeof response.usage.outputTokens === 'number' && typeof response.usage.inputTokens === 'number') {
             result.usage = {
-                input_tokens: response.usage.promptTokens,
-                output_tokens: response.usage.completionTokens,
+                input_tokens: response.usage.inputTokens,
+                output_tokens: response.usage.outputTokens,
             };
         }
         return result;
@@ -290,14 +329,14 @@ export class VercelAiModel implements LanguageModel {
         for (const toolRequest of request.tools) {
             toolSet[toolRequest.name] = tool({
                 description: toolRequest.description,
-                parameters: jsonSchema(toolRequest.parameters),
-                execute: async (args: object, options: ToolExecutionOptions) => {
+                inputSchema: jsonSchema(toolRequest.parameters),
+                execute: async (args, options) => {
                     try {
-                        const result = await toolRequest.handler(JSON.stringify(args), options);
+                        const result = await toolRequest.handler(JSON.stringify(args ?? {}), options);
                         return JSON.stringify(result);
                     } catch (error) {
                         this.logger.error(`Error executing tool (${toolRequest.name}):`, error);
-                        return { status: 'error', error: 'Tool execution failed', details: error };
+                        return createToolCallError(options.abortSignal?.aborted ? 'Tool execution canceled.' : toolErrorMessage(error));
                     }
                 }
             });
@@ -306,7 +345,7 @@ export class VercelAiModel implements LanguageModel {
     }
 
     protected async handleStructuredOutputRequest(
-        model: LanguageModelV1,
+        model: LanguageModelV2,
         request: UserRequest,
         cancellationToken?: VercelCancellationToken
     ): Promise<LanguageModelParsedResponse | LanguageModelStreamResponse> {
@@ -323,7 +362,7 @@ export class VercelAiModel implements LanguageModel {
         const messages = this.processMessages(request.messages);
         const abortSignal = cancellationToken?.signal;
 
-        const response = await generateObject<unknown>({
+        const response = await generateObject({
             model,
             output: 'object',
             messages,
@@ -336,17 +375,17 @@ export class VercelAiModel implements LanguageModel {
             content: JSON.stringify(response.object),
             parsed: response.object
         };
-        if (!isNaN(response.usage.completionTokens) && !isNaN(response.usage.promptTokens)) {
+        if (typeof response.usage.outputTokens === 'number' && typeof response.usage.inputTokens === 'number') {
             result.usage = {
-                input_tokens: response.usage.promptTokens,
-                output_tokens: response.usage.completionTokens,
+                input_tokens: response.usage.inputTokens,
+                output_tokens: response.usage.outputTokens,
             };
         }
         return result;
     }
 
     protected async handleStreamingRequest(
-        model: LanguageModelV1,
+        model: LanguageModelV2,
         request: UserRequest,
         cancellationToken?: VercelCancellationToken
     ): Promise<LanguageModelStreamResponse> {
@@ -360,9 +399,8 @@ export class VercelAiModel implements LanguageModel {
             messages,
             tools,
             toolChoice: 'auto',
-            maxSteps: 100,
+            stopWhen: stepCountIs(100),
             maxRetries: this.maxRetries,
-            toolCallStreaming: true,
             abortSignal,
             ...settings
         });
@@ -372,11 +410,14 @@ export class VercelAiModel implements LanguageModel {
         );
 
         return {
-            stream: transformer.transform()
+            stream: (async function* () {
+                try { yield* transformer.transform(); }
+                finally { cancellationToken?.dispose(); }
+            })()
         };
     }
 
-    protected processMessages(messages: LanguageModelMessage[]): Array<CoreMessage> {
+    protected processMessages(messages: LanguageModelMessage[]): Array<ModelMessage> {
         const converted = messages.map(message => {
             const content = LanguageModelMessage.isTextMessage(message) ? message.text : '';
             let role: 'user' | 'assistant' | 'system';
@@ -401,12 +442,12 @@ export class VercelAiModel implements LanguageModel {
         return this.mergeConsecutiveAssistantMessages(converted);
     }
 
-    protected mergeConsecutiveAssistantMessages(messages: Array<CoreMessage>): Array<CoreMessage> {
-        const result: Array<CoreMessage> = [];
+    protected mergeConsecutiveAssistantMessages(messages: Array<ModelMessage>): Array<ModelMessage> {
+        const result: Array<ModelMessage> = [];
         for (const message of messages) {
             const previous = result[result.length - 1];
             if (previous?.role === 'assistant' && message.role === 'assistant') {
-                const merged: CoreMessage = { ...previous, role: 'assistant' };
+                const merged: ModelMessage = { ...previous, role: 'assistant' };
 
                 const previousContent = typeof previous.content === 'string' ? previous.content : undefined;
                 const nextContent = typeof message.content === 'string' ? message.content : undefined;

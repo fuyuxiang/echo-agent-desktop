@@ -54,10 +54,14 @@ final class MermaidReview: NSObject, WKNavigationDelegate, WKScriptMessageHandle
             window.orderOut(nil)
             exit(0)
         }
+        print("WKWebView loading \(index + 1)/\(cases.count): \(cases[index])")
+        fflush(stdout)
         webView.load(URLRequest(url: URL(string: "\(base)/__ui-review?\(cases[index])")!))
     }
 
     func webView(_ webView: WKWebView, didFinish navigation: WKNavigation!) {
+        print("WKWebView loaded \(index + 1)/\(cases.count)")
+        fflush(stdout)
         webView.evaluateJavaScript("""
         void (async () => {
           try {
@@ -108,6 +112,14 @@ final class MermaidReview: NSObject, WKNavigationDelegate, WKScriptMessageHandle
         fail(String(describing: error))
     }
 
+    func webView(_ webView: WKWebView, didFail navigation: WKNavigation!, withError error: Error) {
+        fail(String(describing: error))
+    }
+
+    func webViewWebContentProcessDidTerminate(_ webView: WKWebView) {
+        fail("Web content process terminated during case \(index + 1)")
+    }
+
     func userContentController(_ userContentController: WKUserContentController, didReceive message: WKScriptMessage) {
         guard let text = message.body as? String,
               let data = text.data(using: .utf8),
@@ -136,6 +148,9 @@ guard CommandLine.arguments.count == 3 else {
     exit(1)
 }
 let app = NSApplication.shared
+// The review window stays offscreen; keep this user-requested verification
+// active so App Nap cannot suspend its WebKit work between navigations.
+let activity = ProcessInfo.processInfo.beginActivity(options: [.userInitiatedAllowingIdleSystemSleep], reason: "Validate native diagram rendering")
 app.setActivationPolicy(.accessory)
 let review = MermaidReview(base: CommandLine.arguments[1], output: URL(fileURLWithPath: CommandLine.arguments[2], isDirectory: true))
 Timer.scheduledTimer(withTimeInterval: 180, repeats: false) { _ in

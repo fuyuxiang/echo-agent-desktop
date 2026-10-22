@@ -3,7 +3,7 @@
   "private": true,
   "version": "0.3.11",
   "type": "module",
-  "description": "EchoAgent — an open-source desktop agent workspace built on Tauri.",
+  "description": "EchoAgent \u2014 an open-source desktop agent workspace built on Tauri.",
   "scripts": {
     "dev": "vite",
     "build": "tsc --noEmit && vite build",
@@ -32,7 +32,10 @@
     "git:push": "bash scripts/git-push.sh",
     "git:push:tags": "bash scripts/git-push.sh --tags",
     "test:rust": "node scripts/test-rust-desktop.mjs",
-    "ide:verify-git": "node scripts/validate-theia-git-runtime.mjs"
+    "ide:verify-git": "node scripts/validate-theia-git-runtime.mjs",
+    "ide:lock": "node scripts/update-theia-runtime-lock.mjs",
+    "test:security": "node --test scripts/test-theia-archive-security.mjs scripts/test-dependency-patches.mjs scripts/test-theia-scanoss.mjs",
+    "security:audit": "python3 scripts/audit-dependencies.py"
   },
   "dependencies": {
     "@monaco-editor/react": "^4.7.0",
@@ -43,12 +46,12 @@
     "@xterm/xterm": "^5.5.0",
     "docx": "^9.7.2",
     "exceljs": "^4.4.0",
-    "katex": "^0.18.1",
+    "katex": "^0.18.4",
     "linkify-it": "^6.0.0",
     "lowlight": "^3.3.0",
     "lucide-react": "^0.460.0",
     "marked": "^18.0.14",
-    "mermaid": "^11.16.0",
+    "mermaid": "^12.2.0",
     "monaco-editor": "^0.52.2",
     "pdf-lib": "^1.17.1",
     "pptxgenjs": "^4.0.1",
@@ -68,7 +71,7 @@
   },
   "devDependencies": {
     "@tauri-apps/cli": "^2.1.0",
-    "@testing-library/jest-dom": "^6.9.1",
+    "@testing-library/jest-dom": "6.9.1",
     "@testing-library/react": "^16.3.2",
     "@testing-library/user-event": "^14.6.1",
     "@types/hast": "^3.0.5",
@@ -77,13 +80,26 @@
     "@types/qrcode": "^1.5.6",
     "@types/react": "^18.3.12",
     "@types/react-dom": "^18.3.1",
-    "@vitejs/plugin-react": "^4.3.3",
+    "@vitejs/plugin-react": "^4.7.0",
     "esbuild": "^0.28.2",
     "jsdom": "^29.1.1",
     "typescript": "^5.6.3",
-    "vite": "^5.4.11",
-    "vitest": "^2.1.9",
+    "vite": "^6.4.5",
+    "vitest": "^4.1.12",
     "ws": "^8.21.1"
   },
-  "packageManager": "pnpm@10.34.5+sha512.a4ee05f2f73658255bd6a89859c065a45c28a57daefae2c893a168ee2b73168c37b91e83e57ea67654ad03f03031746430e8bce38e362e042605fb8abc80192e"
+  "packageManager": "pnpm@10.34.5+sha512.a4ee05f2f73658255bd6a89859c065a45c28a57daefae2c893a168ee2b73168c37b91e83e57ea67654ad03f03031746430e8bce38e362e042605fb8abc80192e",
+  "engines": {
+    "node": "^22.23.4 || ^24.22.1"
+  },
+  "pnpm": {
+    "overrides": {
+      "dompurify": "^3.4.16",
+      "source-map-js": "^1.2.2",
+      "undici": "^7.29.1",
+      "uuid@<11.1.1": "^11.1.1",
+      "pptxgenjs>image-size": "^2.0.4",
+      "katex": "^0.18.4"
+    }
+  }
 }

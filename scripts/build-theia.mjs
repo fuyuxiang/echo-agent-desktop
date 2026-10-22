@@ -4,15 +4,17 @@ import { resolve, join } from "node:path";
 import { spawnSync } from "node:child_process";
 import { patchNodePtyConsoleHelper, patchNodePtyPipeErrors, ensureNodePtyConptySourceUnmodified, syncNodePtyPrebuilds, markNodePtyConptyRebuilt } from "./patch-theia-node-pty.mjs";
 import { patchTheiaWindowlessHelpers, isTheiaWindowlessRuntime } from "./patch-theia-windowless-helpers.mjs";
+import { assertSupportedNodeVersion, assertSupportedNpmVersion } from "./node-runtime-version.mjs";
+import { patchTheiaScanoss } from "./patch-theia-scanoss.mjs";
 
-const major = Number(process.versions.node.split(".")[0]);
-if (major !== 22 && major !== 24) {
-  throw new Error("Echo Code IDE is validated with Node.js 22 or 24. Run this command with one of those versions on PATH.");
-}
+assertSupportedNodeVersion();
 
 const sourceRoot = resolve(import.meta.dirname, "../vendor/theia-platform");
 const npm = process.platform === "win32" ? "npm.cmd" : "npm";
 const env = { ...process.env, PUPPETEER_SKIP_DOWNLOAD: "1" };
+const npmVersion = spawnSync(npm, ["--version"], { env, encoding: "utf8", shell: process.platform === "win32" });
+if (npmVersion.status !== 0) throw new Error(npmVersion.stderr || "npm is unavailable");
+assertSupportedNpmVersion(npmVersion.stdout);
 
 function run(args, extraEnv = {}) {
   const result = spawnSync(npm, args, {
@@ -37,6 +39,7 @@ if (!existsSync(nodeModules) || installedFingerprint !== installFingerprint) {
   run(["ci"]);
   writeFileSync(installMarker, `${installFingerprint}\n`);
 }
+patchTheiaScanoss(sourceRoot);
 patchNodePtyConsoleHelper(sourceRoot);
 patchTheiaWindowlessHelpers(sourceRoot);
 if (process.platform === "win32") {

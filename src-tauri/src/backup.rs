@@ -353,7 +353,11 @@ fn unpack(archive: &Path, staging: &Path) -> Result<Manifest, String> {
     let mut names = HashSet::new();
     for index in 0..zip.len() {
         let file = zip.by_index(index).map_err(|e| e.to_string())?;
-        if !names.insert(file.name().to_owned()) {
+        if !names.insert(
+            file.name()
+                .map_err(|error| format!("备份 ZIP 文件名无效：{error}"))?
+                .into_owned(),
+        ) {
             return Err("备份包含重复 ZIP 条目".into());
         }
     }

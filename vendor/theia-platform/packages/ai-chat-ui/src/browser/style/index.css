@@ -1260,6 +1260,11 @@ details.theia-tool-confirmation-args>summary::marker {
   cursor: default;
 }
 
+.theia-toolCall-failed summary {
+  color: var(--theia-errorForeground);
+  cursor: pointer;
+}
+
 .theia-toolCall-unavailable {
   color: var(--theia-editorWarning-foreground);
   cursor: default;

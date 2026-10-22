@@ -1,0 +1,15 @@
+{
+  "upstream": "https://crates.io/crates/lru/0.16.4",
+  "license": "MIT",
+  "patches": [
+    "RUSTSEC-2026-0253"
+  ],
+  "fixes": [
+    "Detach list node before a potentially panicking key destructor.",
+    "Mutable iteration takes shared key references, matching upstream 0.16.3."
+  ],
+  "upstream_fix": "https://github.com/jeromefroe/lru-rs/pull/238",
+  "patchedSha256": {
+    "src/lib.rs": "f2e0d41737d12d44b0eaad5aa2484b053ba2c48535c47d690897188c5dc2c051"
+  }
+}

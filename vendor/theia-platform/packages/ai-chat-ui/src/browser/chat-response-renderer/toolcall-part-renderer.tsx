@@ -24,8 +24,8 @@ import * as React from '@theia/core/shared/react';
 import { createConfirmationHandlers, ToolConfirmation, ToolConfirmationKeybindingHints, useToolConfirmationState } from './tool-confirmation';
 import { ToolConfirmationMode } from '@theia/ai-chat/lib/common/chat-tool-preferences';
 import { ResponseNode } from '../chat-tree-view';
-import { ToolInvocationRegistry, ToolRequest } from '@theia/ai-core';
-import { renderToolCallResult } from './toolcall-result';
+import { hasToolCallError, ToolInvocationRegistry, ToolRequest } from '@theia/ai-core';
+import { renderToolCallResult, tryParseToolCallResult } from './toolcall-result';
 import { ToolConfirmationManager } from '@theia/ai-chat/lib/browser/chat-tool-preference-bindings';
 import { PendingToolConfirmationTracker } from '@theia/ai-chat/lib/browser/pending-tool-confirmation-tracker';
 import {
@@ -211,6 +211,7 @@ const ToolCallContent: React.FC<ToolCallContentProps> = ({
     const allowedRef = React.useRef<HTMLElement | undefined>(undefined);
 
     const argsLabel = getArgumentsLabel(response.name, response.arguments);
+    const failed = hasToolCallError(tryParseToolCallResult(response.result));
 
     const formatReason = (reason: unknown): string => {
         if (!reason) {
@@ -253,12 +254,15 @@ const ToolCallContent: React.FC<ToolCallContentProps> = ({
                     {ToolCallChatResponseContent.isDenialResult(response.result) && response.result.reason ? <span> — {response.result.reason}</span> : undefined}
                 </span>
             ) : response.finished ? (
-                <details className='theia-toolCall-finished'>
+                <details className={`theia-toolCall-finished${failed ? ' theia-toolCall-failed' : ''}`} open={failed}>
                     <summary
                         ref={(el: HTMLElement | null) => { summaryRef.current = el ?? undefined; }}
                         onMouseEnter={() => showArgsTooltip(response, summaryRef.current)}
                     >
-                        {nls.localize('theia/ai/chat-ui/toolcall-part-renderer/finished', 'Ran')} {response.name}
+                        {failed ? <><span className={codicon('error')}></span> {requestCanceled
+                            ? nls.localize('theia/ai/chat-ui/toolcall-part-renderer/rejected', 'Execution canceled')
+                            : nls.localize('theia/ai/chat-ui/toolcall-part-renderer/failed', 'Execution failed')}</>
+                            : nls.localize('theia/ai/chat-ui/toolcall-part-renderer/finished', 'Ran')} {response.name}
                         (<span className='theia-toolCall-args-label'>{argsLabel}</span>)
                     </summary>
                     <div className='theia-toolCall-response-result'>

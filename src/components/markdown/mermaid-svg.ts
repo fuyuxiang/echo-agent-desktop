@@ -44,6 +44,9 @@ export function createMermaidConfig(
   return {
     startOnLoad: false,
     securityLevel: "strict" as const,
+    // Keep document styling and readable labels stable across Mermaid upgrades.
+    look: "classic" as const,
+    themeVariables: { fontSize: "16px" },
     secure: [...protectedKeys],
     theme: mermaidTheme,
     ...(kind === "mindmap" ? createMindmapTheme(theme) : {}),

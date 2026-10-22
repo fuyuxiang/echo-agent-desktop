@@ -105,7 +105,30 @@ Public APIs and other platform startup mechanisms remain unchanged.
 - License: Node.js license and bundled third-party notices, copied from the
   selected Node.js distribution into `theia/node/LICENSE` in the app resources.
 - Fallback license copy for the pinned development runtime:
-  `vendor/nodejs/LICENSE-24.21.0`.
+  `vendor/nodejs/LICENSE-22.23.4` or `vendor/nodejs/LICENSE-24.22.1`.
+
+## Dependency security backports
+
+These source copies retain their original licenses. `SOURCE.json` in each
+directory records upstream versions, advisories and the local changes.
+
+- `vendor/glib/`: GLib Rust bindings 0.18.5, MIT, including the upstream
+  `VariantStrIter` out-pointer fix while retaining GTK3 compatibility.
+- `vendor/lru-0.12/` and `vendor/lru-0.16/`: lru 0.12.5 and 0.16.4, MIT,
+  including upstream node-detachment and shared-key-reference safety fixes.
+- `vendor/theia-platform/security/braces/`: braces 3.0.3, MIT, with bounded
+  parsing and AST traversal for deeply nested patterns.
+- `vendor/theia-platform/security/sprintf-js/`: sprintf-js 1.0.3, BSD-3-Clause,
+  with bounded numeric precision and padding.
+
+Rust patch entries and npm workspace links select these copies. The original
+license files are included alongside the sources; the JavaScript copies are
+also staged into the packaged IDE runtime.
+
+`scripts/patch-theia-scanoss.mjs` adapts the installed SCANOSS 0.40.2
+(MIT, https://github.com/scanoss/scanoss.js) CommonJS and ESM builds to the
+maintained stream-json 3 Node stream API. SCANOSS retains its upstream license;
+the patch is applied during source installation, builds and runtime staging.
 
 ## async-openai
 

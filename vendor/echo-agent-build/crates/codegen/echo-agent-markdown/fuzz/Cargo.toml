@@ -23,3 +23,6 @@ path = "fuzz_targets/render_all.rs"
 test = false
 doc = false
 bench = false
+
+[patch.crates-io]
+lru = { path = "../../../../../lru-0.12" }

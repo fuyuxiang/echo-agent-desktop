@@ -39,7 +39,7 @@
     "js-yaml": "^4.3.0",
     "minimatch": "^10.2.5",
     "puppeteer-core": "^25.1.0",
-    "simple-git": "^3.36.0"
+    "simple-git": "^4.0.2"
   },
   "publishConfig": {
     "access": "public"

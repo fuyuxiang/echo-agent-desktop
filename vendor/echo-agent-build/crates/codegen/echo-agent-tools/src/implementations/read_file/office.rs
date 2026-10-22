@@ -39,7 +39,7 @@ fn read_entry(
 }
 
 fn push_text(output: &mut String, event: &quick_xml::events::BytesText<'_>) -> Result<(), String> {
-    let text = event.xml_content().map_err(|error| error.to_string())?;
+    let text = event.xml10_content().map_err(|error| error.to_string())?;
     bounded_push(output, &text)
 }
 
@@ -72,7 +72,14 @@ fn bounded_push(output: &mut String, value: &str) -> Result<(), String> {
 fn attribute(reader: &Reader<&[u8]>, start: &BytesStart<'_>, name: &[u8]) -> Option<String> {
     start.attributes().flatten().find_map(|attribute| {
         (attribute.key.local_name().as_ref() == name)
-            .then(|| attribute.decode_and_unescape_value(reader.decoder()).ok())
+            .then(|| {
+                attribute
+                    .decoded_and_normalized_value(
+                        quick_xml::XmlVersion::Implicit1_0,
+                        reader.decoder(),
+                    )
+                    .ok()
+            })
             .flatten()
             .map(|value| value.into_owned())
     })
@@ -373,6 +380,9 @@ fn xlsx_sheets(zip: &mut ZipArchive<Cursor<&[u8]>>) -> Result<Vec<(String, Strin
         // numeric labels while real workbooks retain names and user ordering.
         let mut numbers: Vec<u32> = zip
             .file_names()
+            .collect::<Result<Vec<_>, _>>()
+            .map_err(|error| format!("Invalid archive entry name: {error}"))?
+            .into_iter()
             .filter_map(|name| {
                 name.strip_prefix("xl/worksheets/sheet")?
                     .strip_suffix(".xml")?
@@ -500,7 +510,10 @@ fn odf_repeat(
             }
             value = Some(
                 attribute
-                    .decode_and_unescape_value(reader.decoder())
+                    .decoded_and_normalized_value(
+                        quick_xml::XmlVersion::Implicit1_0,
+                        reader.decoder(),
+                    )
                     .map_err(|error| format!("Invalid OpenDocument repeat attribute: {error}"))?
                     .into_owned(),
             );
@@ -774,7 +787,7 @@ fn extract_paragraph_xml(xml: &str, label: &str) -> Result<String, String> {
                 odf_push(odf_sink(&mut output, &mut tables), "\n", &mut used)?;
             }
             Ok(Event::Text(event)) if paragraph_depth > 0 => {
-                let text = event.xml_content().map_err(|error| error.to_string())?;
+                let text = event.xml10_content().map_err(|error| error.to_string())?;
                 odf_push(odf_sink(&mut output, &mut tables), &text, &mut used)?;
             }
             Ok(Event::GeneralRef(event)) if paragraph_depth > 0 => {
@@ -855,7 +868,10 @@ fn epub_attribute(
             }
             value = Some(
                 attribute
-                    .decode_and_unescape_value(reader.decoder())
+                    .decoded_and_normalized_value(
+                        quick_xml::XmlVersion::Implicit1_0,
+                        reader.decoder(),
+                    )
                     .map_err(|error| format!("Invalid EPUB attribute: {error}"))?
                     .into_owned(),
             );
@@ -966,6 +982,9 @@ fn epub_spine_entries(zip: &mut ZipArchive<Cursor<&[u8]>>) -> Result<Vec<String>
     let Some(container) = read_entry(zip, "META-INF/container.xml")? else {
         if zip
             .file_names()
+            .collect::<Result<Vec<_>, _>>()
+            .map_err(|error| format!("Invalid archive entry name: {error}"))?
+            .into_iter()
             .any(|name| name.to_ascii_lowercase().ends_with(".opf"))
         {
             return Err("EPUB package metadata has no META-INF/container.xml".into());
@@ -973,11 +992,14 @@ fn epub_spine_entries(zip: &mut ZipArchive<Cursor<&[u8]>>) -> Result<Vec<String>
         // Retain the old behavior only for minimal archives without metadata.
         let mut entries: Vec<String> = zip
             .file_names()
+            .collect::<Result<Vec<_>, _>>()
+            .map_err(|error| format!("Invalid archive entry name: {error}"))?
+            .into_iter()
             .filter(|name| {
                 let lower = name.to_ascii_lowercase();
                 lower.ends_with(".xhtml") || lower.ends_with(".html") || lower.ends_with(".htm")
             })
-            .map(str::to_string)
+            .map(|name| name.into_owned())
             .collect();
         entries.sort();
         return Ok(entries);

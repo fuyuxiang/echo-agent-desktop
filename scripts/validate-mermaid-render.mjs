@@ -198,6 +198,11 @@ try {
       await verifyActions(page, after, `flowchart-custom-${theme}`, { download: true });
     } finally { await page.close(); }
   }
+  // Release the completed browser and its GPU/background processes before
+  // exercising the native WebView in this same desktop session.
+  await browser.close();
+  browser = undefined;
+  console.log("Chromium diagram scenarios passed.");
   if (process.platform === "darwin" && process.env.MERMAID_WEBKIT !== "0") {
     const script = fileURLToPath(new URL("./validate-mermaid-webkit.swift", import.meta.url));
     const { stdout } = await promisify(execFile)("/usr/bin/swift", ["-module-cache-path", join(output, "swift-modules"), script, base, output],

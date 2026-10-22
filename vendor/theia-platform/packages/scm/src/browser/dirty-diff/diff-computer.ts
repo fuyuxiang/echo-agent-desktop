@@ -76,7 +76,7 @@ export class DiffComputer {
 
 }
 
-class ArrayDiff extends jsdiff.Diff {
+class ArrayDiff extends jsdiff.Diff<string> {
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     override tokenize(value: any): any {
         return value;

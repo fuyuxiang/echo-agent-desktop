@@ -16,7 +16,7 @@
 
 import { createAnthropic } from '@ai-sdk/anthropic';
 import { createOpenAI } from '@ai-sdk/openai';
-import { LanguageModelV1 } from '@ai-sdk/provider';
+import { LanguageModelV2 } from '@ai-sdk/provider';
 import { injectable } from '@theia/core/shared/inversify';
 import { VercelAiModelDescription } from '../common';
 
@@ -31,7 +31,7 @@ export interface VercelAiProviderConfig {
 @injectable()
 export class VercelAiLanguageModelFactory {
 
-    createLanguageModel(modelDescription: VercelAiModelDescription, providerConfig: VercelAiProviderConfig): LanguageModelV1 {
+    createLanguageModel(modelDescription: VercelAiModelDescription, providerConfig: VercelAiProviderConfig): LanguageModelV2 {
         const apiKey = this.resolveApiKey(modelDescription, providerConfig);
         if (!apiKey) {
             throw new Error(`Please provide an API key for ${providerConfig.provider} in preferences or via environment variable`);
@@ -43,9 +43,8 @@ export class VercelAiLanguageModelFactory {
             case 'openai':
                 return createOpenAI({
                     apiKey,
-                    baseURL,
-                    compatibility: 'strict'
-                }).languageModel(modelDescription.model);
+                    baseURL
+                }).chat(modelDescription.model);
             case 'anthropic':
                 return createAnthropic({
                     apiKey,

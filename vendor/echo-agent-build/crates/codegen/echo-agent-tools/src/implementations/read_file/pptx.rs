@@ -35,6 +35,9 @@ pub(crate) fn extract_pptx_text_from_bytes(bytes: &[u8]) -> Result<String, Strin
     // numerically so slide ordering matches the presentation.
     let mut slide_numbers: Vec<u32> = archive
         .file_names()
+        .collect::<Result<Vec<_>, _>>()
+        .map_err(|error| format!("Invalid archive entry name: {error}"))?
+        .into_iter()
         .filter_map(|name| {
             name.strip_prefix("ppt/slides/slide")?
                 .strip_suffix(".xml")?
@@ -113,7 +116,7 @@ fn extract_drawingml_text(xml: &str) -> Result<String, String> {
         match reader.read_event() {
             Ok(Event::Start(ref e)) if e.local_name().as_ref() == b"t" => in_text_run = true,
             Ok(Event::Text(e)) if in_text_run => {
-                let content = e.xml_content().map_err(|e| e.to_string())?;
+                let content = e.xml10_content().map_err(|e| e.to_string())?;
                 text.push_str(&content);
             }
             // quick-xml ≥0.37 emits `&amp;` / `&#233;` as separate events

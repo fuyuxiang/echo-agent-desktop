@@ -13,6 +13,27 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
+  dependency-security:
+    name: Dependency security / frontend, IDE and Rust
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v7
+      - uses: pnpm/action-setup@v4
+      - uses: actions/setup-node@v7
+        with:
+          node-version: '22'
+          cache: 'pnpm'
+      - run: npm install --global npm@11.21.1 --ignore-scripts --no-audit --no-fund
+      - run: pnpm install --frozen-lockfile
+      - run: python3 scripts/audit-dependencies.py --output security-audit-results
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: dependency-security
+          path: security-audit-results
+          if-no-files-found: ignore
+
   typecheck:
     runs-on: ubuntu-latest
     steps:
@@ -129,6 +150,23 @@ jobs:
         run: cargo clippy --locked --manifest-path src-tauri/Cargo.toml --lib -- -D warnings
       - name: Run isolated Rust unit and integration tests
         run: node scripts/test-rust-desktop.mjs
+      - name: Verify authentication with the patched cryptography backend
+        run: |
+          mkdir -p "$ECHO_AGENT_HOME" "$GROK_HOME"
+          unset HTTP_PROXY HTTPS_PROXY ALL_PROXY http_proxy https_proxy all_proxy
+          cargo test --locked --manifest-path vendor/echo-agent-build/Cargo.toml \
+          -p echo-agent-runtime --lib auth:: -j 2
+        env:
+          CARGO_TARGET_DIR: ${{ github.workspace }}/src-tauri/target
+          ECHO_AGENT_HOME: ${{ runner.temp }}/echo-auth-tests
+          GROK_HOME: ${{ runner.temp }}/echo-auth-tests-legacy
+          NO_PROXY: '*'
+          no_proxy: '*'
+      - name: Validate compatible memory-safety backports
+        run: |
+          cargo test --manifest-path vendor/glib/Cargo.toml --release variant_iter
+          cargo test --manifest-path vendor/lru-0.12/Cargo.toml --test security
+          cargo test --manifest-path vendor/lru-0.16/Cargo.toml --test security
 
   automation-macos:
     name: Automation / macOS Intel + Apple Silicon
@@ -230,6 +268,7 @@ jobs:
           node-version: '22'
           cache: npm
           cache-dependency-path: vendor/theia-platform/package-lock.json
+      - run: npm install --global npm@11.21.1 --ignore-scripts --no-audit --no-fund
       - run: sudo apt-get update && sudo apt-get install -y libx11-dev libxkbfile-dev libsecret-1-dev
       - uses: actions/cache@v4
         with:
@@ -241,4 +280,11 @@ jobs:
         env:
           PUPPETEER_SKIP_DOWNLOAD: '1'
           PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD: '1'
+          ELECTRON_SKIP_BINARY_DOWNLOAD: '1'
+      - run: node --test scripts/test-theia-archive-security.mjs scripts/test-dependency-patches.mjs scripts/test-theia-scanoss.mjs
       - run: node scripts/check-theia-bridge.mjs
+      - name: Verify AI SDK streams and SCM diffs
+        working-directory: vendor/theia-platform
+        run: |
+          node node_modules/typescript/bin/tsc -b packages/ai-vercel-ai packages/ai-chat-ui packages/scm
+          node node_modules/mocha/bin/mocha.js --config configs/mocharc.yml packages/ai-vercel-ai/lib/node/vercel-ai-language-model.spec.js packages/ai-chat-ui/lib/browser/chat-response-renderer/toolcall-part-renderer.spec.js packages/scm/lib/browser/dirty-diff/diff-computer.spec.js

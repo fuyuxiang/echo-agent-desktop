@@ -34,7 +34,7 @@ EchoAgent 将会话绑定到实际工作目录。你可以选择模型和权限�
 
 ### 从源码运行
 
-构建需要 Node.js **22 或 24**、pnpm **10**、Rust **1.96.0+**（stable）、Protocol Buffers 编译器 `protoc`，以及对应平台的原生工具链。macOS 需要 Xcode Command Line Tools；Windows 需要 Visual Studio 2022 C++ 构建工具和 Windows SDK。完整的内嵌 Agent Runtime 源码已经随仓库提交，无需初始化 submodule。
+构建需要 Node.js **22.23.4+（22.x）或 24.22.1+（24.x）**、pnpm **10**、npm **11.21.1+**（内置 IDE 工具链）、Rust **1.96.0+**（stable）、Protocol Buffers 编译器 `protoc`，以及对应平台的原生工具链。macOS 需要 Xcode Command Line Tools；Windows 需要 Visual Studio 2022 C++ 构建工具和 Windows SDK。完整的内嵌 Agent Runtime 源码已经随仓库提交，无需初始化 submodule。
 
 **macOS**
 
@@ -129,6 +129,8 @@ EchoAgent 使用 React 18 构建界面，Tauri 2 与 Rust 负责桌面能力、�
 | `pnpm test` | 运行前端 Vitest 测试。 |
 | `pnpm test:scripts` | 验证浏览器快照标签、测试签名范围、IDE 状态与进程回收、日志脱敏和窗口验收条件；CI 自动运行。 |
 | `pnpm test:ide` | 构建 Theia 后验证固定 VSIX 完整性和 SCM 命令完成、失败传播。 |
+| `pnpm test:security` | 安装 Theia 依赖后验证压缩包路径保护、SCANOSS 报告输出、兼容补丁和运行时版本门槛。 |
+| `pnpm security:audit` | 使用 Python 3.11+ 联网审计前端、IDE 与全部 Rust 锁文件，保留原始报告；CI 自动运行。 |
 | `pnpm test:native-guards` | 在 macOS 运行原生验收工具的合成报告、隔离和续跑条件回归；不启动桌面应用，也不代表真实界面验收。 |
 | `pnpm test:mermaid` | 验证真实图表渲染、换行、预览、复制、下载及失败恢复；macOS 同时检查原生 WKWebView。 |
 | `pnpm build` | TypeScript 类型检查与前端生产构建。 |
@@ -141,6 +143,8 @@ EchoAgent 使用 React 18 构建界面，Tauri 2 与 Rust 负责桌面能力、�
 CI 的 Rust 格式检查独立运行，格式错误不会阻止静态检查与功能测试提供结果。提交前可运行 `cargo fmt --manifest-path src-tauri/Cargo.toml` 修正格式，再执行上表中的格式检查、Clippy 和 `pnpm test:rust`。
 
 发行步骤见 [桌面发行说明](docs/desktop-release.md)。
+
+依赖升级、兼容补丁来源和锁文件更新步骤见 [依赖安全维护](docs/dependency-security.md)。
 
 原生验收入口为 `scripts/validate-native-review.mjs`，以及 `validate-native-browser-review.mjs`、`validate-native-core-review.mjs`、`validate-native-ide-git-review.mjs`、`validate-native-local-review.mjs`、`validate-native-webdav-review.mjs` 和 `validate-native-exit-recovery-review.mjs`。这些工具需要已构建的桌面可执行文件，使用独立临时数据目录；主验收流程包含首次启动和重启检查。涉及模型的流程需要可用的项目内置模型服务，定时任务验收会等待真实到点。它们不会由普通单元测试自动启动。
 

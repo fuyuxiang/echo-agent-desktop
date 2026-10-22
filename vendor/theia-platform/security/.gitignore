@@ -1,0 +1,3 @@
+# These are reviewed source files, not generated Theia output.
+!braces/lib/
+!braces/lib/**

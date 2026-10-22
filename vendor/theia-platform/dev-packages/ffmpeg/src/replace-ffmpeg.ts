@@ -14,7 +14,8 @@
 // SPDX-License-Identifier: EPL-2.0 OR GPL-2.0-only WITH Classpath-exception-2.0
 // *****************************************************************************
 
-import electronGet = require('@electron/get');
+// Node 22 loads the maintained ESM downloader from this CommonJS build.
+const electronGet = require('@electron/get');
 import fs = require('fs-extra');
 import os = require('os');
 import path = require('path');

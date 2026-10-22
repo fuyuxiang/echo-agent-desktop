@@ -438,7 +438,10 @@ fn read_source_file(path: &Path) -> Result<String, String> {
             let mut entry = archive
                 .by_index(index)
                 .map_err(|error| format!("read personal knowledge Office entry: {error}"))?;
-            let name = entry.name().to_string();
+            let name = entry
+                .name()
+                .map_err(|error| format!("文档 ZIP 文件名无效：{error}"))?
+                .into_owned();
             let selected = match extension.as_str() {
                 "docx" => name == "word/document.xml",
                 "pptx" => name.starts_with("ppt/slides/slide") && name.ends_with(".xml"),

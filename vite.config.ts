@@ -1,12 +1,12 @@
 /// <reference types="vitest" />
-import { defineConfig } from "vite";
+import { defineConfig } from "vitest/config";
 import react from "@vitejs/plugin-react";
 import path from "node:path";
 
 // Tauri spawns a dev server it can then load into the webview.
 // HMR works with the default Vite dev server; the fixed port keeps
 // tauri.conf.json `devUrl` stable.
-const HOST = "0.0.0.0";
+const HOST = "127.0.0.1";
 const PORT = 1420;
 
 // `process.env.VITEST` is set by vitest before vite evaluates the config
@@ -83,11 +83,28 @@ export default defineConfig({
     },
   },
   test: {
-    include: ["src/**/*.{test,spec}.{ts,tsx}", "scripts/**/*.test.mjs"],
-    environmentMatchGlobs: [["scripts/**/*.test.mjs", "node"]],
+    maxWorkers: 2,
+    projects: [
+      {
+        extends: true,
+        test: {
+          name: "ui",
+          include: ["src/**/*.{test,spec}.{ts,tsx}"],
+          environment: "jsdom",
+          setupFiles: ["./src/test-setup.ts"],
+        },
+      },
+      {
+        extends: true,
+        test: {
+          name: "scripts",
+          include: ["scripts/**/*.test.mjs"],
+          environment: "node",
+          setupFiles: [],
+        },
+      },
+    ],
     globals: true,
-    environment: "jsdom",
-    setupFiles: ["./src/test-setup.ts"],
     // 不让 CSS import 在测试里报错(我们没装 jsdom CSS 处理)。
     css: false,
   },

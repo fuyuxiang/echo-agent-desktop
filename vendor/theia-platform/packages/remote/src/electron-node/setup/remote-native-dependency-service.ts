@@ -17,15 +17,16 @@
 import { ContributionProvider, THEIA_VERSION } from '@theia/core';
 import { inject, injectable, named } from '@theia/core/shared/inversify';
 import { RequestContext, RequestService, RequestOptions } from '@theia/core/shared/@theia/request';
-import * as decompress from 'decompress';
+// The maintained archive reader is ESM; Node 22 exposes its default via require().
+const decompress: typeof import('decompress') = require('decompress').default;
 import * as path from 'path';
 import * as fs from 'fs/promises';
 import { DependencyDownload, DirectoryDependencyDownload, RemoteNativeDependencyContribution } from './remote-native-dependency-contribution';
 import { RemotePlatform } from '@theia/core/lib/node/remote/remote-cli-contribution';
 
-const decompressTar = require('decompress-tar');
-const decompressTargz = require('decompress-targz');
-const decompressUnzip = require('decompress-unzip');
+const decompressTar = require('decompress-tar').default;
+const decompressTargz = require('decompress-targz').default;
+const decompressUnzip = require('decompress-unzip').default;
 
 export const DEFAULT_HTTP_OPTIONS = {
     method: 'GET',

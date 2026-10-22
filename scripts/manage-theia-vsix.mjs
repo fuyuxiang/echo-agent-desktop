@@ -21,7 +21,7 @@ const plugins = pinnedTheiaPlugins(app);
 // extractor after npm ci, without adding a second ZIP implementation.
 function extractor() {
   try {
-    return createRequire(join(sourceRoot, "dev-packages/cli/package.json"))("decompress");
+    return createRequire(join(sourceRoot, "dev-packages/cli/package.json"))("decompress").default;
   } catch {
     throw new Error("Theia dependencies are missing. Run npm ci in vendor/theia-platform first.");
   }

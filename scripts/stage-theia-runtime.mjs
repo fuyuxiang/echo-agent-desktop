@@ -8,6 +8,9 @@ import { isTheiaWindowlessRuntime } from "./patch-theia-windowless-helpers.mjs";
 import { createHash } from "node:crypto";
 import { pinnedTheiaPlugins, validateTheiaRuntimePlugin, theiaPluginTreeFingerprint } from "./theia-plugin-validation.mjs";
 import { GIT_WINDOWLESS_PATCH } from "./patch-theia-git-windowless.mjs";
+import { createTheiaRuntimeManifest } from "./theia-runtime-manifest.mjs";
+import { assertSupportedNodeVersion, assertSupportedNpmVersion } from "./node-runtime-version.mjs";
+import { patchTheiaScanoss } from "./patch-theia-scanoss.mjs";
 
 const projectRoot = resolve(import.meta.dirname, "..");
 const sourceRoot = join(projectRoot, "vendor/theia-platform");
@@ -33,10 +36,12 @@ const copyUnlessSameFile = (source, target) => {
   if (existsSync(target) && realpathSync(source) === realpathSync(target)) return;
   cpSync(source, target);
 };
-const nodeMajor = Number(process.versions.node.split(".")[0]);
-if (nodeMajor !== 22 && nodeMajor !== 24) {
-  throw new Error("Echo Code IDE runtime is validated with Node.js 22 or 24.");
-}
+assertSupportedNodeVersion();
+const npm = process.platform === "win32" ? "npm.cmd" : "npm";
+const npmShell = process.platform === "win32";
+const npmVersion = spawnSync(npm, ["--version"], { encoding: "utf8", shell: npmShell });
+if (npmVersion.status !== 0) throw new Error(npmVersion.stderr || "npm is unavailable");
+assertSupportedNpmVersion(npmVersion.stdout);
 
 if (!existsSync(join(appRoot, "lib/backend/main.js"))) {
   throw new Error("Build Theia first: pnpm ide:build");
@@ -80,16 +85,9 @@ for (const { id, source } of runtimePlugins) {
     runtimePlugins.map(plugin => plugin.id));
 }
 
-const stagedManifest = {
-  ...app,
-  name: "@echoagent/theia-runtime",
-  private: true,
-  workspaces: ["packages/*", "examples/*"],
-  theiaPluginsDir: "plugins",
-  scripts: {},
-  devDependencies: {},
-};
+const stagedManifest = createTheiaRuntimeManifest(app, JSON.parse(readFileSync(join(sourceRoot, "package.json"), "utf8")));
 writeFileSync(join(runtimeRoot, "package.json"), `${JSON.stringify(stagedManifest, null, 2)}\n`);
+cpSync(join(sourceRoot, "security"), join(runtimeRoot, "security"), { recursive: true, filter: runtimeFile });
 cpSync(join(projectRoot, "scripts/theia-runtime-package-lock.json"), join(runtimeRoot, "package-lock.json"));
 
 for (const name of needed) {
@@ -112,8 +110,6 @@ if (!isTheiaWindowlessRuntime(runtimeRoot)) {
   throw new Error("Staged Theia background workers lost their windowless spawn options.");
 }
 
-const npm = process.platform === "win32" ? "npm.cmd" : "npm";
-const npmShell = process.platform === "win32";
 const install = spawnSync(npm, ["ci", "--omit=dev", "--no-audit", "--no-fund"], {
   cwd: runtimeRoot,
   env: { ...process.env, PUPPETEER_SKIP_DOWNLOAD: "1" },
@@ -121,6 +117,7 @@ const install = spawnSync(npm, ["ci", "--omit=dev", "--no-audit", "--no-fund"], 
   shell: npmShell,
 });
 if (install.status !== 0) throw new Error("Theia runtime dependency staging failed");
+patchTheiaScanoss(runtimeRoot);
 patchNodePtyConsoleHelper(runtimeRoot);
 if (process.platform === "win32") {
   patchNodePtyPipeErrors(runtimeRoot);

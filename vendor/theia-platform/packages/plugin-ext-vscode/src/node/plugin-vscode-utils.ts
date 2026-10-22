@@ -14,7 +14,8 @@
 // SPDX-License-Identifier: EPL-2.0 OR GPL-2.0-only WITH Classpath-exception-2.0
 // *****************************************************************************
 
-import * as decompress from 'decompress';
+// The maintained archive reader is ESM; Node 22 exposes its default via require().
+const decompress: typeof import('decompress') = require('decompress').default;
 import * as path from 'path';
 import * as filenamify from 'filenamify';
 import { FileUri } from '@theia/core/lib/node';

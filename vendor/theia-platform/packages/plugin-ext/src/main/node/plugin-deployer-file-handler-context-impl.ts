@@ -15,7 +15,8 @@
 // *****************************************************************************
 
 import { PluginDeployerEntry, PluginDeployerFileHandlerContext } from '../../common/plugin-protocol';
-import * as decompress from 'decompress';
+// The maintained archive reader is ESM; Node 22 exposes its default via require().
+const decompress: typeof import('decompress') = require('decompress').default;
 
 export class PluginDeployerFileHandlerContextImpl implements PluginDeployerFileHandlerContext {
 

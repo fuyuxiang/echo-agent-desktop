@@ -13,7 +13,7 @@ import { validateTheiaRuntimePlugin } from "./theia-plugin-validation.mjs";
 
 const root = resolve(import.meta.dirname, "..");
 const require = createRequire(join(root, "vendor/theia-platform/dev-packages/cli/package.json"));
-const decompress = require("decompress");
+const decompress = require("decompress").default;
 const spec = { id: "vscode.git", version: "1.95.3" };
 const archive = join(root, "vendor/theia-vsix/vscode.git-1.95.3.vsix");
 const hash = value => createHash("sha256").update(value).digest("hex");
