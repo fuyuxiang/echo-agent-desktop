@@ -74,8 +74,11 @@ export default defineConfig({
             "rehype-highlight",
             "rehype-sanitize",
             "lowlight",
+            // Keep math rendering with its shared Markdown dependencies so
+            // splitting them cannot create a startup initialization cycle.
+            "katex",
+            "rehype-katex",
           ],
-          katex: ["katex", "rehype-katex"],
           mermaid: ["mermaid"],
           monaco: ["monaco-editor", "@monaco-editor/react"],
         },

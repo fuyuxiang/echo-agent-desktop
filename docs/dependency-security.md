@@ -14,6 +14,7 @@
 | Tauri 桌面程序 | `src-tauri/Cargo.toml`、`src-tauri/Cargo.lock` | `cargo check --locked --manifest-path src-tauri/Cargo.toml --lib` |
 | 内嵌 Agent workspace | `vendor/echo-agent-build/Cargo.toml`、同目录 `Cargo.lock` | 用该 manifest 运行 Cargo；其锁文件与桌面锁文件分别维护 |
 | Markdown fuzz workspace | `vendor/echo-agent-build/crates/codegen/echo-agent-markdown/fuzz/Cargo.toml`、同目录 `Cargo.lock` | 在该独立 workspace 中更新 Cargo 锁文件 |
+| Nucleo 独立 workspace 与基准程序 | `vendor/nucleo/Cargo.toml`、同目录 `Cargo.lock` | 用该 manifest 更新锁文件并验证；桌面构建使用桌面锁文件，不能据此遗漏独立锁文件的审计 |
 
 `scripts/theia-runtime-manifest.mjs` 将 Theia 根配置的版本门槛、overrides、`allowScripts` 和安全补丁 workspaces 带入生产依赖图，并移除应用自身的构建脚本和开发依赖。`allowScripts` 保留原生依赖安装所需的明确许可，也保留明确禁止执行的条目，避免生产安装偏离源码的执行策略。npm 默认会对未审阅的脚本发出警告；严格模式会拒绝未审阅的依赖。回归测试用本地安装包验证许可的安装脚本执行、禁止的脚本不执行；本地安装包使用源地址作为许可键，registry 依赖则使用可信包名。修改 Theia 依赖、overrides 或本地补丁包的依赖后，应重新运行 `pnpm ide:lock`，不能只更新源码锁文件。
 
@@ -40,7 +41,7 @@ Theia 源码安装的 `postinstall` 自动应用补丁；IDE 构建入口会再�
 
 ## 升级流程
 
-1. 从依赖公告和上游修复确定受影响范围，分别检查前端、Theia 源码、IDE 生产图和三个 Rust 锁文件。优先选用上游兼容修复。
+1. 从依赖公告和上游修复确定受影响范围，分别检查前端、Theia 源码、IDE 生产图和四个 Rust 锁文件。优先选用上游兼容修复。
 2. 调整直接依赖或最小必要范围的 override。跨主版本覆盖时，逐一核对调用方的导出方式、模块路径、参数、流事件和取消行为；不能仅依据审计输出选择版本。
 3. 使用对应包管理器更新锁文件。修改 Theia 的生产依赖策略后运行 `pnpm ide:lock`，再用 `pnpm ide:build`、`pnpm ide:stage` 验证实际构建及生产安装。不要手工拼接锁文件。
 4. 修改 Rust 依赖时分别更新实际受影响的 workspace 锁文件，随后以 `--locked` 编译；桌面程序不会自动继承另一个 workspace 根目录的 `[patch.crates-io]`。
@@ -61,6 +62,7 @@ pnpm test:security
 pnpm test
 pnpm test:scripts
 pnpm build
+pnpm test:production-startup
 pnpm test:mermaid
 pnpm office:test
 pnpm test:rust
@@ -75,6 +77,10 @@ node node_modules/mocha/bin/mocha.js --config configs/mocharc.yml packages/ai-ve
 
 认证及内存安全补丁另有 CI 检查：Agent 的 `auth::` 测试、GLib release 模式的 `variant_iter` 测试，以及两个 lru 副本的 `security` 测试。GLib 需要系统 GLib 开发库；发行包还需在各自的 macOS、Windows 环境运行 `.github/workflows/desktop-validation.yml` 的构建和验收。
 
+日常 CI 的 `build` job 在生产构建后运行启动冒烟检查：只通过静态 HTTP 服务加载 `dist/`，验证真实侧栏和主界面已出现，并拒绝模块异常、启动错误页、其他控制台错误及资源加载失败。它使用全新的浏览器上下文，不注入成功的原生 IPC 响应；静态浏览器缺少 Tauri 宿主时，两条已知的原生 IPC 控制台提示单独记录，其余错误仍使检查失败。这项检查覆盖生产分块初始化，不能代替原生安装包验收。
+
+本地可以复用 Theia 安装的 Playwright，或通过 `PLAYWRIGHT_MODULE` 指定独立工具目录中的 `playwright/index.mjs`；浏览器可执行文件可通过 `CHROME_BIN` 指定。`PRODUCTION_SMOKE_OUTPUT` 指定截图与 `report.json` 的输出目录，默认使用系统临时目录。检查其他构建目录时执行 `pnpm test:production-startup /path/to/dist`。
+
 ## 联网审计与证据
 
 ```sh
@@ -84,10 +90,16 @@ python3 scripts/audit-dependencies.py npm --output /tmp/echo-npm-audit
 python3 scripts/audit-dependencies.py rust --output /tmp/echo-rust-audit
 ```
 
-不指定输出目录时会创建系统临时目录。npm 部分并行审计前端、Theia 源码和重建的 IDE 生产依赖图；Rust 部分向 OSV 查询三个锁文件中的 registry 包版本，保留公告、包清单和分类结果。本地补丁通过来源摘要及配置检查验证，不以全局忽略公告替代修复。
+不指定输出目录时会创建系统临时目录。npm 部分并行审计前端、Theia 源码和重建的 IDE 生产依赖图；Rust 部分向 OSV 查询四个锁文件中的 registry 包版本，保留公告、包清单和分类结果。本地补丁通过来源摘要及配置检查验证，不以全局忽略公告替代修复。
 
 - 退出码 `0`：本次扫描完成且没有安全发现。
 - 退出码 `1`：扫描完成但发现需处理的安全问题。
 - 退出码 `2`：扫描不完整，包括网络、工具、报告格式或补丁校验失败；不能作为安全检查通过。
 
 Rust 的纯停止维护公告单独记录在 `rust.json` 的 `maintenance` 中，安全发现保存在 `security` 中。CI 的 `dependency-security` job 保留审计产物。报告结论取决于执行时间和公告库覆盖范围；网络不可用、缺少平台环境或测试未完成时，应明确记录未验证部分。
+
+## Dependabot 告警复核
+
+先核对默认分支、告警关联的具体锁文件和 GitHub 依赖图中的实际版本，再判定是否需要升级。同一公告可能分别关联 manifest 和锁文件；某条告警显示 Fixed，不代表其他文件的告警也已同步更新。若当前锁文件和 GitHub 依赖图都已使用修复版本，保留联网审计证据，复核告警状态；不要为了消除旧状态而反复升级或改写锁文件。
+
+`glib` 的 GTK3 兼容补丁仍保留 0.18.5 版本号，低于公告的上游修复门槛 0.20.0。核查此项时，应同时确认桌面 manifest 的 `[patch.crates-io]`、锁文件中该包没有 registry 来源、`SOURCE.json` 摘要和 release 模式的 `variant_iter` 回归测试。若告警仍按旧版本号报告，按具体公告记录回移修复证据后处理；不要全局忽略公告，也不要直接把 GTK3 所需的 GLib 改成不兼容的大版本。

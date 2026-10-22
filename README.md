@@ -134,6 +134,7 @@ EchoAgent 使用 React 18 构建界面，Tauri 2 与 Rust 负责桌面能力、�
 | `pnpm test:native-guards` | 在 macOS 运行原生验收工具的合成报告、隔离和续跑条件回归；不启动桌面应用，也不代表真实界面验收。 |
 | `pnpm test:mermaid` | 验证真实图表渲染、换行、预览、复制、下载及失败恢复；macOS 同时检查原生 WKWebView。 |
 | `pnpm build` | TypeScript 类型检查与前端生产构建。 |
+| `pnpm test:production-startup` | 构建后用静态服务和隔离浏览器检查真实生产资源启动、脚本错误及资源加载；日常 CI 自动运行并保留截图、报告。 |
 | `pnpm office:test` | 验证内置文档生成器。 |
 | `pnpm test:rust` | 在新临时数据目录运行全部 Rust 单元与集成测试；macOS 先对本仓库的测试程序作本地 ad hoc 签名，避免大型未签名测试程序的子进程启动延迟。 |
 | `cargo fmt --manifest-path src-tauri/Cargo.toml --check` | 检查 Rust 格式。 |

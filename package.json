@@ -28,6 +28,7 @@
     "test:native-guards": "node --test --test-concurrency=2 scripts/native-local-review-guards.mjs scripts/validate-native-browser-guards.mjs scripts/validate-native-coding-continuation.mjs scripts/validate-native-coding-delivery-helper.mjs scripts/validate-native-coding-helper.mjs scripts/validate-native-coding-navigation.mjs scripts/validate-native-core-guards.mjs scripts/validate-native-exit-recovery-guards.mjs scripts/validate-native-ide-git-guards.mjs && node scripts/validate-native-coding-agent-review.mjs --self-test",
     "test:ui": "node scripts/validate-ui-surfaces.mjs && node scripts/validate-document-reading-ui.mjs && node scripts/validate-team-ui.mjs && node scripts/validate-group-ui.mjs && node scripts/validate-group-lifecycle-ui.mjs && node scripts/validate-plugin-management-ui.mjs && node scripts/validate-sidebar-session-ui.mjs && node scripts/validate-design-system.mjs && node scripts/validate-composer-feedback-ui.mjs",
     "test:mermaid": "node scripts/validate-mermaid-render.mjs",
+    "test:production-startup": "node scripts/validate-production-startup.mjs",
     "test:ui:coding-composer": "node scripts/validate-coding-composer-ui.mjs",
     "git:push": "bash scripts/git-push.sh",
     "git:push:tags": "bash scripts/git-push.sh --tags",

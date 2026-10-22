@@ -64,7 +64,8 @@ def npm_audits(output):
 
 def rust_audit(output):
     manifests = ["src-tauri/Cargo.lock", "vendor/echo-agent-build/Cargo.lock",
-                 "vendor/echo-agent-build/crates/codegen/echo-agent-markdown/fuzz/Cargo.lock"]
+                 "vendor/echo-agent-build/crates/codegen/echo-agent-markdown/fuzz/Cargo.lock",
+                 "vendor/nucleo/Cargo.lock"]
     packages = {}
     for manifest in manifests:
         for pkg in tomllib.loads((ROOT / manifest).read_text())["package"]:
