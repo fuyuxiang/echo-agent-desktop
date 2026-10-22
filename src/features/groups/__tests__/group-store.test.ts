@@ -100,3 +100,16 @@ it("删除后晚到的目录、快照和输入回调不能重新生成群聊数�
   expect(useGroupStore.getState().drafts[`options:${id}`]).toBeUndefined();
   expect(()=>useGroupStore.getState().requestId(id,"late send")).toThrow("已删除");
 });
+
+it("补充消息沿用原请求的失败状态", () => {
+  const g=group("followup-failure");
+  g.messages=[{id:"root",kind:"user"},{id:"supplement",kind:"user",requestId:"root"}] as Group["messages"];
+  g.works=[{id:"failed",rootId:"root",status:"failed",continuationOf:null}] as Group["works"];
+  expect(groupStatus(g)).toBe("执行失败");
+});
+
+it("停止尚未确认时不能用已暂停掩盖正在停止", () => {
+  const g=group("stopping");g.paused=true;g.works=[{id:"w",status:"stopping"}] as Group["works"];
+  expect(groupStatus(g)).toBe("正在停止");
+  g.works[0].status="cancelled";expect(groupStatus(g)).toBe("已暂停");
+});

@@ -5,7 +5,8 @@ pub(super) fn tools() -> Value {
         tool("group_call_member","Assign work to another member of this group. Returns immediately; finish your turn, the Runtime resumes you when results are back. Use exact member id or name from group context.",json!({"member":{"type":"string"},"prompt":{"type":"string"}}),vec!["member","prompt"]),
         tool("group_read_history","Read this group's messages, oldest first. Other groups and private chats are not accessible.",json!({"after":{"type":"integer","minimum":0},"limit":{"type":"integer","minimum":1,"maximum":50}}),vec![]),
         tool("group_get_work","Read the status and result of work in this group. Do not poll pending work; results are returned to its requester automatically.",json!({"workId":{"type":"string"}}),vec!["workId"]),
-        tool("group_record_decision","Propose a decision citing the user message id. It becomes confirmed only when the user confirms it in the group.",json!({"text":{"type":"string"},"messageId":{"type":"string"}}),vec!["text","messageId"])
+        tool("group_record_decision","Propose a decision citing the user message id. It becomes confirmed only when the user confirms it in the group.",json!({"text":{"type":"string"},"messageId":{"type":"string"}}),vec!["text","messageId"]),
+        tool("group_correct_decision","Correct or retract a confirmed group decision ONLY on the user's explicit instruction in this request. Cite the current user message id and an exact evidence quote. Never use for your own conclusions. All members will use the corrected decision on subsequent work.",json!({"decisionId":{"type":"string"},"action":{"type":"string","enum":["edit","void"]},"text":{"type":"string"},"messageId":{"type":"string"},"evidence":{"type":"string"}}),vec!["decisionId","action","messageId","evidence"])
     ]})
 }
 pub(super) fn call(session: &str, params: &Value) -> Result<Value, String> {
@@ -66,24 +67,37 @@ pub(super) fn call_in_group(
                 return Err("不能向自己派发工作".into());
             }
             let mut cursor = Some(work.id.clone());
+            let mut visited = std::collections::HashSet::new();
             while let Some(id) = cursor {
+                if !visited.insert(id.clone()) {
+                    return Err("工作依赖记录存在循环，请停止后检查".into());
+                }
                 let Some(parent) = g.works.iter().find(|w| w.id == id) else {
                     break;
                 };
                 if parent.member_id == target {
                     return Err("该成员正在等待此项工作，不能形成循环依赖".into());
                 }
-                cursor = parent.parent_id.clone();
+                cursor = parent
+                    .parent_id
+                    .clone()
+                    .or_else(|| parent.continuation_of.clone());
             }
             let prompt = text(
-                args.get("prompt").and_then(Value::as_str).unwrap_or(""),
+                &echo_agent_memory::text_utils::strip_reasoning_blocks(
+                    args.get("prompt").and_then(Value::as_str).unwrap_or(""),
+                ),
                 20000,
                 "工作说明",
             )?;
             if let Some(existing) = g.works.iter().find(|w| {
                 w.parent_id.as_deref() == Some(&work.id)
                     && w.member_id == target
-                    && w.prompt == prompt
+                    && (w.prompt == prompt
+                        || (!w.terminal()
+                            && g.messages
+                                .iter()
+                                .any(|m| m.kind == "user" && m.work_id.as_deref() == Some(&w.id))))
             }) {
                 return Ok(json!({"workId":existing.id,"status":existing.status}));
             }
@@ -112,7 +126,12 @@ pub(super) fn call_in_group(
                 .and_then(Value::as_u64)
                 .unwrap_or(30)
                 .clamp(1, 50) as usize;
-            Ok(json!(g.messages.iter().filter(|m|m.seq>after).take(limit).map(|m|json!({"id":m.id,"seq":m.seq,"memberId":m.member_id,"text":m.text.chars().take(10000).collect::<String>()})).collect::<Vec<_>>()))
+            let member = g
+                .members
+                .iter()
+                .find(|m| m.id == member)
+                .ok_or("成员不存在")?;
+            Ok(json!(runtime::history_window(g, member, after, limit, false, false)?.into_iter().map(|m|json!({"id":m.id,"seq":m.seq,"memberId":m.member_id,"text":m.text.chars().take(10000).collect::<String>()})).collect::<Vec<_>>()))
         }
         "group_get_work" => {
             let id = args.get("workId").and_then(Value::as_str).unwrap_or("");
@@ -121,7 +140,20 @@ pub(super) fn call_in_group(
                 .iter()
                 .find(|w| w.id == id)
                 .ok_or("工作不属于本专家团或不存在")?;
-            Ok(json!({"id":w.id,"status":w.status,"output":w.output,"error":w.error}))
+            let member = g
+                .members
+                .iter()
+                .find(|m| m.id == member)
+                .ok_or("成员不存在")?;
+            let available = (member.history_start_seq == 0
+                || g.messages.iter().any(|m| {
+                    m.seq > member.history_start_seq
+                        && (m.work_id.as_deref() == Some(id) || m.id == w.root_id)
+                }))
+                && runtime::memory_permits(g, member, &w.output)?;
+            Ok(
+                json!({"id":w.id,"status":w.status,"output":if available {w.output.as_str()} else {"该结果未在当前成员可召回的历史中"},"error":w.error}),
+            )
         }
         "group_record_decision" => {
             let source = args.get("messageId").and_then(Value::as_str).unwrap_or("");
@@ -133,7 +165,9 @@ pub(super) fn call_in_group(
                 return Err("决定必须引用用户在本专家团的消息".into());
             }
             let text = text(
-                args.get("text").and_then(Value::as_str).unwrap_or(""),
+                &echo_agent_memory::text_utils::strip_reasoning_blocks(
+                    args.get("text").and_then(Value::as_str).unwrap_or(""),
+                ),
                 2000,
                 "决定",
             )?;
@@ -150,6 +184,50 @@ pub(super) fn call_in_group(
             let result = json!(d);
             g.decisions.push(d);
             Ok(result)
+        }
+        "group_correct_decision" => {
+            if work.discussion {
+                return Err("只读讨论不能修改决定".into());
+            }
+            let source = args.get("messageId").and_then(Value::as_str).unwrap_or("");
+            let evidence = args
+                .get("evidence")
+                .and_then(Value::as_str)
+                .unwrap_or("")
+                .trim();
+            let source = g
+                .messages
+                .iter()
+                .find(|m| {
+                    m.id == source
+                        && m.kind == "user"
+                        && (m.id == work.root_id || m.request_id.as_deref() == Some(&work.root_id))
+                })
+                .ok_or("更正必须引用当前请求中的用户指令")?;
+            if evidence.is_empty() || !source.text.contains(evidence) {
+                return Err("请引用用户明确更正或撤回决定的原文依据".into());
+            }
+            let source_id = source.id.clone();
+            let decision = args.get("decisionId").and_then(Value::as_str).unwrap_or("");
+            if !g
+                .decisions
+                .iter()
+                .any(|d| d.id == decision && d.confirmed && !d.voided)
+            {
+                return Err("只能更正或作废已确认的有效决定".into());
+            }
+            let action = args.get("action").and_then(Value::as_str).unwrap_or("");
+            if !matches!(action, "edit" | "void") {
+                return Err("只支持更正或作废决定".into());
+            }
+            let value = args
+                .get("text")
+                .and_then(Value::as_str)
+                .map(echo_agent_memory::text_utils::strip_reasoning_blocks);
+            management::change_decision(g, decision, action, value.as_deref())?;
+            let updated = g.decisions.iter_mut().find(|d| d.id == decision).unwrap();
+            updated.message_id = Some(source_id);
+            Ok(json!(updated))
         }
         _ => Err("该工具不属于群协作工具".into()),
     }

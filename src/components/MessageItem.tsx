@@ -99,10 +99,12 @@ export const MessageItem = memo(function MessageItem({
   onToast,
   findQuery,
   authorName,
+  autoExpandProcess = true,
 }: {
   message: ChatMessage;
   authorName?: string;
   streaming: boolean;
+  autoExpandProcess?: boolean;
   markdownConfig?: MarkdownConfig;
   /** Workspace used to resolve relative attachment paths. */
   cwd?: string;
@@ -232,9 +234,7 @@ export const MessageItem = memo(function MessageItem({
   const allTextParts = message.parts.filter(
     (part): part is Extract<typeof part, { kind: "text" }> => part.kind === "text",
   );
-  const answerParts = assistantGroups?.responseParts.length
-    ? assistantGroups.responseParts
-    : allTextParts;
+  const answerParts = assistantGroups ? assistantGroups.responseParts : allTextParts;
 
   /** Copy the user-visible answer by default; process details stay opt-in. */
   const plainText = (message.role === "assistant" ? answerParts : allTextParts)
@@ -421,6 +421,7 @@ export const MessageItem = memo(function MessageItem({
                 messageId={message.id}
                 parts={assistantGroups.processParts}
                 active={streaming && !message.complete}
+                autoExpand={autoExpandProcess}
                 startedAt={message.startedAt}
                 completedAt={message.completedAt}
                 stopReason={message.stopReason}

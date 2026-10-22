@@ -176,6 +176,7 @@ pub fn group_create(
         seen_seq: 0,
         discussion_seen_seq: 0,
         generation: 0,
+        history_start_seq: 0,
         removed: false,
     }];
     let source_team =
@@ -244,6 +245,7 @@ pub fn group_create(
             seen_seq: 0,
             discussion_seen_seq: 0,
             generation: 0,
+            history_start_seq: 0,
             removed: false,
         });
     }
@@ -348,9 +350,6 @@ fn send(g: &mut Group, input: &SendInput) -> Result<(), String> {
     if g.messages.len() >= 20_000 || g.works.len() >= 10_000 {
         return Err("专家团历史已达到存储上限，请围绕新目标建立专家团".into());
     }
-    if g.paused || g.archived {
-        return Err("请先恢复专家团协作".into());
-    }
     if input.id.len() > 128 || input.id.is_empty() {
         return Err("消息标识无效".into());
     }
@@ -359,6 +358,21 @@ fn send(g: &mut Group, input: &SendInput) -> Result<(), String> {
     }
     if input.text.chars().count() > 50_000 {
         return Err("消息不能超过 50000 字".into());
+    }
+    if is_stop_request(input) && !g.archived {
+        let stop_root = stop_request_root(g, input)?;
+        if let Some(root) = &stop_root {
+            g.stop_request(root);
+        } else {
+            g.stop_work(None)?;
+        }
+        let message = g.post(None, "user", input.text.clone(), None);
+        message.id = input.id.clone();
+        message.stop_root_id = stop_root;
+        return Ok(());
+    }
+    if g.paused || g.archived {
+        return Err("请先恢复专家团协作".into());
     }
     if input.knowledge.context.chars().count() > 20_000
         || (!input.knowledge.personal && !input.knowledge.context.is_empty())
@@ -396,38 +410,187 @@ fn send(g: &mut Group, input: &SendInput) -> Result<(), String> {
     }
     targets.sort();
     targets.dedup();
-    let quoted = input
+    let reply = input
         .reply_to
-        .as_deref()
+        .as_ref()
         .map(|id| {
             g.messages
                 .iter()
-                .find(|m| m.id == id)
-                .map(|m| m.text.clone())
+                .find(|m| &m.id == id)
                 .ok_or_else(|| "回复的消息不存在".to_string())
         })
         .transpose()?;
-    let prompt = if let Some(quoted) = quoted {
-        format!("回复引用：\n{quoted}\n\n{}", input.text)
-    } else {
-        input.text.clone()
+    let prompt = match reply {
+        Some(quoted) => format!(
+            "回复引用 [id={}]：\n{}\n\n{}",
+            quoted.id, quoted.text, input.text
+        ),
+        None => input.text.clone(),
     };
-    for target in targets {
-        g.enqueue(
-            &input.id,
-            &target,
-            prompt.clone(),
-            input.discussion,
-            None,
-            0,
-        )?;
+    // Compute owners once, including a coordinator who will summarize a
+    // multi-recipient request but has not yet needed its own Work.
+    let mut owners = std::collections::HashMap::<&str, (&str, usize)>::new();
+    for work in g
+        .works
+        .iter()
+        .filter(|w| w.parent_id.is_none() && w.continuation_of.is_none() && !w.summary)
+    {
+        let owner = owners.entry(&work.root_id).or_insert((&work.member_id, 0));
+        owner.1 += 1;
+    }
+    let roots = g
+        .works
+        .iter()
+        .filter(|w| {
+            let owner = owners
+                .get(w.root_id.as_str())
+                .filter(|(_, count)| *count == 1)
+                .map(|(id, _)| *id)
+                .unwrap_or(&g.coordinator_id);
+            matches!(
+                w.status.as_str(),
+                "queued" | "dispatching" | "running" | "waiting_children"
+            ) && w.epoch == g.epoch
+                && w.discussion == input.discussion
+                && (targets.contains(&w.member_id) || targets.iter().any(|target| target == owner))
+        })
+        .map(|w| w.root_id.clone())
+        .collect::<std::collections::HashSet<_>>();
+    // An explicit reply fences task attribution, even when the quoted task has ended.
+    let ongoing = if targets.len() == 1 {
+        let candidate = match reply {
+            Some(message) => g.message_request(message).filter(|root| {
+                g.works.iter().any(|w| {
+                    &w.root_id == root
+                        && w.epoch == g.epoch
+                        && w.discussion == input.discussion
+                        && matches!(
+                            w.status.as_str(),
+                            "queued" | "dispatching" | "running" | "waiting_children"
+                        )
+                })
+            }),
+            None if roots.len() == 1 => roots.into_iter().next(),
+            _ => None,
+        };
+        candidate.filter(|root| {
+            g.messages.iter().find(|m| &m.id == root).is_none_or(|m| {
+                m.knowledge.personal == input.knowledge.personal
+                    && m.knowledge.organization == input.knowledge.organization
+                    && m.knowledge.organization_scope_ids == input.knowledge.organization_scope_ids
+            })
+        })
+    } else {
+        None
+    };
+    if let Some(root) = &ongoing {
+        let size: usize = g
+            .messages
+            .iter()
+            .filter(|m| m.request_id.as_ref() == Some(root))
+            .map(|m| {
+                g.message_prompt(m).chars().count() + m.knowledge.context.chars().count() + 256
+            })
+            .sum();
+        if size + prompt.chars().count() + input.knowledge.context.chars().count() + 256 > 50_000 {
+            return Err("本次任务的补充超过上下文容量，请停止后围绕最新目标继续".into());
+        }
+    }
+    let mut assigned_work = None;
+    if let Some(root) = &ongoing {
+        let target = &targets[0];
+        let owner = g.request_owner(root);
+        if target != &owner
+            && !g
+                .works
+                .iter()
+                .any(|w| &w.root_id == root && &w.member_id == target && !w.terminal())
+        {
+            let parent = g
+                .works
+                .iter()
+                .rev()
+                .find(|w| &w.root_id == root && w.member_id == owner && !w.terminal());
+            let (parent, depth) = match parent {
+                Some(work) if work.status == "queued" => (
+                    work.continuation_of
+                        .clone()
+                        .or_else(|| Some(work.id.clone())),
+                    work.depth + 1,
+                ),
+                Some(work) => (Some(work.id.clone()), work.depth + 1),
+                None => (None, 0),
+            };
+            assigned_work = Some(g.enqueue(
+                root,
+                target,
+                format!("用户直接向你补充本次任务，请完成这部分并返回实际结果：\n{prompt}"),
+                input.discussion,
+                parent,
+                depth,
+            )?);
+        }
+    }
+    if ongoing.is_none() {
+        for target in &targets {
+            g.enqueue(&input.id, target, prompt.clone(), input.discussion, None, 0)?;
+        }
     }
     let message = g.post(None, "user", input.text.clone(), None);
     message.id = input.id.clone();
     message.attachments = input.attachments.clone();
     message.reply_to = input.reply_to.clone();
     message.knowledge = input.knowledge.clone();
+    message.request_id = ongoing;
+    message.work_id = assigned_work;
+    message.member_ids = targets;
     Ok(())
+}
+
+fn stop_request_root(g: &Group, input: &SendInput) -> Result<Option<String>, String> {
+    let text = input.text.trim().trim_end_matches(['。', '！', '!']);
+    if !matches!(text, "停止当前任务" | "停止任务" | "取消任务") {
+        return Ok(None);
+    }
+    let active = g
+        .works
+        .iter()
+        .filter(|w| !w.terminal() && w.epoch == g.epoch)
+        .map(|w| w.root_id.clone())
+        .collect::<std::collections::HashSet<_>>();
+    if let Some(reply) = &input.reply_to {
+        return g
+            .messages
+            .iter()
+            .find(|m| &m.id == reply)
+            .and_then(|m| g.message_request(m))
+            .filter(|root| active.contains(root))
+            .map(Some)
+            .ok_or_else(|| "引用的任务已结束，没有需要停止的工作".into());
+    }
+    if active.len() == 1 {
+        Ok(active.into_iter().next())
+    } else {
+        Err(if active.is_empty() {
+            "当前没有进行中的任务"
+        } else {
+            "有多个进行中的任务，请回复要停止的任务，或发送“停止全部”"
+        }
+        .into())
+    }
+}
+
+fn is_stop_request(input: &SendInput) -> bool {
+    input.attachments.is_empty() && is_stop_text(&input.text)
+}
+fn is_stop_text(text: &str) -> bool {
+    matches!(
+        text.trim()
+            .trim_end_matches(['。', '！', '!'])
+            .to_lowercase()
+            .as_str(),
+        "停止" | "停止全部" | "停止任务" | "停止当前任务" | "取消任务" | "stop"
+    )
 }
 
 fn mentioned_targets(group: &Group, body: &str) -> Vec<String> {
@@ -475,23 +638,91 @@ fn mentioned_targets(group: &Group, body: &str) -> Vec<String> {
 }
 
 #[tauri::command]
-pub fn group_send(
+pub async fn group_send(
     app: tauri::AppHandle,
     state: State<'_, crate::commands::AppState>,
     group_id: String,
     mut input: SendInput,
 ) -> Result<(), String> {
-    crate::commands::require_runtime_ready(Some(&app), &state, None)?;
+    if !is_stop_request(&input) {
+        crate::commands::require_runtime_ready(Some(&app), &state, None)?;
+    }
+    let _dispatch = tokio::time::timeout(
+        std::time::Duration::from_secs(30),
+        runtime::dispatch_lock(&group_id).lock_owned(),
+    )
+    .await
+    .map_err(|_| "成员仍在准备执行，请稍后重试发送".to_string())?;
     let g = db()?.get(&group_id)?;
-    let root = app
-        .state::<crate::shell_fs::FilesystemAccess>()
-        .require_workspace(&g.cwd)?;
-    input.attachments = app
-        .state::<crate::shell_fs::FilesystemAccess>()
-        .validate_session_attachments(&root, &input.attachments)?;
-    db()?.update(&group_id, |g| send(g, &input))?;
+    if !is_stop_request(&input) {
+        let root = app
+            .state::<crate::shell_fs::FilesystemAccess>()
+            .require_workspace(&g.cwd)?;
+        input.attachments = app
+            .state::<crate::shell_fs::FilesystemAccess>()
+            .validate_session_attachments(&root, &input.attachments)?;
+    }
+    let duplicate = g.messages.iter().any(|m| m.id == input.id);
+    if duplicate && !is_stop_request(&input) {
+        return Ok(());
+    }
+    if !duplicate {
+        db()?.update(&group_id, |g| send(g, &input))?;
+    }
     changed(&group_id);
+    let latest = db()?.get(&group_id)?;
+    let tx = state.tx.lock().unwrap().clone();
+    if is_stop_request(&input) {
+        let sessions = stopping_sessions(&latest, &input.id)?;
+        let result = cancel_group_sessions(tx.as_ref(), sessions).await;
+        runtime::kick(app, group_id);
+        return result;
+    } else if let Some(root) = latest
+        .messages
+        .iter()
+        .find(|m| m.id == input.id)
+        .and_then(|m| m.request_id.as_ref())
+    {
+        let tx = tx.as_ref().ok_or("Agent Runtime 尚未初始化；补充已保存")?;
+        let message = latest
+            .messages
+            .iter()
+            .find(|m| m.id == input.id)
+            .ok_or("补充消息不存在")?;
+        deliver_followup(tx, &latest, message, root).await?;
+    }
+
     runtime::kick(app, group_id);
+    Ok(())
+}
+
+async fn deliver_followup(
+    tx: &echo_agent_acp::AcpAgentTx,
+    latest: &Group,
+    message: &Message,
+    root: &str,
+) -> Result<(), String> {
+    let followup_text = format!(
+        "用户对当前任务的最新补充或纠正（与此前冲突时以此为准）：\n{}\n{}",
+        latest.message_prompt(message),
+        message.knowledge.context
+    );
+    for work in latest.works.iter().filter(|w| {
+        w.root_id == root && w.status == "running" && latest.followup_applies(message, w)
+    }) {
+        if let Some(sid) = &work.session_id {
+            // Delivery is fenced to this prompt; late interjections cannot
+            // start an invisible native turn. The durable follow-up is also
+            // included at the next dispatch/continuation boundary.
+            if let Err(error) = crate::ext::call_ext::<Value>(tx, "echo.agent/interject", crate::ext::raw_params(&json!({
+                    "sessionId":sid,"expectedPromptId":work.prompt_id,"interjectionId":message.id,
+                    "text":followup_text,
+                    "content":crate::agent_runtime::build_prompt_blocks(&followup_text, &message.attachments, None).map_err(|e| e.to_string())?
+                }))).await {
+                    tracing::warn!(%error, "group follow-up retained for next dispatch");
+                }
+        }
+    }
     Ok(())
 }
 
@@ -528,28 +759,7 @@ pub async fn group_control(
             }
             "pin" => g.pinned = !g.pinned,
             "stop" => sessions = g.stop_work(work_id.as_deref())?,
-            "retry" => {
-                let work = g.works.iter().find(|w| Some(&w.id) == work_id.as_ref())
-                    .cloned().ok_or("工作不存在")?;
-                if !matches!(work.status.as_str(), "failed" | "uncertain" | "cancelled") {
-                    return Err("只能重试失败、停止或执行情况未确认的工作".into());
-                }
-                if work.status == "uncertain" {
-                    sessions.extend(g.stop_work(Some(&work.id))?);
-                }
-                g.paused = false;
-                let root = id();
-                let source = g.messages.iter().find(|m| m.id == work.root_id).cloned();
-                g.enqueue(&root, &work.member_id,
-                    format!("此前工作未完成。请先检查已有文件和执行结果，避免重复产生副作用，再完成：\n{}", work.prompt),
-                    work.discussion, None, 0)?;
-                let message = g.post(None, "user", format!("检查后继续：{}", work.prompt), None);
-                message.id = root;
-                if let Some(source) = source {
-                    message.attachments = source.attachments;
-                    message.knowledge = source.knowledge;
-                }
-            }
+            "retry" => sessions.extend(g.retry_work(work_id.as_deref().ok_or("工作不存在")?)?),
             _ => return Err("不支持的专家团操作".into()),
         }
         g.ready_callbacks();
@@ -557,17 +767,53 @@ pub async fn group_control(
     })?;
     changed(&group_id);
     let tx = state.tx.lock().unwrap().clone();
+    let result = cancel_group_sessions(tx.as_ref(), sessions).await;
+    runtime::kick(app, group_id);
+    result
+}
+
+fn stopping_sessions(g: &Group, message_id: &str) -> Result<Vec<(String, String)>, String> {
+    let message = g
+        .messages
+        .iter()
+        .find(|m| m.id == message_id)
+        .ok_or("停止消息不存在")?;
+    if message.kind != "user" || !message.attachments.is_empty() || !is_stop_text(&message.text) {
+        return Err("消息标识已用于其他消息，请重新发送".into());
+    }
+    Ok(g.works
+        .iter()
+        .filter(|w| {
+            w.status == "stopping"
+                && message
+                    .stop_root_id
+                    .as_deref()
+                    .is_none_or(|root| w.root_id == root)
+        })
+        .filter_map(|w| {
+            w.session_id
+                .as_ref()
+                .map(|sid| (sid.clone(), w.prompt_id.clone()))
+        })
+        .collect())
+}
+
+async fn cancel_group_sessions(
+    tx: Option<&echo_agent_acp::AcpAgentTx>,
+    sessions: Vec<(String, String)>,
+) -> Result<(), String> {
     let mut errors = vec![];
     if let Some(tx) = tx {
         for (sid, prompt) in sessions {
-            if let Err(e) = crate::agent_runtime::cancel(&tx, &sid, "stop", Some(&prompt)).await {
-                errors.push(e.to_string());
+            if let Err(error) = crate::agent_runtime::cancel(tx, &sid, "stop", Some(&prompt)).await
+            {
+                tracing::warn!(session=%sid,%error,"group cancellation unacknowledged");
+                errors.push(error.to_string());
             }
         }
     } else if !sessions.is_empty() {
         errors.push("Agent Runtime 已断开，请重启应用后检查执行记录".into());
     }
-    runtime::kick(app, group_id);
     if errors.is_empty() {
         Ok(())
     } else {
@@ -836,11 +1082,7 @@ pub async fn group_settings(
             if cwd != g.cwd {
                 g.cwd = cwd;
                 for member in &mut g.members {
-                    member.session_id = None;
-                    member.discussion_session_id = None;
-                    member.seen_seq = 0;
-                    member.discussion_seen_seq = 0;
-                    member.generation += 1;
+                    member.reset_context(true);
                 }
                 g.post(
                     None,
@@ -883,11 +1125,9 @@ pub async fn group_settings(
             m.role = patch.role;
             if m.model_id != patch.model_id {
                 m.model_id = patch.model_id;
-                m.session_id = None;
-                m.discussion_session_id = None;
-                m.seen_seq = 0;
-                m.discussion_seen_seq = 0;
-                m.generation += 1;
+                m.reset_context(false);
+                // The model changes, but this is still the same expert and
+                // collaboration scope. Keep its existing memory namespace.
             }
         }
         Ok(())

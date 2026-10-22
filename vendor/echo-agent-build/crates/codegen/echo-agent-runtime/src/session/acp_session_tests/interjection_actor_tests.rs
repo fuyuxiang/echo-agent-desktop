@@ -116,6 +116,7 @@ async fn drain_interjection_with_images_attaches_image_parts() {
         .run_until(async {
             let (actor, _gateway_rx) = build_actor().await;
             actor.pending_interjections.push(PendingInterjection {
+                scope: None,
                 text: "look at [Image #1]".to_string(),
                 attachments: vec![test_image_content()],
             });
@@ -164,6 +165,7 @@ async fn drain_interjection_strips_placeholder_paths_from_text() {
         .run_until(async {
             let (actor, _gateway_rx) = build_actor().await;
             actor.pending_interjections.push(PendingInterjection {
+                scope: None,
                 text: "look at [Image #1: /tmp/secret/x.png] please".to_string(),
                 attachments: vec![test_image_content()],
             });
@@ -221,6 +223,7 @@ async fn drain_interjection_expands_skill_slash_reference() {
                 .await;
 
             actor.pending_interjections.push(PendingInterjection {
+                scope: None,
                 text: "/find-session foo".to_string(),
                 attachments: vec![],
             });
@@ -249,6 +252,7 @@ async fn drain_interjection_expands_skill_slash_reference() {
             // (no leading slash) stays untouched — mirrors turn-start
             // gating, where "don't run /commit yet" is not an invocation.
             actor.pending_interjections.push(PendingInterjection {
+                scope: None,
                 text: "don't run /find-session yet".to_string(),
                 attachments: vec![],
             });
@@ -275,6 +279,7 @@ async fn drain_interjection_truncation_never_touches_image_data() {
             // Way over LARGE_PROMPT_THRESHOLD so the text path truncates.
             let huge_text = "x".repeat(3_000_000);
             actor.pending_interjections.push(PendingInterjection {
+                scope: None,
                 text: huge_text,
                 attachments: vec![original_image.clone()],
             });
@@ -376,10 +381,12 @@ async fn flush_stranded_interjections_converts_to_front_prompts_in_order() {
                     .push_back(user_item("queued-later", "A"));
             }
             actor.pending_interjections.push(PendingInterjection {
+                scope: None,
                 text: "first steer".to_string(),
                 attachments: vec![],
             });
             actor.pending_interjections.push(PendingInterjection {
+                scope: None,
                 text: "second steer".to_string(),
                 attachments: vec![],
             });

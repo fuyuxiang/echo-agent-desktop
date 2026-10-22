@@ -877,6 +877,7 @@ pub enum SessionCommand {
     /// no response channel needed since the command just pushes to a Mutex.
     Interject {
         text: String,
+        expected_prompt_id: Option<String>,
         /// Client-minted id echoed back on the broadcast
         /// `echo.agent/session/interjection` so the originating pager can dedup its
         /// optimistic local block. `None` from older clients.

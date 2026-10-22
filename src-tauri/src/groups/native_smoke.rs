@@ -4,6 +4,8 @@ use super::*;
 use axum::{extract::State as AxumState, response::IntoResponse, routing::post, Json, Router};
 use std::sync::{Arc, Mutex};
 
+static PROBE_INTERJECTION_QUEUED: tokio::sync::Notify = tokio::sync::Notify::const_new();
+
 #[test]
 fn native_runtime_group_contract() {
     let home = tempfile::tempdir().unwrap();
@@ -37,8 +39,32 @@ async fn model(
     Json(body): Json<Value>,
 ) -> impl IntoResponse {
     requests.lock().unwrap().push(body.clone());
+    let request_text = body.get("messages").unwrap_or(&Value::Null).to_string();
+    let response = if request_text.contains("INTERJECTION_PROBE") {
+        if request_text.contains("INTERJECTION_CORRECTION") {
+            "CORRECTION_APPLIED"
+        } else {
+            tokio::time::timeout(
+                std::time::Duration::from_secs(15),
+                PROBE_INTERJECTION_QUEUED.notified(),
+            )
+            .await
+            .expect("host did not deliver the scoped interjection");
+            "INITIAL_PASS"
+        }
+    } else if request_text.contains("MEMORY_PROBE") {
+        if request_text.contains("MEMORY_PREFERENCE_BETA") {
+            "MEMORY_APPLIED_BETA"
+        } else if request_text.contains("MEMORY_PREFERENCE_ALPHA") {
+            "MEMORY_APPLIED_ALPHA"
+        } else {
+            "MEMORY_EMPTY"
+        }
+    } else {
+        "原生群聊执行成功"
+    };
     if body.get("stream").and_then(Value::as_bool) == Some(true) {
-        let first = json!({"id":"group-test","object":"chat.completion.chunk","created":1,"model":"mock","choices":[{"index":0,"delta":{"role":"assistant","content":"原生群聊执行成功"},"finish_reason":null}]});
+        let first = json!({"id":"group-test","object":"chat.completion.chunk","created":1,"model":"mock","choices":[{"index":0,"delta":{"role":"assistant","content":response},"finish_reason":null}]});
         let last = json!({"id":"group-test","object":"chat.completion.chunk","created":1,"model":"mock","choices":[{"index":0,"delta":{},"finish_reason":"stop"}],"usage":{"prompt_tokens":12,"completion_tokens":6,"total_tokens":18}});
         (
             [("content-type", "text/event-stream")],
@@ -46,7 +72,7 @@ async fn model(
         )
             .into_response()
     } else {
-        Json(json!({"id":"group-test","object":"chat.completion","created":1,"model":"mock","choices":[{"index":0,"message":{"role":"assistant","content":"原生群聊执行成功"},"finish_reason":"stop"}],"usage":{"prompt_tokens":12,"completion_tokens":6,"total_tokens":18}})).into_response()
+        Json(json!({"id":"group-test","object":"chat.completion","created":1,"model":"mock","choices":[{"index":0,"message":{"role":"assistant","content":response},"finish_reason":"stop"}],"usage":{"prompt_tokens":12,"completion_tokens":6,"total_tokens":18}})).into_response()
     }
 }
 
@@ -102,6 +128,13 @@ name = "Group integration model"
 max_completion_tokens = 1024
 [memory]
 enabled = false
+[memory.initial_injection]
+enabled = false
+[model."group-test/reviewer"]
+model = "reviewer"
+model_provider = "group-test"
+name = "Independent reviewer model"
+max_completion_tokens = 1024
 [plugins]
 paths = ["{relative_plugin}"]
 "#
@@ -150,6 +183,14 @@ paths = ["{relative_plugin}"]
                 }
                 AcpClientMessage::ExtNotification(args) => {
                     if let Ok(params) = serde_json::from_str::<Value>(args.request.params.get()) {
+                        if params
+                            .get("text")
+                            .and_then(Value::as_str)
+                            .is_some_and(|text| text.contains("INTERJECTION_CORRECTION"))
+                            && params.get("interjectionId").is_some()
+                        {
+                            PROBE_INTERJECTION_QUEUED.notify_one();
+                        }
                         if let (Some(session), Some(update)) = (
                             params.get("sessionId").and_then(Value::as_str),
                             params.get("update"),
@@ -266,7 +307,7 @@ paths = ["{relative_plugin}"]
         "error" | "rate_limit"
     ));
     assert!(chunks.lock().unwrap().contains("原生群聊执行成功"));
-    super::runtime::flush(&sid);
+    super::runtime::flush(&sid).unwrap();
     let saved = db().unwrap().get(&gid).unwrap();
     assert!(saved.works[0].output.contains("原生群聊执行成功"));
     let history: Value = client.post(crate::team_mcp::server_url().unwrap())
@@ -454,8 +495,203 @@ paths = ["{relative_plugin}"]
             "Group execution exposed a second background scheduler: {name}"
         );
     }
+    // Seed an explicitly confirmed preference through the same record API used
+    // by memory_manage, then observe its arrival in real native model requests.
+    // The loopback response proves delivery/return plumbing, not model quality.
+    use echo_agent_memory::{records, MemoryStorage};
+    let memory_root = home
+        .join("group-memory")
+        .join(&gid)
+        .join(&executor)
+        .join("generation-0");
+    let storage = MemoryStorage::new_flat(workspace.path(), &memory_root);
+    let record = records::remember(
+        &storage,
+        records::RecordInput {
+            id: None,
+            scope: "workspace".into(),
+            kind: "feedback".into(),
+            key: "交付偏好".into(),
+            content: "MEMORY_PREFERENCE_ALPHA".into(),
+            evidence: "用户明确确认".into(),
+            pinned: true,
+            valid_until: None,
+            expected_revision: None,
+            observed_at: None,
+        },
+        None,
+        false,
+    )
+    .unwrap()
+    .expect("explicit scoped memory must be saved");
+    let probe = crate::agent_runtime::GroupSessionRequest {
+        cwd: workspace.path(),
+        model: "group-test/reviewer",
+        profile: &profile,
+        group_id: &gid,
+        member_id: &executor,
+        generation: 0,
+        discussion: false,
+        existing: None,
+    };
+    let memory_sid = memory_probe(&tx, probe, "memory-1").await;
+    let _: Value = crate::ext::call_ext(&tx, "echo.agent/interject", crate::ext::raw_params(&json!({
+        "sessionId":memory_sid,"expectedPromptId":"already-finished", "text":"UNTRACKED_LATE_INTERJECTION", "interjectionId":"late"
+    }))).await.unwrap();
+    assert_eq!(
+        db().unwrap()
+            .get(&gid)
+            .unwrap()
+            .works
+            .last()
+            .unwrap()
+            .output,
+        "MEMORY_APPLIED_ALPHA"
+    );
+    let _: Value = crate::ext::call_ext(
+        &tx,
+        "echo.agent/session/close",
+        crate::ext::raw_params(&json!({"sessionId":memory_sid})),
+    )
+    .await
+    .unwrap();
+    memory_probe(
+        &tx,
+        crate::agent_runtime::GroupSessionRequest {
+            cwd: workspace.path(),
+            model: "group-test/reviewer",
+            profile: &profile,
+            group_id: &gid,
+            member_id: &executor,
+            generation: 0,
+            discussion: false,
+            existing: Some(&memory_sid),
+        },
+        "memory-restored",
+    )
+    .await;
+    assert!(requests
+        .lock()
+        .unwrap()
+        .iter()
+        .any(|r| r["model"] == "reviewer"
+            && r["messages"]
+                .to_string()
+                .contains("MEMORY_PREFERENCE_ALPHA")));
+    let corrected = records::remember(
+        &storage,
+        records::RecordInput {
+            id: Some(record.id),
+            scope: record.scope,
+            kind: record.kind,
+            key: record.key,
+            content: "MEMORY_PREFERENCE_BETA".into(),
+            evidence: "用户明确纠正".into(),
+            pinned: true,
+            valid_until: None,
+            expected_revision: Some(record.revision),
+            observed_at: None,
+        },
+        None,
+        false,
+    )
+    .unwrap()
+    .expect("explicit scoped memory must be saved");
+    // New model, new actor, same member memory namespace.
+    memory_probe(
+        &tx,
+        crate::agent_runtime::GroupSessionRequest {
+            cwd: workspace.path(),
+            model: "group-test/mock",
+            profile: &profile,
+            group_id: &gid,
+            member_id: &executor,
+            generation: 0,
+            discussion: false,
+            existing: None,
+        },
+        "memory-corrected",
+    )
+    .await;
+    assert_eq!(
+        db().unwrap()
+            .get(&gid)
+            .unwrap()
+            .works
+            .last()
+            .unwrap()
+            .output,
+        "MEMORY_APPLIED_BETA"
+    );
+    records::retire(
+        &storage,
+        "workspace",
+        &corrected.id,
+        Some(corrected.revision),
+        false,
+    )
+    .unwrap();
+    memory_probe(
+        &tx,
+        crate::agent_runtime::GroupSessionRequest {
+            cwd: workspace.path(),
+            model: "group-test/mock",
+            profile: &profile,
+            group_id: &gid,
+            member_id: &executor,
+            generation: 0,
+            discussion: false,
+            existing: None,
+        },
+        "memory-forgotten",
+    )
+    .await;
+    assert_eq!(
+        db().unwrap()
+            .get(&gid)
+            .unwrap()
+            .works
+            .last()
+            .unwrap()
+            .output,
+        "MEMORY_EMPTY"
+    );
+    memory_probe(
+        &tx,
+        crate::agent_runtime::GroupSessionRequest {
+            cwd: workspace.path(),
+            model: "group-test/mock",
+            profile: &profile,
+            group_id: &gid,
+            member_id: &member,
+            generation: 0,
+            discussion: true,
+            existing: None,
+        },
+        "memory-other-member",
+    )
+    .await;
+    assert_eq!(
+        db().unwrap()
+            .get(&gid)
+            .unwrap()
+            .works
+            .last()
+            .unwrap()
+            .output,
+        "MEMORY_EMPTY"
+    );
     assert!(crate::sessions::list_workspaces().is_empty(),
         "This isolated Runtime only created group sessions; none may appear in ordinary workspace counts");
+    assert!(
+        !requests
+            .lock()
+            .unwrap()
+            .iter()
+            .any(|r| r.to_string().contains("UNTRACKED_LATE_INTERJECTION")),
+        "a late scoped interjection created an untracked native turn"
+    );
+    followup_contract(&tx, &gid, &executor, &execution_sid, &requests).await;
     // Exercise the real Runtime's permanent-history deletion, including
     // retired/restored native contexts, before removing the group transaction.
     db().unwrap()
@@ -576,4 +812,179 @@ paths = ["{relative_plugin}"]
     .unwrap();
     dispatcher.abort();
     server.abort();
+}
+
+async fn memory_probe(
+    tx: &echo_agent_acp::AcpAgentTx,
+    request: crate::agent_runtime::GroupSessionRequest<'_>,
+    prompt: &str,
+) -> String {
+    let gid = request.group_id.to_string();
+    let member = request.member_id.to_string();
+    let model = request.model.to_string();
+    let discussion = request.discussion;
+    let sid = crate::agent_runtime::group_session(tx, request)
+        .await
+        .unwrap();
+    db().unwrap()
+        .update(&gid, |g| {
+            let pending = g
+                .works
+                .iter()
+                .filter(|w| !w.terminal())
+                .map(|w| w.id.clone())
+                .collect::<Vec<_>>();
+            for id in pending {
+                g.finish(&id, None, false);
+            }
+            let m = g.members.iter_mut().find(|m| m.id == member).unwrap();
+            m.model_id = model;
+            if discussion {
+                m.discussion_session_id = Some(sid.clone());
+            } else {
+                m.session_id = Some(sid.clone());
+            }
+            let id = g.enqueue(prompt, &member, "MEMORY_PROBE".into(), discussion, None, 0)?;
+            let w = g.works.iter_mut().find(|w| w.id == id).unwrap();
+            w.status = "running".into();
+            w.session_id = Some(sid.clone());
+            w.prompt_id = prompt.into();
+            Ok(())
+        })
+        .unwrap();
+    remember_owner(&sid, &gid, &member);
+    let g = db().unwrap().get(&gid).unwrap();
+    let text = runtime::work_prompt(
+        &g,
+        g.works.last().unwrap(),
+        g.members.iter().find(|m| m.id == member).unwrap(),
+        &Knowledge::default(),
+    )
+    .unwrap();
+    crate::agent_runtime::group_prompt(tx, &sid, prompt, &text, &[])
+        .await
+        .unwrap();
+    runtime::flush(&sid).unwrap();
+    sid
+}
+
+async fn followup_contract(
+    tx: &echo_agent_acp::AcpAgentTx,
+    gid: &str,
+    member: &str,
+    sid: &str,
+    requests: &Arc<Mutex<Vec<Value>>>,
+) {
+    let root = id();
+    let work = db()
+        .unwrap()
+        .update(gid, |g| {
+            let pending = g
+                .works
+                .iter()
+                .filter(|w| !w.terminal())
+                .map(|w| w.id.clone())
+                .collect::<Vec<_>>();
+            for work in pending {
+                g.finish(&work, None, false);
+            }
+            send(
+                g,
+                &SendInput {
+                    id: root.clone(),
+                    text: "INTERJECTION_PROBE".into(),
+                    member_ids: vec![member.into()],
+                    discussion: false,
+                    attachments: vec![],
+                    reply_to: None,
+                    knowledge: Knowledge::default(),
+                },
+            )?;
+            let context = g.messages.last().unwrap().seq;
+            let work = g.works.last_mut().unwrap();
+            work.status = "running".into();
+            work.session_id = Some(sid.into());
+            work.context_seq = context;
+            Ok(work.clone())
+        })
+        .unwrap();
+    let task = tokio::spawn({
+        let tx = tx.clone();
+        let sid = sid.to_owned();
+        let prompt = work.prompt_id.clone();
+        async move {
+            crate::agent_runtime::group_prompt(&tx, &sid, &prompt, "INTERJECTION_PROBE", &[])
+                .await
+                .unwrap()
+        }
+    });
+    tokio::time::timeout(std::time::Duration::from_secs(10), async {
+        loop {
+            if requests
+                .lock()
+                .unwrap()
+                .iter()
+                .any(|r| r.to_string().contains("INTERJECTION_PROBE"))
+            {
+                break;
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(5)).await;
+        }
+    })
+    .await
+    .unwrap();
+    let correction = id();
+    db().unwrap()
+        .update(gid, |g| {
+            send(
+                g,
+                &SendInput {
+                    id: correction.clone(),
+                    text: "INTERJECTION_CORRECTION".into(),
+                    member_ids: vec![member.into()],
+                    discussion: false,
+                    attachments: vec![],
+                    reply_to: Some(root.clone()),
+                    knowledge: Knowledge::default(),
+                },
+            )
+        })
+        .unwrap();
+    let latest = db().unwrap().get(gid).unwrap();
+    let message = latest.messages.iter().find(|m| m.id == correction).unwrap();
+    assert_eq!(message.request_id.as_deref(), Some(root.as_str()));
+    super::deliver_followup(tx, &latest, message, &root)
+        .await
+        .unwrap();
+    task.await.unwrap();
+    runtime::flush(sid).unwrap();
+    let completed = db()
+        .unwrap()
+        .update(gid, |g| {
+            let work = g.works.iter().find(|w| w.id == work.id).unwrap();
+            assert!(
+                work.output.contains("CORRECTION_APPLIED"),
+                "correction did not reach actual inference: {}",
+                work.output
+            );
+            assert!(
+                work.consumed_followups.contains(&correction),
+                "native safe-point consumption was not acknowledged"
+            );
+            let id = work.id.clone();
+            g.finish(&id, None, false);
+            Ok(g.works.iter().find(|w| w.id == id).unwrap().clone())
+        })
+        .unwrap();
+    assert_eq!(completed.status, "completed");
+    assert!(
+        !db()
+            .unwrap()
+            .get(gid)
+            .unwrap()
+            .works
+            .iter()
+            .any(|w| w.continuation_of.as_deref() == Some(&completed.id)),
+        "already consumed correction started another host turn"
+    );
 }

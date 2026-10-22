@@ -18,3 +18,10 @@ it("配额为提醒模式时，仍向现有群聊后端发送完整消息", asyn
   await groupSend("group", message);
   expect(invoke).toHaveBeenCalledWith("group_send", { groupId: "group", input: message });
 });
+it("配额耗尽后仍可用自然消息停止协作", async () => {
+  saveQuotaConfig({ period: "daily", tokenLimit: 10, enforcement: "block" });
+  recordUsage([], { modelId: "local/mock", promptTokens: 12, completionTokens: 2 });
+  const stop = { ...message, text: "停止当前任务！" };
+  await groupSend("group", stop);
+  expect(invoke).toHaveBeenCalledWith("group_send", { groupId: "group", input: stop });
+});

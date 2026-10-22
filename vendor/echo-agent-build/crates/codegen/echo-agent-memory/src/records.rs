@@ -320,6 +320,85 @@ pub fn source_blocked(storage: &MemoryStorage, session_id: &str) -> io::Result<b
     Ok(false)
 }
 
+/// Immutable recall rules for one read operation. Load again for subsequent
+/// requests so corrections and forgetting take effect without stale caches.
+#[derive(Clone, Debug, Default)]
+pub struct RecallRules {
+    replaced: Vec<String>,
+    forgotten: Vec<RecallTopic>,
+}
+#[derive(Clone, Debug)]
+struct RecallTopic {
+    normalized: String,
+    length: usize,
+    terms: HashSet<String>,
+}
+impl RecallTopic {
+    fn new(text: String) -> Self {
+        let normalized = normalized(&text);
+        Self {
+            length: normalized.chars().count(),
+            normalized,
+            terms: terms(&text),
+        }
+    }
+}
+
+impl RecallRules {
+    pub fn load(storage: &MemoryStorage) -> io::Result<Self> {
+        let mut rules = Self::default();
+        for scope in ["global", "workspace"] {
+            if scope == "workspace"
+                && (storage.is_ephemeral() || storage.workspace_dir() == storage.global_dir())
+            {
+                continue;
+            }
+            let ledger = load(storage, scope)?;
+            rules
+                .replaced
+                .extend(ledger.replaced.into_iter().map(|text| normalized(&text)));
+            rules
+                .forgotten
+                .extend(ledger.forgotten.into_iter().map(RecallTopic::new));
+            for record in ledger.records {
+                if record.status == "forgotten" {
+                    rules.forgotten.push(RecallTopic::new(record.content));
+                } else if !active(&record) {
+                    rules.replaced.push(normalized(&record.content));
+                }
+            }
+        }
+        Ok(rules)
+    }
+    pub fn permits(&self, content: &str) -> bool {
+        if self.replaced.is_empty() && self.forgotten.is_empty() {
+            return true;
+        }
+        let normalized = normalized(content);
+        if self.replaced.iter().any(|old| normalized.contains(old)) {
+            return false;
+        }
+        let length = normalized.chars().count();
+        if self.forgotten.iter().any(|topic| {
+            topic.length >= 3
+                && (normalized.contains(&topic.normalized)
+                    || length >= 3 && topic.normalized.contains(&normalized))
+        }) {
+            return false;
+        }
+        if self.forgotten.is_empty() {
+            return true;
+        }
+        let content_terms = terms(content);
+        !self.forgotten.iter().any(|topic| {
+            let common = topic.terms.intersection(&content_terms).count();
+            common >= 2
+                && common as f64 / topic.terms.len().min(content_terms.len()).max(1) as f64 >= 0.65
+        })
+    }
+}
+// Single-document callers retain their short-circuiting path; group history
+// explicitly loads RecallRules once for a bounded page.
 pub fn permitted(storage: &MemoryStorage, content: &str) -> io::Result<bool> {
     for scope in ["global", "workspace"] {
         if scope == "workspace" && storage.is_ephemeral() {
@@ -1035,21 +1114,17 @@ mod tests {
         let projection = storage.global_dir().join(RECORD_DOCUMENT);
         std::fs::create_dir_all(&projection).unwrap();
         let json = r#"{"memories":[{"scope":"global","kind":"user","key":"first","content":"first fact","evidence":"first fact"}]}"#;
-        assert!(
-            apply_extraction_at(&storage, json, "source", 123)
-                .unwrap_err()
-                .to_string()
-                .contains("已保存 1 条")
-        );
+        assert!(apply_extraction_at(&storage, json, "source", 123)
+            .unwrap_err()
+            .to_string()
+            .contains("已保存 1 条"));
         assert_eq!(activity(&storage).records_written, 1);
         std::fs::remove_dir(&projection).unwrap();
         apply_extraction_at(&storage, json, "source", 123).unwrap();
         assert_eq!(list(&storage, true).unwrap().len(), 1);
-        assert!(
-            std::fs::read_to_string(projection)
-                .unwrap()
-                .contains("first fact")
-        );
+        assert!(std::fs::read_to_string(projection)
+            .unwrap()
+            .contains("first fact"));
     }
 
     #[test]
@@ -1067,11 +1142,9 @@ mod tests {
             .unwrap()
             .unwrap();
         assert_eq!(retried.revision, committed.revision);
-        assert!(
-            std::fs::read_to_string(projection)
-                .unwrap()
-                .contains("manual fact")
-        );
+        assert!(std::fs::read_to_string(projection)
+            .unwrap()
+            .contains("manual fact"));
     }
 
     #[cfg(unix)]

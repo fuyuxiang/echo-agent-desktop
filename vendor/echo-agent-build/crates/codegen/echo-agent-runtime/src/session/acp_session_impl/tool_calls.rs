@@ -3480,6 +3480,7 @@ mod wait_interrupt_tests {
         };
         assert_eq!(out, "wait-result");
         buf.push(PendingInterjection {
+            scope: None,
             text: "user message".into(),
             attachments: Vec::new(),
         });

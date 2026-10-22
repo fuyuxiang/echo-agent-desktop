@@ -4,7 +4,7 @@ import { listen } from "@tauri-apps/api/event";
 
 export interface GroupMember { removed?: boolean; id: string; name: string; expert: string | null; role: string; modelId: string; sessionId: string | null; discussionSessionId: string | null; generation: number }
 export interface GroupKnowledge { personal: boolean; organization: boolean; organizationScopeIds: string[]; context: string }
-export interface GroupMessage { knowledge?: GroupKnowledge; id: string; seq: number; memberId: string | null; kind: string; text: string; createdAt: number; workId: string | null; replyTo: string | null; attachments: string[]; toolCalls: Record<string, unknown>[] }
+export interface GroupMessage { memberIds?: string[]; requestId?: string | null; knowledge?: GroupKnowledge; id: string; seq: number; memberId: string | null; kind: string; text: string; createdAt: number; workId: string | null; replyTo: string | null; attachments: string[]; toolCalls: Record<string, unknown>[] }
 export interface GroupWork { id: string; rootId: string; parentId: string | null; continuationOf: string | null; memberId: string; prompt: string; status: string; discussion: boolean; sessionId: string | null; output: string; error: string | null; createdAt: number; tokens: number }
 export interface GroupDecision { id: string; text: string; messageId: string | null; confirmed: boolean; voided?: boolean; history?: { text: string; changedAt: number; action?: string }[]; updatedAt?: number | null }
 export interface Group { id: string; name: string; goal: string; cwd: string; sourceSessionId: string | null; sourceTeamId: string | null; coordinatorId: string; members: GroupMember[]; messages: GroupMessage[]; works: GroupWork[]; decisions: GroupDecision[]; archived: boolean; pinned: boolean; paused: boolean; revision: number; updatedAt: number; maxCalls: number; tokenBudget: number }
@@ -21,8 +21,9 @@ export async function resolveGroupForSession(sessionId: string, groups: Group[])
   return owner?.id ?? await groupOwner(sessionId) ?? null;
 }
 export const groupCreate = (input: CreateGroupInput) => invoke<Group>("group_create", { input });
+export const isGroupStopRequest = (input: SendGroupInput) => !input.attachments.length && ["停止", "停止全部", "停止任务", "停止当前任务", "取消任务", "stop"].includes(input.text.trim().replace(/[。！!]+$/, "").toLowerCase());
 export async function groupSend(groupId: string, input: SendGroupInput): Promise<void> {
-  if (isQuotaBlocking(loadUsage(), loadQuotaConfig())) throw new Error("已达到 Token 配额，请先在“用量统计”中调整上限或策略");
+  if (!isGroupStopRequest(input) && isQuotaBlocking(loadUsage(), loadQuotaConfig())) throw new Error("已达到 Token 配额，请先在“用量统计”中调整上限或策略");
   await invoke<void>("group_send", { groupId, input });
 }
 export const groupControl = (groupId: string, action: "pause" | "resume" | "stop" | "archive" | "pin" | "retry", workId?: string) => invoke<void>("group_control", { groupId, action, workId: workId ?? null });
@@ -62,16 +63,25 @@ export function groupRecipients(group: Group, text: string, explicit: string[], 
   return [group.coordinatorId];
 }
 export const workLabels: Record<string, string> = { queued: "待执行", dispatching: "正在启动", running: "执行中", waiting_children: "等待成员结果", completed: "已完成", failed: "执行失败", stopping: "正在停止", cancelled: "已停止", uncertain: "需要检查" };
+/** Supplements retain their message id but report lifecycle against their task. */
+export function latestGroupRequestId(group: Group): string | undefined {
+  const user = [...group.messages].reverse().find(message => message.kind === "user");
+  return user ? user.requestId ?? user.id : group.works.find(work => work.id === group.messages[group.messages.length - 1]?.workId)?.rootId;
+}
+export function failedGroupWorks(group: Group): GroupWork[] {
+  const request = latestGroupRequestId(group);
+  return group.works.filter(work => work.rootId === request && work.status === "failed"
+    && !group.works.some(next => next.continuationOf === work.id));
+}
 export function groupStatus(group: Group): string {
   if (group.archived) return "已归档";
   if (group.works.some(work => work.status === "uncertain")) return "需要检查";
+  if (group.works.some(work => work.status === "stopping")) return "正在停止";
   if (group.paused) return "已暂停";
   const active = group.works.filter(work => ["running", "dispatching", "stopping"].includes(work.status)).length;
   if (active) return `${active} 人工作中`;
   if (group.works.some(work => !terminalWork(work.status))) return "等待协作";
-  const lastMessage = group.messages[group.messages.length - 1];
-  const lastRequest = [...group.messages].reverse().find(message => message.kind === "user")?.id ?? group.works.find(work => work.id === lastMessage?.workId)?.rootId;
-  if (group.works.some(work => work.status === "failed" && work.rootId === lastRequest)) return "执行失败";
+  if (failedGroupWorks(group).length) return "执行失败";
   return "当前空闲";
 }
 
@@ -79,7 +89,7 @@ export interface TeamTemplate { coordinatorName?: string | null; coordinatorRole
 export const groupTemplates = () => invoke<TeamTemplate[]>("group_team_templates");
 export const groupSaveTeam = (groupId: string, name: string) => invoke<TeamTemplate>("group_team_save", { groupId, name });
 export const groupDeleteTeam = (templateId: string) => invoke<void>("group_team_delete", { templateId });
-export const groupMemberChange = (groupId: string, action: "add" | "remove" | "refresh", memberId?: string, expert?: string) => invoke<void>("group_member_change", { groupId, action, memberId: memberId ?? null, expert: expert ?? null });
+export const groupMemberChange = (groupId: string, action: "add" | "remove" | "refresh" | "clear_memory", memberId?: string, expert?: string) => invoke<void>("group_member_change", { groupId, action, memberId: memberId ?? null, expert: expert ?? null });
 export const groupDecision = (groupId: string, text: string, messageId: string, decisionId?: string) => invoke<void>("group_decision", { groupId, text, messageId, decisionId: decisionId ?? null });
 
 export const groupDecisionChange = (groupId: string, decisionId: string, action: "edit" | "void" | "restore", text?: string) => invoke<void>("group_decision_change", { groupId, decisionId, action, text: text ?? null });

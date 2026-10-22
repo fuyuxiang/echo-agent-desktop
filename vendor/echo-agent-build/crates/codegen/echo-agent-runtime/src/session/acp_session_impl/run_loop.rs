@@ -2247,7 +2247,12 @@ pub(super) async fn run_session(
                                 let _ = respond_to.send(result);
                             });
                         }
-                        SessionCommand::Interject { text, id, images } => {
+                        SessionCommand::Interject { text, id, images, expected_prompt_id } => {
+                            if expected_prompt_id.as_ref().is_some_and(|expected| {
+                                session.current_prompt_id.lock().ok().and_then(|g| g.clone()).as_ref() != Some(expected)
+                            }) {
+                                continue;
+                            }
                             // Broadcast to every attached client so all panes
                             // viewing this session render the interjection block
                             // — not just the originating client. The originator
@@ -2276,11 +2281,12 @@ pub(super) async fn run_session(
                                 .is_some();
                             if turn_running {
                                 session.pending_interjections.push(PendingInterjection {
+                                    scope: expected_prompt_id.map(|prompt_id| echo_agent_interjection_core::PromptScope {prompt_id,interjection_id:id.unwrap_or_default()}),
                                     text,
                                     attachments: images,
                                 });
                                 tracing::info!("Queued mid-turn interjection");
-                            } else {
+                            } else if expected_prompt_id.is_none() {
                                 session
                                     .queue_interjection_fallback_prompt(text, images, true)
                                     .await;

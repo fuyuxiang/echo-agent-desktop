@@ -29,6 +29,11 @@ function renderMessage(
 }
 
 describe("assistant message actions", () => {
+  it("只有未闭合推理标签时不提供复制或导出内部文本的入口", () => {
+    renderMessage({ id: "reasoning-only", role: "assistant", complete: true, parts: [{ kind: "text", text: "<analysis>内部内容" }] });
+    expect(screen.queryByRole("button", { name: "复制纯文本" })).toBeNull();
+    expect(screen.queryByRole("group", { name: "回复操作" })).toBeNull();
+  });
   afterEach(() => {
     if (originalClipboardDescriptor) {
       Object.defineProperty(navigator, "clipboard", originalClipboardDescriptor);

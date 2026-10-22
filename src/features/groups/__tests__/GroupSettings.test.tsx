@@ -7,6 +7,16 @@ vi.mock("@tauri-apps/api/core", () => ({ invoke: vi.fn(async () => []) }));
 vi.mock("../group-client", async original => ({ ...await original<typeof import("../group-client")>(), groupSettings: vi.fn(async () => {}) }));
 const group = (): Group => ({id:"settings",name:"旧名称",goal:"原目标",cwd:"/work",sourceSessionId:null,sourceTeamId:null,coordinatorId:"c",members:[],messages:[],works:[],decisions:[],archived:false,pinned:false,paused:false,revision:1,updatedAt:1,maxCalls:12,tokenBudget:10000});
 describe("专家团设置与外部更新", () => {
+  it("已配置但不可用的模型明确显示且不能静默保存成其他模型", () => {
+    const initial = group();
+    initial.members = [{ id: "c", name: "协调员", expert: null, role: "协调", modelId: "missing", sessionId: null, discussionSessionId: null, generation: 0 }];
+    render(<GroupSettings group={initial} models={[{ id: "available", label: "可用模型" }]} onSaved={vi.fn()} onError={vi.fn()} />);
+    expect(screen.getByRole("combobox", { name: "模型" })).toHaveValue("missing");
+    expect(screen.getByRole("option", { name: "不可用：missing" })).toBeDisabled();
+    expect(screen.getByRole("button", { name: "保存专家团设置" })).toBeDisabled();
+    fireEvent.change(screen.getByRole("combobox", { name: "模型" }), { target: { value: "available" } });
+    expect(screen.getByRole("button", { name: "保存专家团设置" })).toBeEnabled();
+  });
   it("菜单重命名同步到未编辑的名称，保存时保留正在编辑的目标", async () => {
     const initial=group(), onSaved=vi.fn();
     const {rerender}=render(<GroupSettings group={initial} models={[]} onSaved={onSaved} onError={vi.fn()} />);

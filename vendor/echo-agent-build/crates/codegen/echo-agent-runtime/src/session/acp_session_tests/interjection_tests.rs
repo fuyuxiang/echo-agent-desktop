@@ -18,6 +18,7 @@ async fn drain_interjections_pushes_synthetic_user_message_after_tool_result() {
                 .chat_state_handle
                 .push_tool_result(ConversationItem::tool_result("call-1", TOOL_RESULT_CONTENT));
             actor.pending_interjections.push(PendingInterjection {
+                scope: None,
                 text: "please also add tests".to_string(),
                 attachments: vec![],
             });
@@ -85,14 +86,17 @@ async fn drain_multiple_interjections_pushes_one_user_message_each_in_order() {
                 .chat_state_handle
                 .push_tool_result(ConversationItem::tool_result("call-1", TOOL_RESULT_CONTENT));
             actor.pending_interjections.push(PendingInterjection {
+                scope: None,
                 text: "first steer".to_string(),
                 attachments: vec![],
             });
             actor.pending_interjections.push(PendingInterjection {
+                scope: None,
                 text: "second steer".to_string(),
                 attachments: vec![],
             });
             actor.pending_interjections.push(PendingInterjection {
+                scope: None,
                 text: "third steer".to_string(),
                 attachments: vec![],
             });

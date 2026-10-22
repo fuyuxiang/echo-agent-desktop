@@ -20,6 +20,7 @@ interface ExecutionProcessProps {
   messageId?: string;
   parts: MessagePart[];
   active: boolean;
+  autoExpand?: boolean;
   startedAt?: number;
   completedAt?: number;
   stopReason?: string;
@@ -125,6 +126,7 @@ export function ExecutionProcess({
   messageId,
   parts,
   active,
+  autoExpand = true,
   startedAt,
   completedAt,
   stopReason,
@@ -161,7 +163,7 @@ export function ExecutionProcess({
     && knowledgeTrace?.personal?.state !== "searching";
   // Show work while it is happening. Completed turns stay compact, including
   // tool-only and failed turns; their status remains visible in the header.
-  const shouldOpenAutomatically = active && !finalAnswerStarted;
+  const shouldOpenAutomatically = autoExpand && active && !finalAnswerStarted;
   const savedChoice = getExecutionDisclosureChoice(sessionId, messageId);
   const [open, setOpen] = useState(savedChoice ?? shouldOpenAutomatically);
   const [now, setNow] = useState(() => Date.now());

@@ -55,7 +55,7 @@ Object.assign(window, { __TAURI_EVENT_PLUGIN_INTERNALS__: { unregisterListener: 
       if (args.action === "add") group.members.push({id:crypto.randomUUID(), name:args.expert, expert:args.expert, role:`${args.expert}负责专业分析和交付`, modelId:"local/mock", sessionId:null, discussionSessionId:null, generation:0});
       const member = group.members.find(member => member.id === args.memberId);
       if (member && args.action === "remove") member.removed = true;
-      if (member && args.action === "refresh") member.generation++;
+      if (member && ["refresh", "clear_memory"].includes(args.action)) { member.sessionId = null; member.discussionSessionId = null; if (args.action === "clear_memory") member.generation++; }
       changed(group); return;
     }
     if (command === "group_decision") {
@@ -97,13 +97,18 @@ Object.assign(window, { __TAURI_EVENT_PLUGIN_INTERNALS__: { unregisterListener: 
       if (failNextSend) { failNextSend = false; throw new Error("隔离验收：暂时无法保存，请重试"); }
       const group = groups.find(group => group.id === args.groupId)!;
       if (group.messages.some(message => message.id === args.input.id)) return;
-      group.messages.push({ id: args.input.id, seq: group.messages.length + 1, kind: "user", text: args.input.text, createdAt: Date.now(), memberId: null, workId: null, replyTo: args.input.replyTo, attachments: args.input.attachments, toolCalls: [] });
-      for (const memberId of args.input.memberIds.length ? args.input.memberIds : [group.coordinatorId]) group.works.push({ id: crypto.randomUUID(), rootId: args.input.id, parentId: null, continuationOf: null, memberId, prompt: args.input.text, status: "running", discussion: args.input.discussion, sessionId: group.members.find(member => member.id === memberId)?.sessionId ?? null, output: "", error: null, createdAt: Date.now(), tokens: 0 });
+      const targets=args.input.memberIds.length ? args.input.memberIds : [group.coordinatorId];
+      const roots=[...new Set(group.works.filter(work => !["completed","failed","cancelled","stopping","uncertain"].includes(work.status) && work.discussion === args.input.discussion && targets.includes(work.memberId)).map(work => work.rootId))];
+      const quote=group.messages.find(message => message.id === args.input.replyTo);
+      const quoteRoot=quote?.requestId ?? group.works.find(work => work.id === quote?.workId)?.rootId ?? (group.works.some(work => work.rootId === quote?.id) ? quote?.id : undefined);
+      const requestId=targets.length === 1 && roots.length === 1 && (!args.input.replyTo || quoteRoot === roots[0]) ? roots[0] : undefined;
+      group.messages.push({ id: args.input.id, seq: group.messages.length + 1, kind: "user", text: args.input.text, createdAt: Date.now(), memberId: null, workId: null, replyTo: args.input.replyTo, attachments: args.input.attachments, toolCalls: [],requestId,memberIds:targets });
+      if (!requestId) for (const memberId of targets) group.works.push({ id: crypto.randomUUID(), rootId: args.input.id, parentId: null, continuationOf: null, memberId, prompt: args.input.text, status: "running", discussion: args.input.discussion, sessionId: group.members.find(member => member.id === memberId)?.sessionId ?? null, output: "", error: null, createdAt: Date.now(), tokens: 0 });
       changed(group); return;
     }
     if (command === "group_control") {
       const group = groups.find(group => group.id === args.groupId)!;
-      if (args.action === "stop") { group.paused = !args.workId; for (const work of group.works) if (!args.workId || work.id === args.workId) work.status = "cancelled"; }
+      if (args.action === "stop") { group.paused = !args.workId; for (const work of group.works) if ((!args.workId || work.id === args.workId) && !["completed", "failed", "cancelled"].includes(work.status)) work.status = "cancelled"; }
       if (args.action === "retry") {
         const original = group.works.find(work => work.id === args.workId)!;
         const root = crypto.randomUUID();
@@ -152,8 +157,7 @@ Object.assign(window, { __TAURI_EVENT_PLUGIN_INTERNALS__: { unregisterListener: 
     const group = groups.find(group => group.id === useGroupStore.getState().currentId)!;
     for (const work of group.works.filter(work => work.status === "running")) {
       work.status = "completed"; work.output = "已完成需求分析与交付检查。\n\n- 审批通过前允许撤回\n- 需要补充边界验收\n- 交付物已整理"; work.tokens = 180;
-      group.messages.push({ id: crypto.randomUUID(), seq: group.messages.length + 1, kind: "activity", text:"", memberId:work.memberId, workId:work.id, replyTo:null, attachments:[], createdAt:Date.now(), toolCalls:[{toolCallId:"read-requirements",title:"读取需求说明",kind:"read",status:"completed",rawInput:{file_path:"/review/需求说明.md"},content:[{type:"content",content:{type:"text",text:"读取需求说明成功"}}]}] });
-      group.messages.push({ id: crypto.randomUUID(), seq: group.messages.length + 1, kind: "assistant", text: work.output, memberId: work.memberId, workId: work.id, replyTo: null, attachments: [], toolCalls: [], createdAt: Date.now() });
+      group.messages.push({ id: crypto.randomUUID(), seq: group.messages.length + 1, kind: "assistant", text:work.output, memberId:work.memberId, workId:work.id, replyTo:null, attachments:[], createdAt:Date.now(), toolCalls:[{toolCallId:"read-requirements",title:"读取需求说明",kind:"read",status:"completed",rawInput:{file_path:"/review/需求说明.md"},content:[{type:"content",content:{type:"text",text:"读取需求说明成功"}}]}] });
     }
     changed(group);
   },

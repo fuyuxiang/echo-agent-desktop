@@ -20,6 +20,41 @@ pub async fn group_member_change(
     if snapshot.works.iter().any(|w| !w.terminal()) {
         return Err("请完成或停止当前工作后调整成员".into());
     }
+    if action == "clear_memory" {
+        let member = snapshot
+            .members
+            .iter()
+            .find(|m| Some(&m.id) == member_id.as_ref() && !m.removed)
+            .ok_or("成员不存在")?;
+        let tx = state.tx.lock().unwrap().clone();
+        if let Some(tx) = tx {
+            // Include retired contexts from earlier model/profile changes.
+            for sid in db()?.sessions(&group_id)? {
+                if !db()?
+                    .owner(&sid)?
+                    .as_ref()
+                    .is_some_and(|(_, owner)| owner == &member.id)
+                {
+                    continue;
+                }
+                crate::ext::call_ext::<Value>(
+                    &tx,
+                    "echo.agent/session/close",
+                    crate::ext::raw_params(&json!({"sessionId":sid})),
+                )
+                .await
+                .map_err(|e| format!("关闭成员旧上下文失败，尚未清除记忆：{e}"))?;
+            }
+        }
+        let result = reset_member_memory(
+            db()?,
+            &crate::paths::echo_agent_home_dir(),
+            &group_id,
+            &member.id,
+        );
+        changed(&group_id);
+        return result;
+    }
     let definition = if matches!(action.as_str(), "add" | "refresh") {
         let expert = expert
             .or_else(|| {
@@ -36,14 +71,24 @@ pub async fn group_member_change(
             .ok_or("本地专家已不存在，请先恢复专家配置")?;
         let mut parsed =
             echo_agent_core::AgentDefinition::parse(&entry.raw).map_err(|e| e.to_string())?;
-        let model = match &parsed.model {
-            echo_agent_core::config::ModelOverride::Override(m) => m.clone(),
-            _ => snapshot
+        let model = if action == "refresh" {
+            snapshot
                 .members
                 .iter()
                 .find(|m| Some(&m.id) == member_id.as_ref())
-                .map(|m| m.model_id.clone())
-                .unwrap_or_else(|| snapshot.members[0].model_id.clone()),
+                .ok_or("成员不存在")?
+                .model_id
+                .clone()
+        } else {
+            match &parsed.model {
+                echo_agent_core::config::ModelOverride::Override(m) => m.clone(),
+                _ => snapshot
+                    .members
+                    .iter()
+                    .find(|m| Some(&m.id) == member_id.as_ref())
+                    .map(|m| m.model_id.clone())
+                    .unwrap_or_else(|| snapshot.members[0].model_id.clone()),
+            }
         };
         crate::commands::require_runtime_ready(Some(&app), &state, Some(&model))?;
         crate::policy::require_model(&model)?;
@@ -89,6 +134,7 @@ pub async fn group_member_change(
                     seen_seq: 0,
                     discussion_seen_seq: 0,
                     generation: 0,
+                    history_start_seq: 0,
                     removed: false,
                 });
             }
@@ -112,11 +158,8 @@ pub async fn group_member_change(
                     .ok_or("成员不存在")?;
                 member.profile = profile;
                 member.model_id = model;
-                member.session_id = None;
-                member.discussion_session_id = None;
-                member.seen_seq = 0;
-                member.discussion_seen_seq = 0;
-                member.generation += 1;
+                member.reset_context(false);
+                // A definition refresh retires the context, not its memory.
             }
             _ => return Err("不支持的成员操作".into()),
         }
@@ -124,6 +167,67 @@ pub async fn group_member_change(
     })?;
     changed(&group_id);
     Ok(())
+}
+
+pub(super) fn reset_member_memory(
+    store: &Store,
+    home: &std::path::Path,
+    group: &str,
+    member: &str,
+) -> Result<(), String> {
+    member_memory_target(home, group, member)?;
+    // Advance the recall fence durably before deleting files. A database error
+    // leaves the old namespace intact; a cleanup error can never restore it.
+    store.update(group, |g| {
+        if g.works.iter().any(|w| !w.terminal()) {
+            return Err("成员正在工作，请稍后清除记忆".into());
+        }
+        let cutoff = g.messages.last().map_or(0, |m| m.seq);
+        let member = g
+            .members
+            .iter_mut()
+            .find(|m| m.id == member && !m.removed)
+            .ok_or("成员不存在")?;
+        member.history_start_seq = cutoff;
+        member.reset_context(true);
+        Ok(())
+    })?;
+    remove_member_memory(home, group, member)
+        .map_err(|error| format!("已重建上下文并隔离旧记忆，但旧文件清理失败，请重试：{error}"))?;
+    Ok(())
+}
+pub(super) fn remove_member_memory(
+    home: &std::path::Path,
+    group: &str,
+    member: &str,
+) -> Result<(), String> {
+    if let Some(target) = member_memory_target(home, group, member)? {
+        std::fs::remove_dir_all(target).map_err(|e| format!("成员记忆清理失败，可重试：{e}"))?;
+    }
+    Ok(())
+}
+fn member_memory_target(
+    home: &std::path::Path,
+    group: &str,
+    member: &str,
+) -> Result<Option<std::path::PathBuf>, String> {
+    let valid = |s: &str| {
+        !s.is_empty() && s.len() <= 64 && s.bytes().all(|c| c.is_ascii_alphanumeric() || c == b'-')
+    };
+    if !valid(group) || !valid(member) {
+        return Err("成员记忆标识无效".into());
+    }
+    let root = home.join("group-memory");
+    let group = root.join(group);
+    let target = group.join(member);
+    for path in [&root, &group, &target] {
+        match std::fs::symlink_metadata(path) {
+            Ok(meta) if meta.is_dir() && !meta.file_type().is_symlink() => {}
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+            _ => return Err("成员记忆目录无效，尚未清除，请检查后重试".into()),
+        }
+    }
+    Ok(Some(target))
 }
 
 #[derive(Clone, Serialize, Deserialize)]

@@ -6,7 +6,7 @@
 
 use agent_client_protocol as acp;
 
-use super::{ExtResult, parse_params};
+use super::{parse_params, ExtResult};
 use crate::agent::MvpAgent;
 use crate::session::SessionCommand;
 
@@ -17,6 +17,9 @@ struct InterjectRequest {
     text: String,
     #[serde(default)]
     interjection_id: Option<String>,
+    /// Host-managed work must never fall back to a separate, untracked turn.
+    #[serde(default)]
+    expected_prompt_id: Option<String>,
     /// Optional structured blocks (text + images) from image-capable
     /// clients; absent = legacy text-only wire shape (empty after default).
     #[serde(default)]
@@ -51,11 +54,12 @@ pub async fn handle(agent: &MvpAgent, args: &acp::ExtRequest) -> ExtResult {
     };
 
     let (text_override, images) = split_content(req.content);
-    let _ = session.cmd_tx.send(SessionCommand::Interject {
+    session.cmd_tx.send(SessionCommand::Interject {
         text: text_override.unwrap_or(req.text),
         id: req.interjection_id,
         images,
-    });
+        expected_prompt_id: req.expected_prompt_id,
+    }).map_err(|_| acp::Error::internal_error().data("session interjection channel closed"))?;
 
     super::to_ext_response(Ok(serde_json::json!({
         "status": "queued",

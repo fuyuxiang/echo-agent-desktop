@@ -811,7 +811,7 @@ fn read_image_attachment(path: &Path) -> Result<Vec<u8>> {
 /// Build a typed ACP prompt. `displayText` and the original attachment paths
 /// live in content metadata so history replay can restore the exact user-facing
 /// bubble without exposing injected project/expert context.
-fn build_prompt_blocks(
+pub(crate) fn build_prompt_blocks(
     text: &str,
     attachments: &[String],
     display_text: Option<&str>,

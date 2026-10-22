@@ -54,6 +54,10 @@ try {
     assert.match(await composer.inputValue(), /请评审/);
     await page.getByRole("button", { name: "发送", exact: true }).click();
     await page.locator(".group-chat__header").getByText("1 人工作中", { exact: true }).waitFor();
+    await composer.fill("@代码专家 更正：请保留现有授权边界");
+    await page.getByRole("button", { name: "发送", exact: true }).click();
+    await page.getByText(/^补充原请求：/).waitFor();
+    assert.equal(await page.evaluate(() => JSON.parse(sessionStorage.getItem("group-review"))[0].works.length),1,"a running-task correction must not create another task");
     await page.evaluate(() => window.groupReview.history());
     await page.waitForFunction(() => document.querySelectorAll(".group-message--reference").length >= 40);
     await page.evaluate(() => window.groupReview.permission());
@@ -70,9 +74,10 @@ try {
     await page.locator(".group-chat__header").getByText("1 人工作中", { exact: true }).waitFor();
     await page.evaluate(() => window.groupReview.complete());
     await page.getByText("已完成需求分析与交付检查。", { exact: true }).waitFor();
-    const processHeader = page.locator(".group-message--activity .execution-process__header");
+    assert.equal(await page.locator(".group-message--assistant").count(), 1, "one expert turn must contain its answer and tool activity");
+    const processHeader = page.locator(".group-message--assistant .execution-process__header");
     if (await processHeader.getAttribute("aria-expanded") === "false") await processHeader.click();
-    await page.locator(".group-message--activity button.toolcall").click();
+    await page.locator(".group-message--assistant button.toolcall").click();
     await page.locator(".group-tool-detail").getByText("读取需求说明成功", { exact: true }).waitFor();
     await page.getByRole("button", { name: "返回专家团详情", exact: true }).click();
     if (width === 420) await page.getByRole("button", { name: "专家团详情", exact: true }).click();
@@ -98,6 +103,13 @@ try {
     await page.getByLabel("添加本地专家", { exact: true }).selectOption({ label: "业务分析师" });
     await page.getByRole("button", { name: "添加成员", exact: true }).click();
     await page.locator(".group-member__head strong").filter({ hasText: "业务分析师" }).waitFor();
+    const memoryRow = page.locator(".group-member-management").filter({ hasText: "代码专家" }).filter({ has: page.getByRole("button", { name: "清除成员记忆", exact: true }) });
+    await memoryRow.getByRole("button", { name: "清除成员记忆", exact: true }).click();
+    await page.getByRole("alertdialog").getByRole("button", { name: "清除成员记忆", exact: true }).click();
+    await page.getByRole("alertdialog").waitFor({ state: "detached" });
+    assert.equal(await page.evaluate(() => JSON.parse(sessionStorage.getItem("group-review"))[0].members.find(member => member.name === "代码专家").generation), 1);
+    await page.getByText("已完成需求分析与交付检查。", { exact: true }).waitFor();
+    await page.getByText("已由你确认", { exact: true }).waitFor();
     await page.getByRole("button", { name: "保存为模板", exact: true }).click();
     await page.getByRole("textbox", { name: "模板名称", exact: true }).fill("审批专家编组");
     await page.getByRole("button", { name: "保存模板", exact: true }).click();
@@ -147,4 +159,4 @@ try {
     await page.close();
   }
   console.log(`Group UI passed: team reuse, member management, confirmed decisions, settings, create, Chinese @member, save failure/retry, native interaction card, member reply, stop/resume, persistent drafts, reload, light/dark and narrow/wide layouts. Screenshots: ${output}`);
-} finally { await browser?.close(); await server.close(); }
+} catch (error) { console.error(error); throw error; } finally { await browser?.close(); await server.close(); }

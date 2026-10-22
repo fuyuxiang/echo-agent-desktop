@@ -26,6 +26,135 @@ impl Store {
         c.execute_batch("CREATE TABLE IF NOT EXISTS team_templates(id TEXT PRIMARY KEY,name TEXT NOT NULL,data TEXT NOT NULL);").map_err(|e|e.to_string())?;
         c.execute_batch("PRAGMA journal_mode=WAL; CREATE TABLE IF NOT EXISTS groups(id TEXT PRIMARY KEY, data TEXT NOT NULL, updated INTEGER NOT NULL); CREATE TABLE IF NOT EXISTS members(session_id TEXT PRIMARY KEY, group_id TEXT NOT NULL, member_id TEXT NOT NULL); CREATE TABLE IF NOT EXISTS messages(id TEXT PRIMARY KEY, group_id TEXT NOT NULL, seq INTEGER NOT NULL, data TEXT NOT NULL, UNIQUE(group_id,seq)); CREATE INDEX IF NOT EXISTS message_group ON messages(group_id,seq); CREATE TABLE IF NOT EXISTS work_items(id TEXT PRIMARY KEY, group_id TEXT NOT NULL, data TEXT NOT NULL); CREATE INDEX IF NOT EXISTS work_group ON work_items(group_id); PRAGMA user_version=1;").map_err(|e| e.to_string())?;
         c.execute_batch("CREATE TABLE IF NOT EXISTS group_cleanup(group_id TEXT PRIMARY KEY, session_ids TEXT NOT NULL); CREATE TABLE IF NOT EXISTS group_previews(id TEXT PRIMARY KEY, data TEXT NOT NULL, updated INTEGER NOT NULL); CREATE INDEX IF NOT EXISTS group_preview_updated ON group_previews(updated DESC,id DESC);").map_err(|e| e.to_string())?;
+        c.execute_batch("CREATE TABLE IF NOT EXISTS group_migrations(name TEXT PRIMARY KEY); CREATE TABLE IF NOT EXISTS group_migration_backups(migration TEXT NOT NULL, group_id TEXT NOT NULL, data TEXT NOT NULL, PRIMARY KEY(migration,group_id));")
+            .map_err(|e| e.to_string())?;
+        // One transaction repairs public history, results and derived prompts.
+        // Never replay historical model calls while migrating existing data.
+        c.execute_batch("BEGIN IMMEDIATE")
+            .map_err(|e| e.to_string())?;
+        let migrate = (|| -> Result<(), String> {
+            let done: bool = c
+                .query_row(
+                    "SELECT EXISTS(SELECT 1 FROM group_migrations WHERE name='public-text-v2')",
+                    [],
+                    |r| r.get(0),
+                )
+                .map_err(|e| e.to_string())?;
+            if !done {
+                let ids = c
+                    .prepare("SELECT id FROM groups")
+                    .map_err(|e| e.to_string())?
+                    .query_map([], |r| r.get::<_, String>(0))
+                    .map_err(|e| e.to_string())?
+                    .collect::<Result<Vec<_>, _>>()
+                    .map_err(|e| e.to_string())?;
+                for id in ids {
+                    let mut group = Self::read(&c, &id)?;
+                    // Keep a private, recoverable pre-migration snapshot. It is
+                    // never used for history, search, prompts or public reads.
+                    c.execute("INSERT OR IGNORE INTO group_migration_backups VALUES('public-text-v2',?1,?2)",params![id,serde_json::to_string(&group).map_err(|e|e.to_string())?]).map_err(|e|e.to_string())?;
+                    let user_literals = group
+                        .messages
+                        .iter()
+                        .filter(|m| m.kind == "user")
+                        .map(|m| {
+                            (
+                                m.request_id.clone().unwrap_or_else(|| m.id.clone()),
+                                m.text.clone(),
+                            )
+                        })
+                        .fold(
+                            std::collections::HashMap::<String, Vec<String>>::new(),
+                            |mut map, (root, text)| {
+                                map.entry(root).or_default().push(text);
+                                map
+                            },
+                        );
+                    let mut filters = std::collections::HashMap::<
+                        String,
+                        (echo_agent_memory::text_utils::PublicText, usize),
+                    >::new();
+                    for (index, message) in group.messages.iter_mut().enumerate() {
+                        if matches!(message.kind.as_str(), "assistant" | "activity" | "handoff") {
+                            let (filter, last) = filters
+                                .entry(
+                                    message
+                                        .work_id
+                                        .clone()
+                                        .unwrap_or_else(|| message.id.clone()),
+                                )
+                                .or_default();
+                            message.text = filter.push(&message.text);
+                            *last = index;
+                        }
+                    }
+                    for (_, (mut filter, last)) in filters {
+                        group.messages[last].text.push_str(&filter.finish());
+                    }
+                    for work in &mut group.works {
+                        work.output =
+                            echo_agent_memory::text_utils::strip_reasoning_blocks(&work.output);
+                        if let Some(literals) = user_literals.get(&work.root_id) {
+                            let mut masked = String::new();
+                            let mut replacements = vec![];
+                            let mut cursor = 0;
+                            let mut literals = literals
+                                .iter()
+                                .filter(|text| !text.is_empty())
+                                .collect::<Vec<_>>();
+                            literals.sort_by_key(|text| std::cmp::Reverse(text.len()));
+                            // Search the original string, never another marker:
+                            // very short user literals must not rewrite markers.
+                            while let Some((offset, literal)) = literals
+                                .iter()
+                                .filter_map(|text| {
+                                    work.prompt[cursor..]
+                                        .find(text.as_str())
+                                        .map(|offset| (offset, *text))
+                                })
+                                .min_by_key(|(offset, text)| {
+                                    (*offset, std::cmp::Reverse(text.len()))
+                                })
+                            {
+                                let start = cursor + offset;
+                                masked.push_str(&work.prompt[cursor..start]);
+                                let marker = format!("\u{e000}{}\u{e001}", super::id());
+                                masked.push_str(&marker);
+                                replacements.push((marker, literal));
+                                cursor = start + literal.len();
+                            }
+                            masked.push_str(&work.prompt[cursor..]);
+                            masked = echo_agent_memory::text_utils::strip_reasoning_blocks(&masked);
+                            for (marker, literal) in replacements {
+                                masked = masked.replace(&marker, literal);
+                            }
+                            work.prompt = masked;
+                        } else {
+                            work.prompt =
+                                echo_agent_memory::text_utils::strip_reasoning_blocks(&work.prompt);
+                        }
+                    }
+                    for decision in &mut group.decisions {
+                        // Human-confirmed content and its audit trail are user
+                        // records, including literal XML and reasoning tags.
+                        if !decision.confirmed {
+                            decision.text = echo_agent_memory::text_utils::strip_reasoning_blocks(
+                                &decision.text,
+                            );
+                        }
+                    }
+                    Self::write(&c, &group, None)?;
+                }
+                c.execute("INSERT INTO group_migrations VALUES('public-text-v2')", [])
+                    .map_err(|e| e.to_string())?;
+            }
+            Ok(())
+        })();
+        if let Err(error) = migrate {
+            let _ = c.execute_batch("ROLLBACK");
+            return Err(error);
+        }
+        c.execute_batch("COMMIT").map_err(|e| e.to_string())?;
         let missing = {
             let mut query = c
                 .prepare("SELECT data FROM groups WHERE id NOT IN (SELECT id FROM group_previews)")
@@ -371,7 +500,13 @@ impl Store {
         .map_err(|e| e.to_string())?;
         tx.execute("DELETE FROM group_previews WHERE id=?", [id])
             .map_err(|e| e.to_string())?;
-        for table in ["messages", "work_items", "members", "group_deletions"] {
+        for table in [
+            "messages",
+            "work_items",
+            "members",
+            "group_deletions",
+            "group_migration_backups",
+        ] {
             tx.execute(&format!("DELETE FROM {table} WHERE group_id=?"), [id])
                 .map_err(|e| e.to_string())?;
         }
