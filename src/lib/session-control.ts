@@ -79,3 +79,15 @@ export function isControlledSessionStatus(status: SessionStatus | undefined): bo
     || status === "stopping"
     || status === "stopped";
 }
+
+export function continuationPrompt(category?: string): string {
+  return category === "PermissionRejected" || category === "PermissionCancelled"
+    ? "请在原有授权范围和用户约束内继续未完成的任务，保留已完成成果。刚才被拒绝或取消的操作仍然禁止，不得通过其他工具、目标或等价操作绕过。先检查允许范围内的替代方案；没有可行方案时明确说明阻塞。"
+    : "请继续。";
+}
+
+export function stoppedTaskLabel(category?: string): string {
+  if (category === "PermissionRejected") return "操作未获批准，任务已停止；已有成果保留";
+  if (category === "PermissionCancelled") return "权限请求已取消，任务已停止；已有成果保留";
+  return "已停止（发送新消息可继续此任务）";
+}

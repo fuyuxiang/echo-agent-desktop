@@ -2384,6 +2384,11 @@ impl SessionActor {
         let mut turn_span_totals = TurnSpanTotals::default();
         let mut model_fingerprint: Option<String> = None;
         let mut structured_output_retries: u32 = 0;
+        let desktop_json = self
+            .tool_bridge_handle()
+            .read_resource::<super::desktop_delivery::DesktopDelivery>()
+            .await
+            .and_then(|d| d.json_shape);
         let mut media_gen_resamples: u32 = 0;
         let structured_output_validator = json_schema.as_ref().map(|schema| {
             jsonschema::validator_for(schema).map_err(|e| format!("invalid output schema: {e}"))
@@ -2939,7 +2944,8 @@ impl SessionActor {
             let turn_refused =
                 stop_reason == Some(echo_agent_sampling_types::StopReason::ContentFilter);
             let refusal_explanation = response.stop_message.clone();
-            let final_answer_text = json_schema.is_some().then(|| response.assistant_text());
+            let final_answer_text = (json_schema.is_some() || desktop_json.is_some())
+                .then(|| response.assistant_text());
             let usage_reported = response.usage.is_some();
             self.record_response_items(response.items, usage_reported)
                 .await;
@@ -2979,6 +2985,21 @@ impl SessionActor {
             self.send_buffered_echo_agent_update(response_completed)
                 .await;
             if tool_calls.is_empty() {
+                if json_schema.is_none()
+                    && !turn_refused
+                    && let Some(shape) = desktop_json.as_deref()
+                    && !super::desktop_delivery::valid_json(
+                        final_answer_text.as_deref().unwrap_or(""),
+                        shape,
+                    )
+                {
+                    if structured_output_retries >= 2 {
+                        return Err(acp::Error::internal_error().data("最终答复未满足用户明确要求的 JSON 格式；已保留本轮成果，请在当前任务重试。"));
+                    }
+                    structured_output_retries += 1;
+                    self.push_system_reminder(&format!("The user explicitly requires JSON-only final output with root type {shape}. Your last final response was not valid for that requirement. Return only the requested JSON, with no Markdown fences, introduction or explanation. Preserve the requested schema and source facts. Do not repeat completed tools."));
+                    continue;
+                }
                 if !schema_ok
                     && !turn_refused
                     && let Some(gate_cfg) = self.todo_gate_policy()

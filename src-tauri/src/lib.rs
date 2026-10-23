@@ -21,6 +21,9 @@ mod commands;
 mod desktop_preferences;
 mod desktop_validation;
 mod document_export;
+#[cfg(test)]
+#[path = "../../vendor/echo-agent-build/crates/codegen/echo-agent-runtime/src/session/acp_session_impl/desktop_delivery.rs"]
+mod desktop_delivery_tests;
 mod expert_avatar;
 mod ext;
 mod groups;

@@ -13,12 +13,25 @@ const MAX_MARKDOWN_BYTES: usize = 2 * 1024 * 1024;
 const MAX_OUTPUT_BYTES: u64 = 50 * 1024 * 1024;
 const EXPORT_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(120);
 
+#[derive(Clone, Copy)]
+enum OutputPolicy<'a> {
+    Replace,
+    Create {
+        identity: Option<(&'a str, &'a str)>,
+    },
+}
+
 #[derive(Debug, Clone, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct DocumentExportRequest {
     pub(crate) title: String,
+    #[serde(default)]
     pub(crate) markdown: String,
     pub(crate) format: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(crate) workbook: Option<serde_json::Value>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(crate) slides: Option<serde_json::Value>,
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize)]
@@ -35,7 +48,7 @@ fn valid_format(format: &str) -> bool {
 }
 
 pub(crate) fn safe_file_title(title: &str) -> String {
-    let name: String = title
+    let mut name: String = title
         .chars()
         .map(|character| match character {
             '/' | '\\' | ':' | '*' | '?' | '"' | '<' | '>' | '|' => '-',
@@ -44,6 +57,11 @@ pub(crate) fn safe_file_title(title: &str) -> String {
         })
         .take(80)
         .collect();
+    // Leave room for the UUID and extension on filesystems with a 255-byte
+    // filename limit, including Chinese and other multibyte titles.
+    while name.len() > 200 {
+        name.pop();
+    }
     let name = name.trim().trim_end_matches(['.', ' ']);
     if name.is_empty() {
         "办公文档".to_string()
@@ -149,7 +167,7 @@ pub(crate) fn validate_output(path: &Path, format: &str) -> Result<(u64, String)
     Ok((metadata.len(), format!("{:x}", hasher.finalize())))
 }
 
-fn install_output(source: &Path, destination: &Path) -> Result<(), String> {
+fn install_output(source: &Path, destination: &Path, overwrite: bool) -> Result<(), String> {
     let parent = destination.parent().ok_or("无效的保存目录")?;
     let stage = tempfile::Builder::new()
         .prefix(".echo-office-stage-")
@@ -160,6 +178,12 @@ fn install_output(source: &Path, destination: &Path) -> Result<(), String> {
         .as_file()
         .sync_all()
         .map_err(|error| format!("无法同步文档临时文件：{error}"))?;
+    if !overwrite {
+        stage
+            .persist_noclobber(destination)
+            .map_err(|e| format!("目标文件已存在或无法保存，原文件保持：{}", e.error))?;
+        return Ok(());
+    }
     let (stage_file, stage_path) = stage.keep().map_err(|error| error.error.to_string())?;
     drop(stage_file);
     let backup = parent.join(format!(".echo-office-backup-{}", uuid::Uuid::now_v7()));
@@ -254,17 +278,37 @@ async fn export_for_session(
     if destination.extension().is_none() {
         destination.set_extension(&request.format);
     }
-    export_to_path_for_session(app, request, &destination, session_id)
-        .await
-        .map(Some)
+    export_to_path_for_session(
+        app,
+        request,
+        &destination,
+        session_id,
+        OutputPolicy::Replace,
+    )
+    .await
+    .map(Some)
 }
 
 pub(crate) fn validate_request(request: &DocumentExportRequest) -> Result<(), String> {
     if !valid_format(&request.format) {
         return Err("不支持的导出格式".into());
     }
-    if request.markdown.trim().is_empty() || request.markdown.len() > MAX_MARKDOWN_BYTES {
+    let structured = request.workbook.is_some() || request.slides.is_some();
+    if (request.markdown.trim().is_empty() && !structured)
+        || serde_json::to_vec(request)
+            .map_err(|e| e.to_string())?
+            .len()
+            > MAX_MARKDOWN_BYTES
+    {
         return Err("文档内容为空或超过 2 MiB 上限".into());
+    }
+    if (request.workbook.is_some() && request.format != "xlsx")
+        || (request.slides.is_some() && request.format != "pptx")
+        || (structured && !request.markdown.trim().is_empty())
+    {
+        return Err(
+            "workbook 仅用于 xlsx，slides 仅用于 pptx；结构化内容与 markdown 只能选择一种".into(),
+        );
     }
     if request.title.chars().count() > 160 {
         return Err("文档标题过长".into());
@@ -272,12 +316,23 @@ pub(crate) fn validate_request(request: &DocumentExportRequest) -> Result<(), St
     Ok(())
 }
 
-pub(crate) async fn export_to_path(
+/// Agent creation never overwrites a destination. Identical retries are
+/// recognized by request digest and verified receipt in office_mcp.
+pub(crate) async fn create_for_session(
     app: &AppHandle,
     request: DocumentExportRequest,
     destination: &Path,
+    session: &str,
+    identity: Option<(&str, &str)>,
 ) -> Result<DocumentExportReceipt, String> {
-    export_to_path_for_session(app, request, destination, None).await
+    export_to_path_for_session(
+        app,
+        request,
+        destination,
+        Some(session),
+        OutputPolicy::Create { identity },
+    )
+    .await
 }
 
 async fn export_to_path_for_session(
@@ -285,6 +340,7 @@ async fn export_to_path_for_session(
     request: DocumentExportRequest,
     destination: &Path,
     session_id: Option<&str>,
+    policy: OutputPolicy<'_>,
 ) -> Result<DocumentExportReceipt, String> {
     validate_request(&request)?;
     if !destination
@@ -305,7 +361,13 @@ async fn export_to_path_for_session(
     } else {
         destination
     };
-    let temp = tempfile::tempdir().map_err(|error| format!("无法创建文档临时目录：{error}"))?;
+    let temp = match policy {
+        OutputPolicy::Create { .. } => tempfile::Builder::new()
+            .prefix(".echo-office-")
+            .tempdir_in(destination.parent().ok_or("无效的保存目录")?),
+        OutputPolicy::Replace => tempfile::tempdir(),
+    }
+    .map_err(|error| format!("无法创建文档临时目录：{error}"))?;
     let output = temp.path().join(format!("output.{}", request.format));
     generate(app, &request, &output).await?;
     let (byte_size, sha256) = validate_output(&output, &request.format)?;
@@ -320,8 +382,18 @@ async fn export_to_path_for_session(
     // by verifying its hash against the installed file after restart.
     if let Some(session) = session_id {
         crate::session_artifacts::stage(session, receipt.clone(), &request.title)?;
+        if let OutputPolicy::Create {
+            identity: Some((key, digest)),
+        } = policy
+        {
+            crate::session_artifacts::identify_creation(session, &receipt.path, key, digest)?;
+        }
     }
-    install_output(&output, destination)?;
+    install_output(
+        &output,
+        destination,
+        matches!(policy, OutputPolicy::Replace),
+    )?;
     if let Some(session) = session_id {
         if let Err(error) =
             crate::session_artifacts::record(session, receipt.clone(), &request.title)
@@ -360,6 +432,31 @@ pub async fn document_export(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn generated_filenames_fit_multibyte_filesystem_limits() {
+        for title in ["季度经营分析".repeat(30), "😀".repeat(160), "a".repeat(160)] {
+            let title = safe_file_title(&title);
+            assert!(!title.is_empty());
+            assert!(format!("{title}-{}.pptx", uuid::Uuid::now_v7().simple()).len() <= 255);
+        }
+    }
+
+    #[test]
+    fn creation_never_overwrites_an_existing_output_and_cleans_staging_files() {
+        let dir = tempfile::tempdir().unwrap();
+        let source = dir.path().join("new.pdf");
+        let destination = dir.path().join("report.pdf");
+        std::fs::write(&source, b"new document").unwrap();
+        std::fs::write(&destination, b"original document").unwrap();
+        assert!(install_output(&source, &destination, false).is_err());
+        assert_eq!(std::fs::read(&destination).unwrap(), b"original document");
+        assert_eq!(std::fs::read_dir(dir.path()).unwrap().count(), 2);
+        std::fs::remove_file(&destination).unwrap();
+        install_output(&source, &destination, false).unwrap();
+        assert_eq!(std::fs::read(&destination).unwrap(), b"new document");
+        assert_eq!(std::fs::read_dir(dir.path()).unwrap().count(), 2);
+    }
 
     #[test]
     fn pdf_receipt_hash_covers_the_header_and_entire_file() {

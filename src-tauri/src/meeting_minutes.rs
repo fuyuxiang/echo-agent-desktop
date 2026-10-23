@@ -1307,6 +1307,8 @@ pub async fn meeting_export(
                 title: format!("{}-会议纪要", record.title),
                 markdown,
                 format: format.to_string(),
+                workbook: None,
+                slides: None,
             },
         )
         .await?;

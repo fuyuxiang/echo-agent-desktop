@@ -40,6 +40,9 @@ importers:
       exceljs:
         specifier: ^4.4.0
         version: 4.4.0
+      jszip:
+        specifier: 3.10.2
+        version: 3.10.2
       katex:
         specifier: ^0.18.4
         version: 0.18.4

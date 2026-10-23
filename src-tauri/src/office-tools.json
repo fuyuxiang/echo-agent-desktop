@@ -1,0 +1,270 @@
+{
+  "tools": [
+    {
+      "name": "office_create",
+      "description": "Create real docx/pdf/xlsx/pptx using the bundled local generator; do not install Python or converters. Use markdown for basic exports, workbook for formulas/charts, or slides for an exact slide count (include the cover in the list). outputPath is relative to the task workspace, or an absolute path inside it; always honor the user's output directory/name. Never overwrites existing files. Reuse requestId for retries. Returns a verified file receipt, not proof of factual correctness. Formulas: arithmetic, comparisons, SUM/AVERAGE/MIN/MAX/COUNT/ROUND/IF/IFERROR, local/cross-sheet references. No external workbooks.",
+      "inputSchema": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "title": {
+            "type": "string",
+            "maxLength": 160
+          },
+          "format": {
+            "type": "string",
+            "enum": [
+              "docx",
+              "pdf",
+              "xlsx",
+              "pptx"
+            ]
+          },
+          "markdown": {
+            "type": "string",
+            "maxLength": 2097152
+          },
+          "outputPath": {
+            "type": "string",
+            "maxLength": 4096
+          },
+          "requestId": {
+            "type": "string",
+            "maxLength": 128
+          },
+          "workbook": {
+            "type": "object",
+            "required": [
+              "sheets"
+            ],
+            "properties": {
+              "sheets": {
+                "type": "array",
+                "minItems": 1,
+                "maxItems": 30,
+                "items": {
+                  "type": "object",
+                  "required": [
+                    "name",
+                    "rows"
+                  ],
+                  "properties": {
+                    "name": {
+                      "type": "string",
+                      "maxLength": 31
+                    },
+                    "rows": {
+                      "type": "array",
+                      "items": {
+                        "type": "array",
+                        "items": {
+                          "anyOf": [
+                            {
+                              "type": [
+                                "string",
+                                "number",
+                                "boolean",
+                                "null"
+                              ]
+                            },
+                            {
+                              "type": "object",
+                              "properties": {
+                                "formula": {
+                                  "type": "string"
+                                },
+                                "type": {
+                                  "enum": [
+                                    "text",
+                                    "date"
+                                  ]
+                                },
+                                "value": {
+                                  "type": "string"
+                                },
+                                "format": {
+                                  "type": "string"
+                                }
+                              }
+                            }
+                          ]
+                        }
+                      }
+                    },
+                    "widths": {
+                      "type": "array",
+                      "items": {
+                        "type": "number",
+                        "minimum": 4,
+                        "maximum": 100
+                      }
+                    },
+                    "formats": {
+                      "type": "array",
+                      "items": {
+                        "type": "string"
+                      }
+                    },
+                    "charts": {
+                      "type": "array",
+                      "maxItems": 8,
+                      "items": {
+                        "type": "object",
+                        "required": [
+                          "type",
+                          "categories",
+                          "series"
+                        ],
+                        "properties": {
+                          "type": {
+                            "enum": [
+                              "bar",
+                              "line"
+                            ]
+                          },
+                          "title": {
+                            "type": "string"
+                          },
+                          "categories": {
+                            "type": "string",
+                            "description": "Single row/column range, e.g. A2:A7"
+                          },
+                          "position": {
+                            "type": "string",
+                            "description": "Top-left cell, e.g. H2"
+                          },
+                          "series": {
+                            "type": "array",
+                            "items": {
+                              "type": "object",
+                              "required": [
+                                "name",
+                                "values"
+                              ],
+                              "properties": {
+                                "name": {
+                                  "type": "string"
+                                },
+                                "values": {
+                                  "type": "string",
+                                  "description": "Numeric range, e.g. B2:B7"
+                                }
+                              }
+                            }
+                          }
+                        }
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "slides": {
+            "type": "array",
+            "minItems": 1,
+            "maxItems": 100,
+            "items": {
+              "type": "object",
+              "required": [
+                "title"
+              ],
+              "properties": {
+                "title": {
+                  "type": "string",
+                  "maxLength": 50
+                },
+                "body": {
+                  "type": "string",
+                  "description": "At most 700 characters, or 180 with a table/chart"
+                },
+                "table": {
+                  "type": "array",
+                  "maxItems": 12,
+                  "items": {
+                    "type": "array",
+                    "maxItems": 8,
+                    "items": {
+                      "type": "string",
+                      "maxLength": 90
+                    }
+                  }
+                },
+                "chart": {
+                  "type": "object",
+                  "required": [
+                    "type",
+                    "categories",
+                    "series"
+                  ],
+                  "properties": {
+                    "type": {
+                      "enum": [
+                        "bar",
+                        "line"
+                      ]
+                    },
+                    "title": {
+                      "type": "string"
+                    },
+                    "categories": {
+                      "type": "array",
+                      "maxItems": 40,
+                      "items": {
+                        "type": "string"
+                      }
+                    },
+                    "series": {
+                      "type": "array",
+                      "minItems": 1,
+                      "maxItems": 8,
+                      "items": {
+                        "type": "object",
+                        "required": [
+                          "name",
+                          "values"
+                        ],
+                        "properties": {
+                          "name": {
+                            "type": "string"
+                          },
+                          "values": {
+                            "type": "array",
+                            "items": {
+                              "type": "number"
+                            }
+                          }
+                        }
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          }
+        },
+        "required": [
+          "title",
+          "format"
+        ],
+        "oneOf": [
+          {
+            "required": [
+              "markdown"
+            ]
+          },
+          {
+            "required": [
+              "workbook"
+            ]
+          },
+          {
+            "required": [
+              "slides"
+            ]
+          }
+        ]
+      }
+    }
+  ]
+}

@@ -959,7 +959,7 @@ fn tools_list_result() -> Value {
             "button":{"type":"string","enum":["left","right","middle"],"default":"left"}, "clickCount":{"type":"integer","minimum":1,"maximum":3,"default":1}
         }), &[])),
         tool("browser_hover", "Move the browser pointer over an element ref.", schema(json!({"elementRef":{"type":"string","maxLength":128}}), &["elementRef"])),
-        tool("browser_type", "Focus an input/contenteditable element and type text after confirmation. Password fields must be completed manually during user takeover; never pass credentials to this tool.", schema(json!({
+        tool("browser_type", "Fill an input/contenteditable after confirmation and verify its actual value and validity. Use complete ISO values for date (YYYY-MM-DD), time (HH:mm), datetime-local, month or week; replace=true is required for these and numeric fields. Unsupported, readonly and invalid fields return an error. After an error inspect a fresh snapshot rather than repeating the same input. Password fields require manual takeover.", schema(json!({
             "elementRef":{"type":"string","maxLength":128}, "text":{"type":"string","maxLength":65536}, "replace":{"type":"boolean","default":true}
         }), &["elementRef","text"])),
         tool("browser_select", "Select one or more values/text labels in a select element after user confirmation.", schema(json!({

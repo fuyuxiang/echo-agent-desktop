@@ -20,6 +20,10 @@ pub struct SessionExport {
     pub created_at: u64,
     #[serde(default)]
     pub pending: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub request_key: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub request_digest: Option<String>,
 }
 
 fn store_path(home: &Path, session: &str) -> Result<PathBuf, String> {
@@ -72,6 +76,11 @@ fn record_at(
     }
     // Staging must preserve the prior published receipt until installation
     // succeeds. Promotion removes only older versions of the same output.
+    let identity = entries
+        .iter()
+        .find(|e| e.receipt.path == receipt.path && e.receipt.sha256 == receipt.sha256)
+        .map(|e| (e.request_key.clone(), e.request_digest.clone()))
+        .unwrap_or_default();
     entries.retain(|entry| entry.receipt.path != receipt.path || (pending && !entry.pending));
     entries.push(SessionExport {
         receipt,
@@ -81,10 +90,85 @@ fn record_at(
             .duration_since(std::time::UNIX_EPOCH)
             .map_err(|e| e.to_string())?
             .as_millis() as u64,
+        request_key: identity.0,
+        request_digest: identity.1,
     });
     let bytes = serde_json::to_vec(&entries).map_err(|e| e.to_string())?;
     if bytes.len() as u64 > MAX_BYTES {
         return Err("会话成果记录超过2MB，原记录已保留".into());
+    }
+    crate::paths::write_private_file(&store_path(home, session)?, &bytes)
+}
+
+pub(crate) fn creation_receipt(
+    session: &str,
+    key: &str,
+    digest: &str,
+) -> Result<Option<DocumentExportReceipt>, String> {
+    creation_receipt_at(&crate::paths::echo_agent_home_dir(), session, key, digest)
+}
+
+fn creation_receipt_at(
+    home: &Path,
+    session: &str,
+    key: &str,
+    digest: &str,
+) -> Result<Option<DocumentExportReceipt>, String> {
+    let _guard = WRITES.lock().map_err(|_| "成果存储锁已损坏")?;
+    let entries = read_at(home, session)?;
+    let Some(entry) = entries
+        .iter()
+        .rev()
+        .find(|e| e.request_key.as_deref() == Some(key))
+    else {
+        return Ok(None);
+    };
+    if entry.request_digest.as_deref() != Some(digest) {
+        return Err("该请求或文件名已经用于其他内容，请使用新的请求标识和文件名".into());
+    }
+    if !staged_receipt_matches(&entry.receipt) {
+        if entry.pending && !Path::new(&entry.receipt.path).exists() {
+            return Ok(None);
+        }
+        return Err("此前生成的文件已移动、删除或被修改，请指定新的文件名后重新生成".into());
+    }
+    Ok(Some(entry.receipt.clone()))
+}
+
+pub(crate) fn identify_creation(
+    session: &str,
+    path: &str,
+    key: &str,
+    digest: &str,
+) -> Result<(), String> {
+    identify_creation_at(
+        &crate::paths::echo_agent_home_dir(),
+        session,
+        path,
+        key,
+        digest,
+    )
+}
+
+fn identify_creation_at(
+    home: &Path,
+    session: &str,
+    path: &str,
+    key: &str,
+    digest: &str,
+) -> Result<(), String> {
+    let _guard = WRITES.lock().map_err(|_| "成果存储锁已损坏")?;
+    let mut entries = read_at(home, session)?;
+    let entry = entries
+        .iter_mut()
+        .rev()
+        .find(|e| e.receipt.path == path)
+        .ok_or("成果回执不存在")?;
+    entry.request_key = Some(key.into());
+    entry.request_digest = Some(digest.into());
+    let bytes = serde_json::to_vec(&entries).map_err(|e| e.to_string())?;
+    if bytes.len() as u64 > MAX_BYTES {
+        return Err("成果记录超过 2MB".into());
     }
     crate::paths::write_private_file(&store_path(home, session)?, &bytes)
 }
@@ -249,6 +333,55 @@ pub(crate) fn forget_session(session: &str) -> Result<(), String> {
 mod tests {
     use super::*;
     #[test]
+    fn creation_retries_reuse_only_the_same_verified_output_after_restart() {
+        let home = tempfile::tempdir().unwrap();
+        let output = dunce::canonicalize(home.path())
+            .unwrap()
+            .join("created.pdf");
+        let bytes = b"%PDF-1.7\nverified creation\n";
+        let receipt = DocumentExportReceipt {
+            path: output.to_string_lossy().into_owned(),
+            format: "pdf".into(),
+            byte_size: bytes.len() as u64,
+            sha256: format!("{:x}", Sha256::digest(bytes)),
+        };
+        record_at(home.path(), "task", receipt.clone(), "成果", true).unwrap();
+        identify_creation_at(home.path(), "task", &receipt.path, "request-1", "digest-1").unwrap();
+        // A failed pre-publication attempt can be retried without inventing a
+        // successful receipt. A matching published file survives a crash before
+        // the pending index is promoted.
+        assert!(
+            creation_receipt_at(home.path(), "task", "request-1", "digest-1")
+                .unwrap()
+                .is_none()
+        );
+        std::fs::write(&output, bytes).unwrap();
+        assert_eq!(
+            creation_receipt_at(home.path(), "task", "request-1", "digest-1")
+                .unwrap()
+                .unwrap()
+                .path,
+            receipt.path
+        );
+        record_at(home.path(), "task", receipt.clone(), "成果", false).unwrap();
+        assert!(
+            creation_receipt_at(home.path(), "task", "request-1", "digest-1")
+                .unwrap()
+                .is_some()
+        );
+        assert!(creation_receipt_at(home.path(), "task", "request-1", "changed-digest").is_err());
+        assert!(
+            creation_receipt_at(home.path(), "other-task", "request-1", "digest-1")
+                .unwrap()
+                .is_none()
+        );
+        std::fs::write(&output, b"%PDF-1.7\nuser changes\n").unwrap();
+        assert!(creation_receipt_at(home.path(), "task", "request-1", "digest-1").is_err());
+        std::fs::remove_file(&output).unwrap();
+        assert!(creation_receipt_at(home.path(), "task", "request-1", "digest-1").is_err());
+    }
+
+    #[test]
     fn restart_access_is_restored_only_for_the_clicked_unchanged_native_receipt() {
         let home = tempfile::tempdir().unwrap();
         let outputs = tempfile::tempdir().unwrap();
@@ -268,13 +401,15 @@ mod tests {
         record_at(home.path(), "session", receipt.clone(), "报告", false).unwrap();
         let restarted_access = crate::shell_fs::FilesystemAccess::default();
         assert!(restarted_access.require_authorized_file(&path).is_err());
-        assert!(verified_receipt_at(
-            home.path(),
-            "session",
-            sibling.to_str().unwrap(),
-            &receipt.sha256
-        )
-        .is_err());
+        assert!(
+            verified_receipt_at(
+                home.path(),
+                "session",
+                sibling.to_str().unwrap(),
+                &receipt.sha256
+            )
+            .is_err()
+        );
         assert!(
             verified_receipt_at(home.path(), "other-session", &receipt.path, &receipt.sha256)
                 .is_err()
@@ -382,14 +517,16 @@ mod tests {
         assert_eq!(records[1].receipt.sha256, "c".repeat(64));
         assert!(read_at(home.path(), "another-session").unwrap().is_empty());
         std::fs::write(store_path(home.path(), "session").unwrap(), b"broken").unwrap();
-        assert!(record_at(
-            home.path(),
-            "session",
-            records[0].receipt.clone(),
-            "new",
-            false
-        )
-        .is_err());
+        assert!(
+            record_at(
+                home.path(),
+                "session",
+                records[0].receipt.clone(),
+                "new",
+                false
+            )
+            .is_err()
+        );
         assert_eq!(
             std::fs::read(store_path(home.path(), "session").unwrap()).unwrap(),
             b"broken"

@@ -474,6 +474,7 @@ pub(crate) async fn run_read_file(
                         msg.push_str("\nThe skill you are looking for is registered at:\n");
                         msg.push_str(&suggestion.display_path.to_string_lossy());
                     }
+                    msg.push_str("\nIf this is a required user-supplied source, check only the task's authorized inputs. If the source is still missing, ask the user to attach or locate it before analyzing its contents. Do not expand the search into unrelated projects or invent missing data. A missing source, denied access and a parse failure are different conditions.");
                     ReadFileOutput::FileNotFound(msg)
                 }
                 Some(std::io::ErrorKind::IsADirectory) => ReadFileOutput::IsADirectory(format!(

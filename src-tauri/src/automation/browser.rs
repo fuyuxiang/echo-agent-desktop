@@ -14,6 +14,7 @@ use url::Url;
 const START_TIMEOUT: Duration = Duration::from_secs(12);
 const COMMAND_TIMEOUT: Duration = Duration::from_secs(30);
 const MAX_CDP_MESSAGE_BYTES: usize = 16 * 1024 * 1024;
+const EDITABLE_TEXT_JS: &str = include_str!("editable-text.js");
 type CdpConnection = WebSocketStream<MaybeTlsStream<tokio::net::TcpStream>>;
 
 #[derive(Debug, Clone, Serialize)]
@@ -451,7 +452,7 @@ impl BrowserController {
         let reference = serde_json::to_string(element_ref)
             .map_err(|error| format!("编码元素引用失败：{error}"))?;
         let expression = format!(
-            "(() => {{ const e=document.querySelector('[data-echo-ref='+CSS.escape({reference})+']'); if(!e) return null; if(e.disabled||e.getAttribute('aria-disabled')==='true') return {{disabled:true}}; e.scrollIntoView({{block:'center',inline:'center'}}); e.focus(); {} return {{disabled:false,type:e.type||'',tag:e.tagName.toLowerCase()}}; }})()",
+            "(() => {{ const editableText={EDITABLE_TEXT_JS}; const e=document.querySelector('[data-echo-ref='+CSS.escape({reference})+']'); if(!e) return null; if(e.matches(':disabled')||e.readOnly||e.getAttribute('aria-disabled')==='true') return {{disabled:true}}; const type=(e.type||'').toLowerCase(); if(type==='password') return {{type}}; if(!(e instanceof HTMLTextAreaElement)&&!(e instanceof HTMLInputElement)&&!e.isContentEditable) return {{unsupported:true}}; if(['checkbox','radio','file','button','submit','reset','hidden','color','range'].includes(type)) return {{unsupported:true,type}}; e.scrollIntoView({{block:'center',inline:'center'}}); e.focus(); {} return {{disabled:false,type,tag:e.tagName.toLowerCase(),editable:e.isContentEditable,before:e.isContentEditable?editableText(e):e.value}}; }})()",
             if replace {
                 "if(typeof e.select==='function') e.select(); else if(e.isContentEditable) { const s=getSelection(),r=document.createRange(); r.selectNodeContents(e); s.removeAllRanges(); s.addRange(r); }"
             } else {
@@ -463,18 +464,80 @@ impl BrowserController {
             return Err("页面元素已失效，请重新获取页面快照".into());
         }
         if target.get("disabled").and_then(Value::as_bool) == Some(true) {
-            return Err("目标输入框处于禁用状态".into());
+            return Err("目标输入框处于禁用或只读状态".into());
         }
         if target.get("type").and_then(Value::as_str) == Some("password") {
             return Err(
                 "为保护凭据，代理不能接收或填写密码框。请暂停自动化并由用户接管填写。".into(),
             );
         }
-        self.call_page("Input.insertText", json!({ "text": text }))
-            .await?;
+        if target.get("unsupported").and_then(Value::as_bool) == Some(true) {
+            return Err(
+                "目标控件不支持文本输入；下拉框请用 browser_select，勾选和按钮请用 browser_click"
+                    .into(),
+            );
+        }
+        let input_type = target.get("type").and_then(Value::as_str).unwrap_or("");
+        let value = serde_json::to_string(text).map_err(|e| e.to_string())?;
+        if matches!(
+            input_type,
+            "date" | "time" | "datetime-local" | "month" | "week" | "number"
+        ) {
+            if !replace {
+                return Err("日期、时间和数字控件需要 replace=true，并填写完整规范值".into());
+            }
+            // Native date editors are locale-dependent segmented controls.
+            // Use their native value setter, then check the actual DOM value
+            // and constraints. This is still behind the same action approval.
+            self.evaluate(&format!(
+                "(() => {{ const e=document.querySelector('[data-echo-ref='+CSS.escape({reference})+']'); if(!(e instanceof HTMLInputElement)||e.matches(':disabled')||e.readOnly||e.type!=={}) throw new Error('输入目标已变化'); const probe=e.cloneNode(false); probe.value={value}; if(probe.value!=={value}||!probe.checkValidity()) throw new Error('输入值不符合控件的日期、格式、范围或步长要求，原字段值保持'); Object.getOwnPropertyDescriptor(HTMLInputElement.prototype,'value').set.call(e,{value}); e.dispatchEvent(new Event('input',{{bubbles:true}})); e.dispatchEvent(new Event('change',{{bubbles:true}})); return true; }})()",
+                serde_json::to_string(input_type).map_err(|e| e.to_string())?
+            ), true).await?;
+        } else {
+            if text.is_empty() && replace {
+                self.key("Backspace", &[]).await?;
+            } else {
+                self.call_page("Input.insertText", json!({ "text": text }))
+                    .await?;
+            }
+        }
+        let readback = self.evaluate(&format!(
+            "(() => {{ const editableText={EDITABLE_TEXT_JS}; const e=document.querySelector('[data-echo-ref='+CSS.escape({reference})+']'); if(!e||e.type==='password') return null; return {{value:e.isContentEditable?editableText(e):e.value,valid:typeof e.checkValidity==='function'?e.checkValidity():true}}; }})()"
+        ), true).await?;
+        if readback.is_null() {
+            return Err("输入后目标控件已变化，请重新获取页面快照检查结果，避免重复填写".into());
+        }
+        let actual = readback.get("value").and_then(Value::as_str).unwrap_or("");
+        // Textareas and rich editors normalize CRLF to LF. The editor reader
+        // preserves block/BR boundaries without counting caret placeholders.
+        let rich_editor = target.get("editable").and_then(Value::as_bool) == Some(true);
+        let normalize = |value: &str| {
+            let normalized = value.replace("\r\n", "\n").replace('\r', "\n");
+            if rich_editor {
+                normalized.replace('\u{00a0}', " ")
+            } else {
+                normalized
+            }
+        };
+        if replace && normalize(actual) != normalize(text) {
+            return Err("输入未按预期生效，请重新获取页面快照；日期使用 YYYY-MM-DD，时间使用 HH:mm，避免重复相同操作".into());
+        }
+        if !replace
+            && actual == target.get("before").and_then(Value::as_str).unwrap_or("")
+            && !text.is_empty()
+        {
+            return Err("输入后字段值没有变化，请检查目标控件".into());
+        }
+        if readback.get("valid").and_then(Value::as_bool) == Some(false) {
+            return Err(
+                "已填写，但字段未通过页面校验；请检查日期范围、长度、格式或步长后再提交".into(),
+            );
+        }
         Ok(json!({
             "typed": true,
             "characters": text.chars().count(),
+            "verified": true,
+            "valid": true,
         }))
     }
 
@@ -487,13 +550,21 @@ impl BrowserController {
         let values_json =
             serde_json::to_string(values).map_err(|error| format!("编码选项失败：{error}"))?;
         let expression = format!(
-            "(() => {{ const e=document.querySelector('[data-echo-ref='+CSS.escape({reference})+']'); if(!(e instanceof HTMLSelectElement)) return null; const wanted=new Set({values_json}); for(const o of e.options) o.selected=wanted.has(o.value)||wanted.has(o.text); e.dispatchEvent(new Event('input',{{bubbles:true}})); e.dispatchEvent(new Event('change',{{bubbles:true}})); return Array.from(e.selectedOptions).map(o=>({{value:o.value,text:o.text}})); }})()"
+            "(() => {{ const e=document.querySelector('[data-echo-ref='+CSS.escape({reference})+']'); if(!(e instanceof HTMLSelectElement)) return null; if(e.matches(':disabled')||e.getAttribute('aria-disabled')==='true') return {{error:'目标下拉框已禁用'}}; const values={values_json}; if(!e.multiple&&values.length!==1) return {{error:'单选下拉框只能选择一个值'}}; const options=Array.from(e.options); const matched=values.map(v=>options.filter(o=>!o.disabled&&!o.parentElement?.disabled&&(o.value===v||o.text===v))); if(matched.some(m=>m.length!==1)) return {{error:'选项不存在、不可用或名称不唯一，请重新获取页面快照'}}; const wanted=new Set(matched.map(m=>m[0])); for(const o of options) o.selected=wanted.has(o); e.dispatchEvent(new Event('input',{{bubbles:true}})); e.dispatchEvent(new Event('change',{{bubbles:true}})); const selected=Array.from(e.selectedOptions); return {{selected:selected.map(o=>({{value:o.value,text:o.text}})),verified:e.isConnected&&selected.length===wanted.size&&selected.every(o=>wanted.has(o)),valid:e.checkValidity()}}; }})()"
         );
         let selected = self.evaluate(&expression, true).await?;
         if selected.is_null() {
             return Err("目标不是有效的下拉选择框，或元素引用已经失效".into());
         }
-        Ok(json!({ "selected": selected }))
+        if let Some(error) = selected.get("error").and_then(Value::as_str) {
+            return Err(error.into());
+        }
+        if selected.get("verified").and_then(Value::as_bool) != Some(true)
+            || selected.get("valid").and_then(Value::as_bool) != Some(true)
+        {
+            return Err("选项未按预期生效或未通过页面校验，请重新检查页面".into());
+        }
+        Ok(selected)
     }
 
     pub async fn upload(
@@ -1315,6 +1386,34 @@ mod tests {
             .expect("observe result");
         assert_eq!(observed["value"], "EchoAgent");
         assert_eq!(observed["clicked"], "yes");
+        browser.evaluate(r#"document.body.insertAdjacentHTML('beforeend','<input aria-label="会议日期" type="date" min="2026-01-01" max="2026-12-31"><select aria-label="房间"><option value="a">甲</option><option value="b">乙</option></select>'); true"#, true).await.expect("install typed controls");
+        let controls = browser.snapshot().await.expect("typed control snapshot");
+        let entries = controls["elements"].as_array().unwrap();
+        let date_ref = entries.iter().find(|e| e["name"] == "会议日期").unwrap()["ref"]
+            .as_str()
+            .unwrap();
+        let room_ref = entries.iter().find(|e| e["name"] == "房间").unwrap()["ref"]
+            .as_str()
+            .unwrap();
+        assert_eq!(
+            browser
+                .type_text(date_ref, "2026-10-23", true)
+                .await
+                .unwrap()["verified"],
+            true
+        );
+        assert!(browser
+            .type_text(date_ref, "2026-02-30", true)
+            .await
+            .is_err());
+        assert_eq!(
+            browser.select(room_ref, &["乙".into()]).await.unwrap()["verified"],
+            true
+        );
+        assert!(browser.select(room_ref, &["不存在".into()]).await.is_err());
+        let values = browser.evaluate("({date:document.querySelector('input[type=date]').value,room:document.querySelector('select').value})", true).await.unwrap();
+        assert_eq!(values["date"], "2026-10-23");
+        assert_eq!(values["room"], "b");
         let (image, _) = browser.screenshot().await.expect("screenshot");
         assert!(image.len() > 1_000);
         let second = browser.new_tab(None).await.expect("new tab");

@@ -478,6 +478,52 @@ describe("ChatView pause/yield/resume 闭环", () => {
     expect(screen.queryByText("已暂停（会话上下文已保留）")).toBeNull();
   });
 
+  it("权限拒绝后使用原限制继续，等待发送时不能重复触发", async () => {
+    let accept!: (value: boolean) => void;
+    baseProps.onSend.mockImplementationOnce(() => new Promise<boolean>(resolve => { accept = resolve; }));
+    setStore({
+      control: { action: "stop", phase: "stopped", requestedAt: 1 },
+      messages: [{ id: "rejected", role: "assistant", complete: true, cancellationCategory: "PermissionRejected", parts: [] }],
+    });
+    renderChat();
+    expect(screen.getByText("操作未获批准，任务已停止；已有成果保留")).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "继续此任务" }));
+    fireEvent.click(screen.getByRole("button", { name: "继续此任务" }));
+    expect(baseProps.onSend).toHaveBeenCalledTimes(1);
+    expect(baseProps.onSend.mock.calls[0][0]).toContain("刚才被拒绝或取消的操作仍然禁止");
+    expect(screen.getByRole("button", { name: "继续此任务" })).toBeDisabled();
+    await act(async () => accept(false));
+    expect(storeState.control?.phase).toBe("stopped");
+    expect(baseProps.onToast).toHaveBeenCalledWith(expect.stringContaining("任务仍保持停止"));
+    expect(screen.getByRole("button", { name: "继续此任务" })).toBeEnabled();
+  });
+
+  it("运行中切换网页工具先等待暂停确认，失败时不切换", async () => {
+    setStore({ streaming: true, streamingMessageId: "a1" });
+    baseProps.onCancel.mockResolvedValueOnce(false);
+    renderChat();
+    await act(async () => fireEvent.click(screen.getByRole("button", { name: "添加" })));
+    fireEvent.click(screen.getByRole("menuitemradio", { name: /操作网页/ }));
+    await waitFor(() => expect(baseProps.onCancel).toHaveBeenCalledWith("pause"));
+    expect(setCodingMode).not.toHaveBeenCalled();
+  });
+
+  it("运行中切换网页工具在暂停确认后才生效，等待时保留原模式", async () => {
+    let confirmPause!: (value: boolean) => void;
+    baseProps.onCancel.mockImplementationOnce(() => new Promise<boolean>(resolve => { confirmPause = resolve; }));
+    setStore({ streaming: true, streamingMessageId: "a1" });
+    renderChat();
+    await act(async () => fireEvent.click(screen.getByRole("button", { name: "添加" })));
+    fireEvent.click(screen.getByRole("menuitemradio", { name: /操作网页/ }));
+    await waitFor(() => expect(baseProps.onCancel).toHaveBeenCalledWith("pause"));
+    expect(setCodingMode).not.toHaveBeenCalled();
+    expect(storeState.agentMode).toBe("default");
+    await act(async () => confirmPause(true));
+    await waitFor(() => expect(setCodingMode).toHaveBeenCalledWith("s1", "browser_use"));
+    expect(storeState.agentMode).toBe("browser_use");
+    expect(baseProps.onSend).not.toHaveBeenCalled();
+  });
+
   it("「恢复」仅清状态,不触发 onSend", async () => {
     setStore({
       streaming: false,

@@ -8,6 +8,7 @@ import ExcelJS from "exceljs";
 import pptxgen from "pptxgenjs";
 import { PDFDocument, rgb } from "pdf-lib";
 import fontkit from "@pdf-lib/fontkit";
+import { createStructuredWorkbook, createStructuredPresentation } from "./office-structured.mjs";
 
 const [outputPath, fontPath] = process.argv.slice(2);
 if (!outputPath || !fontPath) throw new Error("Missing output or font path");
@@ -15,7 +16,7 @@ if (!outputPath || !fontPath) throw new Error("Missing output or font path");
 let input = "";
 for await (const chunk of process.stdin) input += chunk;
 const request = JSON.parse(input);
-const { title, markdown, format } = request;
+const { title, markdown = "", format } = request;
 if (typeof title !== "string" || typeof markdown !== "string") throw new Error("Invalid document request");
 if (!["docx", "pdf", "xlsx", "pptx"].includes(format)) throw new Error("Unsupported document format");
 
@@ -371,7 +372,9 @@ async function createPptx() {
   await deck.writeFile({ fileName: outputPath });
 }
 
-if (format === "docx") await createDocx();
+if (format === "xlsx" && request.workbook) await createStructuredWorkbook(request.workbook, outputPath);
+else if (format === "pptx" && request.slides) await createStructuredPresentation(title, request.slides, outputPath);
+else if (format === "docx") await createDocx();
 else if (format === "pdf") await createPdf();
 else if (format === "xlsx") await createXlsx();
 else await createPptx();

@@ -24,6 +24,7 @@ for (const [name, license] of [
   ["pptxgenjs", "LICENSE"],
   ["pdf-lib", "LICENSE.md"],
   ["marked", "LICENSE"],
+  ["jszip", "LICENSE.markdown"],
 ]) {
   await copyFile(
     resolve(root, "node_modules", name, license),

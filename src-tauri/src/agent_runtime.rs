@@ -838,6 +838,7 @@ pub(crate) fn build_prompt_blocks(
         )
     };
     let mut text_meta = acp::Meta::new();
+    text_meta.insert("echoDesktopTask".into(), serde_json::Value::Bool(true));
     text_meta.insert(
         "displayText".into(),
         serde_json::Value::String(display_text.unwrap_or(text).to_string()),

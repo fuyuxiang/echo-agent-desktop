@@ -162,7 +162,7 @@ the embedded Runtime. The upstream license and source form are retained.
 - License: SIL Open Font License 1.1
 - Local license copy: `src-tauri/resources/office/fonts/LICENSE`
 
-The bundled Office worker uses the npm packages `docx`, `exceljs`, `pptxgenjs`,
+The bundled Office worker uses the npm packages `docx`, `exceljs`, `jszip`, `pptxgenjs`,
 `pdf-lib`, `@pdf-lib/fontkit`, and `marked`. The published license files are
 staged into `office/licenses/` in the app resources during the build; remaining
 MIT license metadata for `@pdf-lib/fontkit` is staged there from its published

@@ -160,6 +160,10 @@ if (["conversation", "conversation-layout", "queue"].includes(query.get("surface
     chat.requestPlanApproval({ requestId: "review-plan", sessionId: "review-conversation", toolCallId: "review-plan-tool" });
     if (query.get("planReview") === "dirty") chat.setPlan(plan, { localRevision: true });
   }
+  if (query.has("recovery")) {
+    chat.startStreaming("review-conversation", "recovery-turn");
+    chat.markComplete({ sessionId: "review-conversation", promptId: "recovery-turn", stopReason: "cancelled", cancellationCategory: "PermissionRejected" });
+  }
 }
 if (query.get("surface") === "sidebar-scroll") {
   const variant = query.get("variant") ?? "both";
@@ -425,6 +429,7 @@ function Fixture() {
   const [label, setLabel] = useState(aliases[query.get("label") ?? ""] ?? query.get("label") ?? "专家·技能·连接器");
   const [createExpertRequested, setCreateExpertRequested] = useState(false);
   const [expertPageOpen, setExpertPageOpen] = useState(false);
+  const [recoverySent, setRecoverySent] = useState("");
   const [cwd, setCwd] = useState("/review/EchoAgent");
   const [automationNotificationSequence, setAutomationNotificationSequence] = useState(0);
   const [automationDraft, setAutomationDraft] = useState(() => buildDraft(
@@ -515,7 +520,8 @@ function Fixture() {
   </>;
   if (surface === "conversation" || surface === "queue") return <div className="app" style={{ display: "flex", flexDirection: "row", height: "100%" }}>
     <aside style={{ width: "min(250px, 22vw)", flex: "none", borderRight: "1px solid var(--echo-border-default)", background: "var(--echo-bg-secondary)", padding: "24px 16px", boxSizing: "border-box" }}>EchoAgent</aside>
-    <ChatView onSend={() => {}} onCancel={() => {}} title="评审投影仪性能与内存泄漏" />
+    <ChatView onSend={text => { setRecoverySent(text); return true; }} onCancel={() => {}} title="评审投影仪性能与内存泄漏" />
+    {recoverySent && query.has("recovery") && <p role="note" style={{position:"absolute",top:0,left:0,maxWidth:"100%",background:"var(--echo-bg-secondary)",fontSize:12,padding:8}}>{recoverySent}</p>}
   </div>;
   if (surface === "projects" || surface === "organization-shell" || surface === "automation-templates") return <ManagementReviewFixture surface={surface} />;
   if (surface === "organization" || surface === "organization-login") return <div style={{ height: "100%", overflow: "auto" }}><OrganizationMemoryPanel onStartConversation={() => {}} /></div>;
