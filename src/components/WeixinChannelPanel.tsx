@@ -32,19 +32,22 @@ export function WeixinChannelPanel({ onToast }: { onToast?: (message: string) =>
   const [checkingCode, setCheckingCode] = useState(false);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
+  // Mutations advance this at start and settlement, invalidating status reads
+  // launched before or during them, and any response after disconnect/unmount.
   const generation = useRef(0);
   const pollingGeneration = useRef<number | null>(null);
   const { requestConfirmation, dialog } = useAppDialog();
 
   useEffect(() => {
     let active = true;
+    const current = generation.current;
     void weixinStatus().then((next) => {
-      if (!active) return;
+      if (!active || current !== generation.current) return;
       setStatus(next);
       setSelected(next.allowedWorkspaces);
       setDefaultWorkspace(next.defaultWorkspace ?? next.allowedWorkspaces[0] ?? "");
       setStatusError("");
-    }).catch((cause) => { if (active) setStatusError(String(cause)); });
+    }).catch((cause) => { if (active && current === generation.current) setStatusError(String(cause)); });
     void invoke<Workspace[]>("agent_list_workspaces")
       .then((spaces) => { if (active) { setWorkspaces(spaces); setWorkspacesError(""); setWorkspacesLoading(false); } })
       .catch((cause) => { if (active) { setWorkspacesError(String(cause)); setWorkspacesLoading(false); } });
@@ -53,22 +56,32 @@ export function WeixinChannelPanel({ onToast }: { onToast?: (message: string) =>
 
   useEffect(() => {
     if (!status?.connected) return;
+    let active = true;
+    let inFlight = false;
     const timer = window.setInterval(() => {
-      void weixinStatus().then((next) => { setStatus(next); setStatusError(""); })
-        .catch((cause) => setStatusError(String(cause)));
+      if (inFlight) return;
+      inFlight = true;
+      const current = generation.current;
+      void weixinStatus().then((next) => {
+        if (active && current === generation.current) { setStatus(next); setStatusError(""); }
+      }).catch((cause) => {
+        if (active && current === generation.current) setStatusError(String(cause));
+      }).finally(() => { inFlight = false; });
     }, 10_000);
-    return () => window.clearInterval(timer);
+    return () => { active = false; window.clearInterval(timer); };
   }, [status?.connected]);
 
   const refreshStatus = () => {
+    const current = generation.current;
     void weixinStatus().then((next) => {
+      if (current !== generation.current) return;
       if (!status) {
         setSelected(next.allowedWorkspaces);
         setDefaultWorkspace(next.defaultWorkspace ?? next.allowedWorkspaces[0] ?? "");
       }
       setStatus(next);
       setStatusError("");
-    }).catch((cause) => setStatusError(String(cause)));
+    }).catch((cause) => { if (current === generation.current) setStatusError(String(cause)); });
   };
 
   const refreshWorkspaces = () => {
@@ -158,24 +171,33 @@ export function WeixinChannelPanel({ onToast }: { onToast?: (message: string) =>
   };
 
   const saveWorkspaces = async () => {
+    const current = ++generation.current;
     setBusy(true); setError("");
     try {
       const next = await weixinSetWorkspaces(selected, defaultWorkspace || undefined);
+      if (current !== generation.current) return;
       setStatus(next);
       setSelected(next.allowedWorkspaces);
       setDefaultWorkspace(next.defaultWorkspace ?? next.allowedWorkspaces[0] ?? "");
       onToast?.("微信可访问的工作区已保存");
-    } catch (cause) { setError(String(cause)); }
-    finally { setBusy(false); }
+    } catch (cause) { if (current === generation.current) setError(String(cause)); }
+    finally {
+      if (current === generation.current) { generation.current += 1; setBusy(false); }
+    }
   };
 
   const revokeSession = async (sessionId: string) => {
+    const current = ++generation.current;
     setBusy(true); setError("");
     try {
-      setStatus(await weixinRevokeSession(sessionId));
+      const next = await weixinRevokeSession(sessionId);
+      if (current !== generation.current) return;
+      setStatus(next);
       onToast?.("已撤销该任务的单独交接授权");
-    } catch (cause) { setError(String(cause)); }
-    finally { setBusy(false); }
+    } catch (cause) { if (current === generation.current) setError(String(cause)); }
+    finally {
+      if (current === generation.current) { generation.current += 1; setBusy(false); }
+    }
   };
 
   const disconnect = () => requestConfirmation({
@@ -183,13 +205,19 @@ export function WeixinChannelPanel({ onToast }: { onToast?: (message: string) =>
     description: "本机将停止接收微信指令，并删除本机的绑定凭据。之后可重新扫码绑定。",
     confirmLabel: "解除绑定", danger: true,
     action: async () => {
-      generation.current += 1;
+      const current = ++generation.current;
       pollingGeneration.current = null;
-      await weixinDisconnect();
-      setStatus({ connected: false, allowedWorkspaces: [], sharedSessions: [], pendingReplies: 0, online: false });
-      setSelected([]); setQrUrl("");
-      setDefaultWorkspace(""); setStatusError("");
-      onToast?.("微信已解除绑定");
+      setBusy(false);
+      try {
+        await weixinDisconnect();
+        if (current !== generation.current) return;
+        setStatus({ connected: false, allowedWorkspaces: [], sharedSessions: [], pendingReplies: 0, online: false });
+        setSelected([]); setQrUrl("");
+        setDefaultWorkspace(""); setStatusError("");
+        onToast?.("微信已解除绑定");
+      } finally {
+        if (current === generation.current) generation.current += 1;
+      }
     },
     onError: (cause) => setError(String(cause)),
   });

@@ -2,6 +2,20 @@
 
 依赖维护需要同时验证漏洞修复、调用方兼容性和最终安装包。审计通过只能说明所扫描的版本图未报告漏洞，不能代替编译、功能测试或桌面验收。
 
+## 2026-10-24 修复依据
+
+宿主和 Runtime 的 Tokio 锁至 1.53.3、ctutils 锁至 0.4.4，分别处理 [RUSTSEC-2026-0386](https://rustsec.org/advisories/RUSTSEC-2026-0386.html) 和 [RUSTSEC-2026-0385](https://rustsec.org/advisories/RUSTSEC-2026-0385.html)。两个 workspace 分别更新，不以其中一个锁文件代替另一个。
+
+Theia 的 body-parser 保留 1.x / 2.x API，分别要求 1.20.9+ / 2.4.0+；multer 要求 2.5.0+，serialize-javascript 要求 7.1.3+。Puppeteer / puppeteer-core 在同一 25.x 内升级，移除旧 Chromium BiDi 的 Zod 3 依赖。构建 manifest 和生产运行时 manifest 继承同一 overrides，并分别重建锁文件。
+
+`test:security` 从 Theia 与 MCP SDK 的实际模块路径分别加载两套 body-parser，在独立子进程的真实 HTTP 服务中验证 [GHSA-27r3-jxmh-p828](https://github.com/expressjs/body-parser/security/advisories/GHSA-27r3-jxmh-p828) 的流生命周期边界。有效 gzip 帧后加 NUL 和 100 KiB 尾部用于触发旧版未捕获的解压错误；分阶段 deflate 请求在解析回调后才发送最后字节，要求服务能读完 HTTP 请求，并保持另一路 SHA-256 消费者的数据完整。普通 JSON、合法 gzip、坏 gzip 的 400 响应及后续请求也逐项断言，子进程必须输出完整成功证据且以 0 退出。
+
+本地对照使用同一 fixture：1.20.8 / 2.3.0 各 5 次均因未捕获的 `Z_DATA_ERROR` 退出 1，1.20.9 / 2.4.0 各 5 次均通过。旧版本只安装在临时目录，不加入项目或 CI 依赖。单独检查已安装版本可执行 `node scripts/fixtures/body-parser-recovery.mjs /absolute/path/to/body-parser/index.js`；不能以短后缀 gzip 请求得到 200/400 作为漏洞已修复的证据。触发样例依据[上游回归用例](https://github.com/expressjs/body-parser/blob/1.20.9/test/json.js)。
+
+VSIX 开发工具通过 `@azure/identity` 引用 MSAL。当前最新 Identity 4.14.0 仍依赖 MSAL 6，而 [MSAL 公告](https://github.com/AzureAD/microsoft-authentication-library-for-js/security/advisories/GHSA-xcx6-jx8p-x3h5) 的修复从 7.1.0 开始，因此临时固定 Identity 4.13.0（使用 MSAL 3.8.10，满足 VSCE 的 `^4.1.0` 约束）。该开发依赖不进入 IDE 生产图；待上游发布兼容修复后再解除固定，不强制为 Identity 替换不同主版本的认证内核。真实 Azure 登录未在本地执行。
+
+本次完整命令、结果和未验证范围见 [源码审计记录](source-audit-2026-10-24.md)。
+
 ## 工具链与依赖图
 
 使用 Node.js 22.23.4+（22.x）或 24.22.1+（24.x）、pnpm 10、npm 11.21.1+、Rust 1.96.0+、Python 3.11+。IDE 构建和打包入口会检查 Node.js、npm 版本。不要用旧 npm 重新生成 IDE 的 workspace 锁文件。
@@ -15,6 +29,7 @@
 | 内嵌 Agent workspace | `vendor/echo-agent-build/Cargo.toml`、同目录 `Cargo.lock` | 用该 manifest 运行 Cargo；其锁文件与桌面锁文件分别维护 |
 | Markdown fuzz workspace | `vendor/echo-agent-build/crates/codegen/echo-agent-markdown/fuzz/Cargo.toml`、同目录 `Cargo.lock` | 在该独立 workspace 中更新 Cargo 锁文件 |
 | Nucleo 独立 workspace 与基准程序 | `vendor/nucleo/Cargo.toml`、同目录 `Cargo.lock` | 用该 manifest 更新锁文件并验证；桌面构建使用桌面锁文件，不能据此遗漏独立锁文件的审计 |
+| 独立原生验收 harness | `scripts/desktop-native-check/Cargo.toml`、同目录 `Cargo.lock` | `pnpm test:desktop-native`；复用原生模块并有独立锁文件，须独立纳入审计 |
 
 `scripts/theia-runtime-manifest.mjs` 将 Theia 根配置的版本门槛、overrides、`allowScripts` 和安全补丁 workspaces 带入生产依赖图，并移除应用自身的构建脚本和开发依赖。`allowScripts` 保留原生依赖安装所需的明确许可，也保留明确禁止执行的条目，避免生产安装偏离源码的执行策略。npm 默认会对未审阅的脚本发出警告；严格模式会拒绝未审阅的依赖。回归测试用本地安装包验证许可的安装脚本执行、禁止的脚本不执行；本地安装包使用源地址作为许可键，registry 依赖则使用可信包名。修改 Theia 依赖、overrides 或本地补丁包的依赖后，应重新运行 `pnpm ide:lock`，不能只更新源码锁文件。
 
@@ -41,7 +56,7 @@ Theia 源码安装的 `postinstall` 自动应用补丁；IDE 构建入口会再�
 
 ## 升级流程
 
-1. 从依赖公告和上游修复确定受影响范围，分别检查前端、Theia 源码、IDE 生产图和四个 Rust 锁文件。优先选用上游兼容修复。
+1. 从依赖公告和上游修复确定受影响范围，分别检查前端、Theia 源码、IDE 生产图和五个 Rust 锁文件（包括独立原生验收 harness）。优先选用上游兼容修复。
 2. 调整直接依赖或最小必要范围的 override。跨主版本覆盖时，逐一核对调用方的导出方式、模块路径、参数、流事件和取消行为；不能仅依据审计输出选择版本。
 3. 使用对应包管理器更新锁文件。修改 Theia 的生产依赖策略后运行 `pnpm ide:lock`，再用 `pnpm ide:build`、`pnpm ide:stage` 验证实际构建及生产安装。不要手工拼接锁文件。
 4. 修改 Rust 依赖时分别更新实际受影响的 workspace 锁文件，随后以 `--locked` 编译；桌面程序不会自动继承另一个 workspace 根目录的 `[patch.crates-io]`。
@@ -90,7 +105,7 @@ python3 scripts/audit-dependencies.py npm --output /tmp/echo-npm-audit
 python3 scripts/audit-dependencies.py rust --output /tmp/echo-rust-audit
 ```
 
-不指定输出目录时会创建系统临时目录。npm 部分并行审计前端、Theia 源码和重建的 IDE 生产依赖图；Rust 部分向 OSV 查询四个锁文件中的 registry 包版本，保留公告、包清单和分类结果。本地补丁通过来源摘要及配置检查验证，不以全局忽略公告替代修复。
+不指定输出目录时会创建系统临时目录。npm 部分并行审计前端、Theia 源码和重建的 IDE 生产依赖图；Rust 部分向 OSV 查询五个锁文件中的 registry 包版本，保留公告、包清单和分类结果。`test:security` 对照 Git 跟踪清单检查锁文件覆盖，避免新增 harness 被漏审。本地补丁通过来源摘要及配置检查验证，不以全局忽略公告替代修复。
 
 - 退出码 `0`：本次扫描完成且没有安全发现。
 - 退出码 `1`：扫描完成但发现需处理的安全问题。

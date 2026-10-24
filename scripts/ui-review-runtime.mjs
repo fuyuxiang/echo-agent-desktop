@@ -78,10 +78,9 @@ export async function createUiReviewServer(port = 1439, {
   const close = server.close.bind(server);
   server.close = async () => {
     try {
-      // Vite 5 cancels dependency optimization during close, but unfinished
-      // transforms may still await its result. Finish the initial import crawl
-      // before cancellation so closing a baseline cannot deadlock the review.
-      await server.waitForRequestsIdle();
+      // Vite 6 owns cancellation of its dependency crawl and pending transforms.
+      // Waiting for crawl idle first can remain pending forever after aborted
+      // navigation, hiding both successful results and the original assertion.
       const closing = close();
       // The browser has already closed when callers dispose a review server.
       // Drain keep-alive/aborted requests too, so Node does not keep a fixture

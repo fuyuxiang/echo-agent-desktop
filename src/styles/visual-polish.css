@@ -1682,15 +1682,13 @@ button,
   letter-spacing: -0.015em;
 }
 .resources-panel__search-input,
-.um-search-input,
-.myfiles-search {
+.um-search-input {
   border-color: var(--ui-line-strong);
   background: var(--ui-surface);
   box-shadow: var(--ui-shadow-xs);
 }
 .resources-panel__search-input:focus,
-.um-search-input:focus,
-.myfiles-search:focus-within {
+.um-search-input:focus {
   border-color: var(--ui-brand-line);
   box-shadow: 0 0 0 3px var(--ui-brand-soft);
 }
@@ -1904,54 +1902,6 @@ button,
 }
 
 /* ---------- Files ---------- */
-
-.myfiles-panel {
-  background: transparent;
-}
-
-.myfiles-header,
-.myfiles-tabs,
-.myfiles-toolbar,
-.myfiles-body {
-  width: min(100%, var(--ui-content-width));
-  margin-inline: auto;
-  box-sizing: border-box;
-}
-
-.myfiles-header {
-  padding: 36px var(--ui-page-gutter) 18px;
-}
-
-.myfiles-title {
-  font-size: 1.625rem;
-  font-weight: 720;
-  letter-spacing: -0.025em;
-}
-
-.myfiles-tabs {
-  padding: 10px var(--ui-page-gutter) 0;
-  border-bottom-color: var(--ui-line);
-}
-
-.myfiles-toolbar {
-  padding-inline: var(--ui-page-gutter);
-}
-
-.myfiles-body {
-  padding: 0 var(--ui-page-gutter) 56px;
-}
-
-.myfiles-table {
-  border: 1px solid var(--ui-line);
-  border-radius: var(--ui-radius-md);
-  background: var(--ui-surface);
-  box-shadow: var(--ui-shadow-xs);
-  overflow: hidden;
-}
-
-.myfiles-row:last-child {
-  border-bottom: 0;
-}
 
 /* ---------- Organization memory ---------- */
 
@@ -2758,7 +2708,6 @@ button,
   .browser-preview__input {
     flex-basis: 260px;
   }
-.myfiles-toolbar,
 .project-section__head,
 .resources-panel__header,
 .plugins-panel__header {
@@ -2819,12 +2768,6 @@ button,
   }
 .sk-grid {
     grid-template-columns: minmax(0, 1fr);
-  }
-
-  .myfiles-col-time,
-  .myfiles-col-size,
-  .myfiles-col-scope {
-    display: none;
   }
 .resources-panel__header,
 .plugins-panel__header,
@@ -3033,12 +2976,6 @@ button,
   .um-topbar-right {
     width: 100%;
     flex-wrap: wrap;
-  }
-
-  .myfiles-col-time,
-  .myfiles-col-size,
-  .myfiles-col-scope {
-    display: none;
   }
 }
 

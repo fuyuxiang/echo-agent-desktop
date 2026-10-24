@@ -63,7 +63,7 @@ def npm_audits(output):
 
 
 def rust_audit(output):
-    manifests = ["src-tauri/Cargo.lock", "vendor/echo-agent-build/Cargo.lock",
+    manifests = ["scripts/desktop-native-check/Cargo.lock", "src-tauri/Cargo.lock", "vendor/echo-agent-build/Cargo.lock",
                  "vendor/echo-agent-build/crates/codegen/echo-agent-markdown/fuzz/Cargo.lock",
                  "vendor/nucleo/Cargo.lock"]
     packages = {}
@@ -83,7 +83,7 @@ def rust_audit(output):
     for name, path in [("lru-0-12", "../lru-0.12"), ("lru-0-16", "../lru-0.16")]:
         if runtime.get("patch", {}).get("crates-io", {}).get(name, {}).get("path") != path:
             raise RuntimeError(f"Runtime LRU security backport is not active: {name}")
-    fuzz = tomllib.loads((ROOT / manifests[2]).with_suffix(".toml").read_text())
+    fuzz = tomllib.loads((ROOT / "vendor/echo-agent-build/crates/codegen/echo-agent-markdown/fuzz/Cargo.toml").read_text())
     if fuzz.get("patch", {}).get("crates-io", {}).get("lru", {}).get("path") != "../../../../../lru-0.12":
         raise RuntimeError("Markdown fuzz LRU security backport is not active")
     for directory in ["vendor/glib", "vendor/lru-0.12", "vendor/lru-0.16"]:

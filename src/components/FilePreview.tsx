@@ -121,18 +121,27 @@ export function FilePreview({ filename, content, onCopyText, docExtractor }: Fil
   // 默认用内置 zip-reader(纯 JS DEFLATE)从 content(data: URL/base64)解压;
   // 调用方也可注入自定义 docExtractor 覆盖。
   if (kind === "docx" || kind === "pptx" || kind === "sheet") {
-    const zip = docExtractor?.(filename) ?? defaultDocExtractor(content);
-    const extracted =
-      zip && kind === "docx" ? extractDocxFromZip(zip)
-      : zip && kind === "pptx" ? extractPptxFromZip(zip)
-      : zip && kind === "sheet" ? extractSheetFromZip(zip)
-      : null;
+    let text: string | null = null;
+    let sheets: Array<{ name: string; rows: string[][] }> | undefined;
+    try {
+      const zip = docExtractor?.(filename) ?? defaultDocExtractor(content);
+      if (zip && kind === "sheet") {
+        const extracted = extractSheetFromZip(zip);
+        text = extracted?.text ?? null;
+        sheets = extracted?.sheets;
+      } else if (zip) {
+        text = (kind === "docx" ? extractDocxFromZip(zip) : extractPptxFromZip(zip))?.text ?? null;
+      }
+    } catch {
+      // Imported documents and custom extractors are untrusted. A corrupt or
+      // oversized preview must leave the conversation and original accessible.
+    }
     return (
       <DocPreview
         filename={filename}
         kind={kind}
-        text={extracted?.text ?? null}
-        sheets={kind === "sheet" && extracted ? (extracted as { sheets: Array<{ name: string; rows: string[][] }> }).sheets : undefined}
+        text={text}
+        sheets={sheets}
         onCopyText={onCopyText}
       />
     );

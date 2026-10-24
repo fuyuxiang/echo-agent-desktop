@@ -49,6 +49,8 @@ import { useGroupStore } from "../../src/features/groups/group-store";
 import { useMessageQueueStore } from "../../src/stores/message-queue-store";
 
 const query = new URLSearchParams(location.search);
+const recoveryReview = { permissionResolutions: 0, modeChanges: 0 };
+Object.assign(window, { recoveryReview });
 if (query.get("surface") === "update") useUpdateStore.setState({ status: "error", error: "暂时无法检查更新，请保留现有工作并稍后重试。" });
 if (query.get("surface") === "runtime") query.set("executionView", "runtime");
 localStorage.setItem("echoagent.theme", query.get("theme") ?? "light");
@@ -222,6 +224,8 @@ Object.assign(window, {
     unregisterCallback: (id: number) => callbacks.delete(id),
     metadata: { currentWindow: { label: "main" }, currentWebview: { label: "main" } },
     invoke: async (command: string, args: any = {}) => {
+      if (command === "agent_resolve_permission") recoveryReview.permissionResolutions++;
+      if (command === "permission_mode_set") recoveryReview.modeChanges++;
       if (extensionState === "error" && ["agents_list", "skills_list", "plugins_list", "mcp_list"].includes(command)) {
         extensionAttempts[command] = (extensionAttempts[command] ?? 0) + 1;
         if (extensionAttempts[command] === 1) throw new Error("隔离验收：列表暂不可用");
@@ -520,7 +524,11 @@ function Fixture() {
   </>;
   if (surface === "conversation" || surface === "queue") return <div className="app" style={{ display: "flex", flexDirection: "row", height: "100%" }}>
     <aside style={{ width: "min(250px, 22vw)", flex: "none", borderRight: "1px solid var(--echo-border-default)", background: "var(--echo-bg-secondary)", padding: "24px 16px", boxSizing: "border-box" }}>EchoAgent</aside>
-    <ChatView onSend={text => { setRecoverySent(text); return true; }} onCancel={() => {}} title="评审投影仪性能与内存泄漏" />
+    <ChatView onSend={text => {
+      setRecoverySent(text);
+      if (query.has("recovery")) useSessionStore.getState().startStreaming("review-conversation", "recovery-followup");
+      return true;
+    }} onCancel={() => {}} title="评审投影仪性能与内存泄漏" />
     {recoverySent && query.has("recovery") && <p role="note" style={{position:"absolute",top:0,left:0,maxWidth:"100%",background:"var(--echo-bg-secondary)",fontSize:12,padding:8}}>{recoverySent}</p>}
   </div>;
   if (surface === "projects" || surface === "organization-shell" || surface === "automation-templates") return <ManagementReviewFixture surface={surface} />;

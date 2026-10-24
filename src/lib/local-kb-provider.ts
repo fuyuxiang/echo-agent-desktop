@@ -14,7 +14,7 @@ import { readZip } from "./zip-reader";
 import {
   extractDocxFromZip,
   extractPptxFromZip,
-  extractSheetFromZip,
+  extractSheetTextFromZip,
 } from "./doc-preview";
 
 /** 受支持的纯文本扩展名(大小写不敏感)。 */
@@ -99,7 +99,7 @@ export function isAnyKnowledgeFile(name: string): boolean {
  * 从 OOXML 字节提取纯文本(复用 zip-reader + doc-preview),按扩展名分发:
  *  - .docx → extractDocxFromZip
  *  - .pptx → extractPptxFromZip(幻灯片文本,按数字序)
- *  - .xlsx → extractSheetFromZip(单元格 + 共享字符串)
+ *  - .xlsx → extractSheetTextFromZip(有界文本索引，不展开预览行列)
  * 无对应内容/解压失败/未知类型返回 null。纯函数,可测。
  *
  * `nameOrExt` 可以是文件名或扩展名(含点,如 ".pptx")。
@@ -119,7 +119,7 @@ export function extractOfficeText(bytes: Uint8Array, nameOrExt: string): string 
     } else if (ext === ".pptx") {
       extracted = extractPptxFromZip(reader)?.text ?? null;
     } else if (ext === ".xlsx") {
-      extracted = extractSheetFromZip(reader)?.text ?? null;
+      extracted = extractSheetTextFromZip(reader, MAX_INDEXED_CONTENT_CHARS);
     } else {
       return null;
     }

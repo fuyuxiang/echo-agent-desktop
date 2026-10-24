@@ -83,6 +83,19 @@ describe("FilePreview", () => {
   });
 
   // ---------- 文档预览(docx/pptx/sheet)----------
+  it("解析器异常不会使会话崩溃，仍可打开原件", () => {
+    render(<FilePreview filename="broken.docx" content="binary" docExtractor={() => { throw new Error("损坏的压缩包"); }} />);
+    expect(screen.getByText(/请用系统应用打开原件/)).toBeInTheDocument();
+  });
+
+  it("超出稀疏表格预览限制时展示降级提示", () => {
+    render(<FilePreview filename="large.xlsx" content="binary" docExtractor={() => ({
+      listEntries: () => ["xl/worksheets/sheet1.xml"],
+      readText: path => path.endsWith("sheet1.xml") ? '<row r="999999999"><c r="A999999999"><v>42</v></c></row>' : null,
+    })} />);
+    expect(screen.getByText(/请用系统应用打开原件/)).toBeInTheDocument();
+  });
+
   it("docx 无 docExtractor 时显示降级占位", () => {
     render(<FilePreview filename="report.docx" content="binary" />);
     expect(screen.getByText("Word")).toBeInTheDocument();

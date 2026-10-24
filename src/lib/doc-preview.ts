@@ -36,7 +36,7 @@ function extractTextNodes(xml: string, tagName: "w:t" | "a:t"): string[] {
   starts.push(xml.length);
   for (let i = 0; i < starts.length - 1; i++) {
     const seg = xml.slice(starts[i], starts[i + 1]);
-    const tRe = new RegExp(`<${tagName}[^>]*>([\\s\\S]*?)</${tagName}>`, "g");
+    const tRe = new RegExp(`<${tagName}\\b[^>]*>([\\s\\S]*?)</${tagName}>`, "g");
     let tm: RegExpExecArray | null;
     let para = "";
     while ((tm = tRe.exec(seg)) !== null) {
@@ -50,12 +50,14 @@ function extractTextNodes(xml: string, tagName: "w:t" | "a:t"): string[] {
 }
 
 function decodeXml(s: string): string {
-  return s
-    .replace(/&lt;/g, "<")
-    .replace(/&gt;/g, ">")
-    .replace(/&quot;/g, '"')
-    .replace(/&apos;/g, "'")
-    .replace(/&amp;/g, "&");
+  const named: Record<string, string> = { lt: "<", gt: ">", quot: '"', apos: "'", amp: "&" };
+  return s.replace(/&(lt|gt|quot|apos|amp|#x[\da-f]+|#\d+);/gi, (entity, code: string) => {
+      if (code[0] !== "#") return named[code] ?? entity;
+      const value = code.slice(1);
+      const point = value[0].toLowerCase() === "x" ? parseInt(value.slice(1), 16) : parseInt(value, 10);
+      return point > 0 && point <= 0x10ffff && !(point >= 0xd800 && point <= 0xdfff)
+        ? String.fromCodePoint(point) : entity;
+    });
 }
 
 /** 从 docx 的 word/document.xml 提取段落文本。 */
@@ -103,36 +105,35 @@ export function extractSheets(
   sheetXmls: Array<{ name: string; xml: string }>,
   sharedStrings: string[] = [],
 ): SheetExtract {
+  let cellCount = 0;
+  let rowCount = 0;
   const sheets = sheetXmls.map(({ name, xml }) => {
     const rows: string[][] = [];
-    const rowRe = /<row[^>]*>([\s\S]*?)<\/row>/g;
-    let rm: RegExpExecArray | null;
-    while ((rm = rowRe.exec(xml)) !== null) {
-      const rowXml = rm[1];
-      const cells: string[] = [];
-      const cellRe = /<c\b([^>]*)>([\s\S]*?)<\/c>/g;
-      let cm: RegExpExecArray | null;
-      while ((cm = cellRe.exec(rowXml)) !== null) {
-        const attrs = cm[1];
-        const inner = cm[2];
-        const isShared = /t="s"/.test(attrs);
-        const vMatch = inner.match(/<v>([\s\S]*?)<\/v>/);
-        const isMatch = inner.match(/<is>([\s\S]*?)<\/is>/);
-        let value = "";
-        if (isMatch) {
-          // inline string:<t>text</t>
-          const tMatch = isMatch[1].match(/<t[^>]*>([\s\S]*?)<\/t>/g);
-          value = tMatch ? tMatch.map((t) => t.replace(/<[^>]+>/g, "")).join("") : "";
-        } else if (vMatch) {
-          value = decodeXml(vMatch[1]);
-          if (isShared) {
-            const idx = parseInt(value, 10);
-            value = Number.isFinite(idx) && idx < sharedStrings.length ? sharedStrings[idx] : value;
-          }
-        }
-        cells.push(decodeXml(value));
+    for (const rm of sheetElements(xml, "row")) {
+      const rowNumber = xmlAttribute(rm[1], "r");
+      const rowIndex = rowNumber === undefined ? rows.length : Number(rowNumber) - 1;
+      if (!Number.isSafeInteger(rowIndex) || rowIndex < 0 || rowIndex >= 10_000) {
+        throw new Error("sheet row exceeds preview limit");
       }
-      if (cells.length) rows.push(cells);
+      const rowXml = rm[2] ?? "";
+      const cells: string[] = [];
+      for (const cm of sheetElements(rowXml, "c")) {
+        const attrs = cm[1];
+        const reference = xmlAttribute(attrs, "r");
+        const column = reference === undefined ? cells.length : sheetColumn(reference);
+        if (column >= 16_384 || cellCount + Math.max(0, column + 1 - cells.length) > 100_000) {
+          throw new Error("sheet cells exceed preview limit");
+        }
+        cellCount += Math.max(0, column + 1 - cells.length);
+        while (cells.length <= column) cells.push("");
+        cells[column] = sheetCellText(attrs, cm[2] ?? "", sharedStrings);
+      }
+      if (cells.length === 0 && rowNumber === undefined) continue;
+      const addedRows = Math.max(0, rowIndex + 1 - rows.length);
+      if (rowCount + addedRows > 10_000) throw new Error("sheet rows exceed preview limit");
+      rowCount += addedRows;
+      while (rows.length <= rowIndex) rows.push([]);
+      rows[rowIndex] = cells;
     }
     return { name, rows };
   });
@@ -142,13 +143,46 @@ export function extractSheets(
   return { sheets, text };
 }
 
+/** 逐个读取实际节点；不根据稀疏坐标分配空行或空列。 */
+function* sheetElements(xml: string, tag: "row" | "c"): Generator<RegExpExecArray> {
+  const pattern = new RegExp(`<${tag}\\b([^>]*?)(?:\\/>|>([\\s\\S]*?)<\\/${tag}>)`, "g");
+  let match: RegExpExecArray | null;
+  while ((match = pattern.exec(xml)) !== null) yield match;
+}
+
+function sheetCellText(attributes: string, inner: string, sharedStrings: string[]): string {
+  const inline = inner.match(/<is>([\s\S]*?)<\/is>/);
+  if (inline) {
+    return [...inline[1].matchAll(/<t\b[^>]*>([\s\S]*?)<\/t>/g)]
+      .map((match) => decodeXml(match[1])).join("");
+  }
+  const raw = inner.match(/<v>([\s\S]*?)<\/v>/)?.[1];
+  if (raw === undefined) return "";
+  const value = decodeXml(raw);
+  if (xmlAttribute(attributes, "t") !== "s") return value;
+  const index = /^\d+$/.test(value.trim()) ? Number(value) : NaN;
+  return Number.isSafeInteger(index) && index >= 0 && index < sharedStrings.length ? sharedStrings[index] : value;
+}
+
+function xmlAttribute(attributes: string, name: string): string | undefined {
+  return attributes.match(new RegExp(`(?:^|\\s)${name}\\s*=\\s*(["'])(.*?)\\1`))?.[2];
+}
+
+function sheetColumn(reference: string): number {
+  const match = /^([A-Z]{1,3})[1-9]\d*$/i.exec(reference);
+  if (!match) throw new Error("sheet column exceeds preview limit");
+  let column = 0;
+  for (const char of match[1].toUpperCase()) column = column * 26 + char.charCodeAt(0) - 64;
+  return column - 1;
+}
+
 /** 从 xlsx xl/sharedStrings.xml 提取共享字符串数组(顺序保留下标)。 */
 export function extractSharedStrings(sharedStringsXml: string): string[] {
   const out: string[] = [];
   const siRe = /<si\b[^>]*>([\s\S]*?)<\/si>/g;
   let m: RegExpExecArray | null;
   while ((m = siRe.exec(sharedStringsXml)) !== null) {
-    const tRe = /<t[^>]*>([\s\S]*?)<\/t>/g;
+    const tRe = /<t\b[^>]*>([\s\S]*?)<\/t>/g;
     let tm: RegExpExecArray | null;
     let val = "";
     while ((tm = tRe.exec(m[1])!) !== null) {
@@ -184,12 +218,51 @@ export function extractPptxFromZip(zip: ZipReader): PptxExtract | null {
 export function extractSheetFromZip(zip: ZipReader): SheetExtract | null {
   const ssXml = zip.readText("xl/sharedStrings.xml");
   const shared = ssXml ? extractSharedStrings(ssXml) : [];
-  const names = zip
-    .listEntries()
-    .filter((n) => /xl\/worksheets\/sheet\d+\.xml$/i.test(n));
+  const names = sheetPaths(zip);
   if (names.length === 0) return null;
   const sheetXmls = names.map((name) => ({ name: sheetNameFromPath(name), xml: zip.readText(name) ?? "" }));
   return extractSheets(sheetXmls, shared);
+}
+
+/**
+ * 知识库只索引实际单元格文本，不展开预览布局。
+ * 在引用共享字符串时逐段截断，避免先拼出巨量重复文本再限长。
+ * ZIP 的输入、条目和解压预算仍由调用方的 readZip 负责。
+ */
+export function extractSheetTextFromZip(zip: ZipReader, maxChars: number): string | null {
+  if (!Number.isSafeInteger(maxChars) || maxChars < 0) throw new RangeError("invalid sheet text budget");
+  const names = sheetPaths(zip);
+  if (names.length === 0) return null;
+  let text = "";
+  const append = (value: string): boolean => {
+    text += value.slice(0, maxChars - text.length);
+    return text.length < maxChars;
+  };
+  if (maxChars === 0) return text;
+  const ssXml = zip.readText("xl/sharedStrings.xml");
+  const shared = ssXml ? extractSharedStrings(ssXml) : [];
+  for (const name of names) {
+    if (!append(`${text ? "\n\n" : ""}# ${sheetNameFromPath(name)}\n`)) return text;
+    const xml = zip.readText(name) ?? "";
+    let hasRow = false;
+    for (const row of sheetElements(xml, "row")) {
+      let hasCell = false;
+      for (const cell of sheetElements(row[2] ?? "", "c")) {
+        const value = sheetCellText(cell[1], cell[2] ?? "", shared);
+        if (!value) continue;
+        if (!append(hasCell ? "\t" : hasRow ? "\n" : "") || !append(value)) return text;
+        hasCell = true;
+        hasRow = true;
+      }
+    }
+  }
+  return text;
+}
+
+function sheetPaths(zip: ZipReader): string[] {
+  return zip.listEntries()
+    .filter((name) => /^xl\/worksheets\/sheet\d+\.xml$/i.test(name))
+    .sort((a, b) => Number(a.match(/sheet(\d+)\.xml$/i)?.[1]) - Number(b.match(/sheet(\d+)\.xml$/i)?.[1]));
 }
 
 /** 从 entry 路径取 sheet 显示名(xl/worksheets/sheet1.xml → Sheet1)。 */

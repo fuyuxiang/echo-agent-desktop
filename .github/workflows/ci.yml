@@ -62,6 +62,7 @@ jobs:
       - run: pnpm install --frozen-lockfile
       - run: pnpm test
       - run: pnpm test:scripts
+      - run: pnpm office:test
 
   build:
     runs-on: ubuntu-latest
@@ -304,5 +305,9 @@ jobs:
       - name: Verify AI SDK streams and SCM diffs
         working-directory: vendor/theia-platform
         run: |
-          node node_modules/typescript/bin/tsc -b packages/ai-vercel-ai packages/ai-chat-ui packages/scm
+          node node_modules/typescript/bin/tsc -b packages/ai-vercel-ai packages/ai-chat-ui packages/scm packages/plugin-ext
           node node_modules/mocha/bin/mocha.js --config configs/mocharc.yml packages/ai-vercel-ai/lib/node/vercel-ai-language-model.spec.js packages/ai-chat-ui/lib/browser/chat-response-renderer/toolcall-part-renderer.spec.js packages/scm/lib/browser/dirty-diff/diff-computer.spec.js
+      - name: Verify pinned IDE plugins and SCM command completion
+        run: |
+          node scripts/manage-theia-vsix.mjs stage
+          node --test scripts/test-theia-plugin-validation.mjs scripts/test-theia-scm-command.mjs scripts/test-theia-git-windowless.mjs

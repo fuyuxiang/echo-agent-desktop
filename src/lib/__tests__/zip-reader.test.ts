@@ -1,6 +1,8 @@
 import { describe, it, expect } from "vitest";
 import { Buffer } from "node:buffer";
 import { deflateRawSync } from "node:zlib";
+import JSZip from "jszip";
+import { extractDocxFromZip } from "../doc-preview";
 import {
   listZipEntries,
   extractEntry,
@@ -50,6 +52,32 @@ function crc32(data: Uint8Array): number {
 }
 
 describe("zip-reader — STORE (method 0)", () => {
+  it("空目录和空文件不会截断后续文档内容", () => {
+    const zip = buildZip([
+      { name: "word/", method: 0, data: Buffer.alloc(0) },
+      { name: "empty.txt", method: 0, data: Buffer.alloc(0) },
+      { name: "word/document.xml", method: 0, data: Buffer.from("正文") },
+    ]);
+    expect(makeDocZipReaderFromBytes(zip).readText("word/document.xml")).toBe("正文");
+  });
+
+  it.each([false, true])("真实 OOXML ZIP 可预览（streamFiles=%s）", async (streamFiles) => {
+    const archive = new JSZip();
+    archive.file("word/document.xml", "<w:document><w:p><w:r><w:t>报告 &amp; 交付</w:t></w:r></w:p></w:document>");
+    archive.file("word/empty.xml", "");
+    const bytes = await archive.generateAsync({ type: "uint8array", compression: "DEFLATE", streamFiles });
+    expect(extractDocxFromZip(makeDocZipReaderFromBytes(bytes))?.text).toBe("报告 & 交付");
+  });
+
+  it("拒绝中央目录指向归档外的文件头", async () => {
+    const archive = new JSZip().file("document.xml", "正文");
+    const bytes = await archive.generateAsync({ type: "uint8array" });
+    const view = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength);
+    const directory = bytes.findIndex((_, index) => index + 4 <= bytes.length && view.getUint32(index, true) === 0x02014b50);
+    view.setUint32(directory + 42, bytes.length + 1, true);
+    expect(() => listZipEntries(bytes)).toThrow(/bounds/);
+  });
+
   it("解压未压缩 entry", () => {
     const content = Buffer.from("hello world", "utf-8");
     const zip = buildZip([{ name: "a.txt", method: 0, data: content }]);

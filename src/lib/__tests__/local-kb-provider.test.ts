@@ -1,6 +1,7 @@
 import { describe, it, expect, beforeEach } from "vitest";
 import { Buffer } from "node:buffer";
 import { deflateRawSync } from "node:zlib";
+import ExcelJS from "exceljs";
 import {
   isKnowledgeFile,
   isDocxFile,
@@ -146,6 +147,28 @@ describe("extractPptxText / extractSheetText / extractOfficeText", () => {
     const text = extractSheetText(zip);
     expect(text).toContain("姓名");
     expect(text).toContain("年龄");
+  });
+
+  it("表格文本索引不展开高行号和空列，也不受预览布局预算影响", () => {
+    const zip = buildMultiEntryZip([
+      { name: "xl/sharedStrings.xml", xml: '<sst><si><t>唯一知识 &amp;lt;事实&amp;gt;</t></si></sst>' },
+      { name: "xl/worksheets/sheet1.xml", xml: '<worksheet><row r="10001"><c r="XFD10001" t="s"><v>0</v></c></row></worksheet>' },
+      { name: "xl/worksheets/sheet2.xml", xml: '<worksheet><row r="1048576"><c r="XFD1048576" t="inlineStr"><is><t>第二张表的正文</t></is></c></row></worksheet>' },
+    ]);
+    const text = extractSheetText(zip);
+    expect(text).toBe('# Sheet1\n唯一知识 &lt;事实&gt;\n\n# Sheet2\n第二张表的正文');
+  });
+
+  it("重复引用共享字符串时，表格索引仍受已有文本容量限制", () => {
+    const value = "知识内容".repeat(8192);
+    const zip = buildMultiEntryZip([
+      { name: "xl/sharedStrings.xml", xml: `<sst><si><t>${value}</t></si></sst>` },
+      { name: "xl/worksheets/sheet1.xml", xml: `<worksheet><row>${'<c t="s"><v>0</v></c>'.repeat(32)}</row></worksheet>` },
+    ]);
+    const text = extractSheetText(zip);
+    expect(text).not.toBeNull();
+    expect(text!.length).toBe(512 * 1024);
+    expect(text).toContain("知识内容");
   });
 
   it("extractOfficeText 按扩展名分发(docx/pptx/xlsx)", () => {
@@ -546,6 +569,27 @@ describe("createLocalKbProvider", () => {
     expect(hit).toHaveLength(1);
     expect(hit[0].title).toBe("data");
     expect(hit[0].snippet).toContain("销售");
+  });
+
+  it("真实 Excel 的高行号正文可以检索、缓存，并在重建后保持可用", async () => {
+    const workbook = new ExcelJS.Workbook();
+    workbook.addWorksheet("事实").getCell("A10001").value = "高行号中的唯一知识事实";
+    const bytes = new Uint8Array(await workbook.xlsx.writeBuffer());
+    let reads = 0;
+    const provider = createLocalKbProvider("/kb", {
+      listDir: async () => [{ name: "facts.xlsx", path: "/kb/facts.xlsx", isDir: false }],
+      readText: async () => null,
+      readBytes: async () => { reads++; return bytes; },
+    });
+    expect(bytes.byteLength).toBeLessThan(10_000);
+    const hits = await provider.list("唯一知识事实");
+    expect(hits).toHaveLength(1);
+    expect(hits[0].snippet).toContain("唯一知识事实");
+    expect(await provider.list("唯一知识事实")).toHaveLength(1);
+    expect(reads).toBe(1);
+    await provider.rebuild!();
+    expect(await provider.list("唯一知识事实")).toHaveLength(1);
+    expect(reads).toBe(2);
   });
 
   it("pptx/xlsx 无 readBytes 支持时降级:有 query 不命中内容,无 query 仍列标题", async () => {

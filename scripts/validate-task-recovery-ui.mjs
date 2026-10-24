@@ -15,17 +15,22 @@ try {
   for (const width of [420, 1280]) for (const theme of ["light", "dark"]) {
     await page.setViewportSize({ width, height: 900 });
     await page.goto("http://127.0.0.1:" + port + "/__ui-review?surface=conversation&recovery=1&theme=" + theme);
-    const button = page.getByRole("button", { name: "继续此任务", exact: true });
-    await button.waitFor();
+    const input = page.locator(".echo-composer__input");
+    await input.waitFor();
+    assert.equal(await page.getByRole("button", { name: "继续此任务", exact: true }).count(), 0);
     assert.match(await page.locator(".yield-banner").textContent(), /操作未获批准/);
+    const controlsBefore = await page.evaluate(() => ({ ...window.recoveryReview }));
+    await input.fill("继续允许范围内的任务，保留此前拒绝的操作");
+    const button = page.getByRole("button", { name: "发送", exact: true });
     const geometry = await button.boundingBox();
     assert(geometry && geometry.x >= 0 && geometry.x + geometry.width <= width && geometry.y + geometry.height <= 900);
     await page.screenshot({ path: join(output, "recovery-" + width + "-" + theme + ".png") });
     await button.click();
     const note = page.getByRole("note"); await note.waitFor();
-    assert.match(await note.textContent(), /刚才被拒绝或取消的操作仍然禁止/);
+    assert.equal(await note.textContent(), "继续允许范围内的任务，保留此前拒绝的操作");
+    assert.deepEqual(await page.evaluate(() => window.recoveryReview), controlsBefore, "continuation must not approve rejected operations or change permission mode");
     assert.equal(await page.locator(".yield-banner").count(), 0);
   }
   assert.deepEqual(errors, []);
-  console.log("Task recovery UI: four layouts, original restrictions, actual continue action and banner dismissal passed. Screenshots: " + output);
+  console.log("Task recovery UI: four layouts, natural-language continuation, unchanged permission decisions/mode and new-turn banner dismissal passed. Screenshots: " + output);
 } finally { await browser?.close(); await server.close(); }

@@ -401,15 +401,13 @@ mod tests {
         record_at(home.path(), "session", receipt.clone(), "报告", false).unwrap();
         let restarted_access = crate::shell_fs::FilesystemAccess::default();
         assert!(restarted_access.require_authorized_file(&path).is_err());
-        assert!(
-            verified_receipt_at(
-                home.path(),
-                "session",
-                sibling.to_str().unwrap(),
-                &receipt.sha256
-            )
-            .is_err()
-        );
+        assert!(verified_receipt_at(
+            home.path(),
+            "session",
+            sibling.to_str().unwrap(),
+            &receipt.sha256
+        )
+        .is_err());
         assert!(
             verified_receipt_at(home.path(), "other-session", &receipt.path, &receipt.sha256)
                 .is_err()
@@ -517,16 +515,14 @@ mod tests {
         assert_eq!(records[1].receipt.sha256, "c".repeat(64));
         assert!(read_at(home.path(), "another-session").unwrap().is_empty());
         std::fs::write(store_path(home.path(), "session").unwrap(), b"broken").unwrap();
-        assert!(
-            record_at(
-                home.path(),
-                "session",
-                records[0].receipt.clone(),
-                "new",
-                false
-            )
-            .is_err()
-        );
+        assert!(record_at(
+            home.path(),
+            "session",
+            records[0].receipt.clone(),
+            "new",
+            false
+        )
+        .is_err());
         assert_eq!(
             std::fs::read(store_path(home.path(), "session").unwrap()).unwrap(),
             b"broken"

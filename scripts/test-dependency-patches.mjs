@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { createRequire } from "node:module";
-import { existsSync, mkdirSync, mkdtempSync, writeFileSync, rmSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync, rmSync } from "node:fs";
 import { spawnSync } from "node:child_process";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
@@ -11,6 +11,33 @@ import { assertSupportedNodeVersion, assertSupportedNpmVersion } from "./node-ru
 const require = createRequire(import.meta.url);
 const braces = require(resolve("vendor/theia-platform/security/braces"));
 const { sprintf } = require(resolve("vendor/theia-platform/security/sprintf-js"));
+
+test("dependency audit covers every tracked Rust lockfile, including the native harness", () => {
+  const result = spawnSync("git", ["ls-files", "-z", "--", "*Cargo.lock"], { encoding: "utf8" });
+  assert.equal(result.status, 0, result.stderr);
+  const tracked = result.stdout.split("\0").filter(Boolean).sort();
+  assert.ok(tracked.length > 0);
+  const source = readFileSync("scripts/audit-dependencies.py", "utf8");
+  const audited = [...source.matchAll(/"([^"\n]+\/Cargo\.lock)"/g)].map(match => match[1]).sort();
+  assert.deepEqual(audited, tracked);
+});
+
+test("both IDE body parsers survive late compressed tails, drain requests and preserve other consumers", () => {
+  const theiaRequire = createRequire(resolve("vendor/theia-platform/package.json"));
+  const sdkRequire = createRequire(theiaRequire.resolve("@modelcontextprotocol/sdk/server/streamableHttp.js"));
+  const implementations = [theiaRequire.resolve("body-parser"), sdkRequire.resolve("body-parser")];
+  assert.equal(new Set(implementations).size, 2, "both installed parser implementations must be exercised");
+  for (const [index, implementation] of implementations.entries()) {
+    const version = createRequire(implementation)("./package.json").version;
+    assert.equal(Number(version.split(".")[0]), index + 1, `unexpected parser API: ${version}`);
+    const result = spawnSync(process.execPath, ["scripts/fixtures/body-parser-recovery.mjs", implementation], {
+      encoding: "utf8", timeout: 20_000,
+    });
+    assert.equal(result.status, 0, result.error?.message || result.stderr || `parser process failed: ${result.signal}`);
+    assert.deepEqual(JSON.parse(result.stdout), { normalJson: true, validGzip: true, invalidGzipRejected: true,
+      trailingGzip: true, lateDeflate: true, otherPipePreserved: true, subsequentRequests: true });
+  }
+});
 
 test("normal brace globs keep expansion and compilation behavior", () => {
   assert.deepEqual(braces.expand("src/{main,test}.{ts,tsx}"), ["src/main.ts", "src/main.tsx", "src/test.ts", "src/test.tsx"]);

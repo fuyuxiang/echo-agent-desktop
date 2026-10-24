@@ -8,6 +8,7 @@ import {
   extractDocxFromZip,
   extractPptxFromZip,
   extractSheetFromZip,
+  extractSheetTextFromZip,
   sheetNameFromPath,
   type ZipReader,
 } from "../doc-preview";
@@ -27,6 +28,11 @@ describe("extractDocxParagraphs", () => {
   it("反转义 XML 实体", () => {
     const xml = `<w:p><w:r><w:t>a &amp; b &lt; c</w:t></w:r></w:p>`;
     expect(extractDocxParagraphs(xml).paragraphs[0]).toBe("a & b < c");
+  });
+
+  it("数字实体只解码一层，并且制表位属性不被当作文本节点", () => {
+    const xml = '<w:p><w:pPr><w:tabs><w:tab w:pos="720"/></w:tabs></w:pPr><w:r><w:t>&#x4e2d;&#25991; &#38;lt;</w:t></w:r></w:p>';
+    expect(extractDocxParagraphs(xml).text).toBe("中文 &lt;");
   });
 
   it("空段落被过滤", () => {
@@ -107,6 +113,33 @@ describe("extractSheets / extractSharedStrings", () => {
 });
 
 describe("extractXxxFromZip (高层 + 注入 ZipReader)", () => {
+  it("稀疏单元格保留列位置、自闭合空格与空行", () => {
+    const xml = '<worksheet><sheetData><row r="1"><c r="A1"><v>表头</v></c><c r="C1"><v>金额</v></c></row><row r="3"><c r="A3"/><c r="C3"><v>42</v></c></row></sheetData></worksheet>';
+    expect(extractSheets([{ name: "Sheet1", xml }]).sheets[0].rows).toEqual([
+      ["表头", "", "金额"], [], ["", "", "42"],
+    ]);
+  });
+
+  it("共享字符串只解码一次，inline string 与它保持相同文字", () => {
+    const shared = extractSharedStrings('<sst><si><t>&amp;lt;tag&amp;gt;</t></si></sst>');
+    const xml = '<row><c t="s"><v>0</v></c><c t="inlineStr"><is><t>&amp;lt;tag&amp;gt;</t></is></c></row>';
+    expect(extractSheets([{ name: "Sheet1", xml }], shared).sheets[0].rows).toEqual([["&lt;tag&gt;", "&lt;tag&gt;"]]);
+  });
+
+  it("无效或缺失的共享字符串索引不会变成第一项", () => {
+    const xml = '<row><c t="s"><v></v></c><c t="s"><v>-1</v></c><c t="s"><v>0.5</v></c></row>';
+    expect(extractSheets([{ name: "Sheet1", xml }], ["不应显示"]).sheets[0].rows).toEqual([["", "-1", "0.5"]]);
+  });
+
+  it("恶意行列坐标不能触发无界空数组分配", () => {
+    expect(() => extractSheets([{ name: "Sheet1", xml: '<row r="999999999"><c r="ZZZZZZ1"><v>x</v></c></row>' }])).toThrow(/limit/);
+  });
+
+  it("多张稀疏工作表共用总行数上限，空行也计入", () => {
+    const xml = '<worksheet><sheetData><row r="6000"/></sheetData></worksheet>';
+    expect(() => extractSheets([{ name: "Sheet1", xml }, { name: "Sheet2", xml }])).toThrow(/rows.*limit/);
+  });
+
   const makeZip = (entries: Record<string, string>): ZipReader => ({
     readText: (p) => entries[p] ?? null,
     listEntries: () => Object.keys(entries),
@@ -141,6 +174,29 @@ describe("extractXxxFromZip (高层 + 注入 ZipReader)", () => {
   });
   it("xlsx:无 worksheet → null", () => {
     expect(extractSheetFromZip(makeZip({}))).toBeNull();
+    expect(extractSheetTextFromZip(makeZip({}), 1024)).toBeNull();
+  });
+
+  it("xlsx 按工作表数字序预览，排除相似路径", () => {
+    const row = (value: string) => `<row><c><v>${value}</v></c></row>`;
+    const zip = makeZip({ "xl/worksheets/sheet10.xml": row("10"), "xl/worksheets/sheet2.xml": row("2"), "other/xl/worksheets/sheet1.xml": row("忽略") });
+    expect(extractSheetFromZip(zip)?.sheets.map(sheet => sheet.name)).toEqual(["Sheet2", "Sheet10"]);
+    expect(extractSheetTextFromZip(zip, 1024)).toBe("# Sheet2\n2\n\n# Sheet10\n10");
+  });
+
+  it("知识索引在字符预算内截断共享字符串，达到上限后不再读取后续工作表", () => {
+    const reads: string[] = [];
+    const zip: ZipReader = {
+      listEntries: () => ["xl/worksheets/sheet2.xml", "xl/worksheets/sheet1.xml"],
+      readText: (path) => {
+        reads.push(path);
+        if (path === "xl/sharedStrings.xml") return `<sst><si><t>${"知识".repeat(1024)}</t></si></sst>`;
+        if (path === "xl/worksheets/sheet1.xml") return '<row r="1048576"><c r="XFD1048576" t="s"><v>0</v></c></row>';
+        throw new Error("不应读取预算外的工作表");
+      },
+    };
+    expect(extractSheetTextFromZip(zip, 32)).toBe(("# Sheet1\n" + "知识".repeat(1024)).slice(0, 32));
+    expect(reads).toEqual(["xl/sharedStrings.xml", "xl/worksheets/sheet1.xml"]);
   });
 });
 

@@ -3,11 +3,11 @@
  *
  * 用途:为 FilePreview 的 docx/pptx/sheet 预览提供运行时 ZipReader(OOXML 是 zip)。
  * 支持:
- *  - 解析本地文件头(Local File Header)定位每个 entry 的压缩数据
+ *  - 通过中央目录定位条目，兼容空目录和流式 ZIP 的 data descriptor
  *  - 解压 method 0(STORE,直接拷贝)与 method 8(DEFLATE,内含迷你 inflate)
  *  - UTF-8 文本读取(供 OOXML XML 提取)
  *
- * 注:只读 central directory 不必要;本地文件头已含方法/大小/名/数据偏移。
+ * 无中央目录的本地文件头片段仅支持已知压缩大小；不会扫描压缩数据猜测边界。
  * 迷你 inflate 实现 raw DEFLATE(bit-stream + Huffman + LZ77),约 150 行,完整覆盖。
  */
 
@@ -27,6 +27,69 @@ const MAX_ZIP_ENTRIES = 512;
 const MAX_ENTRY_OUTPUT_BYTES = 4 * 1024 * 1024;
 const MAX_TOTAL_OUTPUT_BYTES = 16 * 1024 * 1024;
 
+function validateEntryName(name: string): void {
+  if (name.length > 4_096 || name.includes("\0") || name.startsWith("/")
+      || name.replace(/\\/g, "/").split("/").includes("..")) {
+    throw new Error("zip entry name is unsafe");
+  }
+}
+
+/** The directory owns sizes when bit 3 leaves them absent from local headers. */
+function centralDirectoryEntries(data: Uint8Array, dv: DataView): ZipEntry[] | null {
+  // An EOCD has a 22-byte header and at most a 65535-byte comment.
+  let end = -1;
+  for (let offset = data.length - 22; offset >= Math.max(0, data.length - 22 - 65_535); offset--) {
+    if (dv.getUint32(offset, true) === 0x06054b50
+        && offset + 22 + dv.getUint16(offset + 20, true) === data.length) {
+      end = offset;
+      break;
+    }
+  }
+  if (end < 0) return null;
+  const count = dv.getUint16(end + 10, true);
+  if (dv.getUint16(end + 4, true) !== 0 || dv.getUint16(end + 6, true) !== 0
+      || dv.getUint16(end + 8, true) !== count) {
+    throw new Error("multi-disk zip is unsupported");
+  }
+  if (count > MAX_ZIP_ENTRIES) throw new Error("zip contains too many entries");
+  const size = dv.getUint32(end + 12, true);
+  let offset = dv.getUint32(end + 16, true);
+  const directoryStart = offset;
+  const directoryEnd = offset + size;
+  if (directoryEnd !== end) throw new Error("zip directory exceeds archive bounds");
+  const entries: ZipEntry[] = [];
+  for (let index = 0; index < count; index++) {
+    if (offset + 46 > directoryEnd || dv.getUint32(offset, true) !== 0x02014b50) {
+      throw new Error("zip directory entry exceeds archive bounds");
+    }
+    const flags = dv.getUint16(offset + 8, true);
+    const method = dv.getUint16(offset + 10, true);
+    const compressedSize = dv.getUint32(offset + 20, true);
+    const nameLength = dv.getUint16(offset + 28, true);
+    const next = offset + 46 + nameLength + dv.getUint16(offset + 30, true) + dv.getUint16(offset + 32, true);
+    if (next > directoryEnd) throw new Error("zip entry header exceeds archive bounds");
+    if ((flags & 1) !== 0) throw new Error("encrypted zip entries are unsupported");
+    if (dv.getUint16(offset + 34, true) !== 0) throw new Error("multi-disk zip is unsupported");
+    const name = utf8Decode(data.subarray(offset + 46, offset + 46 + nameLength));
+    validateEntryName(name);
+    const local = dv.getUint32(offset + 42, true);
+    if (local + 30 > directoryStart || dv.getUint32(local, true) !== 0x04034b50) {
+      throw new Error("zip local header exceeds archive bounds");
+    }
+    const localNameLength = dv.getUint16(local + 26, true);
+    const dataOffset = local + 30 + localNameLength + dv.getUint16(local + 28, true);
+    if (dataOffset + compressedSize > directoryStart) throw new Error("zip entry data exceeds archive bounds");
+    if (dv.getUint16(local + 6, true) !== flags || dv.getUint16(local + 8, true) !== method
+        || utf8Decode(data.subarray(local + 30, local + 30 + localNameLength)) !== name) {
+      throw new Error("zip local header does not match directory");
+    }
+    entries.push({ name, method, dataOffset, compressedSize });
+    offset = next;
+  }
+  if (offset !== directoryEnd) throw new Error("zip directory size does not match entries");
+  return entries;
+}
+
 /**
  * 列出 zip 字节里的所有 entry(解析本地文件头)。
  * 每个本地文件头签名 0x04034b50(PK\x03\x04)。
@@ -38,12 +101,15 @@ export function listZipEntries(data: Uint8Array): ZipEntry[] {
   const entries: ZipEntry[] = [];
   let off = 0;
   const dv = makeDataView(data);
+  const directoryEntries = centralDirectoryEntries(data, dv);
+  if (directoryEntries) return directoryEntries;
   while (off + 4 <= data.length) {
     const sig = dv.getUint32(off, true);
     if (sig !== 0x04034b50) break; // 不再是本地文件头
-    if (off + 30 > data.length) break;
+    if (off + 30 > data.length) throw new Error("zip entry header exceeds archive bounds");
     const flags = dv.getUint16(off + 6, true);
     if ((flags & 0x1) !== 0) throw new Error("encrypted zip entries are unsupported");
+    if ((flags & 0x8) !== 0) throw new Error("streamed zip requires a central directory");
     const method = dv.getUint16(off + 8, true);
     const compressedSize = dv.getUint32(off + 18, true);
     const nameLen = dv.getUint16(off + 26, true);
@@ -59,20 +125,12 @@ export function listZipEntries(data: Uint8Array): ZipEntry[] {
     if (!Number.isSafeInteger(dataEnd) || dataEnd > data.length) {
       throw new Error("zip entry data exceeds archive bounds");
     }
-    if (
-      name.length > 4_096
-      || name.includes("\0")
-      || name.startsWith("/")
-      || name.replace(/\\/g, "/").split("/").includes("..")
-    ) {
-      throw new Error("zip entry name is unsafe");
-    }
+    validateEntryName(name);
     if (entries.length >= MAX_ZIP_ENTRIES) {
       throw new Error("zip contains too many entries");
     }
     entries.push({ name, method, dataOffset, compressedSize });
-    // 跳到下一个 entry(若有 data descriptor 且 compressedSize 为 0,无法定位 → 停)。
-    if (compressedSize === 0) break;
+    // Even an empty file/directory advances past its header and name.
     off = dataEnd;
   }
   return entries;
