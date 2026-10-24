@@ -19,7 +19,7 @@ EchoAgent 将会话绑定到实际工作目录。你可以选择模型和权限�
 | **专家团** | 复用本地专家与已有专家团；支持中文 @成员、只读讨论、协作派发、成员结果汇总、权限审批、决定记录与交付物。 |
 | **Agent 任务** | 流式对话、计划与任务、工具调用、权限审批、会话历史、回溯与分叉、子 Agent 状态。 |
 | **代码开发** | 内嵌 Eclipse Theia IDE，提供编辑器、文件树、搜索、终端、Git 和预览；Echo Code 管理任务阶段、Diff 审阅、验证与交付。 |
-| **浏览器与桌面操作** | Browser Use 使用任务独立的浏览器资料；Computer Use 增加 macOS AX / Windows UIA 原生控件读取与操作，并保留截图坐标后备（实机验证状态见文档）。能力由当前设备实时检测，关键交互需要确认。 |
+| **浏览器与桌面操作** | Browser Use 使用任务独立的浏览器资料，有副作用的操作单独确认；Computer Use 支持 macOS AX / Windows UIA 原生控件与截图坐标后备，从明确的电脑任务启动，连续执行并可随时暂停。能力由当前设备实时检测，实机验证状态见文档。 |
 | **模型与扩展** | 内置远端模型和自定义模型连接；支持 MCP、Skills、Plugins、连接器与专家。 |
 | **知识与办公** | 本地知识索引、项目上下文、记忆；在任务中读取常见文件，并在本机生成 Word、PDF、Excel 和 PowerPoint。 |
 | **持续工作** | 项目与工作项、定时任务、通知、会议录音与纪要，以及可选的微信远程会话和组织服务。 |
@@ -70,6 +70,16 @@ pnpm install --frozen-lockfile
 
 <p align="center"><sub>图示为涉及文件修改的典型路径；没有权限请求或文件变更时，可跳过相应步骤。</sub></p>
 
+### 用自然语言操作电脑
+
+直接在聊天中说明目标应用、操作和结果。例如在 macOS 发送：“请在 TextEdit 新建纯文本文稿，写入‘会议记录’，保存到桌面的‘会议记录.txt’。”Windows 可指定记事本。明确的电脑操作请求会自动接入 Computer Use；也可从工具菜单手动选择。普通讨论、代码评审和文件生成请求不会仅因提到应用名称而启动桌面操作。
+
+- 任务内连续执行，无需逐步确认。发送“停一下”或 `/pause` 可暂停；在同一聊天发送“继续保存”或 `/resume` 可续做，暂停时也可点击“继续任务”。
+- 保存位置、文件名等要求可继续在同一聊天补充。应用重启后任务以暂停状态保留，需要主动继续。
+- 完成后核对实际保存路径和文件内容；点击保存或工具返回成功不等于文件已经正确保存。
+
+macOS 首次使用需在系统设置中为实际运行的应用授予“辅助功能”和“屏幕录制”权限。Windows 需要可访问的交互桌面；锁屏、系统安全界面、密码和受保护控件可能需要用户接管。支持范围和验证结果见 [原生桌面控件与验收](docs/desktop-control/README.md)。
+
 ## 架构与数据流
 
 EchoAgent 使用 React 18 构建界面，Tauri 2 与 Rust 负责桌面能力、状态和进程管理。Agent Runtime 作为**进程内组件**运行，通过类型化 ACP Channel 与宿主通信。Echo Code 的 Theia 后端由宿主启动为本机进程；浏览器和电脑操作通过绑定当前任务的本地 MCP 服务交给 Runtime 使用。
@@ -117,7 +127,7 @@ EchoAgent 使用 React 18 构建界面，Tauri 2 与 Rust 负责桌面能力、�
 - 默认数据根目录是 `~/.echo-agent/`，可在启动前通过 `ECHO_AGENT_HOME` 调整。模型配置位于 `config.toml`，MCP 配置位于 `mcp.json`，会话与工作台状态存放在该根目录下的对应子目录。
 - Provider API Key 保存在本机配置文件中。请保护该文件，避免将其提交到仓库或附在公开 Issue 中。个人模型连接默认要求 HTTPS；内置模型使用项目配置的远端 HTTP 服务。
 - “本地优先”不等于离线。发送给模型的任务内容，以及启用 Browser Use / Computer Use 后提供的网页内容或屏幕截图，会到达所选模型服务；MCP、通知、云存储和可选组织能力也可能访问外部服务。
-- 工作区授权、权限模式与操作确认共同控制 Agent 行为。Browser Use 默认限制私网访问；Computer Use 从明确的用户任务启动，任务内连续操作，不逐步弹窗；发送“停一下”暂停，发送“继续保存”等直接续做。暂停、停止和重启撤销旧执行令牌；系统权限仍按操作系统要求授予。Theia 的交互终端以当前系统用户身份运行，应审查来源未知项目中的命令。
+- 工作区授权、权限模式与操作确认共同控制 Agent 行为。Browser Use 默认限制私网访问；Computer Use 从明确的用户任务启动，任务内连续操作，不逐步弹窗。暂停、停止、切换模式和重启撤销旧执行令牌；系统权限仍按操作系统要求授予。电脑任务范围是执行上下文，不是操作系统文件沙箱。Theia 的交互终端以当前系统用户身份运行，应审查来源未知项目中的命令。
 
 详细的平台条件与操作边界见 [自动化安全说明](docs/automation-platform-support.md)。
 
@@ -127,11 +137,13 @@ EchoAgent 使用 React 18 构建界面，Tauri 2 与 Rust 负责桌面能力、�
 | --- | --- |
 | `pnpm tauri dev` | 启动完整桌面应用，并自动准备 Theia 与 Office Worker。 |
 | `pnpm test` | 运行前端 Vitest 测试。 |
-| `pnpm test:scripts` | 验证浏览器快照标签、测试签名范围、IDE 状态与进程回收、日志脱敏和窗口验收条件；CI 自动运行。 |
+| `pnpm test:scripts` | 验证浏览器快照标签、测试签名范围、IDE 状态与进程回收、日志脱敏、原生验收条件，以及桌面任务证据、分页、计时和工具入参；CI 自动运行。 |
 | `pnpm test:ide` | 构建 Theia 后验证固定 VSIX 完整性和 SCM 命令完成、失败传播。 |
 | `pnpm test:security` | 安装 Theia 依赖后验证压缩包路径保护、SCANOSS 报告输出、兼容补丁和运行时版本门槛。 |
 | `pnpm security:audit` | 使用 Python 3.11+ 联网审计前端、IDE 与全部 Rust 锁文件，保留原始报告；CI 自动运行。 |
 | `pnpm test:native-guards` | 在 macOS 运行原生验收工具的合成报告、隔离和续跑条件回归；不启动桌面应用，也不代表真实界面验收。 |
+| `pnpm test:desktop-native` | 独立编译生产原生桌面模块并运行回归，不启动完整 Runtime 或派发桌面输入；macOS 事件对象测试需要可访问的图形会话。 |
+| `pnpm test:task-recovery` | 在真实 Chromium 中验证网页输入和任务恢复界面；需可用的 Playwright 与 Chromium，可用 `PLAYWRIGHT_MODULE`、`CHROME_BIN` 指定。 |
 | `pnpm test:mermaid` | 验证真实图表渲染、换行、预览、复制、下载及失败恢复；macOS 同时检查原生 WKWebView。 |
 | `pnpm build` | TypeScript 类型检查与前端生产构建。 |
 | `pnpm test:production-startup` | 构建后用静态服务和隔离浏览器检查真实生产资源启动、脚本错误及资源加载；日常 CI 自动运行并保留截图、报告。 |
@@ -148,6 +160,8 @@ CI 的 Rust 格式检查独立运行，格式错误不会阻止静态检查与�
 依赖升级、兼容补丁来源和锁文件更新步骤见 [依赖安全维护](docs/dependency-security.md)。
 
 原生验收入口为 `scripts/validate-native-review.mjs`，以及 `validate-native-browser-review.mjs`、`validate-native-core-review.mjs`、`validate-native-ide-git-review.mjs`、`validate-native-local-review.mjs`、`validate-native-webdav-review.mjs` 和 `validate-native-exit-recovery-review.mjs`。这些工具需要已构建的桌面可执行文件，使用独立临时数据目录；主验收流程包含首次启动和重启检查。涉及模型的流程需要可用的项目内置模型服务，定时任务验收会等待真实到点。它们不会由普通单元测试自动启动。
+
+macOS 原生桌面任务使用 [`scripts/validate-native-desktop-controls.mjs`](scripts/validate-native-desktop-controls.mjs)，支持 `--smoke`、`--journey`、`--task-flow` 和 `--universal-flow`。桌面任务是否完成需结合真实 Runtime 日志、独立文件核验和界面证据判定；单元测试或 Windows 交叉编译通过不能替代实机验收。准备步骤、核验入口和历史实测范围见 [桌面验收记录](docs/desktop-control/validation.md)。
 
 新增原生验收工具默认将报告写入系统临时目录；可通过各入口的 `NATIVE_*_REVIEW_OUTPUT` 环境变量指定保留位置，通用桌面和会议界面验收使用 `UI_REVIEW_OUTPUT`。Code 验收中的续跑选项必须显式指定原输出目录，保留原始报告与独立临时数据目录。WebDAV 验收需在独立 Python 环境安装 `WsgiDAV` 和 `cheroot`，再用 `WEBDAV_REVIEW_PYTHON` 指定该环境的 Python；可选 `WEBDAV_REVIEW_PYTHONPATH` 用于显式依赖目录。Office 内容独立核验脚本 `validate-native-office-content.py` 另需 `python-docx`、`openpyxl`、`python-pptx` 和 `pypdf`。报告、截图、安装包和用户运行数据不属于项目源码。
 
