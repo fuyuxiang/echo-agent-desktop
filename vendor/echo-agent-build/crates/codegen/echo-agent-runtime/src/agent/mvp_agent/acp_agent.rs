@@ -2141,11 +2141,11 @@ impl acp::Agent for MvpAgent {
                     responds_to: tx,
                 });
         }
-        let _ = rx
+        rx
             .await
             .map_err(|_| {
                 acp::Error::internal_error().data("response to set session failed")
-            })?;
+            })??;
         Ok(acp::SetSessionModeResponse::new())
     }
     async fn set_session_model(
@@ -2863,7 +2863,7 @@ impl acp::Agent for MvpAgent {
                         session_mode: next_mode_id.clone(),
                         responds_to: tx,
                     });
-                if rx.await.is_err() {
+                if !matches!(rx.await, Ok(Ok(()))) {
                     tracing::warn!(
                         session_id = %session_id_str,
                         mode_id = %next_mode_id.0,

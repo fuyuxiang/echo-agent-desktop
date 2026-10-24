@@ -10,11 +10,20 @@ export interface BrowserCapability {
   reason?: string | null;
 }
 
+export interface AccessibilityCapability {
+  supported: boolean;
+  authorization: "granted" | "required" | "unknown";
+  probe: "unknown" | "succeeded" | "failed";
+  reason?: string | null;
+}
+
 export interface ComputerCapability {
   available: boolean;
   platform: string;
   screenCapture: boolean;
   inputControl: boolean;
+  desktopAvailable?: boolean | null;
+  accessibility?: AccessibilityCapability;
   reason?: string | null;
 }
 
@@ -22,6 +31,8 @@ export interface AutomationStatus {
   sessionId: string;
   mode: AutomationMode;
   paused: boolean;
+  computerAuthorized?: boolean;
+  task?: {phase: "running" | "paused" | "stopped"; reason: string | null; scope: string | null; authorized: boolean; generation: number};
   allowPrivateNetwork: boolean;
   browser: BrowserCapability;
   computer: ComputerCapability;
@@ -79,8 +90,8 @@ export const automationPendingApprovals = (sessionId?: string) =>
     sessionId: sessionId ?? null,
   });
 
-export const automationResolveApproval = (requestId: string, approved: boolean) =>
-  invoke<boolean>("automation_resolve_approval", { requestId, approved });
+export const automationResolveApproval = (requestId: string, approved: boolean, allowForTask = false) =>
+  invoke<boolean>("automation_resolve_approval", { requestId, approved, allowForTask });
 
 export const onAutomationStatus = (
   callback: (status: AutomationStatus) => void,

@@ -12,7 +12,9 @@ const MAX_FRAME_AGE_MS: u64 = 30 * 1_000;
 #[serde(rename_all = "camelCase")]
 pub struct ComputerCapability {
     pub available: bool,
+    pub desktop_available: Option<bool>,
     pub platform: String,
+    pub accessibility: super::accessibility::Capability,
     pub screen_capture: bool,
     pub input_control: bool,
     pub reason: Option<String>,
@@ -58,6 +60,21 @@ pub struct ScreenshotFrame {
 #[derive(Debug, Default)]
 pub struct ComputerController {
     last_frame: Option<StoredFrame>,
+}
+
+// Crate-internal dispatch used only by the native worker after its retained
+// window is approved, activated, and its foreground/protected focus rechecked.
+// This is not an IPC/MCP entry point; legacy frame-based key() is unchanged.
+pub(super) fn key_after_native_focus(key: &str, modifiers: &[String]) -> Result<(), String> {
+    platform::key(key, modifiers)
+}
+
+pub(super) fn click_after_native_target(x: f64, y: f64, count: u32) -> Result<(), String> {
+    platform::click(x, y, "left", count)
+}
+
+pub(super) fn text_after_native_focus(text: &str) -> Result<(), String> {
+    platform::type_text(text)
 }
 
 #[derive(Debug)]
@@ -347,11 +364,11 @@ mod platform {
     use core_graphics::access::ScreenCaptureAccess;
     use core_graphics::display::CGDisplay;
     use core_graphics::event::{
-        CGEvent, CGEventFlags, CGEventTapLocation, CGEventType, CGMouseButton, KeyCode,
+        CGEvent, CGEventFlags, CGEventTapLocation, CGEventType, CGMouseButton, EventField, KeyCode,
         ScrollEventUnit,
     };
     use core_graphics::event_source::{CGEventSource, CGEventSourceStateID};
-    use objc2_app_kit::{NSApplicationActivationOptions, NSRunningApplication, NSWorkspace};
+    use objc2_app_kit::NSRunningApplication;
 
     #[link(name = "ApplicationServices", kind = "framework")]
     unsafe extern "C" {
@@ -367,19 +384,28 @@ mod platform {
     pub fn capability() -> ComputerCapability {
         let screen_capture = ScreenCaptureAccess.preflight();
         let input_control = input_allowed();
-        let reason = match (screen_capture, input_control) {
-            (true, true) => None,
-            (false, false) => Some(
-                "需要在“系统设置 > 隐私与安全性”中授予 EchoAgent 屏幕录制和辅助功能权限。".into(),
-            ),
-            (false, true) => Some("需要授予 EchoAgent 屏幕录制权限。".into()),
-            (true, false) => Some("需要授予 EchoAgent 辅助功能权限。".into()),
-        };
+        let desktop = super::super::accessibility::check_desktop_session();
+        let reason =
+            desktop
+                .as_ref()
+                .err()
+                .cloned()
+                .or_else(|| match (screen_capture, input_control) {
+                    (true, true) => None,
+                    (false, false) => Some(
+                        "需要在“系统设置 > 隐私与安全性”中授予 EchoAgent 屏幕录制和辅助功能权限。"
+                            .into(),
+                    ),
+                    (false, true) => Some("需要授予 EchoAgent 屏幕录制权限。".into()),
+                    (true, false) => Some("需要授予 EchoAgent 辅助功能权限。".into()),
+                });
         ComputerCapability {
             // Platform support and live user consent are separate. Keep the
             // mode selectable so the UI can guide first-time permission setup.
             available: true,
+            desktop_available: Some(desktop.is_ok()),
             platform: "macOS".into(),
+            accessibility: super::super::accessibility::capability(),
             screen_capture,
             input_control,
             reason,
@@ -400,8 +426,10 @@ mod platform {
     }
 
     pub fn foreground_target() -> Option<ForegroundTarget> {
-        let application = NSWorkspace::sharedWorkspace().frontmostApplication()?;
-        let pid = application.processIdentifier();
+        let pid = super::super::accessibility::macos_foreground_pid()
+            .ok()
+            .flatten()?;
+        let application = NSRunningApplication::runningApplicationWithProcessIdentifier(pid)?;
         if pid <= 0 {
             return None;
         }
@@ -420,15 +448,10 @@ mod platform {
             .id
             .parse::<libc::pid_t>()
             .map_err(|_| "已记录的 macOS 目标进程无效".to_string())?;
-        if NSWorkspace::sharedWorkspace()
-            .frontmostApplication()
-            .is_some_and(|application| application.processIdentifier() == pid)
-        {
+        if super::super::accessibility::macos_foreground_pid()? == Some(pid) {
             return Ok(());
         }
-        let application = NSRunningApplication::runningApplicationWithProcessIdentifier(pid)
-            .ok_or_else(|| format!("目标应用“{}”已退出，请重新截图", target.name))?;
-        if application.activateWithOptions(NSApplicationActivationOptions::ActivateAllWindows) {
+        if super::super::accessibility::macos_restore_foreground(pid)? {
             Ok(())
         } else {
             Err(format!(
@@ -439,6 +462,7 @@ mod platform {
     }
 
     pub fn displays() -> Result<Vec<DisplayInfo>, String> {
+        super::super::accessibility::check_desktop_session()?;
         let ids = CGDisplay::active_displays()
             .map_err(|code| format!("枚举显示器失败（CoreGraphics {code}）"))?;
         let main = CGDisplay::main();
@@ -538,7 +562,7 @@ mod platform {
 
     fn source() -> Result<CGEventSource, String> {
         if !input_allowed() {
-            return Err("尚未授予辅助功能权限，请在自动化面板中完成授权".into());
+            return Err("尚未授予辅助功能权限，请在系统设置中授予本应用辅助功能权限".into());
         }
         CGEventSource::new(CGEventSourceStateID::HIDSystemState)
             .map_err(|_| "创建 macOS 输入事件源失败".to_string())
@@ -549,15 +573,30 @@ mod platform {
     }
 
     pub fn move_pointer(x: f64, y: f64) -> Result<(), String> {
-        CGEvent::new_mouse_event(
+        let event = CGEvent::new_mouse_event(
             source()?,
             CGEventType::MouseMoved,
             point(x, y),
             CGMouseButton::Left,
         )
-        .map_err(|_| "创建鼠标移动事件失败".to_string())?
-        .post(CGEventTapLocation::HID);
+        .map_err(|_| "创建鼠标移动事件失败".to_string())?;
+        event.set_flags(CGEventFlags::CGEventFlagNull);
+        event.post(CGEventTapLocation::HID);
         Ok(())
+    }
+
+    fn click_event(
+        source: CGEventSource,
+        kind: CGEventType,
+        position: core_graphics::geometry::CGPoint,
+        button: CGMouseButton,
+        click_number: i64,
+    ) -> Result<CGEvent, String> {
+        let event = CGEvent::new_mouse_event(source, kind, position, button)
+            .map_err(|_| "创建鼠标点击事件失败".to_string())?;
+        event.set_flags(CGEventFlags::CGEventFlagNull);
+        event.set_integer_value_field(EventField::MOUSE_EVENT_CLICK_STATE, click_number);
+        Ok(event)
     }
 
     pub fn click(x: f64, y: f64, button: &str, count: u32) -> Result<(), String> {
@@ -580,16 +619,54 @@ mod platform {
             _ => return Err("鼠标按键只能是 left、right 或 middle".into()),
         };
         move_pointer(x, y)?;
-        for _ in 0..count {
-            CGEvent::new_mouse_event(source()?, down, point(x, y), mouse_button)
-                .map_err(|_| "创建鼠标按下事件失败".to_string())?
-                .post(CGEventTapLocation::HID);
-            CGEvent::new_mouse_event(source()?, up, point(x, y), mouse_button)
-                .map_err(|_| "创建鼠标释放事件失败".to_string())?
-                .post(CGEventTapLocation::HID);
+        for click_number in 1..=count {
+            // Construct both halves first so allocation failure cannot strand
+            // a pressed button. macOS requires 1,2,... click-state metadata;
+            // repeated single-click events are not a native double click.
+            let down_event = click_event(
+                source()?,
+                down,
+                point(x, y),
+                mouse_button,
+                i64::from(click_number),
+            )?;
+            let up_event = click_event(
+                source()?,
+                up,
+                point(x, y),
+                mouse_button,
+                i64::from(click_number),
+            )?;
+            down_event.post(CGEventTapLocation::HID);
+            up_event.post(CGEventTapLocation::HID);
             std::thread::sleep(Duration::from_millis(60));
         }
         Ok(())
+    }
+
+    #[cfg(test)]
+    mod click_tests {
+        use super::*;
+        #[test]
+        fn macos_double_click_events_have_native_click_counts_and_neutral_flags() {
+            for number in [1, 2] {
+                for kind in [CGEventType::LeftMouseDown, CGEventType::LeftMouseUp] {
+                    let event = click_event(
+                        CGEventSource::new(CGEventSourceStateID::Private).unwrap(),
+                        kind,
+                        point(10.0, 20.0),
+                        CGMouseButton::Left,
+                        number,
+                    )
+                    .unwrap();
+                    assert_eq!(
+                        event.get_integer_value_field(EventField::MOUSE_EVENT_CLICK_STATE),
+                        number
+                    );
+                    assert_eq!(event.get_flags(), CGEventFlags::CGEventFlagNull);
+                }
+            }
+        }
     }
 
     pub fn drag(
@@ -647,10 +724,13 @@ mod platform {
     pub fn type_text(text: &str) -> Result<(), String> {
         let down = CGEvent::new_keyboard_event(source()?, 0, true)
             .map_err(|_| "创建键盘输入事件失败".to_string())?;
+        down.set_flags(CGEventFlags::CGEventFlagNull);
         down.set_string(text);
         down.post(CGEventTapLocation::HID);
         let up = CGEvent::new_keyboard_event(source()?, 0, false)
             .map_err(|_| "创建键盘释放事件失败".to_string())?;
+        up.set_flags(CGEventFlags::CGEventFlagNull);
+        up.set_string(text);
         up.post(CGEventTapLocation::HID);
         Ok(())
     }
@@ -753,12 +833,29 @@ mod platform {
     use windows_sys::Win32::UI::WindowsAndMessaging::*;
 
     pub fn capability() -> ComputerCapability {
+        use windows_sys::Win32::System::StationsAndDesktops::{
+            CloseDesktop, OpenInputDesktop, DESKTOP_READOBJECTS,
+        };
+        let desktop = unsafe { OpenInputDesktop(0, 0, DESKTOP_READOBJECTS) };
+        let interactive = !desktop.is_null();
+        if interactive {
+            unsafe {
+                CloseDesktop(desktop);
+            }
+        }
+        let screen_capture = interactive && displays().is_ok();
         ComputerCapability {
             available: true,
+            desktop_available: Some(interactive),
             platform: "Windows".into(),
-            screen_capture: true,
-            input_control: true,
-            reason: None,
+            accessibility: super::super::accessibility::capability(),
+            screen_capture,
+            input_control: interactive,
+            reason: if interactive {
+                Some("已探测交互桌面；目标应用的权限级别及 UIA 可用性仍需逐次验证。".into())
+            } else {
+                Some("无法打开 Windows 交互桌面；检查锁屏、UAC 安全桌面及会话权限。".into())
+            },
         }
     }
 
@@ -1188,7 +1285,9 @@ mod platform {
         let reason = result.as_ref().err().cloned();
         ComputerCapability {
             available: result.is_ok(),
+            desktop_available: Some(result.is_ok()),
             platform: "Linux X11".into(),
+            accessibility: super::super::accessibility::capability(),
             screen_capture: result.is_ok(),
             input_control: result.is_ok(),
             reason,

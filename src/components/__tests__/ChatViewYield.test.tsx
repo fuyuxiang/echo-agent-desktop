@@ -1,13 +1,6 @@
-/**
- * ChatView pause/yield/resume 闭环集成测试。
- *
- * 验证:
- *  - 流式时显示「暂停」按钮并发送明确的 pause 动作。
- *  - 会话级 control 显示「已暂停」横幅 + 「恢复」/「恢复并继续」两按钮。
- *  - 「恢复」:仅清状态(不触发 onSend)。
- *  - 「恢复并继续」:清状态 + onSend("请继续。")。
- *
- * mock session-store 提供 streaming/sessionId/messages;mock agent-client 的 rewind*。
+/** Chat pause and continuation share the trusted send/cancel path.
+ * The paused Composer remains usable; desktop tasks expose no separate resume
+ * buttons, and natural pause still cancels between model turns.
  */
 import { afterEach, describe, it, expect, vi, beforeEach } from "vitest";
 import { render, screen, fireEvent, waitFor, act, within } from "@testing-library/react";
@@ -125,6 +118,12 @@ vi.mock("@/lib/agent-client", async () => {
   return mod;
 });
 
+vi.mock("@/lib/automation-client", async (importOriginal) => ({
+  ...await importOriginal<typeof import("@/lib/automation-client")>(),
+  automationResume: vi.fn(async () => undefined),
+  automationPause: vi.fn(async () => undefined),
+}));
+import { automationResume, automationPause } from "@/lib/automation-client";
 import { ChatView } from "../ChatView";
 import { ThemeProvider } from "../ThemeProvider";
 import { rewindExecute, rewindPoints, setCodingMode, commandsList } from "@/lib/agent-client";
@@ -174,6 +173,8 @@ describe("ChatView pause/yield/resume 闭环", () => {
       agentMode: "default",
       control: undefined,
     });
+    vi.mocked(automationResume).mockReset().mockResolvedValue(undefined as never);
+    vi.mocked(automationPause).mockReset().mockResolvedValue(undefined as never);
     baseProps.onSend.mockClear();
     baseProps.onPrepareRetry.mockClear().mockResolvedValue(true);
     baseProps.onRetrySend.mockClear().mockReturnValue(true);
@@ -425,7 +426,7 @@ describe("ChatView pause/yield/resume 闭环", () => {
     });
   });
 
-  it("会话进入 paused 后显示横幅 + 两个恢复按钮", async () => {
+  it("暂停后保留输入框，通过自然语言继续，无双重恢复入口", async () => {
     setStore({ streaming: true, streamingMessageId: "a1" });
     const { rerender } = renderChat();
     fireEvent.click(screen.getByTitle("暂停生成(保留会话,可继续)"));
@@ -439,9 +440,10 @@ describe("ChatView pause/yield/resume 闭环", () => {
         <ChatView {...baseProps} />
       </ThemeProvider>,
     );
-    await waitFor(() => expect(screen.getByText("已暂停（会话上下文已保留）")).toBeInTheDocument());
-    expect(screen.getByRole("button", { name: "恢复" })).toBeInTheDocument();
-    expect(screen.getByRole("button", { name: "恢复并继续" })).toBeInTheDocument();
+    await waitFor(() => expect(screen.getByText("任务已暂停，发送“继续”即可续做")).toBeInTheDocument());
+    expect(screen.queryByRole("button", { name: "恢复" })).toBeNull();
+    expect(screen.getByRole("textbox")).toBeEnabled();
+    expect(screen.queryByRole("button", { name: "恢复并继续" })).toBeNull();
   });
 
   it("过渡态禁止重复输入，已停止后允许用新消息继续", () => {
@@ -459,7 +461,7 @@ describe("ChatView pause/yield/resume 闭环", () => {
     });
     rerender(<ThemeProvider><ChatView {...baseProps} /></ThemeProvider>);
     expect(screen.getByText("已停止（发送新消息可继续此任务）")).toBeInTheDocument();
-    expect(screen.getByRole("button", { name: "继续此任务" })).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "继续此任务" })).toBeNull();
     expect(screen.getByRole("textbox")).toBeEnabled();
   });
 
@@ -475,27 +477,7 @@ describe("ChatView pause/yield/resume 闭环", () => {
         <ChatView {...baseProps} />
       </ThemeProvider>,
     );
-    expect(screen.queryByText("已暂停（会话上下文已保留）")).toBeNull();
-  });
-
-  it("权限拒绝后使用原限制继续，等待发送时不能重复触发", async () => {
-    let accept!: (value: boolean) => void;
-    baseProps.onSend.mockImplementationOnce(() => new Promise<boolean>(resolve => { accept = resolve; }));
-    setStore({
-      control: { action: "stop", phase: "stopped", requestedAt: 1 },
-      messages: [{ id: "rejected", role: "assistant", complete: true, cancellationCategory: "PermissionRejected", parts: [] }],
-    });
-    renderChat();
-    expect(screen.getByText("操作未获批准，任务已停止；已有成果保留")).toBeInTheDocument();
-    fireEvent.click(screen.getByRole("button", { name: "继续此任务" }));
-    fireEvent.click(screen.getByRole("button", { name: "继续此任务" }));
-    expect(baseProps.onSend).toHaveBeenCalledTimes(1);
-    expect(baseProps.onSend.mock.calls[0][0]).toContain("刚才被拒绝或取消的操作仍然禁止");
-    expect(screen.getByRole("button", { name: "继续此任务" })).toBeDisabled();
-    await act(async () => accept(false));
-    expect(storeState.control?.phase).toBe("stopped");
-    expect(baseProps.onToast).toHaveBeenCalledWith(expect.stringContaining("任务仍保持停止"));
-    expect(screen.getByRole("button", { name: "继续此任务" })).toBeEnabled();
+    expect(screen.queryByText("任务已暂停，发送“继续”即可续做")).toBeNull();
   });
 
   it("运行中切换网页工具先等待暂停确认，失败时不切换", async () => {
@@ -522,60 +504,6 @@ describe("ChatView pause/yield/resume 闭环", () => {
     await waitFor(() => expect(setCodingMode).toHaveBeenCalledWith("s1", "browser_use"));
     expect(storeState.agentMode).toBe("browser_use");
     expect(baseProps.onSend).not.toHaveBeenCalled();
-  });
-
-  it("「恢复」仅清状态,不触发 onSend", async () => {
-    setStore({
-      streaming: false,
-      streamingMessageId: null,
-      control: { action: "pause", phase: "paused", requestedAt: 1 },
-    });
-    const { rerender } = renderChat();
-    await waitFor(() => expect(screen.getByText("已暂停（会话上下文已保留）")).toBeInTheDocument());
-    act(() => {
-      fireEvent.click(screen.getByRole("button", { name: "恢复" }));
-    });
-    expect(baseProps.onSend).not.toHaveBeenCalled();
-    rerender(<ThemeProvider><ChatView {...baseProps} /></ThemeProvider>);
-    await waitFor(() =>
-      expect(screen.queryByText("已暂停（会话上下文已保留）")).toBeNull(),
-    );
-  });
-
-  it("「恢复并继续」清状态 + onSend(\"请继续。\")", async () => {
-    setStore({
-      streaming: false,
-      streamingMessageId: null,
-      control: { action: "pause", phase: "paused", requestedAt: 1 },
-    });
-    const { rerender } = renderChat();
-    await waitFor(() => expect(screen.getByText("已暂停（会话上下文已保留）")).toBeInTheDocument());
-    await act(async () => {
-      fireEvent.click(screen.getByRole("button", { name: "恢复并继续" }));
-    });
-    expect(baseProps.onSend).toHaveBeenCalledWith("请继续。");
-    rerender(<ThemeProvider><ChatView {...baseProps} /></ThemeProvider>);
-    await waitFor(() =>
-      expect(screen.queryByText("已暂停（会话上下文已保留）")).toBeNull(),
-    );
-  });
-
-  it("「恢复并继续」未被接纳时保留暂停闸门", async () => {
-    setStore({
-      streaming: false,
-      streamingMessageId: null,
-      control: { action: "pause", phase: "paused", requestedAt: 1 },
-    });
-    baseProps.onSend.mockResolvedValueOnce(false);
-    const { rerender } = renderChat();
-
-    await act(async () => {
-      fireEvent.click(screen.getByRole("button", { name: "恢复并继续" }));
-    });
-
-    rerender(<ThemeProvider><ChatView {...baseProps} /></ThemeProvider>);
-    expect(screen.getByText("已暂停（会话上下文已保留）")).toBeInTheDocument();
-    expect(baseProps.onToast).toHaveBeenCalledWith(expect.stringContaining("任务仍保持暂停"));
   });
 
   it("请求未进入 Runtime 时，原位清理失败轮次后重试", async () => {
@@ -739,4 +667,38 @@ it("历史任务使用自己的目录发现命令，新建动作不会重绑旧�
   await waitFor(() => expect(commandsList).toHaveBeenLastCalledWith("session-a", "/workspace/A"));
   expect(screen.queryByRole("button", {name:/工作目录/})).toBeNull();
   expect(await screen.findByText("/project-a-skill")).toBeInTheDocument();
+});
+
+
+describe("自动化任务恢复", () => {
+  beforeEach(() => {
+    setStore({sessionId:"s1",messages:[],streaming:false,streamingMessageId:null,error:null,plan:null,agentMode:"computer_use",control:undefined});
+    baseProps.onSend.mockReset();
+    baseProps.onToast.mockClear();
+    vi.mocked(automationResume).mockReset().mockResolvedValue(undefined as never);
+    vi.mocked(automationPause).mockReset().mockResolvedValue(undefined as never);
+    artifactMocks.load.mockReset().mockResolvedValue([]);
+  });
+it("电脑任务可直接输入继续保存，恢复只由同一次可信发送处理", async () => {
+  setStore({agentMode:"computer_use", streaming:false, control:{action:"pause",phase:"paused",requestedAt:1}});
+  baseProps.onSend.mockResolvedValueOnce(true);
+  renderChat();
+  const input=screen.getByRole("textbox");
+  expect(input).toBeEnabled();
+  expect(screen.queryByRole("button",{name:"恢复"})).toBeNull();
+  expect(screen.queryByRole("button",{name:"恢复并继续"})).toBeNull();
+  fireEvent.change(input,{target:{value:"继续保存"}});
+  fireEvent.keyDown(input,{key:"Enter",code:"Enter"});
+  await waitFor(()=>expect(baseProps.onSend).toHaveBeenCalledWith("继续保存",[]));
+  expect(automationResume).not.toHaveBeenCalled();
+});
+it("两轮模型调用之间仍能通过停一下撤销电脑执行", async () => {
+  setStore({agentMode:"computer_use",streaming:false,control:undefined});
+  renderChat();
+  const input=screen.getByRole("textbox");
+  fireEvent.change(input,{target:{value:"停一下"}});
+  fireEvent.keyDown(input,{key:"Enter",code:"Enter"});
+  await waitFor(()=>expect(baseProps.onCancel).toHaveBeenCalledWith("pause"));
+  expect(baseProps.onSend).not.toHaveBeenCalled();
+});
 });

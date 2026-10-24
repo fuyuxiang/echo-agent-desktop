@@ -1495,6 +1495,7 @@ button,
 
 .automation-approval__actions {
   display: flex;
+  flex-wrap: wrap;
   align-items: center;
   gap: 6px;
 }
@@ -4960,3 +4961,11 @@ a.help-card:hover {
   .notify-panel__row-actions { flex: 1 1 100%; }
   .notify-panel__add { grid-template-columns: minmax(0, 1fr); }
 }
+
+/* Task progress is a status, not a separate desktop control surface. */
+.task-execution-status { display:flex; flex-wrap:wrap; align-items:center; gap:8px; color:var(--text-secondary); font-size:12px; min-width:0; }
+.task-execution-status:empty { display:none; }
+.task-execution-status button { padding:4px 8px; border:1px solid var(--border-color); border-radius:6px; background:transparent; color:inherit; cursor:pointer; }
+
+.task-execution-status > span { min-width:0; overflow-wrap:anywhere; }
+.task-execution-status > button { flex-shrink:0; }

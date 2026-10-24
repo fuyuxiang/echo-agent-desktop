@@ -19,12 +19,12 @@ EchoAgent 将会话绑定到实际工作目录。你可以选择模型和权限�
 | **专家团** | 复用本地专家与已有专家团；支持中文 @成员、只读讨论、协作派发、成员结果汇总、权限审批、决定记录与交付物。 |
 | **Agent 任务** | 流式对话、计划与任务、工具调用、权限审批、会话历史、回溯与分叉、子 Agent 状态。 |
 | **代码开发** | 内嵌 Eclipse Theia IDE，提供编辑器、文件树、搜索、终端、Git 和预览；Echo Code 管理任务阶段、Diff 审阅、验证与交付。 |
-| **浏览器与桌面操作** | Browser Use 使用任务独立的浏览器资料；Computer Use 基于截图与坐标帧操作桌面。能力由当前设备实时检测，关键交互需要确认。 |
+| **浏览器与桌面操作** | Browser Use 使用任务独立的浏览器资料；Computer Use 增加 macOS AX / Windows UIA 原生控件读取与操作，并保留截图坐标后备（实机验证状态见文档）。能力由当前设备实时检测，关键交互需要确认。 |
 | **模型与扩展** | 内置远端模型和自定义模型连接；支持 MCP、Skills、Plugins、连接器与专家。 |
 | **知识与办公** | 本地知识索引、项目上下文、记忆；在任务中读取常见文件，并在本机生成 Word、PDF、Excel 和 PowerPoint。 |
 | **持续工作** | 项目与工作项、定时任务、通知、会议录音与纪要，以及可选的微信远程会话和组织服务。 |
 
-进一步了解：[Echo Code](docs/echo-code-theia.md) · [Browser Use / Computer Use](docs/automation-platform-support.md) · [办公文档](docs/office-documents.md) · [实时信息](docs/live-information.md) · [微信远程会话](docs/weixin-remote.md) · [Skill 能力声明](docs/skill-capability-manifest.md)
+进一步了解：[Echo Code](docs/echo-code-theia.md) · [Browser Use / Computer Use](docs/automation-platform-support.md) · [原生桌面控件与验收](docs/desktop-control/README.md) · [办公文档](docs/office-documents.md) · [实时信息](docs/live-information.md) · [微信远程会话](docs/weixin-remote.md) · [Skill 能力声明](docs/skill-capability-manifest.md)
 
 ## 快速开始
 
@@ -117,7 +117,7 @@ EchoAgent 使用 React 18 构建界面，Tauri 2 与 Rust 负责桌面能力、�
 - 默认数据根目录是 `~/.echo-agent/`，可在启动前通过 `ECHO_AGENT_HOME` 调整。模型配置位于 `config.toml`，MCP 配置位于 `mcp.json`，会话与工作台状态存放在该根目录下的对应子目录。
 - Provider API Key 保存在本机配置文件中。请保护该文件，避免将其提交到仓库或附在公开 Issue 中。个人模型连接默认要求 HTTPS；内置模型使用项目配置的远端 HTTP 服务。
 - “本地优先”不等于离线。发送给模型的任务内容，以及启用 Browser Use / Computer Use 后提供的网页内容或屏幕截图，会到达所选模型服务；MCP、通知、云存储和可选组织能力也可能访问外部服务。
-- 工作区授权、权限模式与操作确认共同控制 Agent 行为。Browser Use 默认限制私网访问；Computer Use 的点击、拖动、输入与按键即使处于「始终允许」模式也逐次确认。Theia 的交互终端以当前系统用户身份运行，应审查来源未知项目中的命令。
+- 工作区授权、权限模式与操作确认共同控制 Agent 行为。Browser Use 默认限制私网访问；Computer Use 从明确的用户任务启动，任务内连续操作，不逐步弹窗；发送“停一下”暂停，发送“继续保存”等直接续做。暂停、停止和重启撤销旧执行令牌；系统权限仍按操作系统要求授予。Theia 的交互终端以当前系统用户身份运行，应审查来源未知项目中的命令。
 
 详细的平台条件与操作边界见 [自动化安全说明](docs/automation-platform-support.md)。
 

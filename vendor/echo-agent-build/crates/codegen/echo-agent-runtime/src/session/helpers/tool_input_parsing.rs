@@ -44,6 +44,28 @@ pub fn normalize_empty_arguments(arguments: &str) -> &str {
     }
 }
 
+/// A malformed desktop dispatch is a recoverable model-input error, not a
+/// decision for the user. Reject it before permission requests; never execute
+/// an unqualified name or route it to a different integration automatically.
+pub fn computer_dispatch_correction(
+    agent: Option<&str>,
+    outer: &str,
+    input: &serde_json::Value,
+) -> Option<String> {
+    if !matches!(agent, Some("computer_use" | "computer-use")) || outer != "use_tool" {
+        return None;
+    }
+    let target = input.get("tool_name")?.as_str()?;
+    if target.contains("__")
+        || !(target.starts_with("computer_") || target.starts_with("automation_"))
+    {
+        return None;
+    }
+    Some(format!(
+        "Invalid desktop tool name '{target}'. Call use_tool with the qualified tool_name 'echoagent-automation__{target}' and the same tool_input. This malformed call was not executed and needs no user approval."
+    ))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -170,5 +192,39 @@ mod tests {
     fn normalize_non_empty_passthrough() {
         assert_eq!(normalize_empty_arguments(r#"{"a":1}"#), r#"{"a":1}"#);
         assert_eq!(normalize_empty_arguments("not json"), "not json");
+    }
+}
+
+#[cfg(test)]
+mod computer_preflight_tests {
+    use super::*;
+    #[test]
+    fn malformed_desktop_names_return_correction_before_permissions() {
+        let input = serde_json::json!({"tool_name":"computer_screenshot","tool_input":{}});
+        assert!(computer_dispatch_correction(Some("computer-use"), "use_tool", &input).is_some());
+        assert!(
+            computer_dispatch_correction(Some("computer_use"), "use_tool", &input)
+                .unwrap()
+                .contains("echoagent-automation__computer_screenshot")
+        );
+        for (agent, outer, name) in [
+            (Some("default"), "use_tool", "computer_screenshot"),
+            (
+                Some("computer_use"),
+                "use_tool",
+                "echoagent-automation__computer_screenshot",
+            ),
+            (
+                Some("computer_use"),
+                "use_tool",
+                "other__computer_screenshot",
+            ),
+            (Some("computer_use"), "search_tool", "computer_screenshot"),
+        ] {
+            assert!(
+                computer_dispatch_correction(agent, outer, &serde_json::json!({"tool_name":name}))
+                    .is_none()
+            );
+        }
     }
 }

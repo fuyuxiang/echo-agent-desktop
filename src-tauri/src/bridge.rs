@@ -1258,6 +1258,25 @@ async fn handle_client_message(
                 );
             }
 
+            // Computer tools already have a session-bound desktop consent gate.
+            // Do not ask once in Runtime and again inside that same service.
+            if is_builtin_computer_permission(&req.tool_call)
+                && crate::automation::manages_computer_permissions(&session_id_str).await
+            {
+                if let Some(opt) = options.iter().find(|option| option.kind == "allow") {
+                    let response = acp::RequestPermissionResponse::new(
+                        acp::RequestPermissionOutcome::Selected(
+                            acp::SelectedPermissionOutcome::new(acp::PermissionOptionId::new(
+                                Arc::from(opt.option_id.as_str()),
+                            )),
+                        ),
+                    );
+                    tracing::info!(session_id = %session_id_str, "delegated computer permission to desktop consent gate");
+                    let _ = b.response_tx.send(Ok(response));
+                    return;
+                }
+            }
+
             // These two first-party MCP tools only query fixed public endpoints.
             // The runtime still applies explicit deny rules before requesting
             // permission; ordinary conversations should not require a click for
@@ -2417,6 +2436,30 @@ fn is_builtin_live_info_permission(call: &acp::ToolCallUpdate) -> bool {
     direct || wrapper
 }
 
+fn is_builtin_computer_permission(call: &acp::ToolCallUpdate) -> bool {
+    let Some(target) = call.fields.title.as_deref() else {
+        return false;
+    };
+    let Some(name) = target.strip_prefix("echoagent-automation__") else {
+        return false;
+    };
+    if !crate::automation::is_managed_computer_tool(name) {
+        return false;
+    }
+    let Some(meta) = call.meta.as_ref().and_then(|m| m.get("echo.agent/tool")) else {
+        return false;
+    };
+    match (meta["namespace"].as_str(), meta["name"].as_str()) {
+        (Some("mcp"), Some(name)) => name == target,
+        (Some("echo_agent_build"), Some("use_tool")) => call
+            .fields
+            .raw_input
+            .as_ref()
+            .is_some_and(|raw| raw["variant"] == "UseTool" && raw["tool_name"] == target),
+        _ => false,
+    }
+}
+
 pub(crate) fn emit_permission_closed(app: &AppHandle, notice: PermissionClosedFrontend) {
     let _ = app.emit("agent://permission-closed", notice);
 }
@@ -2510,6 +2553,58 @@ mod tests {
             .cloned(),
         );
         assert!(is_builtin_live_info_permission(&wrapped));
+    }
+
+    #[test]
+    fn computer_permission_delegation_requires_registered_mcp_identity() {
+        let make = |target: &str, name: &str, namespace: &str, raw| {
+            acp::ToolCallUpdate::new(
+                acp::ToolCallId::new(Arc::from("call-1")),
+                acp::ToolCallUpdateFields::new()
+                    .title(Some(target.to_owned()))
+                    .raw_input(raw),
+            )
+            .meta(
+                serde_json::json!({"echo.agent/tool":{"name":name,"namespace":namespace}})
+                    .as_object()
+                    .cloned(),
+            )
+        };
+        let target = "echoagent-automation__computer_set_value";
+        assert!(is_builtin_computer_permission(&make(
+            target, target, "mcp", None
+        )));
+        let wrapped = make(
+            target,
+            "use_tool",
+            "echo_agent_build",
+            Some(serde_json::json!({"variant":"UseTool","tool_name":target,"tool_input":{}})),
+        );
+        assert!(is_builtin_computer_permission(&wrapped));
+        for target in [
+            "other-server__computer_set_value",
+            "echoagent-automation__browser_click",
+            "echoagent-automation___proof",
+            "echoagent-automation__computer_unknown",
+        ] {
+            assert!(!is_builtin_computer_permission(&make(
+                target, target, "mcp", None
+            )));
+        }
+        assert!(!is_builtin_computer_permission(&make(
+            target,
+            "Bash",
+            "echo_agent_build",
+            None
+        )));
+        assert!(!is_builtin_computer_permission(&make(
+            target,
+            "use_tool",
+            "echo_agent_build",
+            Some(
+                serde_json::json!({"variant":"UseTool","tool_name":"other-server__computer_set_value"})
+            )
+        )));
     }
 
     #[tokio::test]

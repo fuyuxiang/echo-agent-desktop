@@ -30,11 +30,11 @@ describe("AutomationBoundaryNotice", () => {
     );
     const notice = screen.getByRole("note");
     expect(notice.textContent).toMatch(/操作电脑/);
-    expect(notice.textContent).toMatch(/逐次确认/);
+    expect(notice.textContent).toMatch(/明确任务请求/);
   });
 
   it("role=always-approve 且网页模式也渲染副作用边界", () => {
     render(<AutomationBoundaryNotice role="always-approve" automationMode="browser_use" />);
-    expect(screen.getByRole("note")).toHaveTextContent("操作网页");
+    expect(screen.getByRole("note")).toHaveTextContent("网页操作保留独立确认");
   });
 });

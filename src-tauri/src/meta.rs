@@ -108,6 +108,9 @@ pub struct EchoAgentState {
     /// Browser Use / Computer Use survives app and renderer upgrades.
     #[serde(default)]
     pub session_agent_modes: HashMap<String, String>,
+    /// User task description, never an execution token. Restoring it stays paused.
+    #[serde(default)]
+    pub session_desktop_tasks: HashMap<String, String>,
     /// Last lifecycle state: session_id → SessionLifecycle.
     #[serde(default)]
     pub session_statuses: HashMap<String, SessionLifecycle>,
@@ -122,6 +125,7 @@ impl Default for EchoAgentState {
             expert_sessions: HashMap::new(),
             session_permission_modes: HashMap::new(),
             session_agent_modes: HashMap::new(),
+            session_desktop_tasks: HashMap::new(),
             session_statuses: HashMap::new(),
         }
     }
@@ -216,6 +220,7 @@ fn validate_state(state: &EchoAgentState) -> Result<(), String> {
         || state.expert_sessions.len() > MAX_SESSION_ENTRIES
         || state.session_permission_modes.len() > MAX_SESSION_ENTRIES
         || state.session_agent_modes.len() > MAX_SESSION_ENTRIES
+        || state.session_desktop_tasks.len() > MAX_SESSION_ENTRIES
         || state.session_statuses.len() > MAX_SESSION_ENTRIES
     {
         return Err("会话元数据条目超过安全上限".into());
@@ -242,6 +247,11 @@ fn validate_state(state: &EchoAgentState) -> Result<(), String> {
     for (session_id, mode) in &state.session_agent_modes {
         if !valid_session_id(session_id) || !AGENT_MODES.contains(&mode.as_str()) {
             return Err("会话代理模式包含无效数据".into());
+        }
+    }
+    for (id, scope) in &state.session_desktop_tasks {
+        if !valid_session_id(id) || scope.is_empty() || scope.len() > 16384 {
+            return Err("电脑任务范围无效".into());
         }
     }
     for (session_id, lifecycle) in &state.session_statuses {
@@ -307,6 +317,9 @@ fn sanitize_state(mut state: EchoAgentState) -> EchoAgentState {
             state.session_agent_modes.remove(&key);
         }
     }
+    state
+        .session_desktop_tasks
+        .retain(|id, scope| valid_session_id(id) && !scope.is_empty() && scope.len() <= 16384);
     state.session_statuses.retain(|session_id, lifecycle| {
         valid_session_id(session_id) && validate_lifecycle(lifecycle).is_ok()
     });
@@ -623,6 +636,44 @@ pub fn set_agent_mode(session_id: &str, mode: &str) -> Result<String, String> {
     set_agent_mode_at(&state_path(), session_id, mode)
 }
 
+pub fn desktop_task_scope(session_id: &str) -> Option<String> {
+    read_state().session_desktop_tasks.get(session_id).cloned()
+}
+/// Atomically persist the mode and user context. Execution grants remain
+/// process-local and a restored task always starts paused.
+pub fn set_desktop_task_context(session_id: &str, scope: &str) -> Result<(), String> {
+    set_desktop_task_context_at(&state_path(), session_id, scope)
+}
+fn set_desktop_task_context_at(path: &Path, session_id: &str, scope: &str) -> Result<(), String> {
+    if !valid_session_id(session_id) || scope.trim().is_empty() || scope.len() > 16384 {
+        return Err("请用简短的直接指令说明电脑任务（最多 16 KiB）".into());
+    }
+    update_state_at(path, |state| {
+        if (state.session_desktop_tasks.len() >= MAX_SESSION_ENTRIES
+            && !state.session_desktop_tasks.contains_key(session_id))
+            || (state.session_agent_modes.len() >= MAX_SESSION_ENTRIES
+                && !state.session_agent_modes.contains_key(session_id))
+        {
+            return Err("电脑任务数量超过上限".into());
+        }
+        let changed = state
+            .session_desktop_tasks
+            .get(session_id)
+            .is_none_or(|v| v != scope)
+            || state
+                .session_agent_modes
+                .get(session_id)
+                .is_none_or(|v| v != "computer_use");
+        state
+            .session_desktop_tasks
+            .insert(session_id.into(), scope.into());
+        state
+            .session_agent_modes
+            .insert(session_id.into(), "computer_use".into());
+        Ok(((), changed))
+    })
+}
+
 #[cfg(test)]
 fn clear_permission_mode_at(path: &Path, session_id: &str) -> Result<bool, String> {
     if !valid_session_id(session_id) {
@@ -717,6 +768,7 @@ fn clear_session_metadata_at(path: &Path, session_id: &str) -> Result<bool, Stri
         changed |= state.expert_sessions.remove(session_id).is_some();
         changed |= state.session_permission_modes.remove(session_id).is_some();
         changed |= state.session_agent_modes.remove(session_id).is_some();
+        changed |= state.session_desktop_tasks.remove(session_id).is_some();
         changed |= state.session_statuses.remove(session_id).is_some();
         Ok((changed, changed))
     })
@@ -757,6 +809,7 @@ mod tests {
             expert_sessions: HashMap::new(),
             session_permission_modes: HashMap::new(),
             session_agent_modes: HashMap::new(),
+            session_desktop_tasks: HashMap::new(),
             session_statuses: HashMap::new(),
         };
         let set = state.pinned_set();
@@ -774,6 +827,7 @@ mod tests {
             expert_sessions: HashMap::new(),
             session_permission_modes: HashMap::new(),
             session_agent_modes: HashMap::new(),
+            session_desktop_tasks: HashMap::new(),
             session_statuses: HashMap::new(),
         };
         let set = state.archived_set();
@@ -800,6 +854,7 @@ mod tests {
             expert_sessions: HashMap::new(),
             session_permission_modes: HashMap::from([("s1".into(), "auto".into())]),
             session_agent_modes: HashMap::from([("s1".into(), "browser_use".into())]),
+            session_desktop_tasks: HashMap::new(),
             session_statuses: HashMap::from([(
                 "s1".into(),
                 SessionLifecycle {
@@ -915,6 +970,23 @@ mod tests {
             Some("browser_use")
         );
         assert!(!state.session_agent_modes.contains_key("session-b"));
+    }
+
+    #[test]
+    fn desktop_context_persists_mode_and_amendments_atomically_without_authority() {
+        let tmp = tempfile::tempdir().unwrap();
+        let path = tmp.path().join("echoagent-state.json");
+        set_agent_mode_at(&path, "session-a", "default").unwrap();
+        let scope = "请在 TextEdit 保存文稿\n\n[用户补充]\n保存到 /tmp/report.txt";
+        set_desktop_task_context_at(&path, "session-a", scope).unwrap();
+        let state = read_state_from(&path, true).unwrap();
+        assert_eq!(state.session_agent_modes["session-a"], "computer_use");
+        assert_eq!(state.session_desktop_tasks["session-a"], scope);
+        let committed = std::fs::read(&path).unwrap();
+        assert!(!String::from_utf8_lossy(&committed).contains("authorized"));
+        assert!(set_desktop_task_context_at(&path, "session-a", &"x".repeat(16385)).is_err());
+        assert!(set_desktop_task_context_at(&path, "bad\n", scope).is_err());
+        assert_eq!(std::fs::read(&path).unwrap(), committed);
     }
 
     #[test]

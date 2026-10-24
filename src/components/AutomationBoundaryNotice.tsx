@@ -1,11 +1,11 @@
 import { ShieldAlertIcon } from "@/foundation/components/Icon/icons";
 import type { AutomationMode } from "@/lib/automation-client";
+import { COMPUTER_EXECUTION_NOTICE, BROWSER_CONFIRMATION_NOTICE } from "@/lib/automation-policy";
 
 export type PermissionRole = "ask" | "auto" | "always-approve";
 
 /**
- * “始终允许”只覆盖常规 Agent 工具。网页和真实桌面的副作用
- * 仍受独立确认边界保护，因此两种自动化模式都必须说清楚。
+ * 常规工具权限与明确电脑任务授权是独立的边界。
  */
 export function AutomationBoundaryNotice({
   role,
@@ -15,12 +15,12 @@ export function AutomationBoundaryNotice({
   automationMode: AutomationMode;
 }) {
   if (role !== "always-approve" || automationMode === "default") return null;
-  const target = automationMode === "computer_use" ? "操作电脑" : "操作网页";
+  const boundary = automationMode === "computer_use" ? COMPUTER_EXECUTION_NOTICE : BROWSER_CONFIRMATION_NOTICE;
   return (
     <div className="automation-boundary-notice" role="note">
       <ShieldAlertIcon size="sm" />
       <span>
-        “始终允许”仅适用于常规工具；{target}中可能产生副作用的步骤仍会在执行前逐次确认。
+        “始终允许”仅适用于常规工具；{boundary}。
       </span>
     </div>
   );

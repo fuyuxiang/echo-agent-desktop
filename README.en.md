@@ -18,12 +18,12 @@ EchoAgent binds each conversation to a real working directory. Choose a model an
 | --- | --- |
 | **Agent tasks** | Streaming conversations, plans and tasks, tool calls, approvals, session history, rewind and fork, and subagent status. |
 | **Coding** | Embedded Eclipse Theia IDE with an editor, file tree, search, terminal, Git, and previews; Echo Code manages task stages, diff review, verification, and delivery. |
-| **Browser and desktop control** | Browser Use has a separate profile for each task. Computer Use operates from screenshots and coordinate frames. Availability is detected on the current device; sensitive interactions require confirmation. |
+| **Browser and desktop control** | Browser Use has a separate profile for each task. Computer Use adds native macOS AX / Windows UIA control reads and actions with screenshot fallback (see the documented verification status). Availability is detected on the current device; sensitive interactions require confirmation. |
 | **Models and extensions** | Built-in remote models and custom model connections; MCP, Skills, Plugins, connectors, and reusable experts. |
 | **Knowledge and documents** | Local knowledge index, project context, memory, common-file reading, and local generation of Word, PDF, Excel, and PowerPoint files. |
 | **Ongoing work** | Projects and work items, scheduled automations, notifications, meeting recordings and minutes, plus optional WeChat remote sessions and organization services. |
 
-Read more: [Echo Code](docs/echo-code-theia.md) · [Browser Use / Computer Use](docs/automation-platform-support.md) · [Office documents](docs/office-documents.md) · [Live information](docs/live-information.md) · [WeChat remote sessions](docs/weixin-remote.md) · [Skill capability declarations](docs/skill-capability-manifest.md)
+Read more: [Echo Code](docs/echo-code-theia.md) · [Browser Use / Computer Use](docs/automation-platform-support.md) · [Native desktop controls and validation](docs/desktop-control/README.md) · [Office documents](docs/office-documents.md) · [Live information](docs/live-information.md) · [WeChat remote sessions](docs/weixin-remote.md) · [Skill capability declarations](docs/skill-capability-manifest.md)
 
 ## Quick start
 
@@ -88,7 +88,7 @@ React 18 renders the interface. Tauri 2 and Rust manage native capabilities, sta
 - The default data root is `~/.echo-agent/`. Set `ECHO_AGENT_HOME` before launch to change it. Model configuration lives in `config.toml`, MCP configuration in `mcp.json`, and sessions and workbench state in subdirectories under that root.
 - Provider API keys are stored in a local configuration file. Protect it and do not commit it or attach it to a public issue. Personal model connections require HTTPS by default; the built-in models use the project's configured remote HTTP service.
 - “Local-first” does not mean offline. Task content sent to a model, as well as webpage content or screenshots provided through Browser Use or Computer Use, reaches the selected model service. MCP, notifications, cloud storage, and optional organization features may also access external services.
-- Workspace authorization, permission modes, and action confirmations govern Agent activity. Browser Use restricts private-network access by default. Computer Use clicks, drags, typing, and key presses require per-action confirmation even in Always Allow mode. Theia's interactive terminal runs as the current OS user; review commands from unfamiliar projects.
+- Workspace authorization, permission modes, and action confirmations govern Agent activity. Browser Use restricts private-network access by default. Computer Use starts from an explicit user task and executes continuously without per-step approval. Say “停一下” to pause or “继续保存” to continue the same task. Pausing, stopping, or restarting revokes the old execution lease; operating-system permissions remain required. Theia's interactive terminal runs as the current OS user; review commands from unfamiliar projects.
 
 See the [automation platform and security guide](docs/automation-platform-support.md) for platform requirements and operation boundaries.
 

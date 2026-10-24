@@ -78,7 +78,7 @@ describe("PermissionInlineCard", () => {
     expect(within(choices).getByRole("button", { name: "允许本次" })).toBeInTheDocument();
     const alwaysButton = within(choices).getByRole("button", { name: /本任务始终允许/ });
     expect(alwaysButton).toBeInTheDocument();
-    expect(alwaysButton.getAttribute("title")).toMatch(/操作电脑仍逐次确认/);
+    expect(alwaysButton.getAttribute("title")).toMatch(/操作电脑仍需明确任务请求/);
     expect(within(choices).getByRole("button", { name: "拒绝" })).toBeInTheDocument();
     expect(screen.getAllByText("允许本次")).toHaveLength(1);
     expect(screen.getByText("更多授权选项")).toBeInTheDocument();
@@ -115,7 +115,8 @@ describe("PermissionInlineCard", () => {
 
     fireEvent.click(screen.getByRole("button", { name: /本任务始终允许/ }));
     const dialog = screen.getByRole("alertdialog", { name: "确认本任务始终允许" });
-    expect(within(dialog).getByText(/后续的命令、文件修改等操作不再询问/)).toBeInTheDocument();
+    expect(within(dialog).getByText(/后续的命令、文件修改等常规工具不再询问/)).toBeInTheDocument();
+    expect(within(dialog).getByText(/电脑操作由明确任务请求启动，任务内连续执行/)).toBeInTheDocument();
     expect(within(dialog).getByRole("button", { name: "取消" })).toHaveFocus();
     expect(setPermissionMode).not.toHaveBeenCalled();
 

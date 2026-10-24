@@ -63,7 +63,7 @@ const AUTOMATION_ITEMS: MenuItem[] = [
   {
     id: "computer-use",
     label: "操作电脑",
-    description: "查看屏幕并操作本机应用",
+    description: "读取控件、查看屏幕并操作本机应用",
     icon: <Monitor size={16} />,
   },
 ];

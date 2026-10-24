@@ -1762,7 +1762,9 @@ function Shell() {
       (message) => message.id === beforeCancel.streamingMessageId,
     );
     const activePromptId = beforeCancel?.pendingSendNowPromptId ?? activeMessage?.promptId;
-    if (!beforeCancel?.streamingMessageId && !beforeCancel?.pendingSendNowPromptId) {
+    if (!beforeCancel?.streamingMessageId && !beforeCancel?.pendingSendNowPromptId
+      && sessionStore.getState().agentMode !== "computer_use"
+      && sessionStore.getState().agentMode !== "browser_use") {
       showToast(action === "pause" ? "当前任务没有正在运行的内容" : "当前任务已停止");
       return false;
     }

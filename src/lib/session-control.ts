@@ -67,8 +67,8 @@ export function sessionControlStatus(control: SessionControl): SessionStatus {
 
 /** Exact, attachment-free commands are local task controls and never reach the model. */
 export function parseSessionControlIntent(text: string): SessionControlAction | null {
-  const normalized = text.trim().toLowerCase();
-  if (["暂停", "暂停任务", "/pause"].includes(normalized)) return "pause";
+  const normalized = text.trim().replace(/[。！!.]+$/, "").trim().toLowerCase();
+  if (["暂停", "请暂停", "停一下", "暂停一下", "先停一下", "暂停任务", "/pause"].includes(normalized)) return "pause";
   if (["停止", "中止", "停止任务", "中止任务", "/stop"].includes(normalized)) return "stop";
   return null;
 }

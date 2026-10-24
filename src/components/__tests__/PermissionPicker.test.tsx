@@ -95,14 +95,14 @@ describe("PermissionPicker", () => {
     useSessionsStore.setState({ independent: [], pendingSessionPatches: {} });
   });
 
-  it("始终允许选项描述明确写出电脑操作会逐次确认", async () => {
+  it("始终允许选项描述明确写出操作电脑由明确任务请求启动", async () => {
     const user = userEvent.setup();
     render(<PermissionPicker />);
 
     await user.click(screen.getByRole("button", { name: /审批模式/ }));
     const item = screen.getByRole("menuitemradio", { name: /^本任务始终允许/ });
     expect(item.textContent).toMatch(/操作电脑/);
-    expect(item.textContent).toMatch(/逐次确认/);
+    expect(item.textContent).toMatch(/可随时暂停/);
   });
 
   it("通过 body portal 完整展示并根据视口定位，不受卡片裁剪", async () => {
@@ -134,7 +134,7 @@ describe("PermissionPicker", () => {
     expect(trigger).toHaveAttribute("aria-expanded", "true");
     expect(trigger).toHaveAttribute("aria-controls", menu.id);
     expect(menu).toHaveTextContent("当前任务的敏感操作需要你确认");
-    expect(menu).toHaveTextContent("操作电脑（点击、拖动、输入、按键）会逐次确认");
+    expect(menu).toHaveTextContent("操作电脑由明确任务请求启动，任务内连续执行，可随时暂停");
 
     await user.click(screen.getByRole("menuitemradio", { name: /^本任务始终允许/ }));
     expect(screen.getByRole("alertdialog", { name: "确认本任务始终允许" })).toBeInTheDocument();
@@ -254,7 +254,7 @@ describe("PermissionPicker", () => {
     await user.click(screen.getByRole("button", { name: "仅当前任务始终允许" }));
 
     await waitFor(() => expect(onToast)
-      .toHaveBeenCalledWith(expect.stringMatching(/电脑操作会逐次确认/)));
+      .toHaveBeenCalledWith(expect.stringMatching(/操作电脑由明确任务请求启动/)));
   });
 
   it("组织策略锁定时展示原因并禁止任务修改", async () => {

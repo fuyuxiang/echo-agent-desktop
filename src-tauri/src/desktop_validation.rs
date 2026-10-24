@@ -430,6 +430,53 @@ pub async fn desktop_validation_ready(
             return Ok(());
         }
         REVIEW_EVALUATIONS.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        if std::env::var("ECHO_DESKTOP_REVIEW_CONTROLS").as_deref() == Ok("1") {
+            let home = crate::paths::echo_agent_home_dir();
+            crate::native_review_scope::ordinary_private(&home, true)?;
+            if !home.starts_with("/private/tmp")
+                || !home
+                    .file_name()
+                    .and_then(|n| n.to_str())
+                    .is_some_and(|n| n.starts_with("echo-native-review-controls-"))
+            {
+                return Err(
+                    "Desktop control review requires a private temporary controls home".into(),
+                );
+            }
+            let cwd = crate::paths::default_workspace_dir()?;
+            if !cwd.starts_with(&home) {
+                return Err("Desktop control review workspace escaped home".into());
+            }
+            let model_id = std::env::var("ECHO_DESKTOP_REVIEW_CONTROLS_MODEL_ID")
+                .unwrap_or_else(|_| "echoagent-ojlab/chat-qwen".into());
+            let smoke = std::env::var("ECHO_DESKTOP_REVIEW_CONTROLS_SMOKE").as_deref() == Ok("1");
+            let cross_app =
+                std::env::var("ECHO_DESKTOP_REVIEW_CONTROLS_CROSS_APP").as_deref() == Ok("1");
+            let scope = serde_json::json!({"home":home,"cwd":cwd,"modelId":model_id,"smoke":smoke,"crossApp":cross_app});
+            if std::env::var("ECHO_DESKTOP_REVIEW_CONTROLS_TASK_FLOW").as_deref() == Ok("1") {
+                return window
+                    .eval(format!(
+                        "{}\nwindow.__echoDesktopTaskFlow({scope});",
+                        include_str!("../../scripts/fixtures/native-desktop-task-flow.js")
+                    ))
+                    .map_err(|e| e.to_string());
+            }
+            if std::env::var("ECHO_DESKTOP_REVIEW_CONTROLS_JOURNEY").as_deref() == Ok("1") {
+                return window
+                    .eval(format!(
+                        "{}\nwindow.__echoDesktopControlsJourney({scope});",
+                        include_str!("../../scripts/fixtures/native-desktop-controls-journey.js")
+                    ))
+                    .map_err(|e| e.to_string());
+            }
+            return window
+                .eval(format!(
+                    "{}\nwindow.__echoDesktopControlsReview({scope});",
+                    include_str!("../../scripts/fixtures/native-desktop-controls-review.js")
+                ))
+                .map_err(|e| e.to_string());
+        }
+
         if std::env::var("ECHO_DESKTOP_REVIEW_BROWSER").as_deref() == Ok("1") {
             return crate::native_browser_validation::launch(&window);
         }

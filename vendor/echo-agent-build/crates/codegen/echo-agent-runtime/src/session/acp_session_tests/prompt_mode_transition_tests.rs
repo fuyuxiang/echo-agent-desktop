@@ -251,3 +251,143 @@ async fn a_user_turn_still_applies_its_declared_mode() {
         })
         .await;
 }
+
+#[tokio::test]
+async fn automation_mode_rebuild_removes_default_shell_tools_and_restores_them_on_exit() {
+    tokio::task::LocalSet::new()
+        .run_until(async {
+            let (actor, _events) = actor_with_events().await;
+            actor
+                .apply_session_mode(acp::SessionModeId::new("computer_use"))
+                .await
+                .unwrap();
+            assert_eq!(
+                actor.active_agent_type.lock().as_deref(),
+                Some("computer-use")
+            );
+            let tools = actor.agent.borrow().tool_bridge().tool_definitions().await;
+            assert!(
+                !tools
+                    .iter()
+                    .any(|t| t.function.name == "run_terminal_command")
+            );
+            assert!(
+                actor
+                    .agent
+                    .borrow()
+                    .system_prompt()
+                    .contains("Computer Use mode")
+            );
+            actor
+                .apply_session_mode(acp::SessionModeId::new("default"))
+                .await
+                .unwrap();
+            let tools = actor.agent.borrow().tool_bridge().tool_definitions().await;
+            assert!(
+                tools
+                    .iter()
+                    .any(|t| t.function.name == "run_terminal_command")
+            );
+        })
+        .await;
+}
+
+#[tokio::test]
+async fn automation_mode_rebuild_rejects_inflight_turn_without_advertising_success() {
+    tokio::task::LocalSet::new()
+        .run_until(async {
+            let (actor, mut events) = actor_with_events().await;
+            let before = actor.active_agent_type.lock().clone();
+            actor.state.lock().await.running_task = Some(AgentTask {
+                prompt_id: "pending-turn".into(),
+                handle: tokio::task::spawn_local(std::future::pending::<()>()).abort_handle(),
+            });
+            assert!(
+                actor
+                    .apply_session_mode(acp::SessionModeId::new("computer_use"))
+                    .await
+                    .is_err()
+            );
+            assert_eq!(*actor.active_agent_type.lock(), before);
+            assert!(mode_updates(&mut events).is_empty());
+        })
+        .await;
+}
+
+#[tokio::test]
+async fn every_regular_mode_restores_the_toolset_after_browser_or_computer_use() {
+    tokio::task::LocalSet::new()
+        .run_until(async {
+            for automation in ["computer_use", "browser_use"] {
+                for target in ["plan", "ask", "default"] {
+                    let (actor, mut events) = actor_with_events().await;
+                    // The general actor fixture intentionally has an empty
+                    // mock bridge. Build a real, customized return profile for
+                    // this toolset-boundary test before measuring its inventory.
+                    let mut profile = actor.agent.borrow().definition().clone();
+                    profile.prompt_body =
+                        Some("Preserve this session role across automation.".into());
+                    let regular = actor.rebuild_spec.build_agent(profile).await.unwrap();
+                    *actor.agent.borrow_mut() = regular;
+                    let original = actor.agent.borrow().tool_bridge().tool_definitions().await;
+                    let mut original_names: Vec<_> =
+                        original.iter().map(|t| t.function.name.clone()).collect();
+                    original_names.sort();
+                    actor
+                        .apply_session_mode(acp::SessionModeId::new(automation))
+                        .await
+                        .unwrap();
+                    mode_updates(&mut events);
+                    actor
+                        .apply_session_mode(acp::SessionModeId::new(target))
+                        .await
+                        .unwrap();
+                    let tools = actor.agent.borrow().tool_bridge().tool_definitions().await;
+                    assert!(
+                        tools
+                            .iter()
+                            .any(|t| t.function.name == "run_terminal_command"),
+                        "{automation} -> {target} must restore the regular tools"
+                    );
+                    let mut restored_names: Vec<_> =
+                        tools.iter().map(|t| t.function.name.clone()).collect();
+                    restored_names.sort();
+                    assert_eq!(
+                        restored_names, original_names,
+                        "restore the session's resolved tool profile"
+                    );
+                    assert!(!matches!(
+                        actor.active_agent_type.lock().as_deref(),
+                        Some("computer-use" | "browser-use")
+                    ));
+                    assert!(
+                        !actor
+                            .agent
+                            .borrow()
+                            .system_prompt()
+                            .contains("Computer Use mode")
+                    );
+                    assert!(
+                        !actor
+                            .agent
+                            .borrow()
+                            .system_prompt()
+                            .contains("Browser Use mode")
+                    );
+                    assert!(
+                        actor
+                            .agent
+                            .borrow()
+                            .system_prompt()
+                            .contains("Preserve this session role across automation.")
+                    );
+                    assert_eq!(mode_updates(&mut events), vec![target.to_string()]);
+                    assert_eq!(
+                        *actor.current_prompt_mode.lock(),
+                        prompt_mode_from_session_mode_id(&acp::SessionModeId::new(target))
+                    );
+                }
+            }
+        })
+        .await;
+}

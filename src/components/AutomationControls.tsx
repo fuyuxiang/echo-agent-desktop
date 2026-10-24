@@ -1,17 +1,12 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { Globe2, Monitor, MoreHorizontal } from "lucide-react";
 import type { UnlistenFn } from "@tauri-apps/api/event";
-import { setCodingMode } from "@/lib/agent-client";
 import {
   automationClearBrowserData,
-  automationPause,
   automationPendingApprovals,
   automationRequestComputerPermissions,
   automationResolveApproval,
-  automationResume,
   automationSetPrivateNetwork,
   automationStatus,
-  automationStop,
   onAutomationApproval,
   onAutomationApprovalClosed,
   onAutomationStatus,
@@ -22,12 +17,13 @@ import {
 import { friendlyError } from "@/lib/error-format";
 import { useSessionStore, type AgentMode } from "@/stores/session-store";
 import { useAppDialog } from "./AppDialog";
-import { HelpCircleIcon } from "@/foundation/components/Icon/icons";
 
 interface AutomationControlsProps {
   sessionId: string | null;
   streaming: boolean;
   onToast?: (message: string) => void;
+  onContinue?: () => boolean | void | Promise<boolean | void>;
+  onPause?: () => boolean | void | Promise<boolean | void>;
   placement: "toolbar" | "approval";
 }
 
@@ -171,155 +167,53 @@ function selectedAutomationMode(mode: AgentMode): AutomationMode {
   return mode === "browser_use" || mode === "computer_use" ? mode : "default";
 }
 
-function statusText(status: AutomationStatus | null, mode: AutomationMode): string {
-  if (!status) return mode === "default" ? "" : "正在检查可用性…";
-  if (mode === "browser_use") {
-    if (!status.browser.available) return status.browser.reason || "未找到兼容浏览器";
-    if (status.paused) return "浏览器控制已暂停，你可以安全接管";
-    if (status.browserRunning) {
-      return status.browserTitle || status.browserUrl || `${status.browser.browserName || "浏览器"} 已连接`;
-    }
-    return `${status.browser.browserName || "浏览器"} 将在需要时自动启动`;
-  }
-  if (mode === "computer_use") {
-    if (!status.computer.available) return status.computer.reason || "当前系统不支持电脑控制";
-    if (!status.computer.screenCapture || !status.computer.inputControl) {
-      return status.computer.reason || "需要屏幕录制和辅助功能权限";
-    }
-    return status.paused ? "电脑控制已暂停，你可以安全接管" : "屏幕与输入权限已就绪";
-  }
-  return "";
-}
-
 function AutomationToolbar({
-  sessionId,
-  streaming,
-  onToast,
-  automation,
+  sessionId, streaming, onToast, onContinue, onPause, automation,
 }: Omit<AutomationControlsProps, "placement"> & { automation: AutomationSessionState }) {
   const agentMode = useSessionStore((state) => state.agentMode);
   const mode = selectedAutomationMode(agentMode);
-  const [busy, setBusy] = useState(false);
   const status = automation.status;
+  const [busy, setBusy] = useState(false);
   const { requestConfirmation, dialog } = useAppDialog(sessionId);
-
-  const run = useCallback(async (operation: () => Promise<AutomationStatus | void>, success?: string) => {
-    setBusy(true);
-    try {
-      const next = await operation();
-      if (!automation.isActive()) return;
-      if (next) automation.setStatus(next);
-      if (success) onToast?.(success);
-    } catch (error) {
-      if (automation.isActive()) onToast?.(friendlyError(error));
-    } finally {
-      if (automation.isActive()) setBusy(false);
-    }
-  }, [automation, onToast]);
-
-  const computerNeedsPermission = mode === "computer_use" && status?.computer.available
+  if (mode === "default") return null;
+  const needsPermission = mode === "computer_use" && status?.computer.available
     && (!status.computer.screenCapture || !status.computer.inputControl);
-
-  if (mode === "default") return <>{dialog}</>;
-
-  const modeLabel = mode === "browser_use" ? "操作网页" : "操作电脑";
-  const ModeIcon = mode === "browser_use" ? Globe2 : Monitor;
-
-  return (
-    <div className={`automation-control automation-control--${mode}`}>
-      <span
-        className="automation-control__mode"
-        title={`${modeLabel}启用时，相关网页或屏幕内容会发送给当前模型`}
-      >
-        <ModeIcon size={14} strokeWidth={1.9} aria-hidden="true" />
-        <span>{modeLabel}</span>
-      </span>
-      <button
-        type="button"
-        className="automation-control__hint"
-        aria-label={`查看${modeLabel}的安全确认说明`}
-        title={`${modeLabel}中可能产生副作用的步骤会在执行前单独确认`}
-        data-tip={`${modeLabel}中可能产生副作用的步骤会在执行前单独确认`}
-      >
-        <HelpCircleIcon size="sm" aria-hidden="true" />
-      </button>
-      <span className="automation-control__summary" title={automation.error || statusText(status, mode)}>
-        {automation.error || statusText(status, mode)}
-      </span>
-      {computerNeedsPermission && (
-        <button
-          type="button"
-          disabled={busy}
-          onClick={() => void run(async () => {
-            await automationRequestComputerPermissions();
-            await automation.refresh();
-          }, "已打开系统权限设置，授权后请回到 EchoAgent")}
-        >
-          授予权限
-        </button>
-      )}
-      <details className="automation-control__more">
-        <summary role="button" aria-label="更多自动化选项" title="更多选项">
-          <MoreHorizontal size={16} aria-hidden="true" />
-        </summary>
-        <div className="automation-control__more-menu">
-          <p>网页或屏幕内容会发送给当前模型。</p>
-          {mode === "browser_use" && status?.browser.available && (
-            <label className="automation-control__private" title="默认阻止本机、局域网和企业内网地址">
-              <input
-                type="checkbox"
-                checked={status.allowPrivateNetwork}
-                disabled={busy}
-                onChange={(event) => {
-                  const allowed = event.target.checked;
-                  void run(() => automationSetPrivateNetwork(sessionId!, allowed));
-                }}
-              />
-              允许访问本机与内网
-            </label>
-          )}
-          {mode === "browser_use" && status?.browserHasData && (
-            <button
-              type="button"
-              disabled={busy}
-              title="停止受控浏览器并删除该任务的 Cookie、登录状态、缓存和下载"
-              onClick={() => requestConfirmation({
-                title: "清除该任务的浏览器数据？",
-                description: "将停止受控浏览器，并删除 Cookie、登录状态、缓存和已下载文件。此操作无法撤销。",
-                confirmLabel: "清除数据",
-                danger: true,
-                action: () => run(
-                  () => automationClearBrowserData(sessionId!),
-                  "浏览器数据已清除，自动化保持暂停",
-                ),
-              })}
-            >
-              清除本任务浏览器数据
-            </button>
-          )}
-        </div>
-      </details>
-      {status?.paused ? (
-        <button type="button" disabled={busy || streaming} onClick={() => void run(() => automationResume(sessionId!), "已继续执行")}>继续</button>
-      ) : (
-        <button type="button" disabled={busy} onClick={() => void run(() => automationPause(sessionId!), "已暂停，现在可以安全接管")}>接管</button>
-      )}
-      <button
-        type="button"
-        className="automation-control__end"
-        disabled={busy}
-        onClick={() => void run(async () => {
-          await automationStop(sessionId!);
-          await setCodingMode(sessionId!, "agent");
-          useSessionStore.getState().setAgentMode("default", sessionId!);
-          await automation.refresh();
-        }, `已结束${modeLabel}`)}
-      >
-        结束
-      </button>
-      {dialog}
-    </div>
-  );
+  const reason = status?.task?.reason;
+  const canContinue = mode === "browser_use" || Boolean(status?.task?.scope);
+  const unavailable = mode === "computer_use" && status?.computer.desktopAvailable === false;
+  const message = automation.error || (unavailable ? "桌面暂不可用，请解锁电脑后发送“继续”"
+    : needsPermission ? "首次操作需要系统权限"
+    : status?.paused ? !canContinue ? "请说明需要继续的电脑任务"
+      : status.task?.phase === "stopped" ? "任务已停止，已有内容保留"
+      : reason === "application_restarted" ? "任务已保留，发送“继续”即可续做"
+      : reason === "validation_watchdog" ? "验收已超时暂停，已有内容保留"
+      : reason === "prompt_failed" ? "本轮未能完成，已有内容保留，可继续或补充要求"
+      : "任务已暂停，发送“继续”即可续做"
+    : streaming ? "正在处理任务，可随时说“停一下”"
+    : status?.computerAuthorized ? "可继续补充任务要求" : "");
+  const run = async (operation: () => unknown) => {
+    setBusy(true);
+    try { const accepted = await operation(); if (accepted !== false && automation.isActive()) await automation.refresh(); }
+    catch (error) { if (automation.isActive()) onToast?.(friendlyError(error)); }
+    finally { if (automation.isActive()) setBusy(false); }
+  };
+  return <div className="task-execution-status" role="status">
+    {message && <span>{message}</span>}
+    {needsPermission && <button type="button" disabled={busy} onClick={() => void run(automationRequestComputerPermissions)}>打开系统权限设置</button>}
+    {status?.paused && canContinue && onContinue && <button type="button" disabled={busy || streaming || Boolean(needsPermission) || unavailable}
+      onClick={() => void run(onContinue)}>继续任务</button>}
+    {!status?.paused && !streaming && status?.computerAuthorized && onPause && <button type="button" disabled={busy}
+      onClick={() => void run(onPause)}>暂停任务</button>}
+    {mode === "browser_use" && <details><summary>浏览器数据与访问范围</summary>
+      <label><input type="checkbox" checked={status?.allowPrivateNetwork ?? false} disabled={busy}
+        onChange={event => void run(() => automationSetPrivateNetwork(sessionId!, event.target.checked))} />允许访问本机与内网</label>
+      {status?.browserHasData && <button type="button" disabled={busy} onClick={() => requestConfirmation({
+        title:"清除该任务的浏览器数据？", description:"将停止浏览器并删除 Cookie、缓存和下载。", confirmLabel:"清除数据", danger:true,
+        action:() => run(() => automationClearBrowserData(sessionId!)),
+      })}>清除浏览器数据</button>}
+    </details>}
+    {dialog}
+  </div>;
 }
 
 function AutomationApprovalCard({
@@ -347,11 +241,17 @@ function AutomationApprovalCard({
     return [
       ["网站", safeUrl],
       ["页面", typeof details.pageTitle === "string" ? details.pageTitle : ""],
-      ["目标控件", target && typeof target.name === "string" ? target.name : ""],
-      ["目标应用", typeof details.targetName === "string" ? details.targetName : ""],
+      ["目标控件", target && typeof target.name === "string" ? target.name : typeof details.name === "string" ? details.name : ""],
+      ["目标应用", typeof details.application === "string" ? details.application : typeof details.targetName === "string" ? details.targetName : ""],
+      ["目标窗口", typeof details.windowName === "string" ? details.windowName : ""],
+      ["控件角色", typeof details.role === "string" ? details.role : ""],
+      ["控件标识", typeof details.identifier === "string" ? details.identifier : ""],
+      ["原生动作", typeof details.nativeAction === "string" ? details.nativeAction : typeof details.action === "string" ? details.action : ""],
+      ["应用路径", typeof details.appPath === "string" ? details.appPath : ""],
       ["文件", Array.isArray(details.files) ? details.files.join("、") : ""],
       ["文本长度", typeof details.characters === "number" ? `${details.characters} 个字符` : ""],
       ["按键", typeof details.key === "string" ? details.key : ""],
+      ["组合键", Array.isArray(details.modifiers) ? details.modifiers.filter((m): m is string => typeof m === "string").join(" + ") : ""],
       ["显示器", typeof details.displayId === "string" ? details.displayId : ""],
     ].filter((row): row is [string, string] => Boolean(row[1]));
   }, [request]);
@@ -361,10 +261,12 @@ function AutomationApprovalCard({
   }, [request]);
 
   if (!request) return null;
-  const resolve = async (approved: boolean) => {
+  const resolve = async (approved: boolean, allowForTask = false) => {
     setResolving(true);
     try {
-      const found = await automationResolveApproval(request.requestId, approved);
+      const found = allowForTask
+        ? await automationResolveApproval(request.requestId, approved, true)
+        : await automationResolveApproval(request.requestId, approved);
       if (!automation.isActive()) return;
       automation.removeApproval(request.requestId);
       if (!found) onToast?.("该确认已超时或被处理");
@@ -395,6 +297,7 @@ function AutomationApprovalCard({
         <button type="button" className="automation-approval__approve" disabled={resolving} onClick={() => void resolve(true)}>
           允许本次
         </button>
+
       </div>
     </section>
   );

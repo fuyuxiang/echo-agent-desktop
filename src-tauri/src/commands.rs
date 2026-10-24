@@ -1566,8 +1566,16 @@ pub async fn agent_send(
         .clone()
         .ok_or("agent not initialized")?;
     let send_now = send_now.unwrap_or(false);
+    let task_admitted = crate::automation::prepare_user_prompt(
+        &tx,
+        &session_id,
+        display_text.as_deref().unwrap_or(&text),
+        !attachments.is_empty(),
+        send_now,
+    )
+    .await?;
     tracing::info!(%session_id, attachment_count = attachments.len(), send_now, "agent prompt send");
-    agent_runtime::prompt_with_attachments(
+    let result = agent_runtime::prompt_with_attachments(
         &tx,
         &session_id,
         &text,
@@ -1580,7 +1588,11 @@ pub async fn agent_send(
     .map_err(|error| {
         tracing::error!(%session_id, error = ?error, "agent prompt failed");
         error.to_string()
-    })
+    });
+    if let (true, Some(generation)) = (result.is_err(), task_admitted) {
+        crate::automation::prompt_admission_failed(&session_id, generation).await;
+    }
+    result
 }
 
 #[tauri::command]
@@ -1610,12 +1622,13 @@ pub async fn agent_cancel(
     } else {
         crate::automation::stop_session(&session_id).await
     };
-    if let Err(error) = automation_result {
+    if let Err(ref error) = automation_result {
         tracing::warn!(%error, %session_id, cancel_trigger, "failed to stop automation while cancelling turn");
     }
     agent_runtime::cancel(&tx, &session_id, cancel_trigger, prompt_id.as_deref())
         .await
-        .map_err(|e| e.to_string())
+        .map_err(|e| e.to_string())?;
+    automation_result
 }
 
 /// Cleanly shut down the agent (cancel token + clear state) so the frontend

@@ -81,10 +81,14 @@ impl SessionActor {
         self.signals_handle()
             .record_model_usage(&sampling_config.model);
         if apply_prompt_override && !skip_prompt_rewrite {
+            let automation_profile = matches!(
+                self.active_agent_type.lock().as_deref(),
+                Some("browser-use" | "computer-use")
+            );
             let mut conversation = self.chat_state_handle.get_conversation().await;
             for item in conversation.iter_mut() {
                 if let ConversationItem::System(sys) = item {
-                    if use_concise {
+                    if use_concise && !automation_profile {
                         sys.content = std::sync::Arc::<str>::from(
                             echo_agent_core::prompt::template::COMPACT_SYSTEM_PROMPT,
                         );
@@ -191,6 +195,18 @@ impl SessionActor {
                     "rebuild_agent: build failed for agent_type={new_agent_name}: {e}"
                 ))
             })?;
+        // Session-owned tools are registered after the initial builder. They
+        // must return with a regular profile; curated desktop/browser profiles
+        // continue to expose only their execution/discovery toolset.
+        if !matches!(new_agent_name.as_str(), "computer-use" | "browser-use") {
+            self.register_memory_extras(new_agent.tool_bridge())
+                .await
+                .map_err(|error| {
+                    acp::Error::internal_error().data(format!(
+                        "rebuild_agent: session memory tools could not be restored: {error}"
+                    ))
+                })?;
+        }
         let new_system_prompt = new_agent.system_prompt().to_string();
         let mut new_prompt_context = new_agent.prompt_context().clone();
         new_prompt_context.normalize_for_persistence();

@@ -192,7 +192,7 @@ export function PermissionInlineCard({ sessionId }: { sessionId: string | null }
           isDanger ? " btn--danger" : isPrimary ? " btn--primary" : " btn--ghost"
         }${isTaskAlways ? " perm-inline__action--elevated" : ""}`}
         title={isTaskAlways
-          ? `${option.title} · 仅影响本任务的常规工具调用；操作电脑仍逐次确认`
+          ? `${option.title} · 仅影响本任务的常规工具调用；操作电脑仍需明确任务请求`
           : option.title}
         onClick={() => {
           if (isTaskAlways) {
@@ -269,7 +269,7 @@ export function PermissionInlineCard({ sessionId }: { sessionId: string | null }
             }}
           >
             <strong>确认提高当前任务的权限？</strong>
-            <span>将允许当前操作，且本任务后续的命令、文件修改等操作不再询问；该范围仅限常规工具，网页与电脑自动化中可能产生副作用的步骤仍会单独确认。</span>
+            <span>将允许当前操作，且本任务后续的命令、文件修改等常规工具不再询问。网页操作保留独立确认；电脑操作由明确任务请求启动，任务内连续执行，暂停、停止或重启会撤销执行授权。</span>
             <div className="perm-inline__confirm-actions">
               <button
                 ref={confirmCancelRef}

@@ -948,6 +948,7 @@ pub(crate) async fn spawn_session_actor(
         Arc::new(TokioMutex::new(state))
     };
     let rebuild_spec = std::sync::Arc::new(crate::session::agent_rebuild::AgentRebuildSpec {
+        regular_mode_definition: parking_lot::Mutex::new(None),
         working_directory: tool_context.cwd.as_path().to_path_buf(),
         terminal_backend: terminal_backend.clone(),
         fs_backend: fs_backend.clone(),

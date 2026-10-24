@@ -33,7 +33,7 @@ import { selectQuestionForSession, useQuestionStore } from "@/stores/question-st
 import { buildTimeline } from "@/lib/timeline-utils";
 import { formatAgentError, friendlyError } from "@/lib/error-format";
 import { useSubagentStore } from "@/stores/subagent-store";
-import { continuationPrompt, stoppedTaskLabel, type SessionControlAction } from "@/lib/session-control";
+import { stoppedTaskLabel, type SessionControlAction } from "@/lib/session-control";
 import type { ModelOption } from "./ModelSelector";
 import type { AgentEntry } from "@/lib/types";
 import type { SlashCommandInvocation } from "@/lib/slash-commands";
@@ -42,7 +42,7 @@ import { useStickToBottom } from "./use-stick-to-bottom";
 import { isGlobalShortcutBlocked } from "@/lib/keyboard-scope";
 import { stripAttachmentTransportContext } from "@/lib/user-message";
 import { AutomationControls } from "./AutomationControls";
-import type { AutomationMode } from "@/lib/automation-client";
+import { type AutomationMode } from "@/lib/automation-client";
 import { useAppDialog } from "./AppDialog";
 import type {
   MessageRetryKind,
@@ -145,7 +145,6 @@ export function ChatView({
   const traceLoadError = useKnowledgeStore(state => sessionId ? state.traceLoadErrors[sessionId] : undefined);
   const agentMode = useSessionStore((s) => s.agentMode);
   const control = useSessionStore((s) => s.control);
-  const resumeSession = useSessionStore((s) => s.resumeSession);
   const awaitingQuestion = Boolean(useQuestionStore(selectQuestionForSession(sessionId)));
   const mentionCandidates = useWorkspaceMentions(cwd);
   // 会话内查找(对齐 EchoAgent chat-search)。
@@ -195,8 +194,6 @@ export function ChatView({
   const [subagentsOpen, setSubagentsOpen] = useState(false);
   const [teamsOpen, setTeamsOpen] = useState(false);
   const [automationModeChanging, setAutomationModeChanging] = useState(false);
-  const [continuing, setContinuing] = useState(false);
-  const continuingRef = useRef(false);
   const terminalMessage = [...messages].reverse().find(message => message.role === "assistant"
     && (!control?.promptId || message.promptId === control.promptId));
   const stoppedCategory = terminalMessage?.cancellationCategory;
@@ -230,43 +227,15 @@ export function ChatView({
     if (!sessionId || !streaming) return;
     await onCancel("pause");
   }, [sessionId, streaming, onCancel]);
-  const handleResume = useCallback(() => {
-    if (!sessionId) return;
-    resumeSession(sessionId);
-    useSessionsStore.getState().upsert({ sessionId, status: "completed" });
-    onToast?.("已恢复，可继续发送消息");
-  }, [sessionId, resumeSession, onToast]);
-  const handleResumeAndContinue = useCallback(async () => {
-    if (!sessionId || continuingRef.current) return;
-    continuingRef.current = true;
-    setContinuing(true);
-    const retainedState = control?.phase === "stopped" ? "停止" : "暂停";
-    try {
-      // Keep the persisted pause barrier until the new turn is admitted. The
-      // send path clears it atomically with the optimistic assistant turn; the
-      // explicit resume below also supports embedders whose onSend returns void.
-      const accepted = await onSend(continuationPrompt(stoppedCategory));
-      if (accepted === false) {
-        onToast?.(`暂未能继续，任务仍保持${retainedState}，请检查模型、额度或待回答问题`);
-        return;
-      }
-      resumeSession(sessionId);
-    } catch (error) {
-      onToast?.(`继续任务失败，已保持${retainedState}：${String(error).replace(/^Error:\s*/, "")}`);
-    } finally {
-      continuingRef.current = false;
-      setContinuing(false);
-    }
-  }, [sessionId, resumeSession, onSend, onToast, stoppedCategory, control?.phase]);
   const handleTextControl = useCallback(async (action: SessionControlAction) => {
-    if (!streaming) {
-      if (control?.phase === "paused") onToast?.("当前任务已暂停");
-      else if (control?.phase === "stopped") onToast?.("当前任务已停止");
-      else onToast?.("当前任务没有正在运行的内容");
+    // A desktop task may be between model turns. Native cancellation still has
+    // to revoke physical execution; chat streaming is not its lifecycle.
+    if (!streaming && automationMode === "default") {
+      onToast?.(control?.phase === "paused" ? "当前任务已暂停" : "当前任务没有正在运行的内容");
       return true;
     }
     return onCancel(action);
-  }, [control?.phase, onCancel, onToast, streaming]);
+  }, [control?.phase, automationMode, onCancel, onToast, streaming]);
   // 按会话持久化的输入草稿:切到本会话时回填,每次输入回写 store。
   // 选 setDraft 的稳定引用做回调,避免 sessionId 变化时让 Composer 收到新函数。
   const setDraft = useSessionsStore((s) => s.setDraft);
@@ -721,6 +690,8 @@ export function ChatView({
               sessionId={sessionId}
               streaming={streaming}
               onToast={onToast}
+              onContinue={() => onSend("继续")}
+              onPause={() => onCancel("pause")}
               placement="toolbar"
             />
             {cwd && (
@@ -1045,42 +1016,19 @@ export function ChatView({
           />
           <PermissionInlineCard sessionId={sessionId} />
           <QuestionInlineCard sessionId={sessionId} />
-          {control && (
+          {control && automationMode === "default" && (
             <div className="yield-banner" role="status">
               <span>
                 {control.phase === "pausing" && "正在暂停任务…"}
-                {control.phase === "paused" && "已暂停（会话上下文已保留）"}
+                {control.phase === "paused" && "任务已暂停，发送“继续”即可续做"}
                 {control.phase === "stopping" && "正在停止任务…"}
                 {control.phase === "stopped" && stoppedTaskLabel(stoppedCategory)}
               </span>
-              {(control.phase === "paused" || control.phase === "stopped") && (
-                <div className="yield-banner__actions">
-                  <button
-                    type="button"
-                    className="yield-banner__resume"
-                    onClick={control.phase === "stopped" ? handleResumeAndContinue : handleResume}
-                    disabled={continuing}
-                    title={control.phase === "stopped" ? "保留已有成果，按原有约束继续；被拒绝的操作不会获得授权" : "恢复会话，等待你发送下一条消息"}
-                  >
-                    {control.phase === "paused" ? "恢复" : "继续此任务"}
-                  </button>
-                  {control.phase === "paused" && (
-                    <button
-                      type="button"
-                      className="yield-banner__resume yield-banner__resume--primary"
-                      onClick={handleResumeAndContinue}
-                      disabled={continuing}
-                      title="恢复并发送「请继续」让 Agent 接着生成"
-                    >
-                      恢复并继续
-                    </button>
-                  )}
-                </div>
-              )}
+
             </div>
           )}
           {/* 流式时提供「暂停」按钮(软停止,区别于停止按钮的硬取消)。 */}
-          {sessionId && streaming && !control && (
+          {sessionId && streaming && !control && automationMode === "default" && (
             <button
               type="button"
               className="chatview__pause-btn"
@@ -1113,7 +1061,7 @@ export function ChatView({
           )}
           <Composer
             streaming={streaming}
-            disabled={control?.phase === "pausing" || control?.phase === "paused" || control?.phase === "stopping"}
+            disabled={control?.phase === "pausing" || control?.phase === "stopping"}
             apiReady={apiReady}
             setupHint={setupHint}
             onOpenSettings={onOpenSettings}

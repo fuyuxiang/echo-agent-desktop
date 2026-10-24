@@ -31,6 +31,51 @@ pub(super) fn filter_cursor_tools_by_plan_mode(
     defs
 }
 impl SessionActor {
+    /// A prompt rewrite cannot remove the previous profile's registered tools.
+    /// Rebuild at automation boundaries and propagate a busy/build failure to ACP
+    /// before advertising the new mode. The existing rebuild preserves history
+    /// and reconnects the same authenticated session MCP configuration.
+    pub(super) async fn apply_session_mode(
+        &self,
+        mode: acp::SessionModeId,
+    ) -> Result<(), acp::Error> {
+        let active = self.active_agent_type.lock().clone();
+        let was_automation = matches!(active.as_deref(), Some("computer-use" | "browser-use"));
+        let entering_automation = matches!(mode.0.as_ref(), "computer_use" | "browser_use");
+        let return_definition = (!was_automation && entering_automation)
+            .then(|| self.agent.borrow().definition().clone());
+        let next = match mode.0.as_ref() {
+            "computer_use" => Some(AgentDefinition::computer_use()),
+            "browser_use" => Some(AgentDefinition::browser_use()),
+            "default" | "ask" | "plan"
+                if matches!(active.as_deref(), Some("computer-use" | "browser-use")) =>
+            {
+                Some(
+                    self.rebuild_spec
+                        .regular_mode_definition
+                        .lock()
+                        .clone()
+                        .unwrap_or_else(AgentDefinition::default_echo_agent_build),
+                )
+            }
+            _ => None,
+        };
+        if let Some(definition) = next {
+            if active.as_deref() != Some(definition.name.as_str()) {
+                self.handle_rebuild_agent_for_definition(definition).await?;
+            }
+        }
+        if let Some(definition) = return_definition {
+            *self.rebuild_spec.regular_mode_definition.lock() = Some(definition);
+        }
+        let leaving_automation =
+            was_automation && matches!(mode.0.as_ref(), "default" | "ask" | "plan");
+        self.handle_session_mode(mode).await;
+        if leaving_automation {
+            self.rebuild_spec.regular_mode_definition.lock().take();
+        }
+        Ok(())
+    }
     pub(super) fn apply_prompt_modes_to_snapshot(&self, snapshot: &mut TurnDeltaSnapshot) {
         snapshot.start_prompt_mode = Some(self.turn_start_prompt_mode.lock().to_string());
         snapshot.end_prompt_mode = Some(self.turn_prompt_mode.lock().to_string());
@@ -118,7 +163,13 @@ impl SessionActor {
         let agent_def = match session_mode_id.0.as_ref() {
             "browser_use" => Some(AgentDefinition::browser_use()),
             "computer_use" => Some(AgentDefinition::computer_use()),
-            "default" | "ask" => Some(AgentDefinition::default_echo_agent_build()),
+            "default" | "ask" => Some(
+                self.rebuild_spec
+                    .regular_mode_definition
+                    .lock()
+                    .clone()
+                    .unwrap_or_else(AgentDefinition::default_echo_agent_build),
+            ),
             name => {
                 let cwd = self.tool_context.cwd.as_path();
                 echo_agent_core::discovery::by_name_in_cwd(name, cwd)

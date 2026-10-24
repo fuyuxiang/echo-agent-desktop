@@ -1098,6 +1098,25 @@ impl SessionActor {
                 }
             }
         };
+        let active_agent = self.active_agent_type.lock().clone();
+        if let Some(message) =
+            crate::session::helpers::tool_input_parsing::computer_dispatch_correction(
+                active_agent.as_deref(),
+                &call.function.name,
+                &raw_input,
+            )
+        {
+            self.handle_tool_parse_error(
+                &tool_call_id,
+                &call.id,
+                &call.function.name,
+                echo_agent_tool_runtime::ToolError::invalid_arguments(message),
+                &call.function.arguments,
+                &model_id_str,
+            )
+            .await?;
+            return Ok(Err(ToolLoop::ToolParsingError));
+        }
         let parsed = self
             .tool_bridge_handle()
             .try_parse(&call.function.name, raw_input.clone())

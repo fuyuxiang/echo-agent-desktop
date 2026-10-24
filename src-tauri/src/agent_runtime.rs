@@ -1552,7 +1552,50 @@ mod tests {
             "EchoAgent never connected to the team MCP server — tools would be missing"
         );
 
-        // 5. Clean shutdown: cancel the agent thread and join it.
+        // 5. Exercise the actual ACP actor without an inference request or
+        // desktop input. The regular tool inventory must return even for plan,
+        // whose handler exits before the ordinary mode prompt rewrite.
+        let baseline = session_info(&handle.tx, &session_id)
+            .await
+            .expect("regular tool inventory");
+        let regular_tools = baseline["context"]["toolDefinitionsCount"]
+            .as_u64()
+            .expect("tool count");
+        assert!(
+            regular_tools > 3,
+            "regular mode must provide more than discovery/MCP tools"
+        );
+        for automation in ["computer_use", "browser_use"] {
+            for target in ["plan", "ask", "default"] {
+                set_session_mode_id(&handle.tx, &session_id, automation)
+                    .await
+                    .expect("enter automation");
+                let restricted = session_info(&handle.tx, &session_id)
+                    .await
+                    .expect("restricted inventory");
+                let restricted_count = restricted["context"]["toolDefinitionsCount"]
+                    .as_u64()
+                    .expect("automation tool count");
+                assert!(
+                    restricted_count < regular_tools,
+                    "automation must remove regular tools: {restricted}"
+                );
+                set_session_mode_id(&handle.tx, &session_id, target)
+                    .await
+                    .expect("leave automation");
+                let restored = session_info(&handle.tx, &session_id)
+                    .await
+                    .expect("restored inventory");
+                assert_eq!(
+                    restored["context"]["toolDefinitionsCount"].as_u64(),
+                    Some(regular_tools),
+                    "{automation} -> {target}: {restored}"
+                );
+                assert_ne!(restored["agentName"], automation.replace('_', "-"));
+            }
+        }
+
+        // 6. Clean shutdown: cancel the agent thread and join it.
         handle.cancel.cancel();
         if let Some(thread) = handle.thread {
             let _ = tokio::task::spawn_blocking(move || thread.join()).await;

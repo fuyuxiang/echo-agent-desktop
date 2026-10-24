@@ -3,7 +3,7 @@ import { execFileSync } from 'node:child_process';
 
 // Read only the graphical session flags, never account details or pixels.
 export function readNativeReviewSession() {
-  const script = 'ObjC.import("CoreGraphics"); var reviewSession = ObjC.deepUnwrap(ObjC.castRefToObject($.CGSessionCopyCurrentDictionary())); JSON.stringify({ screenLocked: reviewSession.CGSSessionScreenIsLocked === true, onConsole: reviewSession.kCGSSessionOnConsoleKey === true, loginDone: reviewSession.kCGSessionLoginDoneKey === true });';
+  const script = 'ObjC.import("CoreGraphics"); var reviewSession = ObjC.deepUnwrap(ObjC.castRefToObject($.CGSessionCopyCurrentDictionary())); JSON.stringify({ available: !!reviewSession, screenLocked: reviewSession ? reviewSession.CGSSessionScreenIsLocked === true : null, onConsole: reviewSession ? reviewSession.kCGSSessionOnConsoleKey === true : null, loginDone: reviewSession ? reviewSession.kCGSessionLoginDoneKey === true : null });';
   return JSON.parse(execFileSync('/usr/bin/osascript', ['-l', 'JavaScript', '-e', script], { encoding: 'utf8', timeout: 3000 }));
 }
 

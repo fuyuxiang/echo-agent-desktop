@@ -4,9 +4,14 @@
 //! HTTP headers. This module uses that trusted session binding rather than an
 //! LLM-supplied argument, so automation state cannot cross task boundaries.
 
+mod accessibility;
+mod arguments;
+mod artifact;
 mod browser;
 mod computer;
+mod desktop_coordinator;
 mod network_proxy;
+pub(crate) mod task;
 
 use axum::{
     extract::{DefaultBodyLimit, State},
@@ -39,24 +44,26 @@ const MAX_SESSION_ID_CHARS: usize = 256;
 const APPROVAL_TIMEOUT: Duration = Duration::from_secs(5 * 60);
 const SERVER_START_TIMEOUT: Duration = Duration::from_secs(5);
 
-/// 工具白名单：无论任务级权限模式（ask/auto/always-approve）如何，
-/// 都必须在执行前经用户独立确认。这是为了保护用户真实桌面——
-/// AI 一旦自动执行 click/drag/type/key，可能造成不可逆后果
-///（购买、删除、确认对话框、退出应用、键盘快捷键误触）。
-///
-/// 与任务级 PermissionMode::always-approve 是正交的两套安全机制：
-/// - always-approve 控制"分类器/审批模式"
-/// - 本列表控制"真实桌面上的副作用"
-///
-pub(crate) const ALWAYS_CONFIRM_TOOLS: &[&str] = &[
+/// Physical writes require a live user-task execution lease. The original user
+/// task authorizes continuous desktop execution; native target/focus/identity
+/// checks still apply. There is no per-app, per-button or coordinate approval.
+/// Runtime permission mode cannot manufacture this user-task authorization.
+pub(crate) const DESKTOP_WRITE_TOOLS: &[&str] = &[
     "computer_click",
+    "computer_click_control",
     "computer_drag",
     "computer_type",
     "computer_key",
+    "computer_activate_window",
+    "computer_key_window",
+    "computer_file_dialog",
+    "computer_open_app",
+    "computer_invoke",
+    "computer_set_value",
 ];
 
-pub(crate) fn requires_independent_confirmation(tool_name: &str) -> bool {
-    ALWAYS_CONFIRM_TOOLS.contains(&tool_name)
+pub(crate) fn requires_desktop_consent(tool_name: &str) -> bool {
+    DESKTOP_WRITE_TOOLS.contains(&tool_name)
 }
 
 static SERVICE: OnceLock<Arc<AutomationService>> = OnceLock::new();
@@ -91,6 +98,8 @@ pub struct AutomationStatus {
     pub session_id: String,
     pub mode: AutomationMode,
     pub paused: bool,
+    pub computer_authorized: bool,
+    pub task: task::TaskExecution,
     pub allow_private_network: bool,
     pub browser: browser::BrowserCapability,
     pub computer: computer::ComputerCapability,
@@ -109,12 +118,14 @@ pub struct AutomationCapabilities {
 
 struct AutomationSession {
     mode: Mutex<AutomationMode>,
-    paused: Mutex<bool>,
+    task: Mutex<task::TaskExecution>,
+    intent_generation: std::sync::atomic::AtomicU64,
     allow_private_network: Mutex<bool>,
     browser: AsyncMutex<Option<BrowserController>>,
     computer: Mutex<ComputerController>,
+    accessibility: Mutex<Option<Arc<accessibility::Controller>>>,
     action_token: Mutex<CancellationToken>,
-    execution_gate: AsyncRwLock<()>,
+    execution_gate: Arc<AsyncRwLock<()>>,
 }
 
 impl AutomationSession {
@@ -123,24 +134,31 @@ impl AutomationSession {
         let changed = *current != mode;
         *current = mode;
         if activate {
-            *self.paused.lock().unwrap() = false;
+            self.task.lock().unwrap().resume(false);
         } else if changed && mode != AutomationMode::Default {
-            *self.paused.lock().unwrap() = true;
+            self.task.lock().unwrap().pause("mode_changed");
         }
     }
+    #[cfg(test)]
     fn new(mode: AutomationMode) -> Self {
+        Self::with_scope(mode, None)
+    }
+
+    fn with_scope(mode: AutomationMode, scope: Option<String>) -> Self {
         // A restored task must never silently regain control after an app
         // restart. A deliberate mode switch starts active; restoring an
         // already-automated task starts paused until the user resumes in UI.
         let restored_automation = mode != AutomationMode::Default;
         Self {
             mode: Mutex::new(mode),
-            paused: Mutex::new(restored_automation),
+            task: Mutex::new(task::TaskExecution::new(restored_automation, scope)),
+            intent_generation: std::sync::atomic::AtomicU64::new(0),
             allow_private_network: Mutex::new(false),
             browser: AsyncMutex::new(None),
             computer: Mutex::new(ComputerController::default()),
+            accessibility: Mutex::new(None),
             action_token: Mutex::new(CancellationToken::new()),
-            execution_gate: AsyncRwLock::new(()),
+            execution_gate: Arc::new(AsyncRwLock::new(())),
         }
     }
 
@@ -149,11 +167,35 @@ impl AutomationSession {
     }
 
     fn cancel_actions(&self) {
+        self.task.lock().unwrap().revoke();
         self.action_token.lock().unwrap().cancel();
     }
 
+    fn authorize_computer_task(&self, token: &CancellationToken) -> Result<(), String> {
+        if token.is_cancelled()
+            || self.task.lock().unwrap().paused()
+            || *self.mode.lock().unwrap() != AutomationMode::ComputerUse
+        {
+            return Err("任务已暂停或模式变化，请重新确认电脑操作授权".into());
+        }
+        self.task.lock().unwrap().authorized = true;
+        Ok(())
+    }
+
+    fn computer_task_authorized(&self, token: &CancellationToken) -> bool {
+        let mode = *self.mode.lock().unwrap();
+        let task = self.task.lock().unwrap();
+        !token.is_cancelled()
+            && !task.paused()
+            && mode == AutomationMode::ComputerUse
+            && task.authorized
+    }
+
     fn reset_action_token(&self) {
-        *self.action_token.lock().unwrap() = CancellationToken::new();
+        self.task.lock().unwrap().revoke();
+        let mut current = self.action_token.lock().unwrap();
+        current.cancel();
+        *current = CancellationToken::new();
     }
 }
 
@@ -163,13 +205,31 @@ async fn enter_action<'a>(
     required: AutomationMode,
 ) -> Result<RwLockReadGuard<'a, ()>, String> {
     let guard = session.execution_gate.read().await;
-    if token.is_cancelled() || *session.paused.lock().unwrap() {
+    if token.is_cancelled() || session.task.lock().unwrap().paused() {
         return Err("自动化已暂停。用户接管期间不会执行任何浏览器或电脑操作。".into());
     }
     if *session.mode.lock().unwrap() != required {
         return Err("任务模式已变化，本次自动化操作已取消".into());
     }
     Ok(guard)
+}
+
+async fn native_lease(
+    session: &AutomationSession,
+    token: &CancellationToken,
+) -> Result<accessibility::ExecutionLease, String> {
+    let desktop = desktop_coordinator::acquire(token).await?;
+    let gate = session.execution_gate.clone().read_owned().await;
+    if token.is_cancelled()
+        || session.task.lock().unwrap().paused()
+        || *session.mode.lock().unwrap() != AutomationMode::ComputerUse
+    {
+        return Err("cancelled: native action stopped before dispatch".into());
+    }
+    Ok(accessibility::ExecutionLease {
+        _desktop: desktop,
+        _session: gate,
+    })
 }
 
 async fn browser_preflight<T>(
@@ -199,6 +259,7 @@ pub struct AutomationApproval {
 struct PendingApproval {
     request: AutomationApproval,
     response: oneshot::Sender<bool>,
+    cancellation: CancellationToken,
 }
 
 struct BrowserApprovalPlan {
@@ -241,12 +302,19 @@ impl AutomationManager {
                     .as_deref()
                     .and_then(|mode| AutomationMode::parse(mode).ok())
                     .unwrap_or(AutomationMode::Default);
-                Arc::new(AutomationSession::new(mode))
+                Arc::new(AutomationSession::with_scope(
+                    mode,
+                    crate::meta::desktop_task_scope(session_id),
+                ))
             })
             .clone())
     }
 
     async fn set_mode(&self, session_id: &str, mode: AutomationMode) -> Result<(), String> {
+        self.session(session_id)
+            .await?
+            .intent_generation
+            .fetch_add(1, Ordering::SeqCst);
         self.apply_mode(session_id, mode, true).await
     }
 
@@ -269,6 +337,8 @@ impl AutomationManager {
         session.cancel_actions();
         self.reject_session_approvals(session_id).await;
         let _exclusive = session.execution_gate.write().await;
+        session.accessibility.lock().unwrap().take();
+        session.computer.lock().unwrap().invalidate_frame();
         session.commit_mode(mode, activate);
         session.reset_action_token();
         if !mode.allows_browser() {
@@ -282,18 +352,29 @@ impl AutomationManager {
 
     async fn status(&self, session_id: &str) -> Result<AutomationStatus, String> {
         let session = self.session(session_id).await?;
-        let mode = *session.mode.lock().unwrap();
-        let paused = *session.paused.lock().unwrap();
         let allow_private_network = *session.allow_private_network.lock().unwrap();
         let mut browser_guard = session.browser.lock().await;
         let browser_status = match browser_guard.as_mut() {
             Some(browser) => browser.status().await.ok(),
             None => None,
         };
+        // Capture execution fields together after asynchronous provider queries.
+        // Mixing a pre-await scope with a post-await grant misrepresents admission.
+        let (mode, task) = {
+            let mode = session.mode.lock().unwrap();
+            (*mode, session.task.lock().unwrap().clone())
+        };
+        let paused = task.paused();
+        let computer_authorized = task.authorized
+            && !paused
+            && mode == AutomationMode::ComputerUse
+            && !session.action_token().is_cancelled();
         Ok(AutomationStatus {
             session_id: session_id.to_string(),
             mode,
             paused,
+            computer_authorized,
+            task,
             allow_private_network,
             browser: browser::capability(),
             computer: ComputerController::capability(),
@@ -323,33 +404,53 @@ impl AutomationManager {
                 AutomationMode::BrowserUse => {
                     "当前任务未开启操作网页，请从输入框的 + 菜单开启".into()
                 }
-                AutomationMode::ComputerUse => {
-                    "当前任务未开启操作电脑，请从输入框的 + 菜单开启".into()
-                }
+                AutomationMode::ComputerUse => "请直接说明需要在电脑上完成的任务".into(),
                 AutomationMode::Default => "当前任务模式不允许此操作".into(),
             });
         }
-        if *session.paused.lock().unwrap() {
+        if session.task.lock().unwrap().paused() {
             return Err("自动化已暂停。用户接管期间不会执行任何浏览器或电脑操作。".into());
         }
         Ok(session)
     }
 
     async fn pause(&self, session_id: &str, paused: bool) -> Result<(), String> {
+        self.pause_with_reason(session_id, paused, "user_paused")
+            .await
+    }
+
+    async fn pause_with_reason(
+        &self,
+        session_id: &str,
+        paused: bool,
+        reason: &str,
+    ) -> Result<(), String> {
         let session = self.session(session_id).await?;
         if paused {
+            session.intent_generation.fetch_add(1, Ordering::SeqCst);
             // Cancel first, then wait for the exclusive gate. Once this method
             // returns, no action admitted under the old token can still run.
             session.cancel_actions();
-            *session.paused.lock().unwrap() = true;
+            session.task.lock().unwrap().pause(reason);
             // Taking over is a hard boundary: no earlier approval request may
             // remain live and resume an operation behind the user's back.
             self.reject_session_approvals(session_id).await;
             let _exclusive = session.execution_gate.write().await;
+            // Reassert after the gate: a preflight already holding it may have
+            // been finishing admission when cancellation arrived. Its token is
+            // cancelled; the acknowledged lifecycle must stay paused as well.
+            session.task.lock().unwrap().pause(reason);
+            let worker = session.accessibility.lock().unwrap().clone();
+            if let Some(worker) = worker {
+                if worker.invalidate_elements().await.is_err() {
+                    session.accessibility.lock().unwrap().take();
+                }
+            }
+            session.computer.lock().unwrap().invalidate_frame();
         } else {
             let _exclusive = session.execution_gate.write().await;
             session.reset_action_token();
-            *session.paused.lock().unwrap() = false;
+            session.task.lock().unwrap().resume(false);
         }
         self.emit_status(session_id).await;
         Ok(())
@@ -365,10 +466,14 @@ impl AutomationManager {
         session_id: &str,
         session: &Arc<AutomationSession>,
     ) -> Result<(), String> {
+        session.intent_generation.fetch_add(1, Ordering::SeqCst);
         session.cancel_actions();
-        *session.paused.lock().unwrap() = true;
+        session.task.lock().unwrap().stop();
         self.reject_session_approvals(session_id).await;
         let _exclusive = session.execution_gate.write().await;
+        session.task.lock().unwrap().stop();
+        session.accessibility.lock().unwrap().take();
+        session.computer.lock().unwrap().invalidate_frame();
         let browser_result = stop_browser(&session.browser).await;
         self.emit_status(session_id).await;
         browser_result
@@ -425,6 +530,15 @@ impl AutomationManager {
         if cancellation.is_cancelled() {
             return Err("自动化已暂停，操作未进入确认阶段".into());
         }
+        if tool.starts_with("computer_") && requires_desktop_consent(tool) {
+            let session = self.sessions.lock().await.get(session_id).cloned();
+            return if session.is_some_and(|session| session.computer_task_authorized(cancellation))
+            {
+                Ok(())
+            } else {
+                Err("电脑任务尚未开始或已暂停；请说明任务，或发送继续来续做原任务".into())
+            };
+        }
         let request_id = uuid::Uuid::now_v7().to_string();
         let request = AutomationApproval {
             request_id: request_id.clone(),
@@ -440,6 +554,7 @@ impl AutomationManager {
             PendingApproval {
                 request: request.clone(),
                 response: tx,
+                cancellation: cancellation.clone(),
             },
         );
         if self.app.emit("automation://approval", &request).is_err() {
@@ -479,7 +594,7 @@ impl AutomationManager {
             .collect::<Vec<_>>();
         for session in &sessions {
             session.cancel_actions();
-            *session.paused.lock().unwrap() = true;
+            session.task.lock().unwrap().pause("user_paused");
         }
         let pending = std::mem::take(&mut *self.approvals.lock().await);
         for (request_id, approval) in pending {
@@ -493,6 +608,8 @@ impl AutomationManager {
         let mut errors = Vec::new();
         for session in sessions {
             let _exclusive = session.execution_gate.write().await;
+            session.accessibility.lock().unwrap().take();
+            session.computer.lock().unwrap().invalidate_frame();
             if let Err(error) = stop_browser(&session.browser).await {
                 errors.push(error);
             }
@@ -509,7 +626,7 @@ impl AutomationManager {
         let session = self.sessions.lock().await.get(session_id).cloned();
         if let Some(session) = session {
             session.cancel_actions();
-            *session.paused.lock().unwrap() = true;
+            session.task.lock().unwrap().pause("user_paused");
             self.reject_session_approvals(session_id).await;
             let _exclusive = session.execution_gate.write().await;
             if let Err(error) = stop_browser(&session.browser).await {
@@ -754,6 +871,142 @@ pub fn automation_capabilities() -> AutomationCapabilities {
     capabilities
 }
 
+/// Admission for a real user message only. This function is deliberately not an
+/// MCP tool: neither the model nor document/tool content can grant or resume.
+pub(crate) async fn prepare_user_prompt(
+    tx: &echo_agent_acp::AcpAgentTx,
+    session_id: &str,
+    user_text: &str,
+    has_attachments: bool,
+    send_now: bool,
+) -> Result<Option<u64>, String> {
+    let mut intent = task::user_intent(user_text, has_attachments);
+    if intent == task::UserIntent::Ordinary {
+        // Replacing a model turn must also revoke its physical input lease,
+        // including corrections such as "不要保存，先解释". Runtime cancellation
+        // alone can drop an HTTP caller while a native worker is still running.
+        if send_now
+            && matches!(
+                crate::meta::agent_mode(session_id).as_deref(),
+                Some("computer_use" | "browser_use")
+            )
+        {
+            manager()?
+                .pause_with_reason(session_id, true, "user_instruction")
+                .await?;
+        }
+        return Ok(None);
+    }
+    if intent != task::UserIntent::DesktopTask
+        && !matches!(
+            crate::meta::agent_mode(session_id).as_deref(),
+            Some("computer_use" | "browser_use")
+        )
+    {
+        return Ok(None);
+    }
+    let manager = manager()?;
+    let session = manager.session(session_id).await?;
+    let mode = *session.mode.lock().unwrap();
+    let current = session.task.lock().unwrap().clone();
+    // Manual mode selection supplies the app context for a first imperative
+    // such as "新建文稿". It never authorizes discussion or a restored history.
+    if intent == task::UserIntent::TaskUpdate
+        && current.scope.is_none()
+        && mode == AutomationMode::ComputerUse
+        && !current.paused()
+    {
+        intent = task::UserIntent::DesktopTask;
+    }
+    let scope = task::updated_scope(current.scope.as_deref(), intent, user_text)?;
+    if intent != task::UserIntent::DesktopTask && mode != AutomationMode::ComputerUse {
+        if intent != task::UserIntent::Continue || mode != AutomationMode::BrowserUse {
+            return Ok(None);
+        }
+    } else if scope.is_none() {
+        return Err("当前没有可续做的电脑任务，请直接说明需要在哪个应用中完成什么".into());
+    }
+    let generation = session.intent_generation.load(Ordering::SeqCst);
+    if intent == task::UserIntent::DesktopTask {
+        validate_mode_capability(AutomationMode::ComputerUse)?;
+        if mode != AutomationMode::ComputerUse {
+            crate::agent_runtime::set_session_mode_id(tx, session_id, "computer_use")
+                .await
+                .map_err(|e| e.to_string())?;
+            manager
+                .apply_mode(session_id, AutomationMode::ComputerUse, true)
+                .await?;
+        }
+    }
+    let exclusive = session.execution_gate.write().await;
+    if generation != session.intent_generation.load(Ordering::SeqCst) {
+        session.cancel_actions();
+        session.task.lock().unwrap().pause("user_paused");
+        return Err("任务已被暂停，本条执行请求已取消；发送继续可从现场续做".into());
+    }
+    let computer_mode = *session.mode.lock().unwrap() == AutomationMode::ComputerUse;
+    if computer_mode {
+        // Commit descriptions only after Runtime accepts the mode. No token or
+        // authorization is persisted, including when admission later fails.
+        if let Some(scope) = &scope {
+            crate::meta::set_desktop_task_context(session_id, scope)?;
+        }
+    }
+    session.reset_action_token();
+    if intent == task::UserIntent::DesktopTask {
+        session.accessibility.lock().unwrap().take();
+    } else {
+        let worker = session.accessibility.lock().unwrap().clone();
+        if let Some(worker) = worker {
+            if worker.invalidate_elements().await.is_err() {
+                session.accessibility.lock().unwrap().take();
+            }
+        }
+    }
+    session.computer.lock().unwrap().invalidate_frame();
+    let admitted_generation = {
+        let mut task = session.task.lock().unwrap();
+        if let Some(scope) = scope {
+            task.scope = Some(scope);
+        }
+        task.resume(computer_mode);
+        task.generation
+    };
+    drop(exclusive);
+    tracing::info!(%session_id, ?intent, admitted_generation, "trusted user task admitted");
+    manager.emit_status(session_id).await;
+    Ok(Some(admitted_generation))
+}
+
+pub(crate) async fn prompt_admission_failed(session_id: &str, admitted_generation: u64) {
+    let Ok(manager) = manager() else { return };
+    let Ok(session) = manager.session(session_id).await else {
+        return;
+    };
+    let exclusive = session.execution_gate.write().await;
+    {
+        let task = session.task.lock().unwrap();
+        // PromptRequest settles after the whole turn. A late failure of an old
+        // turn must never pause a newer user task or undo an acknowledged stop.
+        if task.paused() || task.generation != admitted_generation {
+            return;
+        }
+    }
+    session.intent_generation.fetch_add(1, Ordering::SeqCst);
+    session.cancel_actions();
+    session.task.lock().unwrap().pause("prompt_failed");
+    manager.reject_session_approvals(session_id).await;
+    let worker = session.accessibility.lock().unwrap().clone();
+    if let Some(worker) = worker {
+        if worker.invalidate_elements().await.is_err() {
+            session.accessibility.lock().unwrap().take();
+        }
+    }
+    session.computer.lock().unwrap().invalidate_frame();
+    drop(exclusive);
+    manager.emit_status(session_id).await;
+}
+
 #[tauri::command]
 pub async fn automation_status(session_id: String) -> Result<AutomationStatus, String> {
     manager()?.status(&session_id).await
@@ -766,8 +1019,18 @@ pub async fn automation_clear_browser_data(session_id: String) -> Result<Automat
 }
 
 #[tauri::command]
-pub async fn automation_pause(session_id: String) -> Result<AutomationStatus, String> {
-    manager()?.pause(&session_id, true).await?;
+pub async fn automation_pause(
+    session_id: String,
+    reason: Option<String>,
+) -> Result<AutomationStatus, String> {
+    let reason = match reason.as_deref() {
+        None | Some("user_paused") => "user_paused",
+        Some("validation_watchdog") => "validation_watchdog",
+        _ => return Err("不支持的任务暂停原因".into()),
+    };
+    manager()?
+        .pause_with_reason(&session_id, true, reason)
+        .await?;
     manager()?.status(&session_id).await
 }
 
@@ -830,17 +1093,76 @@ pub async fn automation_pending_approvals(
 pub async fn automation_resolve_approval(
     request_id: String,
     approved: bool,
+    allow_for_task: Option<bool>,
 ) -> Result<bool, String> {
     let pending = manager()?.approvals.lock().await.remove(&request_id);
     let Some(pending) = pending else {
         return Ok(false);
     };
-    let _ = pending.response.send(approved);
+    let authorizing_session = if approved && allow_for_task.unwrap_or(false) {
+        manager()?
+            .sessions
+            .lock()
+            .await
+            .get(&pending.request.session_id)
+            .cloned()
+    } else {
+        None
+    };
+    let grant = if approved && allow_for_task.unwrap_or(false) {
+        if !pending.request.tool.starts_with("computer_")
+            || !requires_desktop_consent(&pending.request.tool)
+        {
+            Err("本任务授权仅适用于电脑操作确认".to_string())
+        } else if let Some(session) = authorizing_session {
+            let _exclusive = session.execution_gate.write().await;
+            session.authorize_computer_task(&pending.cancellation)
+        } else {
+            Err("任务已结束，授权未生效".to_string())
+        }
+    } else {
+        Ok(())
+    };
+    let _ = pending.response.send(approved && grant.is_ok());
     let _ = manager()?.app.emit(
         "automation://approval-closed",
         json!({ "requestId": request_id, "sessionId": pending.request.session_id }),
     );
+    grant?;
+    manager()?.emit_status(&pending.request.session_id).await;
     Ok(true)
+}
+
+/// Runtime's generic MCP prompt is delegated only to this process's registered
+/// computer service. It still enforces its own task/one-action consent and
+/// target validation. No model-controlled flag can create this authorization.
+pub(crate) async fn manages_computer_permissions(session_id: &str) -> bool {
+    let Some(service) = SERVICE.get() else {
+        return false;
+    };
+    if !service.ready.load(Ordering::SeqCst) {
+        return false;
+    }
+    service
+        .manager
+        .sessions
+        .lock()
+        .await
+        .get(session_id)
+        .is_some_and(|s| *s.mode.lock().unwrap() == AutomationMode::ComputerUse)
+}
+
+pub(crate) fn is_managed_computer_tool(name: &str) -> bool {
+    (name.starts_with("computer_")
+        || matches!(
+            name,
+            "automation_status" | "automation_pause" | "automation_stop"
+        ))
+        && tools_list_result()["tools"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|t| t["name"] == name)
 }
 
 #[derive(Clone)]
@@ -945,7 +1267,7 @@ fn initialize_result(params: &Value) -> Value {
 }
 
 fn tools_list_result() -> Value {
-    json!({ "tools": [
+    let mut result = json!({ "tools": [
         tool("automation_status", "Read Browser Use and Computer Use capability, mode and lifecycle status for this task.", object_schema(&[])),
         tool("automation_pause", "Pause all browser/computer actions so the user can take over safely.", object_schema(&[])),
         tool("automation_stop", "Stop the controlled browser and all automation for this task.", object_schema(&[])),
@@ -981,24 +1303,269 @@ fn tools_list_result() -> Value {
         tool("browser_stop", "Stop the controlled browser for this task without changing conversation mode.", object_schema(&[])),
 
         tool("computer_capabilities", "Check operating-system screen capture and input-control permissions.", object_schema(&[])),
-        tool("computer_displays", "List controllable displays and their logical/pixel coordinate systems.", object_schema(&[])),
-        tool("computer_screenshot", "Capture a display. Returns a frameId, coordinate metadata and PNG image. Coordinate actions must use this frameId.", schema(json!({"displayId":{"type":"string","maxLength":128}}), &[])),
+        tool("computer_displays", "List display system dimensions. Captured image resolution can differ: use screenshot imageWidth/imageHeight and its frameId for coordinate actions.", object_schema(&[])),
+        tool("computer_screenshot", "Capture a display. Returns a frameId, actual imageWidth/imageHeight, logical desktop bounds and PNG image. Action x/y are pixels in this captured image; the backend maps to logical desktop coordinates. Do not use computer_displays pixelWidth to scale the image. Capture immediately before a coordinate action.", schema(json!({"displayId":{"type":"string","maxLength":128}}), &[])),
         tool("computer_move", "Move the pointer using coordinates from a current computer_screenshot frame. Hover UI may change, so the frame is invalidated.", schema(json!({"frameId":{"type":"string"},"x":{"type":"number"},"y":{"type":"number"}}), &["frameId","x","y"])),
-        tool("computer_click", "Click using coordinates from a current screenshot after user confirmation. The frame is invalidated after the action.", schema(json!({
-            "frameId":{"type":"string"},"x":{"type":"number"},"y":{"type":"number"},"button":{"type":"string","enum":["left","right","middle"],"default":"left"},"clickCount":{"type":"integer","minimum":1,"maximum":3,"default":1}
-        }), &["frameId","x","y"])),
-        tool("computer_drag", "Drag between two coordinates from a current screenshot after user confirmation and invalidate the frame.", schema(json!({
+        tool("computer_click", "Click under the active user task. Prefer ref for an observed native control: the backend obtains its current bounds and verifies the native hit target, with no screenshot coordinates. Set clickCount=2 to open a directory suggestion. Native ref clicks support the left button and counts 1 or 2 on macOS. If native clicking is unsupported or no control is exposed, use frameId/x/y from a fresh screenshot; x/y are captured-image pixels, never raw AX bounds. Choose exactly one target representation. No per-step approval is needed.", schema(json!({
+            "ref":{"type":"string"},"frameId":{"type":"string"},"x":{"type":"number"},"y":{"type":"number"},"button":{"type":"string","enum":["left","right","middle"],"default":"left"},"clickCount":{"type":"integer","minimum":1,"maximum":3,"default":1}
+        }), &[])),
+        tool("computer_drag", "Drag under the active user task using two captured-image pixel coordinates, not AX logical bounds. Consume the fresh screenshot frame.", schema(json!({
             "frameId":{"type":"string"},"fromX":{"type":"number"},"fromY":{"type":"number"},"toX":{"type":"number"},"toY":{"type":"number"},"durationMs":{"type":"integer","minimum":100,"maximum":5000,"default":500}
         }), &["frameId","fromX","fromY","toX","toY"])),
         tool("computer_scroll", "Scroll the active desktop target using a current screenshot frame. Positive deltaY scrolls down and the frame is invalidated.", schema(json!({"frameId":{"type":"string"},"deltaX":{"type":"integer","default":0},"deltaY":{"type":"integer"}}), &["frameId","deltaY"])),
-        tool("computer_type", "Type text into the focused desktop control after user confirmation. Text is never shown in the confirmation card.", schema(json!({
+        tool("computer_type", "Type into the focused desktop control under the active user task. Prefer native computer_set_value with inputMethod=keyboard for an observed text control.", schema(json!({
             "frameId":{"type":"string"},"text":{"type":"string","maxLength":65536}
         }), &["frameId","text"])),
-        tool("computer_key", "Press a desktop key with optional modifiers after user confirmation.", schema(json!({
+        tool("computer_key", "Press a desktop key with optional modifiers under the active user task. Prefer computer_key_window when a native window reference is available.", schema(json!({
             "frameId":{"type":"string"},"key":{"type":"string","maxLength":64},"modifiers":{"type":"array","maxItems":4,"items":{"type":"string"}}
         }), &["frameId","key"])),
         tool("computer_wait", "Wait briefly before taking the next screenshot.", schema(json!({"milliseconds":{"type":"integer","minimum":50,"maximum":30000,"default":1000}}), &[]))
-    ] })
+    ] });
+    result["tools"]
+        .as_array_mut()
+        .unwrap()
+        .extend(accessibility_tools());
+    if let Some(click) = result["tools"]
+        .as_array_mut()
+        .unwrap()
+        .iter_mut()
+        .find(|tool| tool["name"] == "computer_click")
+    {
+        click["inputSchema"]["oneOf"] = json!([
+            {"required":["ref"]},
+            {"required":["frameId","x","y"]}
+        ]);
+    }
+    result
+}
+
+fn accessibility_tools() -> Vec<Value> {
+    vec![
+        tool("computer_context", "Start here for a known app: resolve its localized name, executable/bundle alias or identifier, discover its windows and return compact current native controls and actual menu keyboard commands in ONE call. Supply app (for example the user's app name), appRef or windowRef. Focused modal dialogs are observed instead of their background file browser. Native actions already return updated state with fresh refs: use that state directly; do not repeat discovery/snapshot/screenshot unless the needed target is missing/truncated or layout is required; unrelated metadata errors do not require rereading the tree. Application/window refs are revalidated native identities, not execution authority. commands are observed shortcuts, never guessed app recipes.", schema(json!({"app":{"type":"string"},"appRef":{"type":"string"},"windowRef":{"type":"string"}}),&[])),
+        tool("computer_click_control", "Click or double-click an observed native control ref without screenshot coordinates. Prefer this for observed rows/cells/buttons lacking an open/press action, including Go to Folder suggestions. The backend activates its original window, obtains current native bounds and hit-tests that the point is this retained control or its child; it never trusts model coordinates. Set clickCount=2 to open a directory suggestion. macOS supports hit-tested control clicking; unsupported providers/platforms return an explicit error for screenshot fallback. No per-step approval under the active task.", schema(json!({"ref":{"type":"string"},"clickCount":{"type":"integer","minimum":1,"maximum":2,"default":1}}), &["ref"])),
+        tool("computer_verify_file", "Read-only verification after GUI saving: check an explicit absolute output path from the current user's task. Does not create, rename or write files. Returns exists=false when a path-like window title is not an actual file. Optional expectedText compares exact UTF-8 content including final newlines. Use expectedTrailingNewlines to declare boundary newlines as an integer if the provider strips string endings; this checks caller expectation, so also compare it with the user's original requirement.", schema(json!({"path":{"type":"string","maxLength":4096},"expectedText":{"type":"string","maxLength":64000},"expectedTrailingNewlines":{"type":"integer","minimum":0,"maximum":16,"description":"Explicit terminal LF count; use with expectedText without final LF when the provider strips string endings. Omit to preserve the expectedText exactly."}}), &["path"])),
+        tool("computer_open_app", "Open an installed .app bundle (macOS) or .exe (Windows) by absolute appPath, under active task authorization. No arguments or shell commands are accepted. This may activate an already-running app: it does NOT create a new document. Verify running state, then separately create a new document if the task requires one.", schema(json!({"appPath":{"type":"string","maxLength":4096}}), &["appPath"])),
+        tool("computer_list_apps", "Discover running native applications; optionally filter by exact observed/authorized name or identifier to locate a known target without reading unrelated pages. Returns session-bound app refs and matchStatus for filtered discovery; do not choose the first ambiguous match. Does not launch applications. Consume nextCursor pages when listing all applications.", schema(json!({"name":{"type":"string","minLength":1,"maxLength":512},"identifier":{"type":"string","minLength":1,"maxLength":1024}}), &[])),
+        tool("computer_continue", "Read the next page from nextCursor until null. The opaque cursor is session-bound, single-use, expires after 120s, and becomes stale when its window snapshot changes. Page truncation differs from unavailable native content.", schema(json!({"cursor":{"type":"string"}}), &["cursor"])),
+        tool("computer_list_windows", "Discover windows and foreground state, preferably scoped to the target appRef. Save/Open/Go to Folder sheets are often attached to the original document window, not separate windows: inspect that original window with computer_snapshot or computer_find even when its title and this list do not change. Returns window refs and documentUrl when the provider exposes a local document URL. A title containing a path may be a literal filename: verify documentUrl after saving. Inaccessible apps/providers preserve readable windows with status=incomplete, issues and truncated=true. An incomplete global listing does not mean the target has no windows; retry with its appRef.", schema(json!({"appRef":{"type":"string"}}), &[])),
+        tool("computer_activate_window", "Activate an observed app/window under active task authorization and verify foreground identity.", schema(json!({"ref":{"type":"string"}}), &["ref"])),
+        tool("computer_key_window", "Press a known key/shortcut in an observed native window under active task authorization. Use an actually observed menu shortcut, for example shortcut=cmd+s. Do not guess Save As shortcuts. Alternatively use key=n and modifiers=[cmd]. Provide exactly one representation; never put command+n in key. Revalidates the retained window, restores and verifies foreground focus, rejects protected keyboard focus, then dispatches under the desktop lease. Use for known dialog/menu shortcuts when native actions are unavailable. Returns updated state with current controls and menu commands. Use that state directly, without redundant discovery or screenshot; dispatch alone does not claim save/task completion. Coordinate tools still require a fresh frameId.", schema(json!({"ref":{"type":"string"},"shortcut":{"type":"string","minLength":1,"maxLength":80,"description":"Observed menu shortcut such as cmd+n or cmd+s. Do not also pass key/modifiers."},"key":{"type":"string","maxLength":64},"modifiers":{"type":"array","maxItems":4,"items":{"type":"string","enum":["shift","ctrl","control","alt","option","cmd","command","meta"]}}}), &["ref"])),
+        tool("computer_file_dialog", "Prepare an ALREADY OPEN standard OS Open/Save panel for an absolute file path using native UI, in one cancellable operation. Currently macOS system panels only; all host apps use the same implementation. Does not open/reopen any panel, write files, or press its final Open/Save/Upload button. For Save, navigates the parent directory and fills only the basename; for Open, navigates to/selects the exact path. Path text readback and return to the original panel are checked. Use its returned state and press the actual final button once, then verify the outcome; never repeat on result_unknown. If no system panel is open, use the application actual observed command first.", schema(json!({"ref":{"type":"string","description":"Original document window ref, not the sheet/control ref"},"path":{"type":"string","maxLength":4096}}), &["ref","path"])),
+        tool("computer_snapshot", "Read a bounded native control tree and provider documentUrl (when available). On macOS a focused modal sheet is the observation root, so Go to Folder controls are not buried in the parent file browser. windowRef remains the original document identity; focusedDialog and observationRootRole describe this scope. Supply windowRef (not ref). Failed child providers preserve readable nodes and report incomplete issues. Unchanged native targets retain short refs; changed, removed or expired targets lose their refs. Truncation/virtual content is not complete history. Bounds are desktop logical points on macOS, physical pixels on Windows.", schema(json!({"windowRef":{"type":"string"},"maxDepth":{"type":"integer","minimum":1,"maximum":20},"maxNodes":{"type":"integer","minimum":1,"maximum":1000},"maxText":{"type":"integer","minimum":1,"maximum":64000}}), &["windowRef"])),
+        tool("computer_find", "Refresh the window tree and find by exact native role/name/identifier. Returns unique, ambiguous or not_found plus candidates. Never choose the first ambiguous match.", schema(json!({"windowRef":{"type":"string"},"role":{"type":"string"},"name":{"type":"string"},"identifier":{"type":"string"},"maxDepth":{"type":"integer"},"maxNodes":{"type":"integer"}}), &["windowRef"])),
+        tool("computer_invoke", "Perform an advertised native action under active task authorization. Returns updated state with fresh controls; use it directly to verify the next step. An executed action alone does not verify the user's outcome. Never replay result_unknown blindly.", schema(json!({"ref":{"type":"string"},"action":{"type":"string"}}), &["ref","action"])),
+        tool("computer_set_value", "Replace native control text under active task authorization, then read actual value for exact verification and return updated state. Use after.value/state directly; no separate snapshot/read is needed when the complete expected value is verified. value is plain Unicode text; do not pre-escape newlines, quotes or backslashes. For required terminal LF use value without final LF plus trailingNewlines=1 (or the exact count), avoiding provider trimming. verified means readback equals this call's input; also compare against the user's requested text. Prefer inputMethod=keyboard for user text entry in focusable text controls, including forms and system file dialogs; native value readback alone does not prove application change handlers ran. Explicit inputMethod=keyboard: activates the original window, focuses and verifies this exact text control, replaces all text using Unicode keyboard events and verifies actual readback. Keyboard input is limited to 8KB and requires a focusable text role; it needs no screenshot/frameId. Default inputMethod=value uses native AX/UIA value setting and never switches methods automatically. Password controls require user takeover.", schema(json!({"ref":{"type":"string"},"value":{"type":"string","maxLength":64000,"description":"Exact plain text including real newlines; JSON encoding is handled by the tool call format. No extra escaping or unescaping is performed."},"inputMethod":{"type":"string","enum":["value","keyboard"],"default":"value"},"trailingNewlines":{"type":"integer","minimum":0,"maximum":16,"description":"Explicit terminal LF count; overrides only terminal LF characters. Use with value without final LF to preserve a required ending across provider serialization. Omit to preserve value exactly."}}), &["ref","value"])),
+        tool("computer_read", "Read provider-exposed text in Unicode scalar segments. Output is byte-bounded: continue with returned nextOffset while truncated, even if less than limit was returned. Does not claim unloaded/virtual history is complete.", schema(json!({"ref":{"type":"string"},"offset":{"type":"integer","minimum":0,"maximum":2000000},"limit":{"type":"integer","minimum":1,"maximum":64000}}), &["ref"])),
+        tool("computer_wait_for", "Poll a window for an exact selector and state: appears, disappears, enabled, or text_equals. Ambiguity is an error. Releases desktop between polls; cancellable by pause. Timeout never means success.", schema(json!({"windowRef":{"type":"string"},"role":{"type":"string"},"name":{"type":"string"},"identifier":{"type":"string"},"state":{"enum":["appears","disappears","enabled","text_equals"]},"text":{"type":"string"},"timeoutMs":{"type":"integer","minimum":100,"maximum":30000}}), &["windowRef","state"])),
+    ]
+}
+
+async fn accessibility_tool(
+    manager: &Arc<AutomationManager>,
+    session_id: &str,
+    session: &AutomationSession,
+    name: &str,
+    args: &Value,
+    token: &CancellationToken,
+) -> Result<Value, String> {
+    let controller = {
+        let mut worker = session.accessibility.lock().unwrap();
+        if worker.as_ref().is_some_and(|w| !w.is_alive()) {
+            worker.take();
+        }
+        worker
+            .get_or_insert_with(|| Arc::new(accessibility::Controller::new()))
+            .clone()
+    };
+    let mut arguments = args.clone();
+    // No model-controlled receipt/proof can enter the internal approval path.
+    if arguments.get("_proof").is_some() {
+        return Err("invalid_argument: reserved field".into());
+    }
+    if name == "computer_key_window" {
+        accessibility::window_key_input(args)?;
+    }
+    if name == "computer_set_value" {
+        let (raw_value, _) = accessibility::text_input(args)?;
+        let value =
+            artifact::with_trailing_newlines(raw_value, optional_u64(args, "trailingNewlines")?)?;
+        arguments["value"] = json!(value);
+    }
+    if name == "computer_open_app" {
+        let path = std::path::Path::new(required_str(args, "appPath")?);
+        if !path.is_absolute() {
+            return Err("invalid_argument: appPath must be absolute".into());
+        }
+        let path = path
+            .canonicalize()
+            .map_err(|e| format!("application_not_found: {e}"))?;
+        let extension = path
+            .extension()
+            .and_then(|e| e.to_str())
+            .unwrap_or_default();
+        let supported =
+            (cfg!(target_os = "macos") && extension.eq_ignore_ascii_case("app") && path.is_dir())
+                || (cfg!(target_os = "windows")
+                    && extension.eq_ignore_ascii_case("exe")
+                    && path.is_file());
+        if !supported {
+            return Err(
+                "invalid_argument: expected an installed .app bundle or .exe; no script/arguments"
+                    .into(),
+            );
+        }
+        let metadata = std::fs::metadata(&path).map_err(|e| e.to_string())?;
+        manager
+            .approve(
+                session_id,
+                name,
+                "确认打开应用",
+                "请核对将要打开的应用路径。",
+                json!({"appPath":path}),
+                token,
+            )
+            .await?;
+        let lease = native_lease(session, token).await?;
+        let current = std::fs::metadata(&path).map_err(|e| e.to_string())?;
+        if current.modified().ok() != metadata.modified().ok() || current.len() != metadata.len() {
+            return Err(
+                "target_changed: application changed while awaiting approval/desktop queue".into(),
+            );
+        }
+        let result = controller
+            .call("_open_app", json!({"appPath":path}), token, lease)
+            .await?;
+        session.computer.lock().unwrap().invalidate_frame();
+        return Ok(tool_json_result(result));
+    }
+    if requires_desktop_consent(name) {
+        let prepared = {
+            let lease = native_lease(session, token).await?;
+            controller
+                .call(
+                    "_prepare",
+                    json!({"ref":required_str(args,"ref")?}),
+                    token,
+                    lease,
+                )
+                .await?
+        };
+        let mut details = prepared["target"].clone();
+        details["action"] = json!(name);
+        if name == "computer_set_value" {
+            details["inputMethod"] = json!(if accessibility::text_input(args)?.1 {
+                "keyboard"
+            } else {
+                "value"
+            });
+            details["characters"] = json!(arguments
+                .get("value")
+                .and_then(Value::as_str)
+                .ok_or("invalid_argument: value must be a string")?
+                .chars()
+                .count());
+        }
+        if name == "computer_invoke" {
+            details["nativeAction"] = json!(required_str(args, "action")?);
+        }
+        if name == "computer_key_window" {
+            let (key, modifiers) = accessibility::window_key_input(args)?;
+            details["key"] = json!(key);
+            details["modifiers"] = json!(modifiers);
+        }
+        manager
+            .approve(
+                session_id,
+                name,
+                "确认原生桌面操作",
+                "请核对目标控件；批准后仍会重新验证目标。输入原文不会显示在确认卡片中。",
+                details,
+                token,
+            )
+            .await?;
+        arguments["_proof"] = prepared["proof"].clone();
+    }
+    if name == "computer_wait_for" {
+        let state = required_str(args, "state")?;
+        if !["appears", "disappears", "enabled", "text_equals"].contains(&state) {
+            return Err("invalid_argument: unsupported wait state".into());
+        }
+        if state == "text_equals" {
+            args.get("text")
+                .and_then(Value::as_str)
+                .ok_or("invalid_argument: text must be a string")?;
+        }
+        let deadline = tokio::time::Instant::now()
+            + Duration::from_millis(
+                optional_u64(args, "timeoutMs")?
+                    .unwrap_or(5000)
+                    .clamp(100, 30000),
+            );
+        loop {
+            let observed = {
+                let lease = native_lease(session, token).await?;
+                let mut observed = controller
+                    .call("computer_find", arguments.clone(), token, lease)
+                    .await?;
+                if state == "text_equals" && observed["status"] == "unique" {
+                    let read_lease = native_lease(session, token).await?;
+                    let read = controller
+                        .call(
+                            "_read_matches",
+                            json!({"ref":observed["candidates"][0]["ref"],"limit":64000,"text":args["text"]}),
+                            token,
+                            read_lease,
+                        )
+                        .await?;
+                    observed["textMatches"] = read["matches"].clone();
+                }
+                // Wait results retain the condition and one bounded observation;
+                // large candidate pages belong to explicit find/continue calls.
+                observed["candidatePreviewTruncated"] =
+                    json!(observed["totalItems"].as_u64().unwrap_or(0) > 1);
+                observed["nextCursor"] = Value::Null;
+                observed["continuation"] =
+                    json!("call computer_find to inspect full bounded candidates");
+                observed["candidates"] = json!(observed["candidates"]
+                    .as_array()
+                    .unwrap()
+                    .iter()
+                    .take(1)
+                    .collect::<Vec<_>>());
+                observed
+            };
+            if observed["status"] == "ambiguous" {
+                return Ok(tool_json_result(
+                    json!({"status":"ambiguous","verified":false,"observation":observed}),
+                ));
+            }
+            let found = observed["status"] == "unique";
+            let met = match state {
+                "appears" => found,
+                "disappears" => !found && observed["truncated"] == false,
+                "enabled" => found && observed["candidates"][0]["enabled"] == true,
+                "text_equals" => found && observed["textMatches"] == true,
+                _ => false,
+            };
+            if met {
+                return Ok(tool_json_result(
+                    json!({"status":"verified","verified":true,"observation":observed}),
+                ));
+            }
+            if tokio::time::Instant::now() >= deadline {
+                return Ok(tool_json_result(
+                    json!({"status":"timeout","verified":false,"observation":observed}),
+                ));
+            }
+            tokio::select! {biased; _=token.cancelled()=>return Err("cancelled: condition wait interrupted".into()),_=tokio::time::sleep(Duration::from_millis(200))=>{}}
+        }
+    }
+    let lease = native_lease(session, token).await?;
+    let result = controller.call(name, arguments, token, lease).await?;
+    if requires_desktop_consent(name) {
+        session.computer.lock().unwrap().invalidate_frame();
+    }
+    Ok(tool_json_result(result))
 }
 
 fn tool(name: &str, description: &str, input_schema: Value) -> Value {
@@ -1048,7 +1615,9 @@ async fn tools_call(
         "automation_status" => serde_json::to_value(manager.status(session_id).await?)
             .map_err(|error| error.to_string())?,
         "automation_pause" => {
-            manager.pause(session_id, true).await?;
+            manager
+                .pause_with_reason(session_id, true, "agent_requested_pause")
+                .await?;
             serde_json::to_value(manager.status(session_id).await?)
                 .map_err(|error| error.to_string())?
         }
@@ -1061,7 +1630,9 @@ async fn tools_call(
             return browser_tool(manager, session_id, name, &args).await;
         }
         name if name.starts_with("computer_") => {
-            return computer_tool(manager, session_id, name, &args).await;
+            let result = computer_tool(manager, session_id, name, &args).await;
+            manager.emit_status(session_id).await;
+            return result;
         }
         other => return Err(format!("unknown tool: {other}")),
     };
@@ -1556,11 +2127,67 @@ async fn computer_tool(
     name: &str,
     args: &Value,
 ) -> Result<Value, String> {
+    let normalized = accessibility::normalize_integer_options(name, args)?;
+    let args = &normalized;
     let session = manager
         .ensure_active(session_id, AutomationMode::ComputerUse)
         .await?;
+    if ComputerController::capability().desktop_available == Some(false) {
+        manager
+            .pause_with_reason(session_id, true, "desktop_unavailable")
+            .await?;
+        return Err("桌面暂不可用，任务已暂停；解锁电脑后发送继续可从现场续做".into());
+    }
     let action_token = session.action_token();
-    if requires_independent_confirmation(name) {
+    if name == "computer_click" && accessibility::native_click_ref(args)?.is_some() {
+        return accessibility_tool(
+            manager,
+            session_id,
+            &session,
+            "computer_click_control",
+            args,
+            &action_token,
+        )
+        .await;
+    }
+    if name == "computer_verify_file" {
+        let _read_guard =
+            enter_action(&session, &action_token, AutomationMode::ComputerUse).await?;
+        let scope = session.task.lock().unwrap().scope.clone();
+        let count = optional_u64(args, "expectedTrailingNewlines")?;
+        let expected = optional_str(args, "expectedText")?
+            .map(|text| artifact::with_trailing_newlines(text, count))
+            .transpose()?;
+        if count.is_some() && expected.is_none() {
+            return Err("invalid_argument: expectedTrailingNewlines requires expectedText".into());
+        }
+        let locations = artifact::Locations {
+            home: dirs::home_dir(),
+            desktop: dirs::desktop_dir(),
+            documents: dirs::document_dir(),
+            downloads: dirs::download_dir(),
+            workspace: Some(
+                manager
+                    .app
+                    .state::<crate::commands::AppState>()
+                    .session_workspace(session_id)?,
+            ),
+        };
+        let result = artifact::verify_file_at(
+            scope.as_deref(),
+            required_str(args, "path")?,
+            expected.as_deref(),
+            &locations,
+        )?;
+        return Ok(tool_json_result(result));
+    }
+    if accessibility_tools()
+        .iter()
+        .any(|tool| tool["name"] == name)
+    {
+        return accessibility_tool(manager, session_id, &session, name, args, &action_token).await;
+    }
+    if requires_desktop_consent(name) {
         let plan = computer_approval_plan(&session, name, args)?;
         manager
             .approve(
@@ -1576,6 +2203,11 @@ async fn computer_tool(
             .ensure_active(session_id, AutomationMode::ComputerUse)
             .await?;
     }
+    let _desktop = if name == "computer_wait" {
+        None
+    } else {
+        Some(desktop_coordinator::acquire(&action_token).await?)
+    };
     let result = match name {
         "computer_capabilities" => serde_json::to_value(ComputerController::capability())
             .map_err(|error| error.to_string())?,
@@ -1602,8 +2234,7 @@ async fn computer_tool(
             )?;
             json!({ "moved": true, "desktopX": x, "desktopY": y, "frameInvalidated": true })
         }
-        // 硬安全约束：本工具的真实桌面副作用（点击）不可逆，必须逐次用户确认。
-        // 详见 ALWAYS_CONFIRM_TOOLS；不要在此处改为按权限模式跳过 approve。
+        // 点击必须经过上方桌面授权门；常规权限模式不能代替用户桌面授权。
         "computer_click" => {
             let frame_id = required_str(args, "frameId")?;
             let _action_guard =
@@ -1617,8 +2248,7 @@ async fn computer_tool(
             )?;
             json!({ "clicked": true, "desktopX": x, "desktopY": y, "frameInvalidated": true })
         }
-        // 硬安全约束：拖动可能移动文件 / 改变顺序，必须逐次确认。
-        // 详见 ALWAYS_CONFIRM_TOOLS。
+        // 拖动沿用同一桌面授权门和派发前的画面验证。
         "computer_drag" => {
             let frame_id = required_str(args, "frameId")?;
             let _action_guard =
@@ -1648,8 +2278,8 @@ async fn computer_tool(
             )?;
             json!({ "scrolled": true, "frameInvalidated": true })
         }
-        // 硬安全约束：键盘输入可能被当前应用立即读取/发送/提交，必须逐次确认。
-        // 详见 ALWAYS_CONFIRM_TOOLS。
+        // 文本输入沿用上方桌面授权门，不因常规工具的自动批准而跳过。
+        // 详见 DESKTOP_WRITE_TOOLS。
         "computer_type" => {
             let frame_id = required_str(args, "frameId")?;
             let characters = required_str(args, "text")?.chars().count();
@@ -1662,8 +2292,8 @@ async fn computer_tool(
                 .type_text(frame_id, required_str(args, "text")?)?;
             json!({ "typed": true, "characters": characters, "frameInvalidated": true })
         }
-        // 硬安全约束：按键或快捷键可能提交内容/执行命令/改变应用状态，必须逐次确认。
-        // 详见 ALWAYS_CONFIRM_TOOLS。
+        // 按键沿用上方桌面授权门及目标焦点验证。
+        // 详见 DESKTOP_WRITE_TOOLS。
         "computer_key" => {
             let frame_id = required_str(args, "frameId")?;
             let key = required_str(args, "key")?;
@@ -1841,8 +2471,8 @@ fn required_f64(value: &Value, key: &str) -> Result<f64, String> {
 fn optional_f64(value: &Value, key: &str) -> Result<Option<f64>, String> {
     match value.get(key) {
         None | Some(Value::Null) => Ok(None),
-        Some(value) => value
-            .as_f64()
+        Some(value) => arguments::number(value)
+            .and_then(|n| n.as_f64())
             .filter(|value| value.is_finite())
             .map(Some)
             .ok_or_else(|| format!("参数 {key} 必须是有限数字")),
@@ -1856,8 +2486,8 @@ fn required_i64(value: &Value, key: &str) -> Result<i64, String> {
 fn optional_i64(value: &Value, key: &str) -> Result<Option<i64>, String> {
     match value.get(key) {
         None | Some(Value::Null) => Ok(None),
-        Some(value) => value
-            .as_i64()
+        Some(value) => arguments::number(value)
+            .and_then(|n| n.as_i64())
             .map(Some)
             .ok_or_else(|| format!("参数 {key} 必须是整数")),
     }
@@ -1866,8 +2496,8 @@ fn optional_i64(value: &Value, key: &str) -> Result<Option<i64>, String> {
 fn optional_u64(value: &Value, key: &str) -> Result<Option<u64>, String> {
     match value.get(key) {
         None | Some(Value::Null) => Ok(None),
-        Some(value) => value
-            .as_u64()
+        Some(value) => arguments::number(value)
+            .and_then(|n| n.as_u64())
             .map(Some)
             .ok_or_else(|| format!("参数 {key} 必须是非负整数")),
     }
@@ -1961,7 +2591,7 @@ mod tests {
         for mode in [AutomationMode::BrowserUse, AutomationMode::ComputerUse] {
             let session = AutomationSession::new(mode);
             session.commit_mode(mode, false);
-            assert!(*session.paused.lock().unwrap());
+            assert!(session.task.lock().unwrap().paused());
             assert!(!*session.allow_private_network.lock().unwrap());
         }
     }
@@ -1971,18 +2601,49 @@ mod tests {
         let session = AutomationSession::new(AutomationMode::Default);
         session.commit_mode(AutomationMode::BrowserUse, true);
         session.commit_mode(AutomationMode::BrowserUse, false);
-        assert!(!*session.paused.lock().unwrap());
+        assert!(!session.task.lock().unwrap().paused());
         session.commit_mode(AutomationMode::ComputerUse, false);
-        assert!(*session.paused.lock().unwrap());
+        assert!(session.task.lock().unwrap().paused());
     }
 
     #[test]
     fn explicit_mode_selection_can_activate_after_restored_pause() {
         let session = AutomationSession::new(AutomationMode::BrowserUse);
         session.commit_mode(AutomationMode::BrowserUse, false);
-        assert!(*session.paused.lock().unwrap());
+        assert!(session.task.lock().unwrap().paused());
         session.commit_mode(AutomationMode::BrowserUse, true);
-        assert!(!*session.paused.lock().unwrap());
+        assert!(!session.task.lock().unwrap().paused());
+    }
+
+    #[test]
+    fn computer_task_consent_is_local_and_revoked_at_control_boundaries() {
+        let session = AutomationSession::new(AutomationMode::ComputerUse);
+        assert!(session
+            .authorize_computer_task(&session.action_token())
+            .is_err());
+        session.commit_mode(AutomationMode::ComputerUse, true);
+        let token = session.action_token();
+        assert!(!session.computer_task_authorized(&token));
+        session.authorize_computer_task(&token).unwrap();
+        assert!(session.computer_task_authorized(&token));
+        let other = AutomationSession::new(AutomationMode::ComputerUse);
+        other.commit_mode(AutomationMode::ComputerUse, true);
+        assert!(!other.computer_task_authorized(&other.action_token()));
+        session.reset_action_token();
+        assert!(token.is_cancelled());
+        assert!(!session.computer_task_authorized(&session.action_token()));
+        assert!(session.authorize_computer_task(&token).is_err());
+        let token = session.action_token();
+        session.authorize_computer_task(&token).unwrap();
+        session.cancel_actions();
+        assert!(!session.computer_task_authorized(&token));
+        session.reset_action_token();
+        assert!(!session.computer_task_authorized(&session.action_token()));
+        assert!(session.authorize_computer_task(&token).is_err());
+        session.commit_mode(AutomationMode::BrowserUse, true);
+        assert!(session
+            .authorize_computer_task(&session.action_token())
+            .is_err());
     }
 
     #[test]
@@ -2026,6 +2687,16 @@ mod tests {
             .iter()
             .all(|tool| tool["inputSchema"]["additionalProperties"] == false));
         assert!(!tools.iter().any(|tool| tool["name"] == "automation_resume"));
+        let click = tools
+            .iter()
+            .find(|tool| tool["name"] == "computer_click")
+            .unwrap();
+        assert_eq!(
+            click["inputSchema"]["oneOf"],
+            json!([
+                {"required":["ref"]}, {"required":["frameId","x","y"]}
+            ])
+        );
         for tool_name in ["computer_click", "computer_type", "computer_key"] {
             let tool = tools.iter().find(|tool| tool["name"] == tool_name).unwrap();
             let properties = tool["inputSchema"]["properties"].as_object().unwrap();
@@ -2044,7 +2715,7 @@ mod tests {
     #[tokio::test]
     async fn takeover_cancels_browser_preparation_and_releases_execution_gate() {
         let session = AutomationSession::new(AutomationMode::BrowserUse);
-        *session.paused.lock().unwrap() = false;
+        session.task.lock().unwrap().resume(false);
         let token = session.action_token();
         let preparation = browser_preflight(
             &session,
@@ -2054,7 +2725,7 @@ mod tests {
         let cancel = async {
             tokio::task::yield_now().await;
             session.cancel_actions();
-            *session.paused.lock().unwrap() = true;
+            session.task.lock().unwrap().pause("user_paused");
             let _exclusive = session.execution_gate.write().await;
         };
         let (result, ()) = tokio::time::timeout(Duration::from_secs(1), async {
@@ -2069,10 +2740,10 @@ mod tests {
     }
 
     #[test]
-    fn requires_independent_confirmation_matches_const_list() {
-        for tool in super::ALWAYS_CONFIRM_TOOLS {
+    fn requires_desktop_consent_matches_const_list() {
+        for tool in super::DESKTOP_WRITE_TOOLS {
             assert!(
-                super::requires_independent_confirmation(tool),
+                super::requires_desktop_consent(tool),
                 "expected always-confirm for {tool}"
             );
         }
@@ -2087,9 +2758,82 @@ mod tests {
             "browser_navigate",
         ] {
             assert!(
-                !super::requires_independent_confirmation(tool),
+                !super::requires_desktop_consent(tool),
                 "expected NOT always-confirm for {tool}"
             );
         }
+    }
+    #[test]
+    fn native_desktop_tools_are_listed_and_writes_cannot_opt_out_of_approval() {
+        let list = tools_list_result();
+        let tools = list["tools"].as_array().unwrap();
+        for name in [
+            "computer_list_apps",
+            "computer_list_windows",
+            "computer_activate_window",
+            "computer_snapshot",
+            "computer_find",
+            "computer_invoke",
+            "computer_set_value",
+            "computer_read",
+            "computer_wait_for",
+            "computer_open_app",
+            "computer_key_window",
+            "computer_file_dialog",
+        ] {
+            let tool = tools
+                .iter()
+                .find(|t| t["name"] == name)
+                .expect("native tool discoverable by Runtime");
+            for bypass in [
+                "_proof",
+                "safe",
+                "consequential",
+                "skipApproval",
+                "approved",
+            ] {
+                assert!(tool["inputSchema"]["properties"].get(bypass).is_none());
+            }
+        }
+        for name in [
+            "computer_activate_window",
+            "computer_invoke",
+            "computer_set_value",
+            "computer_open_app",
+            "computer_key_window",
+            "computer_file_dialog",
+        ] {
+            assert!(requires_desktop_consent(name));
+        }
+    }
+
+    #[tokio::test]
+    async fn pause_boundary_waits_for_dispatched_native_event_and_rejects_later_input() {
+        let session = AutomationSession::new(AutomationMode::ComputerUse);
+        session.task.lock().unwrap().resume(false);
+        let token = session.action_token();
+        let (started, observed) = oneshot::channel();
+        let executed = std::sync::atomic::AtomicUsize::new(0);
+        let event = async {
+            let _gate = enter_action(&session, &token, AutomationMode::ComputerUse)
+                .await
+                .unwrap();
+            let _ = started.send(());
+            // Represents an event already submitted to the OS; it cannot be withdrawn.
+            tokio::time::sleep(Duration::from_millis(10)).await;
+            executed.fetch_add(1, Ordering::SeqCst);
+        };
+        let pause = async {
+            observed.await.unwrap();
+            session.cancel_actions();
+            session.task.lock().unwrap().pause("user_paused");
+            let _exclusive = session.execution_gate.write().await;
+            assert_eq!(executed.load(Ordering::SeqCst), 1);
+        };
+        tokio::join!(event, pause);
+        assert!(enter_action(&session, &token, AutomationMode::ComputerUse)
+            .await
+            .is_err());
+        assert_eq!(executed.load(Ordering::SeqCst), 1);
     }
 }

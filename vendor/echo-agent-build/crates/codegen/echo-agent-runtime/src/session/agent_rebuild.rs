@@ -80,6 +80,9 @@ pub(crate) struct ResolvedToolParamsJson {
 /// derived — the spec lives behind an [`Arc`] and is shared by clone of
 /// that `Arc`.
 pub(crate) struct AgentRebuildSpec {
+    /// Per-session return profile for temporary browser/computer mode. Keep the
+    /// resolved definition (including user tool overrides), not a fresh preset.
+    pub regular_mode_definition: parking_lot::Mutex<Option<AgentDefinition>>,
     pub working_directory: PathBuf,
     pub terminal_backend: Arc<dyn TerminalBackend>,
     pub fs_backend: Arc<dyn AsyncFileSystem>,
@@ -195,6 +198,7 @@ impl AgentRebuildSpec {
     ) -> Result<(Agent, std::time::Duration), AgentBuildError> {
         let build_phase_start = std::time::Instant::now();
         let Self {
+            regular_mode_definition,
             working_directory,
             terminal_backend,
             fs_backend,
@@ -251,7 +255,7 @@ impl AgentRebuildSpec {
             owner_session_id,
             parent_scheduler_handle,
         } = self.as_ref();
-        let _ = mcp_state;
+        let _ = (mcp_state, regular_mode_definition);
         #[allow(unused_variables)]
         let is_cursor_template =
             crate::session::is_cursor_system_template(&definition.system_prompt);
@@ -430,6 +434,7 @@ impl AgentRebuildSpec {
 pub(crate) fn test_rebuild_spec_default() -> Arc<AgentRebuildSpec> {
     let (uq_tx, _uq_rx) = tokio::sync::mpsc::unbounded_channel();
     Arc::new(AgentRebuildSpec {
+        regular_mode_definition: parking_lot::Mutex::new(None),
         working_directory: std::env::temp_dir(),
         terminal_backend: Arc::new(
             echo_agent_tools::computer::local::LocalTerminalBackend::new_local(

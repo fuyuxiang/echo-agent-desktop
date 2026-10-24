@@ -1,0 +1,16 @@
+import {readFileSync} from 'node:fs';
+import vm from 'node:vm';
+import assert from 'node:assert/strict';
+import test from 'node:test';
+const context={window:{}};
+vm.runInNewContext(readFileSync(new URL('./fixtures/native-desktop-task-flow.js',import.meta.url),'utf8'),context);
+const observe=context.window.__echoTaskFlowObserveBody;
+const expected='中文\n多行\n';
+const report=()=>({expected});
+const write={id:'write',tool:'computer_set_value',at:'2026-10-24T00:00:00Z',output:{executed:true,verified:true,after:{role:'AXTextArea',value:expected.trimEnd()}}};
+const snapshot={id:'snapshot',tool:'computer_snapshot',at:'2026-10-24T00:00:01Z',output:{nodes:[{role:'AXTextArea',value:expected,textTruncated:false}]}};
+test('a matching old document before the task write is not task input',()=>{const r=report();observe(r,snapshot);assert(!r.bodyReadback);});
+test('missing final newline does not pass, subsequent native snapshot can verify it',()=>{const r=report();observe(r,write);assert(!r.bodyReadback);observe(r,snapshot);assert.equal(r.bodyReadback.text,expected);assert.equal(r.bodyReadback.via,'observed_native_provider_text');});
+test('verified native after value counts without forcing one read tool choice',()=>{const r=report();observe(r,{...write,output:{...write.output,after:{role:'AXTextArea',value:expected}}});assert.equal(r.bodyReadback.via,'verified_native_provider_readback');});
+test('truncated snapshot and partial text do not verify full input',()=>{const r=report();observe(r,write);observe(r,{...snapshot,output:{nodes:[{role:'AXTextArea',value:expected,textTruncated:true}]}});assert(!r.bodyReadback);observe(r,{...snapshot,tool:'computer_read',output:{text:expected,offset:1,truncated:false}});assert(!r.bodyReadback);});
+test('full read and paged observations are valid and preserve the first checkpoint',()=>{const r=report();observe(r,write);observe(r,{...snapshot,tool:'computer_continue'});const first=r.bodyReadback.id;observe(r,{id:'later',tool:'computer_read',output:{text:expected,offset:0,truncated:false}});assert.equal(r.bodyReadback.id,first);});

@@ -326,7 +326,7 @@ pub enum SessionCommand {
     },
     SessionMode {
         session_mode: acp::SessionModeId,
-        responds_to: oneshot::Sender<()>,
+        responds_to: oneshot::Sender<Result<(), acp::Error>>,
     },
     SetSessionModel {
         sampling_config: echo_agent_sampler::SamplerConfig,

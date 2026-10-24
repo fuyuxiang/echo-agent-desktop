@@ -4136,6 +4136,7 @@ dependencies = [
  "urlencoding",
  "uuid",
  "walkdir",
+ "windows 0.61.3",
  "windows-sys 0.61.2",
  "x11rb",
  "zip",

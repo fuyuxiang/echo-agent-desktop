@@ -4,13 +4,14 @@
  * EchoAgent 任务级权限的三档选择:
  *  - ask            审批模式:每次工具调用都弹确认
  *  - auto           自动模式:EchoAgent 的分类器自动批准安全操作
- *  - always-approve 始终允许:常规工具自动批准；自动化副作用仍独立确认
+ *  - always-approve 始终允许:常规工具自动批准；电脑执行仍需明确任务请求
  *
  * 首页选择只属于即将创建的任务；已有会话通过 sessionId
  * 定向同步，绝不影响其他任务。
  */
 import { useCallback, useEffect, useId, useRef, useState } from "react";
 import { createPortal } from "react-dom";
+import { COMPUTER_EXECUTION_NOTICE } from "@/lib/automation-policy";
 import {
   ChevronDownIcon,
   CheckIcon,
@@ -40,7 +41,7 @@ const MODES: { id: PermissionMode; label: string; desc: string }[] = [
   {
     id: "always-approve",
     label: "本任务始终允许",
-    desc: "仅当前任务的常规工具调用自动批准；操作电脑（点击、拖动、输入、按键）会逐次确认",
+    desc: `仅当前任务的常规工具调用自动批准；${COMPUTER_EXECUTION_NOTICE}`,
   },
 ];
 
@@ -209,7 +210,7 @@ export function PermissionPicker({
         const parts = [`当前任务已切换为“${label}”`];
         if (remaining > 0) parts.push(`当前 ${remaining} 个待审批操作仍需你确认`);
         const agentMode = useSessionStore.getState().transcripts[sessionId]?.agentMode;
-        if (agentMode === "computer_use") parts.push("电脑操作会逐次确认");
+        if (agentMode === "computer_use") parts.push(COMPUTER_EXECUTION_NOTICE);
         onToast?.(parts.join("，"));
       } catch (e) {
         onToast?.(`权限模式切换失败：${String(e).replace(/^Error:\s*/, "")}`);
