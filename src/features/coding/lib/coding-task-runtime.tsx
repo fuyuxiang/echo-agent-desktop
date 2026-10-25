@@ -4,9 +4,13 @@ import { create } from "zustand";
 import { beginAgentTurn } from "@/lib/agent-turn";
 import { agentLoadSession } from "@/lib/agent-client";
 import { useSessionStore } from "@/stores/session-store";
+import { useSessionsStore } from "@/stores/sessions-store";
 import type { SessionTranscript } from "@/stores/session-store";
 import { usePermissionStore } from "@/stores/permission-store";
 import { useQuestionStore } from "@/stores/question-store";
+import { useMessageQueueStore } from "@/stores/message-queue-store";
+import { useCodingFollowupQueue } from "../hooks/useCodingFollowupQueue";
+import { codingQueueOwner, codingSessionReady, sendCodingQueuedFollowup } from "./coding-followup";
 
 import { useTaskStore } from "../store/task-store";
 import { prepareWorkspaceEditor } from "./workspace-editor";
@@ -130,7 +134,7 @@ async function recoverInterruptedRound(root: string, task: CodingTask, transcrip
   await codingApi.reportInterrupted(root, task.id, "paused");
 }
 
-function CodingTaskRuntime({ root, taskId }: TrackedTask) {
+function CodingTaskRuntime({ root, taskId, apiReady, availableModelIds }: TrackedTask & { apiReady: boolean; availableModelIds?: string[] }) {
   const [task, setTask] = useState<CodingTask | null>(null);
   const [problems, setProblems] = useState<Problem[]>([]);
   const [restoring, setRestoring] = useState(false);
@@ -150,7 +154,7 @@ function CodingTaskRuntime({ root, taskId }: TrackedTask) {
     if (generation !== refreshGeneration.current) return;
     latestTask.current = result.task;
     setTask(result.task);
-    if (!isBusyPhase(result.task.phase)) useCodingRuntimeStore.getState().setStopping(root, taskId, false);
+    if (["paused", "stopped", "blocked"].includes(result.task.phase)) useCodingRuntimeStore.getState().setStopping(root, taskId, false);
     setProblems(result.problems);
     const selected = useTaskStore.getState();
     if (selected.root === root && selected.task?.id === taskId) {
@@ -183,6 +187,28 @@ function CodingTaskRuntime({ root, taskId }: TrackedTask) {
   const streaming = Boolean(transcript?.streamingMessageId);
   const awaitingPermission = usePermissionStore((state) => sessionId ? (state.queues[sessionId]?.length ?? 0) > 0 : false);
   const awaitingQuestion = useQuestionStore((state) => sessionId ? (state.queues[sessionId]?.length ?? 0) > 0 : false);
+  const sessionModelId = useSessionsStore(state => state.independent.find(entry => entry.sessionId === sessionId)?.currentModelId);
+  const queueModelId = sessionModelId ?? task?.modelId;
+  const queueEnabled = apiReady && (!availableModelIds || !!queueModelId && availableModelIds.includes(queueModelId));
+  const queueEnabledRef = useRef(queueEnabled);
+  queueEnabledRef.current = queueEnabled;
+  useCodingFollowupQueue({
+    workspace: root, taskId, sessionId,
+    autoReady: queueEnabled && task?.phase === "delivered" && !!transcript && !transcript.control
+      && !restoring && !streaming && !transcript.pendingSendNowPromptId && !transcript.planApprovals?.length
+      && !settling && !awaitingPermission && !awaitingQuestion && !stopping,
+    manualReady: false,
+    send: (text, contextPaths, promptId, manual) => {
+      const epoch = useCodingRuntimeStore.getState().actionEpochs[codingRuntimeKey(root, taskId)] ?? 0;
+      return sendCodingQueuedFollowup({ root, taskId, sessionId: sessionId!, text, contextPaths, promptId, manual,
+        canDispatch: () => canAct() && queueEnabledRef.current
+          && epoch === (useCodingRuntimeStore.getState().actionEpochs[codingRuntimeKey(root, taskId)] ?? 0)
+          && !useCodingRuntimeStore.getState().settling[codingRuntimeKey(root, taskId)]
+          && codingSessionReady(sessionId!),
+        onChanged: refresh,
+      });
+    },
+  });
   const restoredSession = useRef<string | null>(null);
   useEffect(() => {
     if (!sessionId || useSessionStore.getState().transcripts[sessionId] || restoredSession.current === sessionId) return;
@@ -346,10 +372,18 @@ function CodingTaskRuntime({ root, taskId }: TrackedTask) {
   return null;
 }
 
-export function CodingTaskRuntimeManager({ roots }: { roots: string[] }) {
+export function CodingTaskRuntimeManager({ roots, apiReady = true, availableModelIds }: { roots: string[]; apiReady?: boolean; availableModelIds?: string[] }) {
   const tracked = useCodingRuntimeStore((state) => state.tasks);
+  const queues = useMessageQueueStore(state => state.queues);
   const tasks = useMemo(() => Object.values(tracked), [tracked]);
   const rootsKey = roots.join("\0");
+  useEffect(() => {
+    // Durable queues keep their owners alive even when no workbench is open.
+    for (const key of Object.keys(queues)) {
+      const owner = codingQueueOwner(key);
+      if (owner) useCodingRuntimeStore.getState().track(owner.root, owner.taskId);
+    }
+  }, [queues]);
   useEffect(() => {
     let disposed = false;
     const scan = async () => {
@@ -366,5 +400,5 @@ export function CodingTaskRuntimeManager({ roots }: { roots: string[] }) {
     return () => { disposed = true; window.clearInterval(timer); };
   }, [rootsKey]);
 
-  return <>{tasks.map((entry) => <CodingTaskRuntime key={codingRuntimeKey(entry.root, entry.taskId)} {...entry} />)}</>;
+  return <>{tasks.map((entry) => <CodingTaskRuntime key={codingRuntimeKey(entry.root, entry.taskId)} {...entry} apiReady={apiReady} availableModelIds={availableModelIds} />)}</>;
 }

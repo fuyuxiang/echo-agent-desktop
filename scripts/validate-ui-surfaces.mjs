@@ -105,8 +105,8 @@ page.setDefaultNavigationTimeout(60000);
         continue;
       }
       if (surface === "conversation") {
-        await page.getByRole("button", { name: "更多操作" }).click();
-        await page.getByRole("menuitem", { name: "历史提问" }).click();
+        await page.getByRole("button", { name: "任务操作" }).click();
+        await page.getByRole("menuitem", { name: "对话目录" }).click();
         const dialog = page.getByRole("dialog", { name: "历史提问" });
         await dialog.getByRole("searchbox", { name: "筛选历史提问" }).waitFor();
         const box = await dialog.boundingBox();
@@ -398,7 +398,7 @@ page.setDefaultNavigationTimeout(60000);
   await page.screenshot({ path: join(output, "automation-workspace-input.png") });
   layouts += 1;
   assert.deepEqual(errors, [], "browser runtime errors");
-  console.log(JSON.stringify({ passed: true, screenshots: output, layouts, interactions: ["meeting source selection", "organization document preview", "conversation question navigation", "office export scope, keyboard navigation and font scaling", "memory", "notification", "storage", "expert creation", "expert entry and refresh", "extension navigation", "font scaling", "project keyboard navigation", "workspace menu tooltip dismissal", "cross-session scroll restoration", "task panel docking", "sidebar font scaling and hover", "independent sidebar list scrolling"] }, null, 2));
+  console.log(JSON.stringify({ passed: true, screenshots: output, layouts, interactions: ["meeting source selection", "organization document preview", "conversation question navigation", "office export scope, keyboard navigation and font scaling", "memory", "notification", "storage", "expert creation", "expert entry and refresh", "extension navigation", "font scaling", "project keyboard navigation", "workspace menu tooltip dismissal", "cross-session scroll restoration", "inline background task summary", "sidebar font scaling and hover", "independent sidebar list scrolling"] }, null, 2));
 } finally {
   await browser?.close();
   await server.close();

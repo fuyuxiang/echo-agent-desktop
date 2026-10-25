@@ -1,6 +1,8 @@
 import { memo, useCallback, useEffect, useId, useRef, useState } from "react";
 import {
   Check,
+  Pencil,
+  FileText,
   MoreHorizontal,
   Copy,
   Download,
@@ -30,6 +32,7 @@ import { friendlyAttachmentError } from "@/lib/attachment-errors";
 import { highlightSegments } from "@/lib/extract-text";
 import { copyShareText } from "@/lib/share";
 import { exportOfficeDocument, type OfficeFormat } from "@/lib/document-export";
+import type { SessionArtifact } from "@/lib/session-artifacts";
 import { registerDocumentArtifact } from "@/lib/artifact-catalog";
 import { partitionAssistantParts } from "@/lib/execution-process";
 import {
@@ -93,6 +96,8 @@ export const MessageItem = memo(function MessageItem({
   cwd,
   sessionId,
   onOpenTool,
+  onOpenArtifact,
+  compactIdentity = false,
   onEditResend,
   onRetry,
   retrying = false,
@@ -104,6 +109,8 @@ export const MessageItem = memo(function MessageItem({
 }: {
   message: ChatMessage;
   authorName?: string;
+  compactIdentity?: boolean;
+  onOpenArtifact?: (artifact: SessionArtifact) => void;
   streaming: boolean;
   autoExpandProcess?: boolean;
   markdownConfig?: MarkdownConfig;
@@ -136,6 +143,7 @@ export const MessageItem = memo(function MessageItem({
     useFeedbackStore.getState().setRating(sessionId, message.id, rating);
     if (feedback !== rating) setFeedbackDialog(rating);
   };
+  const [exportedArtifact, setExportedArtifact] = useState<SessionArtifact | null>(null);
   const [exporting, setExporting] = useState<OfficeFormat | null>(null);
   const knowledgeTrace = useKnowledgeStore((state) => (
     sessionId && message.promptId
@@ -261,8 +269,8 @@ export const MessageItem = memo(function MessageItem({
         || "EchoAgent 报告";
       const receipt = await exportOfficeDocument(title, markdownText, format, sessionId ?? undefined);
       if (receipt) {
-        if (sessionId) registerDocumentArtifact(receipt, sessionId, title, cwd ?? "");
-        onToast?.(`已导出到 ${receipt.path}${sessionId ? "，可在本任务的产物中查看" : ""}`);
+        if (sessionId) setExportedArtifact(registerDocumentArtifact(receipt, sessionId, title, cwd ?? ""));
+        onToast?.(`已导出到 ${receipt.path}${sessionId ? "，可在本任务的成果中查看" : ""}`);
       }
     } catch (error) {
       onToast?.(`导出失败：${String(error).replace(/^Error:\s*/, "")}`);
@@ -336,16 +344,16 @@ export const MessageItem = memo(function MessageItem({
               aria-label={copiedKind === "plain" ? "已复制" : "复制"}
               aria-live="polite"
             >
-              {copiedKind === "plain" ? "已复制" : "复制"}
+              {copiedKind === "plain" ? <Check size={14} /> : <Copy size={14} />}
             </button>
             {onEditResend && (
               <button
                 type="button"
                 className="msg__action-btn"
                 onClick={() => onEditResend(plainText, attachments)}
-                title="编辑并重新发送"
+                data-tip="编辑并重新发送" title="编辑并重新发送" aria-label="编辑并重新发送"
               >
-                编辑
+                <Pencil size={14} />
               </button>
             )}
           </div>
@@ -355,7 +363,7 @@ export const MessageItem = memo(function MessageItem({
   }
 
   return (
-    <div className="msg msg--assistant">
+    <div className={"msg msg--assistant" + (compactIdentity ? " msg--continuation" : "")}>
       <div>
         <div className="msg__header">
           <span className="msg__avatar">
@@ -415,10 +423,15 @@ export const MessageItem = memo(function MessageItem({
           <div className={"msg__actions msg__actions--footer" + (latest ? " msg__actions--latest" : "") + (speaking || exporting || retrying ? " msg__actions--active" : "")}
             role="group" aria-label="回复操作">
             {hasAnswerText && <button type="button" className="msg__action-btn" data-chat-copy="true"
-              onClick={() => void copyText(plainText, "plain")} title={copyMainLabel} aria-label={copyMainLabel} aria-live="polite">
-              {copiedKind ? <Check size={14} /> : <Copy size={14} />}<span>{copiedKind ? "已复制" : "复制"}</span>
+              onClick={() => void copyText(plainText, "plain")} title={copyMainLabel} data-tip={copyMainLabel} aria-label={copyMainLabel} aria-live="polite">
+              {copiedKind ? <Check size={14} /> : <Copy size={14} />}
             </button>}
-            {speaking && <button type="button" className="msg__action-btn" onClick={toggleSpeak} aria-label="停止朗读"><Square size={13} />停止朗读</button>}
+            {hasAnswerText && <button type="button" className="msg__action-btn" onClick={toggleSpeak} aria-label={speaking ? "停止朗读" : "朗读回复"}
+              data-tip={speaking ? "停止朗读" : "朗读回复"} aria-pressed={speaking}>{speaking ? <Square size={14} /> : <Volume2 size={14} />}</button>}
+            {sessionId && hasAnswerText && <>
+              <button type="button" className="msg__action-btn" aria-label={feedback === "up" ? "取消赞" : "赞"} data-tip="有帮助" aria-pressed={feedback === "up"} onClick={() => rateReply("up")}><ThumbsUp size={14} /></button>
+              <button type="button" className="msg__action-btn" aria-label={feedback === "down" ? "取消踩" : "踩"} data-tip="需要改进" aria-pressed={feedback === "down"} onClick={() => rateReply("down")}><ThumbsDown size={14} /></button>
+            </>}
             {exporting && <span className="msg__action-status" role="status">正在导出 {exporting.toUpperCase()}…</span>}
             {onRetry && (retryKind === "retry" || message.stopReason && message.stopReason !== "end_turn" || retrying) && <button type="button" className="msg__action-btn" onClick={() => onRetry(retryKind)}
               title={messageRetryTitle(retryKind)} disabled={retrying} aria-busy={retrying}><RefreshCw size={14} className={retrying ? "msg__action-spin" : undefined} />{retryLabel}</button>}
@@ -442,20 +455,17 @@ export const MessageItem = memo(function MessageItem({
                   {hasAnswerText && <>
                     <button type="button" role="menuitem" className="topbar-actions__item" data-chat-copy="true" onClick={() => { close(true); void copyText(plainText, "plain"); }}><Copy size={14} />复制纯文本</button>
                     <button type="button" role="menuitem" className="topbar-actions__item" data-chat-copy="true" onClick={() => { close(true); void copyText(markdownText, "markdown"); }}><FileCode2 size={14} />复制 Markdown</button>
-                    <button type="button" role="menuitem" className="topbar-actions__item" onClick={() => { close(true); toggleSpeak(); }}><Volume2 size={14} />{speaking ? "停止朗读" : "朗读回复"}</button>
-                    <button type="button" role="menuitem" className="topbar-actions__item" disabled={Boolean(exporting)} onClick={() => setActionView("export")}><Download size={14} />导出回复为办公文件</button>
+                    <button type="button" role="menuitem" className="topbar-actions__item" disabled={Boolean(exporting)} onClick={() => setActionView("export")}><Download size={14} />导出本条回复为办公文件</button>
                   </>}
                   {onRetry && <button type="button" role="menuitem" className="topbar-actions__item" title={messageRetryTitle(retryKind)} disabled={retrying} onClick={() => { close(true); onRetry(retryKind); }}><RefreshCw size={14} />{retryLabel}</button>}
-                  {sessionId && hasAnswerText && <>
-                    <div role="separator" className="action-menu__separator" />
-                    <button type="button" role="menuitem" className="topbar-actions__item" aria-label={feedback === "up" ? "取消赞" : "赞"} onClick={() => { close(true); rateReply("up"); }}><ThumbsUp size={14} />{feedback === "up" ? "取消赞" : "有帮助"}</button>
-                    <button type="button" role="menuitem" className="topbar-actions__item" aria-label={feedback === "down" ? "取消踩" : "踩"} onClick={() => { close(true); rateReply("down"); }}><ThumbsDown size={14} />{feedback === "down" ? "取消踩" : "需要改进"}</button>
-                  </>}
+
                 </>}
               </>}
             </ActionMenu>
           </div>
         )}
+        {exportedArtifact && onOpenArtifact && <button type="button" className="msg__exported-artifact" title={exportedArtifact.path}
+          onClick={() => onOpenArtifact(exportedArtifact)}><FileText size={15} /><span>{attachmentBasename(exportedArtifact.path)}</span><span>查看成果 →</span></button>}
         {sessionId && <FeedbackDialog open={feedbackDialog !== null} sessionId={sessionId} messageId={message.id}
           rating={feedbackDialog ?? feedback ?? "up"} onClose={() => setFeedbackDialog(null)} />}
 

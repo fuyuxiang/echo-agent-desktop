@@ -291,10 +291,10 @@ function CodePreview({
   const { status, copy } = usePreviewCopy(content, filename, onCopyText);
   const lang = kind === "code" ? codeLanguage(filename) : "text";
   return (
-    <div className="file-preview file-preview--code">
+    <div className="file-preview file-preview--code" data-preview-kind={kind}>
       <div className="file-preview__head">
         <span className="file-preview__name">{filename}</span>
-        <span className="file-preview__lang">{lang}</span>
+        <span className="file-preview__lang">{kind === "text" ? "纯文本" : lang}</span>
         <button
           type="button"
           className="file-preview__copy"

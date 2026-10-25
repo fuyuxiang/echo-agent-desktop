@@ -32,6 +32,7 @@ export interface QueueItem {
   attachments?: string[];
   status: QueueItemStatus;
   recovery?: "queued" | "uncertain";
+  sendError?: string;
   /** Prompt correlation id while this exact row is owned by an Agent turn. */
   promptId?: string;
   /** 入队时间戳(ms)。 */
@@ -65,6 +66,8 @@ interface QueueState {
     settlement: SendingSettlement,
     promptId?: string,
   ) => QueueItem | null;
+  /** Preserve one uncertain dispatch for explicit review, without affecting other tasks. */
+  holdSending: (sessionId: string, promptId: string, uncertain?: boolean, message?: string) => void;
   /** Return all process-owned in-flight rows to a retryable state. */
   retryAllSending: () => void;
   /** 取下一条 active(非 paused)项并从队列移除;无则返回 null。 */
@@ -154,7 +157,7 @@ export const useMessageQueueStore = create<QueueState>((set, get) => ({
     const q = queueOf(queues, sessionId);
     if (!q.some((it) => it.id === id)) return true;
     return commitQueues({ ...queues, [sessionId]: q.map((it) => it.id === id
-      ? { ...it, status, promptId: undefined, recovery: undefined } : it) }, set);
+      ? { ...it, status, promptId: undefined, recovery: undefined, sendError: undefined } : it) }, set);
   },
   claimNext: (sessionId, promptId) => {
     let claimed: QueueItem | null = null;
@@ -205,6 +208,16 @@ export const useMessageQueueStore = create<QueueState>((set, get) => ({
     });
     return settled;
   },
+  holdSending: (sessionId, promptId, uncertain = true, message) => set(state => {
+    const queue = queueOf(state.queues, sessionId);
+    if (!queue.some(item => item.status === "sending" && item.promptId === promptId)) return state;
+    const next = queue.map(item => item.status === "sending" && item.promptId === promptId
+      ? {...item, status: "paused" as const, recovery: uncertain ? "uncertain" as const : undefined,
+        promptId: uncertain ? promptId : undefined, sendError: message} : item);
+    const queues = {...state.queues, [sessionId]:next};
+    writeDurable(OUTBOX_KEY, queues);
+    return {queues};
+  }),
   retryAllSending: () =>
     set((state) => {
       let changed = false;

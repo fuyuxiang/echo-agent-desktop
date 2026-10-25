@@ -1,3 +1,4 @@
+import { openWorkspaceView } from "./session-review-navigation.mjs";
 import assert from "node:assert/strict";
 import { join } from "node:path";
 
@@ -10,12 +11,11 @@ export async function validateConversationLayout(page, output) {
     return viewport && Math.abs(viewport.scrollHeight - viewport.clientHeight - viewport.scrollTop) < 2
       && !document.querySelector(".chatview__jump-latest");
   });
-  const dockAligned = () => page.waitForFunction(() => {
-    const composer = document.querySelector(".chatview .echo-composer")?.getBoundingClientRect();
-    const panel = document.querySelector(".tasks-panel")?.getBoundingClientRect();
-    return composer && panel && Math.abs(composer.right - panel.right) < 2
-      && Math.abs(composer.top - panel.bottom - 12) < 2
-      && panel.top >= 0 && panel.left >= 0;
+  const summaryAligned = () => page.waitForFunction(() => {
+    const summary = document.querySelector(".session-background-tasks")?.getBoundingClientRect();
+    const footer = document.querySelector(".chatview__footer")?.getBoundingClientRect();
+    return summary && footer && summary.top >= footer.top && summary.bottom <= footer.bottom
+      && summary.left >= footer.left && summary.right <= footer.right;
   });
   const rows = () => page.locator(".sidebar__conv").evaluateAll(elements => elements.map(element => {
     const rect = node => {
@@ -29,16 +29,13 @@ export async function validateConversationLayout(page, output) {
   for (const [width, height, theme] of [[1920, 1080, "light"], [1024, 768, "dark"], [768, 720, "light"]]) {
     await page.setViewportSize({ width, height });
     await page.goto(`http://127.0.0.1:1439/__ui-review?surface=conversation-layout&theme=${theme}`);
-    await page.getByRole("complementary", { name: "运行中任务" }).waitFor();
-    await dockAligned();
+    await page.getByRole("button", { name: /后台任务/ }).waitFor();
+    await summaryAligned();
     const toolbar = page.locator(".session-header");
-    const openView = async name => {
-      await toolbar.getByRole("button", { name: "工作区", exact: true }).click();
-      await page.getByRole("menuitem", { name: new RegExp(name) }).click();
-    };
+    const openView = label => openWorkspaceView(page, label);
     const originalComposer = await page.locator(".chatview .echo-composer").boundingBox();
     await openView("网页预览");
-    await dockAligned();
+    await summaryAligned();
     const movedComposer = await page.locator(".chatview .echo-composer").boundingBox();
     if (width === 1920) {
       assert.ok(Math.abs(originalComposer.width - movedComposer.width) < 1, "wide composer should retain its width");
@@ -47,15 +44,20 @@ export async function validateConversationLayout(page, output) {
     await page.screenshot({ path: join(output, `conversation-dock-${width}-${theme}.png`) });
     layouts += 1;
     await openView("网页预览");
-    await dockAligned();
+    await summaryAligned();
     await page.getByRole("button", { name: "收起侧边栏", exact: true }).click();
-    await dockAligned();
+    await summaryAligned();
     await page.getByRole("button", { name: "展开侧边栏", exact: true }).click();
-    await dockAligned();
+    await summaryAligned();
 
     const viewport = page.locator(".chatview__scroll");
     for (const label of ["变更", "团队"]) {
       await page.locator('.sidebar__conv[data-session-id="review-conversation"] .sidebar__conv-select').click();
+      // Returning to A restores its details view as well as its reading position.
+      const closeDetails = page.getByRole("button", { name: "关闭面板", exact: true });
+      if (await closeDetails.isVisible()) await closeDetails.click();
+      const jump = page.getByRole("button", { name: "回到最新消息并恢复自动跟随" });
+      if (await jump.isVisible()) await jump.click();
       await atBottom();
       await viewport.evaluate(element => {
         element.scrollTop = 650;
@@ -64,20 +66,20 @@ export async function validateConversationLayout(page, output) {
       });
       await page.getByRole("button", { name: "回到最新消息并恢复自动跟随" }).waitFor();
       await openView(label === "团队" ? "管理任务团队" : "文件变更");
-      await openView(label === "团队" ? "管理任务团队" : "文件变更");
+      await page.getByRole("button",{name:"关闭面板",exact:true}).click();
       await page.waitForFunction(() => Math.abs(document.querySelector(".chatview__scroll").scrollTop - 650) < 2);
       await openView(label === "团队" ? "管理任务团队" : "文件变更");
       await page.locator('.sidebar__conv[data-session-id="review-other"] .sidebar__conv-select').click();
       await atBottom();
-      assert.equal(await page.locator(".chatview__runtime-view").count(), 0, "new session must not inherit a runtime panel");
+      assert.equal(await page.locator(".chatview__runtime-view:visible").count(), 0, "new session must not inherit a runtime panel");
       await openView(label === "团队" ? "管理任务团队" : "文件变更");
-      await page.getByRole("button", { name: "关闭工作视图", exact: true }).click();
+      await page.getByRole("button", { name: "关闭面板", exact: true }).click();
       await atBottom();
     }
 
     for (const fontSize of [13, 18]) {
       await page.evaluate(size => { document.documentElement.style.fontSize = `${16 * size / 13}px`; }, fontSize);
-      await dockAligned();
+      await summaryAligned();
       const before = await rows();
       for (const row of before) {
         assert.ok(row.title.top >= row.row.top && row.title.bottom <= row.row.bottom, "session title escapes its row");

@@ -52,12 +52,12 @@ describe("assistant message actions", () => {
   it("真实消息反馈关闭重开保留草稿，并使用重新选择的方向提交", () => {
     useFeedbackStore.getState().__replace({});
     renderMessage(completedMessage, { latest: true, sessionId: "feedback-session" });
-    openReplyItem("赞");
+    fireEvent.click(screen.getByRole("button", {name:"赞"}));
     fireEvent.click(screen.getByLabelText("4 星"));
     fireEvent.change(screen.getByPlaceholderText("补充说明(可选)"), { target: { value: "这段备注仍可继续编辑" } });
     fireEvent.click(screen.getByRole("button", { name: "关闭" }));
     expect(screen.queryByRole("dialog")).toBeNull();
-    openReplyItem("踩");
+    fireEvent.click(screen.getByRole("button", {name:"踩"}));
     expect(screen.getByText(/这条回复有待改进/)).toBeInTheDocument();
     expect(screen.getByPlaceholderText("补充说明(可选)")).toHaveValue("这段备注仍可继续编辑");
     expect(screen.getByText("较好")).toBeInTheDocument();
@@ -140,7 +140,7 @@ describe("assistant message actions", () => {
   it("导出格式菜单支持键盘导航与 Escape 返回", async () => {
     renderMessage();
     const trigger = screen.getByRole("button", { name: "更多回复操作" });
-    openReplyItem("导出回复为办公文件");
+    openReplyItem("导出本条回复为办公文件");
     const word = screen.getByRole("menuitem", { name: "Word" });
     expect(word).toHaveFocus();
     fireEvent.keyDown(word, { key: "ArrowDown" });
@@ -152,7 +152,7 @@ describe("assistant message actions", () => {
 
   it("选择办公格式前说明公式、图表及 Excel 的导出范围，且保留四个可用入口", () => {
     renderMessage();
-    openReplyItem("导出回复为办公文件");
+    openReplyItem("导出本条回复为办公文件");
 
     const commonNote = screen.getByText("公式和 Mermaid 图表以原始文本保留。图表可从图表菜单下载 SVG。");
     const spreadsheetNote = screen.getByText("Excel：回复含表格时，仅导出表格。");
@@ -175,7 +175,7 @@ describe("assistant message actions", () => {
 
   it("导出说明不改变菜单首尾导航及离开菜单的焦点行为", () => {
     renderMessage();
-    openReplyItem("导出回复为办公文件");
+    openReplyItem("导出本条回复为办公文件");
     const word = screen.getByRole("menuitem", { name: "Word" });
     const ppt = screen.getByRole("menuitem", { name: "PPT" });
     fireEvent.keyDown(word, { key: "End" });
@@ -259,8 +259,7 @@ describe("progressive reply actions preserve business scope", () => {
     const stop = vi.fn(), speak = vi.fn(() => stop);
     registerTtsProvider({id:"test-reply-tts",isAvailable:()=>true,speak});
     renderMessage();
-    expect(screen.queryByRole("button",{name:"朗读回复"})).toBeNull();
-    openReplyItem("朗读回复");
+    fireEvent.click(screen.getByRole("button",{name:"朗读回复"}));
     expect(speak).toHaveBeenCalledWith("第一段 第二段", "zh-CN", expect.anything());
     fireEvent.click(screen.getByRole("button",{name:"停止朗读"}));
     expect(stop).toHaveBeenCalledOnce();
@@ -271,14 +270,18 @@ describe("progressive reply actions preserve business scope", () => {
     const catalog = await import("@/lib/artifact-catalog");
     let finish!: (value: never) => void;
     const exportSpy = vi.spyOn(documents,"exportOfficeDocument").mockImplementation(() => new Promise(resolve=>{finish=resolve;}));
-    const registerSpy = vi.spyOn(catalog,"registerDocumentArtifact").mockImplementation(()=>({} as never));
-    renderMessage(completedMessage,{sessionId:"reply-scope",cwd:"/reply-workspace"});
-    openReplyItem("导出回复为办公文件");
+    const artifact = {id:"exported-reply",path:"/reply-workspace/reply.docx",kind:"document_export",status:"completed",title:"Reply",toolCallId:"receipt"};
+    const registerSpy = vi.spyOn(catalog,"registerDocumentArtifact").mockImplementation(()=>(artifact as never));
+    const onOpenArtifact = vi.fn();
+    renderMessage(completedMessage,{sessionId:"reply-scope",cwd:"/reply-workspace",onOpenArtifact});
+    openReplyItem("导出本条回复为办公文件");
     fireEvent.click(screen.getByRole("menuitem",{name:"Word"}));
     expect(exportSpy).toHaveBeenCalledWith("**第一段**", "**第一段**\n\n第二段", "docx", "reply-scope");
     expect(screen.getByRole("status")).toHaveTextContent("正在导出 DOCX");
     await act(async()=>finish({path:"/reply-workspace/reply.docx",format:"docx"} as never));
     expect(registerSpy).toHaveBeenCalledWith(expect.objectContaining({path:"/reply-workspace/reply.docx"}),"reply-scope","**第一段**","/reply-workspace");
+    fireEvent.click(screen.getByRole("button",{name:/reply.docx.*查看成果/}));
+    expect(onOpenArtifact).toHaveBeenCalledWith(artifact);
     exportSpy.mockRestore(); registerSpy.mockRestore();
   });
 });

@@ -75,7 +75,7 @@ function Harness({
   return (
     <>
       <div ref={scrollRef} data-testid="scroll">
-        <div ref={contentRef} data-testid="content">
+        <div ref={contentRef} data-testid="content"><div data-msg-id="reading-anchor">message</div>
           <button type="button" data-chat-copy="true" data-testid="copy-action">
             copy
           </button>
@@ -373,4 +373,24 @@ describe("useStickToBottom", () => {
 
     expect(scroller.scrollTop).toBe(700);
   });
+  it("preserves a visible message across width reflow and restores each session's reading mode", () => {
+    const { getByTestId, rerender, container } = render(<Harness version={1} sessionId="A" />);
+    const viewport = getByTestId("scroll");
+    setScrollMetrics(viewport,{scrollHeight:2000,clientHeight:400,scrollTop:600});
+    const row = container.querySelector<HTMLElement>("[data-msg-id]")!;
+    let contentTop = 650;
+    vi.spyOn(row,"getBoundingClientRect").mockImplementation(()=>({top:contentTop-viewport.scrollTop,bottom:contentTop+200-viewport.scrollTop} as DOMRect));
+    fireEvent.wheel(viewport,{deltaY:-1}); fireEvent.scroll(viewport);
+    expect(getByTestId("following")).toHaveTextContent("false");
+    contentTop = 850;
+    act(()=>resizeObservers.forEach(observer=>observer.trigger()));
+    expect(viewport.scrollTop).toBe(800);
+    rerender(<Harness version={2} sessionId="B" />);
+    expect(getByTestId("following")).toHaveTextContent("true");
+    expect(viewport.scrollTop).toBe(1600);
+    rerender(<Harness version={3} sessionId="A" />);
+    expect(viewport.scrollTop).toBe(800);
+    expect(getByTestId("following")).toHaveTextContent("false");
+  });
+
 });

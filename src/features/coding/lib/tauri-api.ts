@@ -92,8 +92,9 @@ export const codingApi = {
     invoke<CodingTask>("coding_task_report_start_failed", { root, taskId, reason }),
   beginFollowup: (root: string, taskId: string, requirement: string) =>
     invoke<CodingTask>("coding_task_begin_followup", { root, taskId, requirement }),
-  reportInterrupted: (root: string, taskId: string, interruption: "paused" | "stopped") =>
-    invoke<CodingTask>("coding_task_report_interrupted", { root, taskId, interruption }),
+  reportInterrupted: (root: string, taskId: string, interruption: "paused" | "stopped", expectedUpdatedAt?: string) =>
+    invoke<CodingTask>("coding_task_report_interrupted", { root, taskId, interruption,
+      ...(expectedUpdatedAt ? { expectedUpdatedAt } : {}) }),
   resumeTask: (root: string, taskId: string) =>
     invoke<CodingTask>("coding_task_resume", { root, taskId }),
   beginVerification: (root: string, taskId: string, expectedUpdatedAt?: string) =>

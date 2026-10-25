@@ -1,4 +1,4 @@
-import { act, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { act, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { invoke } from "@tauri-apps/api/core";
 import { ToolSidePanel, type ToolSidePanelMode } from "../ToolSidePanel";
@@ -56,52 +56,132 @@ describe("ToolSidePanel navigation collapse", () => {
     try {
       const { container } = render(<CoordinatedPanel />);
       const panel = container.querySelector<HTMLElement>(".tool-side-panel")!;
-      expect(panel.style.width).toBe("280px");
+      expect(panel).toHaveClass("tool-side-panel--maximized");
       expect(localStorage.getItem("tool-side-panel-width")).toBe("380");
       fireEvent.click(screen.getByText("隐藏全局导航"));
-      await waitFor(() => expect(panel.style.width).toBe("380px"));
+      expect(panel).toHaveClass("tool-side-panel--maximized");
       fireEvent.click(screen.getByText("恢复全局导航"));
-      await waitFor(() => expect(panel.style.width).toBe("280px"));
+      expect(panel).toHaveClass("tool-side-panel--maximized");
       expect(localStorage.getItem("tool-side-panel-width")).toBe("380");
     } finally {
       Object.defineProperty(window, "innerWidth", { value: originalViewport });
     }
   });
 
-  it("replaces the full header with one accessible expand control", () => {
-    const { container } = renderPanel();
-
-    expect(screen.getByRole("button", { name: "收起导航" })).toBeInTheDocument();
-    expect(screen.getByRole("button", { name: "钉住左列" })).toBeInTheDocument();
-
-    fireEvent.click(screen.getByRole("button", { name: "收起导航" }));
-
-    expect(container.querySelector(".tool-side-panel__nav--collapsed")).toBeInTheDocument();
-    expect(screen.getByRole("button", { name: "展开导航" })).toBeInTheDocument();
-    expect(screen.queryByRole("button", { name: "钉住左列" })).not.toBeInTheDocument();
-    expect(screen.queryByRole("button", { name: "产物" })).not.toBeInTheDocument();
-    expect(container.querySelector(".tool-side-panel__nav-body")).not.toBeInTheDocument();
-
-    fireEvent.click(screen.getByRole("button", { name: "展开导航" }));
-
-    expect(container.querySelector(".tool-side-panel__nav--collapsed")).not.toBeInTheDocument();
-    expect(screen.getByRole("button", { name: "收起导航" })).toBeInTheDocument();
-    expect(screen.getByRole("button", { name: "钉住左列" })).toBeInTheDocument();
+  it("uses the whole default panel for a list or preview, with a return path", async () => {
+    Object.defineProperty(window, "innerWidth", {configurable:true, value:1280});
+    const { container } = renderPanel("artifacts", [artifact("C:/work/single.md")]);
+    expect(container.querySelector(".task-details__list--split")).toBeNull();
+    expect(screen.queryByRole("button", {name: "详情布局"})).toBeNull();
+    fireEvent.click(screen.getByRole("button", { name: /^single.md/ }));
+    expect(screen.getByRole("button", {name: "返回成果列表"})).toBeInTheDocument();
+    expect(container.querySelector(".task-details__list")).not.toBeVisible();
+    fireEvent.click(screen.getByRole("button", {name: "返回成果列表"}));
+    expect(screen.getByRole("button", {name: /^single.md/})).toBeInTheDocument();
   });
 
-  it("keeps the navigation expanded when pinning and unpinning", async () => {
+  it("closes the final standalone file without resurrecting it, then explicitly reopens the same path", async () => {
+    Object.defineProperty(window, "innerWidth", {configurable:true,value:1280});
+    vi.mocked(invoke).mockImplementation(async command => command === "read_text_file" ? "Standalone content" : []);
+    const props = {open:true,mode:"fileTree" as const,artifacts:[],cwd:"/workspace",sessionId:"single-content-close",
+      previewPath:"/workspace/note.md",onClose:vi.fn(),onSelectTool:vi.fn(),onSelectArtifact:vi.fn(),onOpenArtifacts:vi.fn()};
+    const view = render(<ToolSidePanel {...props} previewRequestId={1} />);
+    await screen.findByText("Standalone content");
+    expect(screen.queryByRole("tablist",{name:"工作区文件和预览标签"})).toBeNull();
+    fireEvent.click(screen.getByRole("button",{name:"关闭标签 note.md"}));
+    expect(screen.queryByText("Standalone content")).toBeNull();
+    expect(screen.queryByRole("button",{name:"关闭标签 note.md"})).toBeNull();
+    view.rerender(<ToolSidePanel {...props} previewRequestId={2} />);
+    expect(await screen.findByText("Standalone content")).toBeInTheDocument();
+    expect(screen.getByRole("button",{name:"关闭标签 note.md"})).toBeInTheDocument();
+  });
+
+  it("keeps a lone file tab selectable without labelling a blank web preview as that file", async () => {
+    Object.defineProperty(window, "innerWidth", {configurable:true,value:1280});
+    vi.mocked(invoke).mockImplementation(async command => command === "read_text_file" ? "File preview content" : []);
+    renderPanel("artifacts",[artifact("/workspace/context.md")]);
+    fireEvent.click(screen.getByRole("button",{name:/^context.md/}));
+    await screen.findByText("File preview content");
+    fireEvent.click(screen.getByRole("tab",{name:"网页"}));
+    const input=screen.getByRole("textbox",{name:"预览网址"});
+    fireEvent.change(input,{target:{value:"https://example.com/draft"}});
+    const tab=screen.getByRole("tab",{name:/context.md/});
+    expect(tab).toHaveAttribute("aria-selected","false");
+    fireEvent.click(tab);
+    expect(screen.getByRole("tab",{name:"成果"})).toHaveAttribute("aria-selected","true");
+    expect(await screen.findByText("File preview content")).toBeInTheDocument();
+  });
+
+  it("preserves expanded directories and the file list scroll through previews and category changes", async () => {
+    Object.defineProperty(window, "innerWidth", {configurable:true,value:1280});
+    vi.mocked(invoke).mockImplementation(async (command, args) => {
+      if (command === "read_text_file") return "Nested file content";
+      if (command !== "list_dir") return [];
+      const path = (args as {path:string}).path;
+      return [{name:path === "/workspace" ? "src" : "nested.md",path:`${path}/${path === "/workspace" ? "src" : "nested.md"}`,
+        kind:path === "/workspace" ? "directory" : "file",size:1,modifiedAt:0,isLarge:false,isBinary:false}];
+    });
+    const props = {open:true,mode:"fileTree" as const,artifacts:[],cwd:"/workspace",sessionId:"tree-return",
+      onClose:vi.fn(),onSelectTool:vi.fn(),onSelectArtifact:vi.fn(),onOpenArtifacts:vi.fn()};
+    const {container,unmount} = render(<ToolSidePanel {...props} />);
+    const directory = await screen.findByRole("treeitem",{name:/src/});
+    fireEvent.click(directory);
+    const nested = await screen.findByRole("treeitem",{name:/nested.md/});
+    const list = container.querySelector<HTMLDivElement>(".task-details__list")!;
+    list.scrollTop = 120;
+    fireEvent.scroll(list);
+    fireEvent.click(nested);
+    await screen.findByText("Nested file content");
+    expect(list).not.toBeVisible();
+    fireEvent.click(screen.getByRole("button",{name:"返回文件列表"}));
+    expect(screen.getByRole("treeitem",{name:/src/})).toBe(directory);
+    expect(directory).toHaveAttribute("aria-expanded","true");
+    expect(screen.getByRole("treeitem",{name:/nested.md/})).toBeVisible();
+    expect(list.scrollTop).toBe(120);
+    fireEvent.click(screen.getByRole("tab",{name:"网页"}));
+    fireEvent.click(screen.getByRole("tab",{name:"文件"}));
+    expect(directory).toHaveAttribute("aria-expanded","true");
+    expect(list.scrollTop).toBe(120);
+    unmount();
+    render(<ToolSidePanel {...props} />);
+    expect(await screen.findByRole("treeitem",{name:/nested.md/})).toBeVisible();
+    expect(screen.getByRole("treeitem",{name:/src/})).toHaveAttribute("aria-expanded","true");
+  });
+
+  it("selects the shared artifact tab when the file tree opens a generated file", async () => {
+    Object.defineProperty(window, "innerWidth", {configurable:true,value:1280});
+    const generated = artifact("/workspace/generated.md");
+    vi.mocked(invoke).mockImplementation(async command => command === "read_text_file" ? "Generated file content" : command === "list_dir"
+      ? [{name:"generated.md",path:generated.path,kind:"file",size:1,modifiedAt:0,isLarge:false,isBinary:false},
+        {name:"other.md",path:"/workspace/other.md",kind:"file",size:1,modifiedAt:0,isLarge:false,isBinary:false}] : []);
+    render(<ToolSidePanel open mode="fileTree" artifacts={[generated]} cwd="/workspace" sessionId="generated-tree-selection"
+      onClose={vi.fn()} onSelectTool={vi.fn()} onSelectArtifact={vi.fn()} onOpenArtifacts={vi.fn()} />);
+    fireEvent.click(await screen.findByRole("treeitem",{name:/other.md/}));
+    await screen.findByText("Generated file content");
+    fireEvent.click(screen.getByRole("button",{name:"返回文件列表"}));
+    fireEvent.click(screen.getByRole("treeitem",{name:/generated.md/}));
+    const tabs = screen.getByRole("tablist",{name:"工作区文件和预览标签"});
+    const active = within(tabs).getByRole("tab",{name:/generated.md/});
+    expect(active).toHaveAttribute("aria-selected","true");
+    expect(active).toHaveAttribute("tabindex","0");
+    expect(within(tabs).getByRole("tab",{name:/other.md/})).toHaveAttribute("aria-selected","false");
+    fireEvent.keyDown(active,{key:"ArrowLeft"});
+    expect(within(tabs).getByRole("tab",{name:/other.md/})).toHaveAttribute("aria-selected","true");
+  });
+
+  it("exposes list layout controls only when a readable split fits", async () => {
+    Object.defineProperty(window, "innerWidth", {configurable:true, value:1024});
     const { container } = renderPanel("fileTree");
     await screen.findByText(/没有可见文件/);
-
-    fireEvent.click(screen.getByRole("button", { name: "钉住左列" }));
-    expect(screen.getByRole("button", { name: "取消钉住" })).toBeInTheDocument();
-    expect(screen.queryByRole("button", { name: "收起导航" })).not.toBeInTheDocument();
-
-    fireEvent.click(screen.getByRole("button", { name: "取消钉住" }));
-    expect(screen.getByRole("button", { name: "钉住左列" })).toBeInTheDocument();
-    expect(screen.getByRole("button", { name: "收起导航" })).toBeInTheDocument();
-    expect(container.querySelector(".tool-side-panel__nav--collapsed")).not.toBeInTheDocument();
-    expect(container.querySelector(".tool-side-panel__nav-body")).toBeInTheDocument();
+    expect(container.querySelector(".task-details__list--split")).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", {name: "详情布局"}));
+    fireEvent.click(screen.getByRole("menuitem", {name: "收起列表"}));
+    expect(container.querySelector(".task-details__list--split")).toBeNull();
+    fireEvent.click(screen.getByRole("button", {name: "详情布局"}));
+    fireEvent.click(screen.getByRole("menuitem", {name: "钉住列表"}));
+    expect(container.querySelector(".task-details__list--split")).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", {name: "详情布局"}));
+    expect(screen.getByRole("menuitem", {name: "收起列表"})).toBeDisabled();
   });
 
   it.each(["fileTree", "browser"] as const)(
@@ -114,10 +194,9 @@ describe("ToolSidePanel navigation collapse", () => {
       const panel = container.querySelector<HTMLElement>(".tool-side-panel");
       const nav = container.querySelector<HTMLElement>(".tool-side-panel__nav");
 
-      expect(panel?.style.width).toBe("280px");
+      expect(panel).toHaveClass("tool-side-panel--maximized");
       if (mode === "fileTree") {
-        expect(nav?.style.width).toBe("140px");
-        expect(container.querySelector(".tool-side-panel__nav-body")).toBeInTheDocument();
+        expect(container.querySelector(".task-details__list--split")).toBeInTheDocument();
       } else {
         expect(nav).toBeNull();
         expect(screen.getByRole("textbox", { name: "预览网址" })).toBeInTheDocument();
@@ -125,7 +204,7 @@ describe("ToolSidePanel navigation collapse", () => {
 
       await waitFor(() => {
         expect(localStorage.getItem("tool-side-panel-width")).toBe("280");
-        expect(localStorage.getItem("tool-side-panel-nav-width")).toBe("140");
+        expect(localStorage.getItem("tool-side-panel-nav-width")).toBe("180");
       });
     },
   );
@@ -135,10 +214,9 @@ describe("ToolSidePanel navigation collapse", () => {
     fireEvent.change(screen.getByRole("textbox", { name: "预览网址" }), { target: { value: "https://example.com/review" } });
     fireEvent.click(screen.getByRole("button", { name: "预览" }));
     expect(container.querySelector("iframe")).toHaveAttribute("src", "https://example.com/review");
-    fireEvent.click(screen.getByRole("button", { name: "浏览器" }));
-    fireEvent.click(screen.getByRole("option", { name: "文件树" }));
+    fireEvent.click(screen.getByRole("tab", { name: "文件" }));
     expect(await screen.findByText(/没有可见文件/)).toBeInTheDocument();
-    expect(screen.getByRole("button", { name: "收起导航" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "详情布局" })).toBeInTheDocument();
   });
 
   it("waits for the persisted export receipt before reading a historical file", async () => {

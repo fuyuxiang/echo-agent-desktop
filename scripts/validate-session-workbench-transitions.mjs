@@ -1,14 +1,12 @@
+import { openWorkspaceView } from "./session-review-navigation.mjs";
 import assert from "node:assert/strict";
 import { join } from "node:path";
 
 /** Real component regressions for workflows that cross session/view states. */
 export async function validateWorkbenchTransitions(page, base, output) {
-  const openView = async name => {
-    await page.getByRole("button", { name: "工作区", exact: true }).click();
-    await page.getByRole("menuitem", { name: new RegExp(name) }).click();
-  };
+  const openView = label => openWorkspaceView(page, label);
   const sessionAction = async name => {
-    await page.getByRole("button", { name: "更多操作", exact: true }).click();
+    await page.getByRole("button", { name: "任务操作", exact: true }).click();
     await page.getByRole("menuitem", { name, exact: true }).click();
   };
   const jump = page.getByRole("button", { name: "回到最新消息并恢复自动跟随" });
@@ -43,7 +41,7 @@ export async function validateWorkbenchTransitions(page, base, output) {
     assert.equal(await page.getByRole("button", { name: "创建分叉", exact: true }).count(), 0);
     await sessionAction(action === "rewind" ? "回溯…" : "分叉…");
     await page.keyboard.press("Escape");
-    await page.getByRole("button", { name: "更多操作", exact: true }).waitFor();
+    await page.getByRole("button", { name: "任务操作", exact: true }).waitFor();
   }
   console.log("History confirmations invalidate when a new turn starts.");
 
@@ -59,9 +57,8 @@ export async function validateWorkbenchTransitions(page, base, output) {
   await page.getByRole("button", { name: "预览", exact: true }).click();
   await page.locator(".browser-preview__frame").waitFor();
   assert.equal(await page.locator(".browser-preview__frame").getAttribute("src"), "https://example.com/workbench-review");
-  await page.getByRole("button", { name: "浏览器", exact: true }).click();
-  await page.getByRole("option", { name: "文件树", exact: true }).click();
-  await page.getByRole("button", { name: "收起导航", exact: true }).waitFor();
+  await openView("文件");
+  await page.locator(".task-details__list").waitFor();
   await openView("网页预览");
   assert.equal(await page.locator(".browser-preview__frame").getAttribute("src"), "https://example.com/workbench-review", "view changes preserve the browser tab");
   await page.screenshot({ path: join(output, "empty-session-workspace.png") });
@@ -69,50 +66,46 @@ export async function validateWorkbenchTransitions(page, base, output) {
 
   for (const following of [true, false]) {
     await page.goto(`${base}&state=files`);
-    await page.evaluate(async () => {
-      const { useSessionStore } = await import("/src/stores/session-store.ts");
-      const messages = useSessionStore.getState().messages;
-      // Keep the source tool visible beneath the runtime view, so every
-      // transition below uses normal mouse clicks without forced scrolling.
-      useSessionStore.getState().setMessages([messages[0], messages.at(-1), ...messages.slice(1, -1)]);
-    });
     await atBottom();
     if (!following) {
       await page.locator(".chatview__scroll").evaluate(e => {
         e.scrollTop = 600;
-        e.dispatchEvent(new WheelEvent("wheel", { deltaY: -1 }));
+        e.dispatchEvent(new WheelEvent("wheel", {deltaY:-1}));
         e.dispatchEvent(new Event("scroll"));
       });
       await jump.waitFor();
     }
-    await openView("文件变更");
-    const process = page.locator(".execution-process__header").first();
-    if (await process.getAttribute("aria-expanded") !== "true") await process.click();
-    await page.locator(".toolcall").first().click();
-    await page.getByRole("complementary", { name: "工作区面板" }).waitFor();
-    assert.equal(await page.locator(".chatview__runtime-view").count(), 0);
-    if (following) await atBottom();
-    else await page.waitForFunction(() => Math.abs(document.querySelector(".chatview__scroll").scrollTop - 600) < 2);
-    await page.getByRole("button", { name: "关闭面板", exact: true }).click();
-    await page.locator(".chatview__scroll").evaluate(e => {
-      e.scrollTop = 900;
-      e.dispatchEvent(new WheelEvent("wheel", { deltaY: -1 }));
-      e.dispatchEvent(new Event("scroll"));
+    const anchor = await page.locator(".chatview__scroll").evaluate(e => {
+      const top=e.getBoundingClientRect().top;
+      const row=[...e.querySelectorAll("[data-msg-id]")].find(row=>row.getBoundingClientRect().bottom>top);
+      return {id:row?.dataset.msgId, offset:row ? row.getBoundingClientRect().top-top : 0};
     });
-    await jump.waitFor();
-    await openView("文件变更");
-    await page.getByRole("button", { name: "关闭工作视图", exact: true }).click();
-    await page.waitForFunction(() => Math.abs(document.querySelector(".chatview__scroll").scrollTop - 900) < 2);
-    assert.ok(await jump.isVisible(), "old follow state must not replace the reader's new position");
+    const assertAnchor = async () => {
+      if (following) { await atBottom(); return; }
+      await page.waitForFunction(anchor => {
+        const viewport=document.querySelector(".chatview__scroll");
+        const row=[...viewport.querySelectorAll("[data-msg-id]")].find(row=>row.dataset.msgId===anchor.id);
+        return row && Math.abs(row.getBoundingClientRect().top-viewport.getBoundingClientRect().top-anchor.offset)<3;
+      }, anchor);
+      assert.ok(await jump.isVisible(), "view changes must not resume following");
+    };
+    await openView("文件变更"); await assertAnchor();
+    assert.equal(await page.locator(".chatview__inner .chatview__runtime-view").count(),0);
+    await page.getByRole("button",{name:"关闭面板",exact:true}).click(); await assertAnchor();
+    await openView("网页预览"); await assertAnchor();
+    await page.getByRole("button",{name:"关闭面板",exact:true}).click(); await assertAnchor();
   }
   await openView("任务产物");
-  await page.getByRole("button", { name: /^report\.md/ }).click();
-  const reportTab = page.getByRole("tab", { name: /更新任务交付说明/ });
-  await reportTab.waitFor();
+  await page.getByRole("complementary", {name:"工作区面板"}).getByRole("button", { name: /^report\.md/ }).click();
+  const reportTab = page.getByRole("tab", { name: /report\.md/ });
+  await page.getByRole("button",{name:"关闭标签 report.md",exact:true}).waitFor();
   await openView("网页预览");
+  await address.fill("https://example.com/workbench-review");
+  await page.getByRole("button",{name:"预览",exact:true}).click();
   await reportTab.click();
-  await page.getByRole("button", { name: "产物", exact: true }).waitFor();
+  await page.getByRole("tab", { name: "成果", exact: true }).waitFor();
   await page.getByRole("button", { name: "查看关联工具", exact: true }).waitFor();
+  await page.screenshot({path:join(output,"artifact-preview.png")});
   console.log("Message tool navigation preserves fresh reading snapshots.");
 
   for (const width of [900, 1280]) for (const theme of ["light", "dark"]) for (const mode of ["browser", "computer"]) {
@@ -120,17 +113,11 @@ export async function validateWorkbenchTransitions(page, base, output) {
     await page.goto(`${base}&state=${mode}-paused&theme=${theme}`);
     const bar = page.locator(".task-execution-status");
     await bar.getByRole("button", { name: "继续任务", exact: true }).waitFor();
-    await page.getByRole("complementary", { name: "运行中任务" }).waitFor();
-    const dockClear = () => page.waitForFunction(() => {
-      const tasks = document.querySelector(".tasks-panel")?.getBoundingClientRect();
-      const controls = document.querySelector(".task-execution-status")?.getBoundingClientRect();
-      return tasks && controls && tasks.bottom <= controls.top - 11;
-    });
-    await dockClear();
+    assert.equal(await page.locator(".tasks-panel").count(), 0, "no floating background controls");
     await bar.getByRole("button", { name: "继续任务", exact: true }).click({ trial: true });
     if (mode === "browser") {
       await bar.locator("summary").click();
-      await dockClear();
+
       await bar.getByRole("checkbox", { name: "允许访问本机与内网" }).click({ trial: true });
       await bar.getByRole("button", { name: "清除浏览器数据", exact: true }).click({ trial: true });
     }

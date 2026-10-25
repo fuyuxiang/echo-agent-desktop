@@ -7,22 +7,26 @@
  * 持久化，切回该会话时恢复。
  *
  * 与 EchoAgent 的差异：echoagent 本期只支持 4 个 kind ——
- *   artifact | file | preview | changes
+ *   artifact | file | browser | changes
  * （去掉 mcpApp / expert / fileChange，其中 fileChange 合并到 changes）。
  */
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { SessionArtifact } from "@/lib/session-artifacts";
 import type { FileChange } from "@/lib/file-changes";
+import { artifactFileKey } from "./artifact-file-key";
 
 /** 右侧栏支持的视图。 */
 export type WorkspaceView =
   | "artifacts"
   | "fileTree"
-  | "preview"
-  | "changes";
+  | "browser"
+  | "changes"
+  | "plan"
+  | "subagents"
+  | "teams";
 
 /** 标签种类（决定图标 + 激活时切到哪个视图）。 */
-export type TabKind = "artifact" | "file" | "preview" | "changes";
+export type TabKind = "artifact" | "file" | "browser" | "changes";
 
 /** 一个统一标签页的描述符。 */
 export interface UnifiedTab {
@@ -111,7 +115,7 @@ function getTabSignature(tab: UnifiedTab): string {
       return `${tab.kind}:${tab.artifactId ?? ""}`;
     case "file":
       return `file:${tab.filePath ?? ""}`;
-    case "preview":
+    case "browser":
       return `preview:${tab.browserUrl ?? ""}`;
     default:
       return tab.id;
@@ -161,7 +165,7 @@ export function deriveActiveTab(options: UseUnifiedTabsOptions): UnifiedTab | nu
     return {
       id: `artifact:${artifact.id}`,
       kind: "artifact",
-      label: artifact.title || artifact.path || artifact.id,
+      label: lastSegment(artifact.path) || artifact.title || artifact.id,
       subtitle: artifact.path,
       artifactId: artifact.id,
       viewWhenActive: "artifacts",
@@ -184,8 +188,10 @@ export function deriveActiveTab(options: UseUnifiedTabsOptions): UnifiedTab | nu
   if (currentView === "fileTree") {
     const path = options.selectedFilePath;
     if (!path) return null;
+    const output = options.artifacts.find(item => artifactFileKey(item.path) === artifactFileKey(path));
+    if (output) return deriveActiveTab({ ...options, currentView: "artifacts", selectedArtifactId: output.id });
     return {
-      id: `file:${path}`,
+      id: `file:${artifactFileKey(path)}`,
       kind: "file",
       label: lastSegment(path),
       subtitle: path,
@@ -193,16 +199,16 @@ export function deriveActiveTab(options: UseUnifiedTabsOptions): UnifiedTab | nu
       viewWhenActive: "fileTree",
     };
   }
-  if (currentView === "preview") {
+  if (currentView === "browser") {
     const url = options.browserUrl;
     if (!url) return null;
     return {
       id: "preview:current",
-      kind: "preview",
+      kind: "browser",
       label: deriveBrowserLabel(url),
       subtitle: url,
       browserUrl: url,
-      viewWhenActive: "preview",
+      viewWhenActive: "browser",
     };
   }
   return null;
@@ -225,7 +231,7 @@ function isTabStillValid(
         options.changes.some((c) => c.path === tab.artifactId)
       );
     case "file":
-    case "preview":
+    case "browser":
       return true;
     default:
       return true;
@@ -244,7 +250,7 @@ function activateTab(tab: UnifiedTab, options: UseUnifiedTabsOptions): void {
     case "file":
       options.onFileSelect?.(tab.filePath);
       return;
-    case "preview":
+    case "browser":
       options.onBrowserUrlChange?.(tab.browserUrl);
       return;
   }
@@ -509,7 +515,7 @@ export function useUnifiedTabs(
 
         // 关闭 preview 标签时，联动关闭同源的 artifact 标签（对齐 EchoAgent）。
         const linkedArtifactTabIds: string[] = [];
-        if (closingTab.kind === "preview" && opts.selectedArtifactId) {
+        if (closingTab.kind === "browser" && opts.selectedArtifactId) {
           for (const t of prev) {
             if (
               t.id !== id &&
@@ -529,16 +535,16 @@ export function useUnifiedTabs(
           clearAllSelections(opts);
           opts.onAllTabsClosed?.();
           if (
-            closingTab.kind === "preview" &&
-            opts.currentView === "preview"
+            closingTab.kind === "browser" &&
+            opts.currentView === "browser"
           )
             opts.onViewChange("artifacts");
           return next;
         }
-        if (closingTab.kind === "preview") {
+        if (closingTab.kind === "browser") {
           opts.onBrowserUrlChange?.(undefined);
           opts.onArtifactSelect(undefined);
-          if (opts.currentView === "preview")
+          if (opts.currentView === "browser")
             opts.onViewChange("artifacts");
         }
         if (!isActive) return next;
@@ -565,7 +571,7 @@ export function useUnifiedTabs(
   const visibleTabs = useMemo(
     () =>
       filterTabsByOwner(openTabs, options.resetKey).filter((tab) => {
-        if (tab.kind === "preview")
+        if (tab.kind === "browser")
           return !!options.browserUrl && tab.browserUrl === options.browserUrl;
         if (tab.kind === "artifact" && tab.artifactId)
           return artifactIdSet.has(tab.artifactId);

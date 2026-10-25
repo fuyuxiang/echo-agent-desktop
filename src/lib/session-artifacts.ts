@@ -1,6 +1,7 @@
 import type { ChatMessage, ToolCallView } from "@/stores/session-store";
 import type { DiffContent } from "@/lib/types";
 import { isOfficeCreateTool, officeReceiptFromToolCall } from "@/lib/document-export";
+import { artifactFileKey, artifactFilePath } from "./artifact-file-key";
 
 /** A file produced by a successful tool call in the current transcript. */
 export interface SessionArtifact {
@@ -14,6 +15,10 @@ export interface SessionArtifact {
   status: ToolCallView["status"];
   /** Set only by the output-aware collector; absent on legacy catalog rows. */
   verifiedOutput?: true;
+  /** Exact native receipt path; lexical display identity is never an authority. */
+  authorizationPath?: string;
+  /** Native export time or tool completion time, in Unix milliseconds. */
+  producedAt?: number;
 }
 
 /**
@@ -25,8 +30,8 @@ export interface SessionArtifact {
  * We therefore trust structured diffs first, and only inspect path arguments
  * for tools whose kind/title explicitly describes a write-like operation.
  */
-export function collectSessionArtifacts(messages: ChatMessage[]): SessionArtifact[] {
-  const byPath = new Map<string, SessionArtifact>();
+export function collectSessionArtifacts(messages: ChatMessage[], cwd?: string, catalog: SessionArtifact[] = []): SessionArtifact[] {
+  const byPath = new Map(mergeSessionArtifacts(catalog, cwd).map(item => [item.id, item]));
 
   for (const msg of messages) {
     if (msg.role !== "assistant") continue;
@@ -34,25 +39,38 @@ export function collectSessionArtifacts(messages: ChatMessage[]): SessionArtifac
       if (part.kind !== "tool_call") continue;
       const tc = part.toolCall;
       if (tc.status !== "completed") continue;
+      const producedAt = tc.completedAt ?? msg.completedAt ?? msg.startedAt;
+      // Replayed legacy tools can lack timestamps. They must not erase a
+      // durable manual export whose later position cannot be disproved.
+      const supersedes = (key: string) => {
+        const previous = byPath.get(key);
+        return !previous?.producedAt || (producedAt !== undefined && producedAt >= previous.producedAt);
+      };
       if (isDeletionTool(tc)) {
         for (const path of extractSourcePaths(tc, ["Delete", "Remove", "Unlink"])) {
-          byPath.delete(pathKey(path));
+          const key = artifactFileKey(path, cwd);
+          if (supersedes(key)) byPath.delete(key);
         }
         continue;
       }
       if (isMoveTool(tc)) {
-        for (const path of extractSourcePaths(tc)) byPath.delete(pathKey(path));
+        for (const path of extractSourcePaths(tc)) {
+          const key = artifactFileKey(path, cwd);
+          if (supersedes(key)) byPath.delete(key);
+        }
       }
       for (const path of extractPathsFromToolCall(tc)) {
-        const key = pathKey(path);
+        const key = artifactFileKey(path, cwd);
+        if (!supersedes(key)) continue;
         byPath.set(key, {
           id: key,
-          path,
+          path: artifactFilePath(path, cwd),
           kind: tc.kind,
           title: tc.title,
           toolCallId: tc.toolCallId,
           status: tc.status,
           verifiedOutput: true,
+          producedAt,
         });
       }
     }
@@ -208,8 +226,17 @@ function cleanTitlePath(path: string): string {
   return path.trim().replace(/[),.;:]+$/, "");
 }
 
-function pathKey(path: string): string {
-  return path.replace(/\\/g, "/");
+/** Catalog and transcript outputs share the same identity, including tab IDs. */
+export function mergeSessionArtifacts(items: SessionArtifact[], cwd?: string): SessionArtifact[] {
+  const byPath = new Map<string, SessionArtifact>();
+  for (const item of items) {
+    const key = artifactFileKey(item.path, cwd);
+    const previous = byPath.get(key);
+    if (previous && (previous.producedAt ?? 0) > (item.producedAt ?? 0)) continue;
+    byPath.set(key, { ...item, id: key, path: artifactFilePath(item.path, cwd),
+      ...(item.kind === "document_export" ? { authorizationPath: item.authorizationPath ?? item.path } : {}) });
+  }
+  return [...byPath.values()];
 }
 
 function looksLikePath(s: string): boolean {

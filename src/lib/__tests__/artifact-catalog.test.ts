@@ -50,7 +50,7 @@ describe("artifact catalog", () => {
     indexTaskArtifacts("s1", "任务1", "/w", [toolMessage("edit", "Write a.md", "a.md")]);
     indexTaskArtifacts("s1", "任务1", "/w", [toolMessage("edit", "Write b.md", "b.md")]);
     indexTaskArtifacts("s2", "任务2", "/w", [toolMessage("edit", "Write c.md", "c.md")]);
-    expect(loadTaskArtifacts().map((item) => item.path).sort()).toEqual(["b.md", "c.md"]);
+    expect(loadTaskArtifacts().map((item) => item.path).sort()).toEqual(["/w/b.md", "/w/c.md"]);
   });
 
   it("合并时以更新的同会话同路径记录为准", () => {
@@ -60,7 +60,7 @@ describe("artifact catalog", () => {
     } as TaskArtifact;
     expect(mergeTaskArtifacts(
       [{ ...base, updatedAt: 1 }],
-      [{ ...base, path: "a.md", sessionTitle: "new", updatedAt: 2 }],
+      [{ ...base, path: "./A.md", sessionTitle: "new", updatedAt: 2 }],
     )[0].sessionTitle).toBe("new");
   });
 

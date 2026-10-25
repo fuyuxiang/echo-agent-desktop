@@ -23,14 +23,15 @@ describe("TasksPanel", () => {
     expect(screen.queryByLabelText("运行中任务")).not.toBeInTheDocument();
   });
 
-  it("零任务查询失败只给非阻塞提示，不留下运行中任务 (0)", async () => {
+  it("零任务查询失败在详情中显示可重试错误", async () => {
     const onToast = vi.fn();
     vi.mocked(tasksList).mockRejectedValue(new Error("任务通道不可用"));
     render(<TasksPanel sessionId="session-1" onToast={onToast} />);
 
     await waitFor(() => expect(tasksList).toHaveBeenCalledWith("session-1"));
     await waitFor(() => expect(onToast).toHaveBeenCalledWith("加载运行中任务失败：任务通道不可用"));
-    expect(screen.queryByText(/运行中任务 \(0\)/)).not.toBeInTheDocument();
+    expect(screen.getByRole("alert")).toHaveTextContent("任务通道不可用");
+    expect(screen.getByRole("button", {name: "重试加载运行中任务"})).toBeEnabled();
   });
 
   it("瞬时刷新失败不移除已知任务的终止入口", async () => {
@@ -52,7 +53,7 @@ describe("TasksPanel", () => {
     expect(screen.getByRole("button", { name: "终止任务：后台分析" })).toBeEnabled();
   });
 
-  it("可以收起、展开和关闭，并在任务事件后重新显示", async () => {
+  it("可收起和展开，任务事件仍会刷新详情", async () => {
     vi.mocked(tasksList).mockResolvedValue([{
       id: "task-1",
       source: "task",
@@ -70,8 +71,6 @@ describe("TasksPanel", () => {
     fireEvent.click(screen.getByRole("button", { name: "展开运行中任务" }));
     expect(screen.getByText("生成报告")).toBeInTheDocument();
 
-    fireEvent.click(screen.getByRole("button", { name: "关闭运行中任务" }));
-    expect(screen.queryByLabelText("运行中任务")).not.toBeInTheDocument();
     rerender(<TasksPanel sessionId="session-1" refreshSignal={1} />);
     expect(await screen.findByText("生成报告")).toBeInTheDocument();
   });
@@ -154,25 +153,18 @@ describe("TasksPanel", () => {
   });
 });
 
-describe("task dock protects decisions and execution controls", () => {
-  it.each(["perm-inline", "question-inline", "automation-approval", "task-execution-status", "yield-banner", "queue-panel"])("%s 出现时停靠在其上方，消失后恢复输入框对齐", async protectedClass => {
-    vi.mocked(tasksList).mockResolvedValue([{ id:"task-dock",source:"task",description:"后台核验",status:"running",sessionId:"dock-session" }]);
-    const measure = vi.spyOn(HTMLElement.prototype,"getBoundingClientRect").mockImplementation(function(this:HTMLElement) {
-      return this.classList.contains("echo-composer") ? new DOMRect(200,650,600,100)
-        : this.classList.contains(protectedClass) ? new DOMRect(200,450,600,120) : new DOMRect();
-    });
-    const content = (protectedVisible: boolean) => <div className="chatview"><div className="chatview__footer">
-      {protectedVisible && <div className={protectedClass}>待处理操作</div>}
-      <div className="echo-composer" /><TasksPanel sessionId="dock-session" />
-    </div></div>;
-    const view = render(content(false));
-    const panel = await screen.findByRole("complementary",{name:"运行中任务"});
-    await waitFor(()=>expect(panel).toHaveStyle({bottom:`${window.innerHeight-650+12}px`}));
-    view.rerender(content(true));
-    await waitFor(()=>expect(panel).toHaveStyle({bottom:`${window.innerHeight-450+12}px`}));
-    expect(screen.getByRole("button",{name:"终止任务：后台核验"})).toBeEnabled();
-    view.rerender(content(false));
-    await waitFor(()=>expect(panel).toHaveStyle({bottom:`${window.innerHeight-650+12}px`}));
-    measure.mockRestore();
+describe("background task summary", () => {
+  it("shows a compact entry and keeps task controls inside details", async () => {
+    vi.mocked(tasksList).mockResolvedValue([{id:"task-summary",source:"task",description:"后台核验",status:"running",sessionId:"summary"}]);
+    const onOpen = vi.fn();
+    const view = render(<TasksPanel sessionId="summary" presentation="summary" onOpen={onOpen} />);
+    fireEvent.click(await screen.findByRole("button", {name: "后台任务 1"}));
+    expect(onOpen).toHaveBeenCalledOnce();
+    expect(screen.queryByRole("button", {name: /终止任务/})).toBeNull();
+    view.rerender(<TasksPanel sessionId="summary" presentation="details" />);
+    const panel = await screen.findByRole("complementary", {name:"运行中任务"});
+    expect(panel).toHaveClass("tasks-panel--inline");
+    expect(panel.style.bottom).toBe("");
+    expect(screen.getByRole("button", {name:"终止任务：后台核验"})).toBeEnabled();
   });
 });

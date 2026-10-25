@@ -1,17 +1,8 @@
-/**
- * 右侧统一工作区面板 —— 对齐 EchoAgent `SidebarNext / DetailPanel`。
- *
- * 在原 3 模式（tool/artifacts/preview）基础上升级为统一工作区：
- *  - ViewSelector 下拉切换视图：产物 / 文件树 / 浏览器 / 变更
- *  - 统一标签页（useUnifiedTabs）：跨视图共享、自动开/关、可拖拽排序、会话持久化
- *  - 可调宽（Sash）+ 钉住左列 + 最大化 + 收起
- *  - 浏览器预览（BrowserPreview，含后退/前进/刷新/外开）
- *  - 文件树（FileTreeView，懒加载目录）
- *
- * 兼容性：保留原导出名 `ToolSidePanel` / `ToolSidePanelMode` 与 ChatView 的 props，
- * 新增内部状态管理视图/标签/宽度。原 "tool" 模式仍用于展示单个工具调用详情。
+import { artifactFileKey } from "@/lib/artifact-file-key";
+/** One session-scoped container for resources, runtime details and tool inspection.
+ * Narrow panels show a list or preview; a split requires a measured 360px preview.
  */
-import { useCallback, useContext, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useContext, useEffect, useLayoutEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { SidebarLayoutContext } from "@/lib/sidebar-layout";
 import type { ToolCallView } from "@/stores/session-store";
 import type { SessionArtifact } from "@/lib/session-artifacts";
@@ -34,10 +25,11 @@ import {
   isUnauthorizedPathError,
 } from "@/lib/artifact-access";
 import { invoke } from "@tauri-apps/api/core";
-import { IS_MACOS } from "@/lib/platform";
 import { ViewSelector, defaultViews } from "./workspace-panel/ViewSelector";
 import { ArtifactTabsBar } from "./workspace-panel/ArtifactTabsBar";
 import { FileTreeView } from "./workspace-panel/FileTreeView";
+import { ActionMenu } from "./ActionMenu";
+import { ArrowLeft, Settings2 } from "lucide-react";
 import { BrowserPreview } from "./BrowserPreview";
 import {
   EchoPinIcon,
@@ -45,28 +37,28 @@ import {
   MaximizeIcon,
   RestoreIcon,
   CloseIcon,
-  ChevronLeftIcon,
 } from "@/foundation/components/Icon/icons";
 
-/** 向后兼容：原模式 + 新视图。tool 为单工具详情，其余映射到工作区视图。 */
-export type ToolSidePanelMode =
-  | "tool"
-  | "artifacts"
-  | "preview"
-  | "fileTree"
-  | "browser"
-  | "changes";
+/** The outer navigation and panel use the same view identifiers. */
+export type ToolSidePanelMode = WorkspaceView | "tool";
+interface PanelSelection {
+  artifact?: string; file?: string; url?: string; list: boolean; scroll: number;
+  listScroll?: Partial<Record<WorkspaceView, number>>;
+  bodyScroll?: Partial<Record<WorkspaceView, number>>;
+  fileTree?: { root?: string; expandedPaths: string[] };
+}
+const sessionSelections = new Map<string, PanelSelection>();
 
 // ---------- 持久化常量 ----------
 const WIDTH_KEY = "tool-side-panel-width";
 const NAV_WIDTH_KEY = "tool-side-panel-nav-width";
-const DEFAULT_WIDTH = 380;
-const DEFAULT_NAV_WIDTH = 200;
+const DEFAULT_WIDTH = 420;
+const DEFAULT_NAV_WIDTH = 180;
 const MIN_WIDTH = 280;
 const MAX_WIDTH_RATIO = 0.6; // 占视口 60%
-const MIN_NAV_WIDTH = 140;
-const MAX_NAV_WIDTH = 360;
-const MIN_MAIN_WIDTH = 120;
+const MIN_NAV_WIDTH = 180;
+const MAX_NAV_WIDTH = 220;
+const MIN_MAIN_WIDTH = 360;
 const NAV_SASH_WIDTH = 5;
 
 interface ToolSidePanelProps {
@@ -75,6 +67,8 @@ interface ToolSidePanelProps {
   toolCall?: ToolCallView | null;
   artifacts: SessionArtifact[];
   previewPath?: string | null;
+  previewRequestId?: number;
+  navigationRequestId?: number;
   cwd?: string;
   /** 会话消息（用于聚合文件变更）。 */
   messages?: ChatMessage[];
@@ -82,11 +76,14 @@ interface ToolSidePanelProps {
   sessionId?: string;
   onToast?: (msg: string) => void;
   onClose: () => void;
+  onBack?: () => void;
   onModeChange?: (mode: ToolSidePanelMode) => void;
   onSelectTool: (tc: ToolCallView) => void;
   onSelectArtifact: (a: SessionArtifact) => void;
   onOpenArtifacts: () => void;
   findToolCall?: (id: string) => ToolCallView | undefined;
+  details?: ReactNode;
+  detailsRef?: React.RefObject<HTMLDivElement>;
 }
 
 export function ToolSidePanel({
@@ -95,36 +92,86 @@ export function ToolSidePanel({
   toolCall,
   artifacts,
   previewPath,
+  previewRequestId,
+  navigationRequestId,
   cwd,
   messages,
   sessionId,
   onToast,
   onClose,
+  onBack,
   onModeChange,
   onSelectTool,
   onSelectArtifact,
   findToolCall,
+  details,
+  detailsRef,
 }: ToolSidePanelProps) {
-  // ---- 视图状态：把外部 mode 映射到内部 WorkspaceView ----
-  const [legacyView, setView] = useState<WorkspaceView>("artifacts");
-  const view: WorkspaceView = onModeChange
-    ? mode === "browser" ? "preview" : mode === "preview" ? "fileTree"
-      : mode === "fileTree" || mode === "changes" ? mode : "artifacts"
-    : legacyView;
+  const [legacyView, setView] = useState<WorkspaceView>(mode === "tool" ? "artifacts" : mode);
+  const view: WorkspaceView = onModeChange && mode !== "tool" ? mode : legacyView;
+  useEffect(() => { if (mode !== "tool") setView(mode); }, [mode]);
+  const browserVisited = useRef(false);
+  if (open && view === "browser") browserVisited.current = true;
+  const fileTreeVisit = useRef({ sessionId, visited: false });
+  if (fileTreeVisit.current.sessionId !== sessionId) fileTreeVisit.current = { sessionId, visited: false };
+  if (open && view === "fileTree") fileTreeVisit.current.visited = true;
+  const saved = sessionId ? sessionSelections.get(sessionId) : undefined;
+  const [selectedArtifactId, setSelectedArtifactId] = useState<string | undefined>(saved?.artifact);
+  const [selectedFilePath, setSelectedFilePath] = useState<string | undefined>(saved?.file);
+  const [browserUrl, setBrowserUrl] = useState<string | undefined>(saved?.url);
+  const [showList, setShowList] = useState(saved?.list ?? true);
+  const [selectionOwner, setSelectionOwner] = useState(sessionId);
+  const listRef = useRef<HTMLDivElement>(null);
+  const listContentRef = useRef<HTMLDivElement>(null);
+  const restoringListRef = useRef(false);
+  const internalBodyRef = useRef<HTMLDivElement>(null);
+  const bodyRef = detailsRef ?? internalBodyRef;
+  const panelRef = useRef<HTMLElement>(null);
+  const [measuredWidth, setMeasuredWidth] = useState(0);
+  const selectionRef = useRef<{ owner?: string; value: PanelSelection }>({ owner: sessionId, value: { list: true, scroll: 0 } });
+  if (selectionOwner !== sessionId) {
+    const previous = selectionRef.current;
+    if (previous.owner) sessionSelections.set(previous.owner, previous.value);
+    selectionRef.current = { owner: sessionId, value: saved ?? { list: true, scroll: 0 } };
+    setSelectionOwner(sessionId);
+    setSelectedArtifactId(saved?.artifact);
+    setSelectedFilePath(saved?.file);
+    setBrowserUrl(saved?.url);
+    setShowList(saved?.list ?? true);
+  } else {
+    selectionRef.current = { owner: sessionId, value: { artifact: selectedArtifactId, file: selectedFilePath,
+      url: browserUrl, list: showList,
+      bodyScroll: selectionRef.current.value.bodyScroll ?? saved?.bodyScroll,
+      listScroll: selectionRef.current.value.listScroll ?? saved?.listScroll,
+      fileTree: selectionRef.current.value.fileTree ?? saved?.fileTree,
+      scroll: selectionRef.current.value.scroll } };
+  }
+  useEffect(() => () => {
+    const { owner, value } = selectionRef.current;
+    if (!owner) return;
+    sessionSelections.set(owner, value);
+    if (sessionSelections.size > 50) sessionSelections.delete(sessionSelections.keys().next().value!);
+  }, []);
+  useLayoutEffect(() => {
+    if (bodyRef.current) bodyRef.current.scrollTop = saved?.bodyScroll?.[view] ?? 0;
+  }, [showList, view, sessionId]);
+  const handledPreview = useRef<{ path?: string | null; request?: number }>({});
+  const handledNavigation = useRef(navigationRequestId);
+  useLayoutEffect(() => {
+    if (handledNavigation.current === navigationRequestId) return;
+    handledNavigation.current = navigationRequestId;
+    setShowList(true);
+  }, [navigationRequestId]);
   useEffect(() => {
-    if (onModeChange) return;
-    if (mode === "artifacts") setView("artifacts");
-    else if (mode === "preview") setView("fileTree"); // 单文件预览映射到文件树视图
-    else if (mode === "fileTree") setView("fileTree");
-    else if (mode === "browser") setView("preview");
-    else if (mode === "changes") setView("changes");
-    // "tool" 模式不改 view（工具详情在主列覆盖渲染）
-  }, [mode, onModeChange]);
-
-  // ---- selection 状态 ----
-  const [selectedArtifactId, setSelectedArtifactId] = useState<string | undefined>();
-  const [selectedFilePath, setSelectedFilePath] = useState<string | undefined>();
-  const [browserUrl, setBrowserUrl] = useState<string | undefined>();
+    if (handledPreview.current.path === previewPath && handledPreview.current.request === previewRequestId) return;
+    handledPreview.current = { path: previewPath, request: previewRequestId };
+    if (!previewPath) return;
+    const key = artifactFileKey(previewPath, cwd);
+    if (view === "artifacts") setSelectedArtifactId(artifacts.find(item => artifactFileKey(item.path, cwd) === key)?.id ?? key);
+    else if (view === "fileTree") setSelectedFilePath(previewPath);
+    else return;
+    setShowList(false);
+  }, [previewPath, previewRequestId, view, cwd, sessionId, artifacts]);
 
   // 文件变更数据。
   const changes = useMemo<FileChange[]>(
@@ -135,13 +182,15 @@ export function ToolSidePanel({
 
   // ---- 视图切换 ----
   const handleViewChange = useCallback((v: WorkspaceView) => {
-    if (onModeChange) onModeChange(v === "preview" ? "browser" : v);
+    if (onModeChange) onModeChange(v);
     else setView(v);
+    setShowList(true);
   }, [onModeChange]);
 
   const handleArtifactSelect = useCallback(
     (id?: string) => {
       setSelectedArtifactId(id);
+      setShowList(!id);
       if (id) {
         const a = artifacts.find((x) => x.id === id);
         if (a) onSelectArtifact(a);
@@ -153,6 +202,7 @@ export function ToolSidePanel({
   const handleFileSelect = useCallback(
     (path?: string) => {
       setSelectedFilePath(path);
+      setShowList(!path);
       if (path) {
         // 复用 onSelectArtifact 把路径包成 SessionArtifact，驱动主列预览。
         onSelectArtifact({
@@ -165,7 +215,7 @@ export function ToolSidePanel({
         });
       }
     },
-    [onSelectArtifact],
+    [onSelectArtifact, cwd],
   );
 
   // ---- 统一标签页 ----
@@ -173,7 +223,7 @@ export function ToolSidePanel({
     resetKey: sessionId,
     enabled: open,
     currentView: view,
-    selectedArtifactId,
+    selectedArtifactId: view === "changes" && details ? undefined : selectedArtifactId,
     selectedFilePath,
     browserUrl,
     artifacts,
@@ -205,30 +255,33 @@ export function ToolSidePanel({
     );
   });
   const [maximized, setMaximized] = useState(false);
+  const fullView = maximized || viewportWidth < 1180 || panelMaxWidth < 380;
   const [pinned, setPinned] = useState(false);
   const [navCollapsed, setNavCollapsed] = useState(false);
   const closeRef = useRef(onClose);
   closeRef.current = onClose;
   const registerPanel = shellLayout?.registerPanel;
   useLayoutEffect(() => {
-    registerPanel?.(open && !maximized ? { minimumWidth: MIN_WIDTH, close: () => closeRef.current() } : null);
+    registerPanel?.(open && !fullView ? { minimumWidth: MIN_WIDTH, close: () => closeRef.current() } : null);
     return () => registerPanel?.(null);
-  }, [open, maximized, registerPanel]);
+  }, [open, fullView, registerPanel]);
 
   const renderedPanelWidth = clamp(width, MIN_WIDTH, panelMaxWidth);
-  const availablePanelWidth = maximized ? viewportWidth : renderedPanelWidth;
+  const availablePanelWidth = fullView ? measuredWidth || viewportWidth : renderedPanelWidth;
+  useLayoutEffect(() => {
+    const panel = panelRef.current;
+    if (!panel) return;
+    const measure = () => setMeasuredWidth(panel.clientWidth);
+    measure();
+    const observer = typeof ResizeObserver === "undefined" ? null : new ResizeObserver(measure);
+    observer?.observe(panel);
+    return () => observer?.disconnect();
+  }, [open, fullView]);
   const navMaxWidth = Math.max(
     MIN_NAV_WIDTH,
     Math.min(MAX_NAV_WIDTH, availablePanelWidth - MIN_MAIN_WIDTH - NAV_SASH_WIDTH),
   );
   const renderedNavWidth = clamp(navWidth, MIN_NAV_WIDTH, navMaxWidth);
-
-  // 切换会话时重置 selection（避免跨会话残留）。
-  useEffect(() => {
-    setSelectedArtifactId(undefined);
-    setSelectedFilePath(undefined);
-    setBrowserUrl(undefined);
-  }, [sessionId]);
 
   // 窗口缩放后重新约束面板，避免持久化尺寸在小窗口中挤坏布局。
   useEffect(() => {
@@ -262,212 +315,118 @@ export function ToolSidePanel({
     setPinned((current) => !current);
   }, []);
 
-  if (!open) return null;
-
   const views = defaultViews({ hasChanges });
-  // tool 模式：主列渲染工具详情；其余按工作区视图渲染。
   const showToolDetail = mode === "tool";
-  // Browser navigation lives in its toolbar; an otherwise empty file list
-  // must not take half the panel away from the address field and page.
-  const browserView = view === "preview" && !showToolDetail;
-
-  return (
-    <aside
-      className={
-        "tool-side-panel" +
-        (maximized ? " tool-side-panel--maximized" : "")
-      }
-      style={
-        maximized
-          ? undefined
-          : { width: `${renderedPanelWidth}px` }
-      }
-      aria-label="工作区面板"
-    >
-      {/* 面板左边缘：全宽拖拽（非最大化时）。 */}
-      {!maximized && (
-        <div
-          className="tool-side-panel__edge-sash"
-          onPointerDown={(e) =>
-            startResizeEdge(e, renderedPanelWidth, panelMaxWidth, setWidth)
-          }
-        />
-      )}
-      {/* 左导航列 */}
-      {!browserView && <div
-        className={
-          "tool-side-panel__nav" +
-          (effectiveNavCollapsed ? " tool-side-panel__nav--collapsed" : "")
-        }
-        style={
-          effectiveNavCollapsed ? undefined : { width: `${renderedNavWidth}px` }
-        }
-      >
-        {/* macOS 贴窗口顶边：空白处支持拖动/双击缩放（同 header）。 */}
-        <div
-          className="tool-side-panel__nav-header"
-          {...(IS_MACOS ? { "data-tauri-drag-region": true } : {})}
-        >
-          {effectiveNavCollapsed ? (
-            <button
-              type="button"
-              className="tool-side-panel__icon-btn tool-side-panel__nav-expand"
-              onClick={() => setNavCollapsed(false)}
-              title="展开导航"
-              aria-label="展开导航"
-            >
-              <ChevronLeftIcon size="sm" className="tool-side-panel__icon--flip" />
-            </button>
-          ) : (
-            <>
-              <ViewSelector view={view} views={views} onChange={handleViewChange} />
-              <button
-                type="button"
-                className="tool-side-panel__icon-btn"
-                onClick={handlePinnedToggle}
-                title={pinned ? "取消钉住" : "钉住左列"}
-                aria-label={pinned ? "取消钉住" : "钉住左列"}
-                aria-pressed={pinned}
-              >
-                {pinned ? <EchoUnpinIcon size="sm" /> : <EchoPinIcon size="sm" />}
-              </button>
-              {!pinned && (
-                <button
-                  type="button"
-                  className="tool-side-panel__icon-btn"
-                  onClick={() => setNavCollapsed(true)}
-                  title="收起导航"
-                  aria-label="收起导航"
-                >
-                  <ChevronLeftIcon size="sm" />
-                </button>
-              )}
-            </>
-          )}
+  const runtimeView = Boolean(details) && (view === "plan" || view === "subagents" || view === "teams" || view === "changes");
+  const listView = !showToolDetail && (view === "artifacts" || view === "fileTree");
+  const split = listView && availablePanelWidth >= MIN_MAIN_WIDTH + renderedNavWidth + NAV_SASH_WIDTH && !effectiveNavCollapsed;
+  useLayoutEffect(() => {
+    const viewport = listRef.current;
+    if (!viewport || !open || !listView || !split && !showList) return;
+    const positions = selectionRef.current.value.listScroll;
+    const target = positions ? positions[view] ?? 0 : saved?.scroll ?? 0;
+    let active = true;
+    const observer = typeof ResizeObserver === "undefined" ? null : new ResizeObserver(() => restore());
+    const cancel = () => { active = false; restoringListRef.current = false; observer?.disconnect(); };
+    const restore = () => {
+      if (!active) return;
+      viewport.scrollTop = target;
+      if (Math.abs(viewport.scrollTop - target) < 1) cancel();
+    };
+    restoringListRef.current = true;
+    if (listContentRef.current) observer?.observe(listContentRef.current);
+    restore();
+    // Directory children can arrive after the panel's first layout. Wait for
+    // their actual height, but let any new reading intent take precedence.
+    const events = ["wheel", "pointerdown", "touchstart", "keydown"] as const;
+    for (const event of events) viewport.addEventListener(event, cancel, {capture:true,passive:true});
+    return () => {
+      cancel();
+      for (const event of events) viewport.removeEventListener(event, cancel, true);
+    };
+  }, [open, listView, split, showList, view, sessionId]);
+  const list = <>
+    {view !== "fileTree" && <NavContent view={view} artifacts={artifacts} changes={changes}
+      selectedArtifactId={selectedArtifactId}
+      onArtifactSelect={handleArtifactSelect} />}
+    {fileTreeVisit.current.visited && <div hidden={view !== "fileTree"} className="task-details__file-tree">
+      <FileTreeView key={`${sessionId}:${cwd}`} rootPath={cwd} selectedPath={selectedFilePath}
+        onFileSelect={handleFileSelect} onToast={onToast}
+        initialExpandedPaths={selectionRef.current.value.fileTree?.root === cwd ? selectionRef.current.value.fileTree?.expandedPaths ?? [] : []}
+        onExpandedPathsChange={expandedPaths => {
+          selectionRef.current.value.fileTree = { root: cwd, expandedPaths };
+          if (sessionId) sessionSelections.set(sessionId, selectionRef.current.value);
+        }} />
+    </div>}
+  </>;
+  const selectedName = basename((view === "artifacts" ? artifacts.find(a => a.id === selectedArtifactId)?.path : selectedFilePath) ?? previewPath ?? "");
+  const singleTab = tabsApi.tabs.length === 1 ? tabsApi.tabs[0] : undefined;
+  const showingContent = !showToolDetail && !runtimeView && (!listView || split || !showList);
+  const activeContentTab = showingContent ? tabsApi.tabs.find(tab => tab.id === tabsApi.activeTabId) : undefined;
+  const singleCurrentTab = singleTab && activeContentTab?.id === singleTab.id ? singleTab : undefined;
+  const closeSingleContent = () => {
+    if (!singleTab) return;
+    tabsApi.closeTab(singleTab.id);
+    if (listView) setShowList(true);
+    window.requestAnimationFrame(() => {
+      const target = listRef.current?.querySelector<HTMLButtonElement>("button")
+        ?? panelRef.current?.querySelector<HTMLButtonElement>('.workspace-view-tabs [aria-selected="true"]');
+      target?.focus({preventScroll:true});
+    });
+  };
+  const closeContentButton = singleCurrentTab && !showToolDetail && !runtimeView
+    ? <button type="button" className="tool-side-panel__icon-btn" aria-label={`关闭标签 ${singleCurrentTab.label}`} data-tip="关闭当前内容" onClick={closeSingleContent}><CloseIcon size="sm" /></button>
+    : null;
+  return <aside id="session-workspace" hidden={!open} ref={panelRef} className={"tool-side-panel task-details" + (fullView ? " tool-side-panel--maximized" : "")}
+    style={fullView ? undefined : { width: `${renderedPanelWidth}px` }} aria-label="工作区面板">
+    {!fullView && <div className="tool-side-panel__edge-sash" onPointerDown={e => startResizeEdge(e, renderedPanelWidth, panelMaxWidth, setWidth)} />}
+    <div className="task-details__shell">
+      <header className="tool-side-panel__header">
+        <ViewSelector view={view} views={views} onChange={handleViewChange} />
+        <div className="tool-side-panel__actions">
+          {listView && availablePanelWidth >= MIN_MAIN_WIDTH + renderedNavWidth + NAV_SASH_WIDTH && <ActionMenu label="详情布局" menuLabel="详情布局选项" trigger={<Settings2 size={16} />}>
+            {({close}) => <>
+              <button type="button" role="menuitem" className="topbar-actions__item" onClick={() => { handlePinnedToggle(); close(true); }}>{pinned ? <EchoUnpinIcon size="sm" /> : <EchoPinIcon size="sm" />}{pinned ? "取消钉住" : "钉住列表"}</button>
+              <button type="button" role="menuitem" className="topbar-actions__item" disabled={pinned} title={pinned ? "先取消钉住列表" : undefined} onClick={() => { setNavCollapsed(v => !v); close(true); }}>{navCollapsed ? "展开列表" : "收起列表"}</button>
+            </>}
+          </ActionMenu>}
+          <button type="button" className="tool-side-panel__icon-btn" onClick={() => setMaximized(m => !m)} aria-label={maximized ? "恢复" : "最大化"} title={maximized ? "恢复" : "最大化"}>{maximized ? <RestoreIcon size="sm" /> : <MaximizeIcon size="sm" />}</button>
+          <button type="button" className="tool-side-panel__icon-btn" onClick={onClose} aria-label="关闭面板" title="返回会话"><CloseIcon size="sm" /></button>
         </div>
-        {!effectiveNavCollapsed && (
-          <div className="tool-side-panel__nav-body">
-            <NavContent
-              view={view}
-              artifacts={artifacts}
-              changes={changes}
-              cwd={cwd}
-              selectedArtifactId={selectedArtifactId}
-              selectedFilePath={selectedFilePath}
-              onArtifactSelect={handleArtifactSelect}
-              onFileSelect={handleFileSelect}
-              onToast={onToast}
-            />
-          </div>
-        )}
+      </header>
+      {!showToolDetail && <ViewSelector view={view} views={views} onChange={handleViewChange} secondary />}
+      {onBack && <div className="task-details__breadcrumb"><button type="button" onClick={onBack}><ArrowLeft size={15} />返回上一视图</button><span>{showToolDetail ? "操作详情" : singleTab?.label ?? selectedName}</span>{closeContentButton}</div>}
+      {showToolDetail && !onBack && <div className="task-details__breadcrumb"><strong>操作详情</strong></div>}
+      {tabsApi.tabs.length > 0 && !singleCurrentTab && !showToolDetail && !runtimeView && <div className="task-details__tabs"><ArtifactTabsBar tabs={tabsApi.tabs} activeTabId={activeContentTab?.id} onSelect={tabsApi.setActiveTab} onClose={tabsApi.closeTab} onReorder={tabsApi.reorderTabs} /></div>}
+      {singleCurrentTab && !showToolDetail && !runtimeView && !onBack && <div className="task-details__single-content">
+        {listView && !showList && !split && <button type="button" className="task-details__back-list" onClick={() => setShowList(true)}><ArrowLeft size={15} />返回{view === "artifacts" ? "成果列表" : "文件列表"}</button>}
+        <span title={singleCurrentTab.subtitle}>{singleCurrentTab.label}</span>{closeContentButton}
       </div>}
-
-      {/* Sash：调整左列宽度 */}
-      {!browserView && !effectiveNavCollapsed && (
-        <div
-          className="tool-side-panel__sash"
-          onPointerDown={(e) =>
-            startResizeNav(e, renderedNavWidth, navMaxWidth, setNavWidth)
-          }
-        />
-      )}
-
-      {/* 主内容列 */}
-      <div className="tool-side-panel__main">
-        {/* macOS 上这行 header 贴窗口顶边（Overlay 标题栏）：空白处需要
-            data-tauri-drag-region 才能拖动窗口 / 双击缩放（红绿灯右侧的
-            标签条区域）。tab 本身是子元素，不会成为拖拽目标，点击/拖拽
-            排序不受影响。Windows 有自绘 TitleBar，不需要。 */}
-        <header
-          className="tool-side-panel__header"
-          {...(IS_MACOS ? { "data-tauri-drag-region": true } : {})}
-        >
-          {browserView && <ViewSelector view={view} views={views} onChange={handleViewChange} />}
-          <div
-            className="tool-side-panel__tabs"
-            {...(IS_MACOS ? { "data-tauri-drag-region": true } : {})}
-          >
-            <ArtifactTabsBar
-              tabs={tabsApi.tabs}
-              activeTabId={tabsApi.activeTabId}
-              onSelect={tabsApi.setActiveTab}
-              onClose={tabsApi.closeTab}
-              onReorder={tabsApi.reorderTabs}
-            />
-          </div>
-          <div className="tool-side-panel__actions">
-            <button
-              type="button"
-              className="tool-side-panel__icon-btn"
-              onClick={() => setMaximized((m) => !m)}
-              title={maximized ? "恢复" : "最大化"}
-              aria-label={maximized ? "恢复" : "最大化"}
-            >
-              {maximized ? <RestoreIcon size="sm" /> : <MaximizeIcon size="sm" />}
-            </button>
-            <button
-              type="button"
-              className="tool-side-panel__icon-btn"
-              onClick={onClose}
-              aria-label="关闭面板"
-              title="关闭"
-            >
-              <CloseIcon size="sm" />
-            </button>
-          </div>
-        </header>
-
-        <div className="tool-side-panel__body">
-          {showToolDetail ? (
-            toolCall ? (
-              <ToolCallDetailBody
-                tc={toolCall}
-                onOpenPath={(path) => {
-                  onSelectArtifact({
-                    id: path,
-                    path,
-                    kind: toolCall.kind,
-                    title: toolCall.title,
-                    toolCallId: toolCall.toolCallId,
-                    status: toolCall.status,
-                  });
-                }}
-              />
-            ) : (
-              <p className="tool-side-panel__empty">在对话中点击工具行查看详情</p>
-            )
-          ) : (
-            <MainContent
-              view={view}
-              artifacts={artifacts}
-              sessionId={sessionId}
-              cwd={cwd}
-              previewPath={previewPath}
-              selectedArtifactId={selectedArtifactId}
-              selectedFilePath={selectedFilePath}
-              browserUrl={browserUrl}
-              onArtifactSelect={(a) => {
-                const tc = findToolCall?.(a.toolCallId);
-                if (tc) {
-                  onSelectTool(tc);
-                } else {
-                  onToast?.("关联工具记录已不可用，可继续预览文件内容");
-                }
-              }}
-              onBrowserUrlChange={setBrowserUrl}
-              onOpenOs={(path) => openLocalPath(path, {
-                cwd,
-                type: "file",
-                onToast,
-                revealFile: false,
-              })}
-              onToast={onToast}
-            />
-          )}
+      {listView && !showList && !split && !singleCurrentTab && !onBack && <div className="task-details__breadcrumb"><button type="button" onClick={() => setShowList(true)}><ArrowLeft size={15} />返回{view === "artifacts" ? "成果列表" : "文件列表"}</button><span title={selectedName}>{selectedName}</span></div>}
+      <div className="task-details__content">
+        <div hidden={!listView || !split && !showList} className={split ? "task-details__list task-details__list--split" : "task-details__list"} style={split ? {width: renderedNavWidth} : undefined} ref={listRef} onScroll={e => {
+          if (restoringListRef.current || !listView || !split && !showList) return;
+          const value = selectionRef.current.value;
+          value.scroll = e.currentTarget.scrollTop;
+          value.listScroll = {...value.listScroll, [view]: value.scroll};
+          if (sessionId) sessionSelections.set(sessionId, value);
+        }}><div ref={listContentRef}>{list}</div></div>
+        {split && <div className="tool-side-panel__sash" onPointerDown={e => startResizeNav(e, renderedNavWidth, navMaxWidth, setNavWidth)} />}
+        <div hidden={listView && !split && showList} ref={bodyRef} onScroll={e => {
+          const value = selectionRef.current.value;
+          value.bodyScroll = {...value.bodyScroll, [view]:e.currentTarget.scrollTop};
+          if (sessionId) sessionSelections.set(sessionId,value);
+        }} className="tool-side-panel__body task-details__body">
+          <div hidden={!runtimeView || showToolDetail}>{details}</div>
+          {browserVisited.current && <div className="task-details__browser" hidden={view !== "browser" || showToolDetail}><BrowserPreview url={browserUrl ?? ""} onUrlChange={setBrowserUrl} /></div>}
+          {(!listView || split || !showList) && ((!runtimeView && view !== "browser") || showToolDetail) && (showToolDetail ? toolCall ? <ToolCallDetailBody tc={toolCall} onOpenPath={path => onSelectArtifact({id:path,path,kind:toolCall.kind,title:toolCall.title,toolCallId:toolCall.toolCallId,status:toolCall.status})} /> : <p className="tool-side-panel__empty">选择操作查看详情</p> : <MainContent view={view} artifacts={artifacts} sessionId={sessionId} cwd={cwd} previewPath={previewPath}
+            selectedArtifactId={selectedArtifactId} selectedFilePath={selectedFilePath} browserUrl={browserUrl}
+            onArtifactSelect={a => { const tc = findToolCall?.(a.toolCallId); if (tc) onSelectTool(tc); else onToast?.("关联工具记录已不可用，可继续预览文件内容"); }}
+            onBrowserUrlChange={setBrowserUrl} onOpenOs={path => openLocalPath(path,{cwd,type:"file",onToast,revealFile:false})} onToast={onToast} />)}
         </div>
       </div>
-    </aside>
-  );
+    </div>
+  </aside>;
 }
 
 // ---------- 左导航内容：按视图渲染列表 ----------
@@ -476,22 +435,14 @@ function NavContent({
   view,
   artifacts,
   changes,
-  cwd,
   selectedArtifactId,
-  selectedFilePath,
   onArtifactSelect,
-  onFileSelect,
-  onToast,
 }: {
   view: WorkspaceView;
   artifacts: SessionArtifact[];
   changes: FileChange[];
-  cwd?: string;
   selectedArtifactId?: string;
-  selectedFilePath?: string;
   onArtifactSelect: (id?: string) => void;
-  onFileSelect: (path?: string) => void;
-  onToast?: (msg: string) => void;
 }) {
   if (view === "artifacts") {
     return (
@@ -508,16 +459,6 @@ function NavContent({
         changes={changes}
         selectedPath={selectedArtifactId}
         onSelect={(path) => onArtifactSelect(path)}
-      />
-    );
-  }
-  if (view === "fileTree") {
-    return (
-      <FileTreeView
-        rootPath={cwd}
-        selectedPath={selectedFilePath}
-        onFileSelect={(p) => onFileSelect(p)}
-        onToast={onToast}
       />
     );
   }
@@ -561,8 +502,7 @@ function ArtifactsNavList({
             <span className="artifacts-list__name">{basename(a.path)}</span>
             <span className="artifacts-list__path">{a.path}</span>
             <span className="artifacts-list__meta">
-              {a.kind}
-              {a.status === "failed" ? " · 失败" : ""}
+              {(basename(a.path).split(".").pop() ?? "文件").toUpperCase()} · {a.status === "failed" ? "生成失败" : a.kind === "edit" || a.kind === "edit_file" ? "已更新" : "已生成"}
             </span>
           </button>
         </li>
@@ -637,7 +577,7 @@ function MainContent({
   onOpenOs: (path: string) => Promise<boolean>;
   onToast?: (msg: string) => void;
 }) {
-  if (view === "preview") {
+  if (view === "browser") {
     return (
       <BrowserPreview
         url={browserUrl ?? ""}
@@ -646,13 +586,13 @@ function MainContent({
     );
   }
   if (view === "fileTree") {
-    const path = selectedFilePath ?? previewPath ?? null;
+    const path = selectedFilePath ?? null;
     if (!path) {
       return <p className="tool-side-panel__empty">选择文件查看内容</p>;
     }
     return (
       <ArtifactFilePreview path={path} cwd={cwd} sessionId={sessionId}
-          artifact={artifacts.find(item => item.path === path)} onToast={onToast} onOpenOs={() => onOpenOs(path)} />
+          artifact={artifacts.find(item => artifactFileKey(item.path, cwd) === artifactFileKey(path, cwd))} onToast={onToast} onOpenOs={() => onOpenOs(path)} />
     );
   }
   if (view === "changes") {
@@ -662,15 +602,15 @@ function MainContent({
     }
     return (
       <ArtifactFilePreview path={path} cwd={cwd} sessionId={sessionId}
-          artifact={artifacts.find(item => item.path === path)} onToast={onToast} onOpenOs={() => onOpenOs(path)} />
+          artifact={artifacts.find(item => artifactFileKey(item.path, cwd) === artifactFileKey(path, cwd))} onToast={onToast} onOpenOs={() => onOpenOs(path)} />
     );
   }
-  // artifacts：选中产物时预览其文件。
+  // artifacts：选中成果时预览其文件。
   if (view === "artifacts") {
     const id = selectedArtifactId;
     if (!id) {
       return (
-        <p className="tool-side-panel__empty">在左侧选择产物查看内容</p>
+        <p className="tool-side-panel__empty">在左侧选择成果查看内容</p>
       );
     }
     const a = artifacts.find((x) => x.id === id);
@@ -689,7 +629,7 @@ function MainContent({
           </button>
         )}
         <ArtifactFilePreview path={path} cwd={cwd} sessionId={sessionId}
-          artifact={artifacts.find(item => item.path === path)} onToast={onToast} onOpenOs={() => onOpenOs(path)} />
+          artifact={artifacts.find(item => artifactFileKey(item.path, cwd) === artifactFileKey(path, cwd))} onToast={onToast} onOpenOs={() => onOpenOs(path)} />
       </div>
     );
   }
@@ -761,7 +701,7 @@ function ArtifactFilePreview({
         onToast?.("已授权该文件，可以在面板中预览");
         setRetry((value) => value + 1);
       } else if (result === "mismatch") {
-        onToast?.("所选文件与当前产物不一致，请选择列表中显示的原文件");
+        onToast?.("所选文件与当前成果不一致，请选择列表中显示的原文件");
       }
     } catch (error) {
       onToast?.(`授权失败：${errorMessage(error)}`);

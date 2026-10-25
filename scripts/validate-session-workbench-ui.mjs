@@ -1,3 +1,4 @@
+import { openWorkspaceView } from "./session-review-navigation.mjs";
 import assert from "node:assert/strict";
 import { mkdtempSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -16,12 +17,9 @@ try {
   const page = await browser.newPage();
   page.setDefaultNavigationTimeout(60000);
   const errors = []; page.on("pageerror", error => errors.push(error.message));
-  const openView = async label => {
-    await page.getByRole("button", { name: "工作区", exact: true }).click();
-    await page.getByRole("menuitem", { name: new RegExp(label) }).click();
-  };
+  const openView = label => openWorkspaceView(page, label);
   const sessionAction = async label => {
-    await page.getByRole("button", { name: "更多操作", exact: true }).click();
+    await page.getByRole("button", { name: "任务操作", exact: true }).click();
     await page.getByRole("menuitem", { name: label, exact: true }).click();
   };
   for (const width of [1536, 1280, 900]) for (const theme of ["light", "dark"]) for (const platform of ["mac", "other"]) {
@@ -50,12 +48,12 @@ try {
     }
     await page.getByRole("button", {name:"新建任务",exact:true}).click();
     assert.ok(await page.evaluate(() => window.workbenchNewTask), "collapsed new-task path");
-    await page.getByRole("button", {name:"工作区",exact:true}).focus();
+    await page.getByRole("button", {name:"任务操作",exact:true}).focus();
     await page.keyboard.press("ArrowDown");
-    const menu = page.getByRole("menu", {name:"工作区视图"});
+    const menu = page.getByRole("menu", {name:"当前会话操作"});
     assert.ok(await menu.getByRole("menuitem").first().evaluate(e=>e===document.activeElement));
     await page.keyboard.press("End"); await page.keyboard.press("Escape");
-    assert.ok(await page.getByRole("button", {name:"工作区",exact:true}).evaluate(e=>e===document.activeElement));
+    assert.ok(await page.getByRole("button", {name:"任务操作",exact:true}).evaluate(e=>e===document.activeElement));
   }
   await page.setViewportSize({width:1280,height:900});
   await page.goto(`${base}&theme=light&platform=mac`);
@@ -65,7 +63,7 @@ try {
   await page.getByText("验收后的任务标题",{exact:true}).first().waitFor();
   await sessionAction("取消置顶");
   await page.waitForFunction(() => window.workbenchCalls.some(c => c.command === "agent_set_session_pinned" && c.args.sessionId === "review-conversation" && c.args.pinned === false));
-  await sessionAction("导出与本地分享…");
+  await sessionAction("导出整个会话…");
   const share = page.getByRole("dialog",{name:"分享选项"});
   await share.getByRole("button",{name:"导出 Markdown",exact:true}).click();
   await page.waitForFunction(() => window.workbenchCalls.some(c=>c.command==="export_text_file" && c.args.content.includes("评审投影仪")));
@@ -76,9 +74,9 @@ try {
   await openView("网页预览");
   await page.getByRole("complementary",{name:"工作区面板"}).waitFor();
   await openView("文件变更");
-  assert.equal(await page.getByRole("complementary",{name:"工作区面板"}).count(),0,"only one workspace view");
-  await page.getByRole("button",{name:"关闭工作视图",exact:true}).click();
-  await sessionAction("历史提问");
+  assert.equal(await page.getByRole("complementary",{name:"工作区面板"}).count(),1,"one shared details container");
+  await page.getByRole("button",{name:"关闭面板",exact:true}).click();
+  await sessionAction("对话目录");
   await page.getByRole("searchbox",{name:"筛选历史提问"}).fill("蓝牙");
   await page.locator(".question-history__item").click();
   await page.locator(".msg-wrap--jump-target").waitFor();
@@ -91,24 +89,20 @@ try {
   for (const state of ["empty","files","plan","running","permission","collaboration","paused","failed"]) {
     await page.goto(`${base}&theme=light&platform=mac&state=${state}`);
     await page.locator(".session-header").waitFor();
-    if (state === "empty") { assert.equal(await page.getByRole("button",{name:"查找当前会话"}).count(),0); assert.equal(await page.getByRole("button",{name:"工作区",exact:true}).count(),1); }
+    if (state === "empty") { assert.equal(await page.getByRole("button",{name:"查找当前会话"}).count(),0); assert.equal(await page.getByRole("button",{name:"任务操作",exact:true}).count(),1); }
     if (state === "files") { await openView("文件变更"); await page.getByRole("region",{name:"文件变更",exact:true}).waitFor(); }
     if (state === "plan") { await openView("执行计划"); await page.getByText("验证工作台交互与交付",{exact:true}).waitFor(); }
-    if (state === "collaboration") { await openView("协作详情"); await page.getByText("核对交付文档",{exact:true}).waitFor(); }
+    if (state === "collaboration") { await openView("运行与协作"); await page.getByText("核对交付文档",{exact:true}).waitFor(); }
     if (state === "permission") {
       await page.getByRole("button",{name:"允许本次",exact:true}).waitFor();
-      await page.getByRole("complementary",{name:"运行中任务"}).waitFor();
-      await page.waitForFunction(() => {
-        const tasks = document.querySelector(".tasks-panel")?.getBoundingClientRect();
-        const permission = document.querySelector(".perm-inline")?.getBoundingClientRect();
-        return tasks && permission && tasks.bottom <= permission.top - 11;
-      });
+      assert.equal(await page.locator(".tasks-panel").count(), 0, "background details must not cover decisions");
+      await page.getByRole("button", {name:/后台任务/}).waitFor();
       const allow = page.getByRole("button",{name:"允许本次",exact:true});
       await allow.click({trial:true});
       await page.getByRole("button",{name:"拒绝",exact:true}).click({trial:true});
     }
     if (state === "running") { await page.getByRole("button",{name:"停止生成",exact:true}).waitFor(); await page.getByRole("button",{name:"暂停",exact:true}).waitFor(); }
-    if (state === "paused") await page.getByText("任务已暂停，发送“继续”即可续做",{exact:true}).waitFor();
+    if (state === "paused") await page.getByText("任务已暂停，可继续执行",{exact:true}).waitFor();
     if (state === "failed") await page.getByRole("alert").filter({hasText:"本轮任务失败"}).waitFor();
     await page.screenshot({path:join(output,`state-${state}.png`)});
   }

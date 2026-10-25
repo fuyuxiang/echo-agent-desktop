@@ -61,7 +61,7 @@ describe("Sidebar", () => {
     const nav = container.querySelector(".sidebar__nav");
     expect(nav).not.toBeNull();
     expect(within(nav as HTMLElement).getAllByRole("button").map((button) => button.textContent?.trim())).toEqual([
-      "新建任务", "项目", "组织", "专家·技能·连接器", "代码开发", "更多知识与工具",
+      "新建任务", "项目", "代码开发", "专家与技能", "更多知识与工具",
     ]);
     expect(screen.queryByText("助理")).not.toBeInTheDocument();
   });
@@ -85,11 +85,11 @@ describe("Sidebar", () => {
     expect(onNavigate).toHaveBeenCalledWith("项目");
   });
 
-  it("组织是直接可见的入口并进入组织页面", () => {
+  it("组织可从次级导航进入并保留真实路由", () => {
     const onNavigate = vi.fn();
     render(<Sidebar {...base} activeNav="组织" onNavigate={onNavigate} />);
-    const entry = screen.getByRole("button", { name: "组织" });
-    expect(entry).toHaveClass("sidebar__nav-item--active");
+    fireEvent.click(screen.getByRole("button", { name: /更多/ }));
+    const entry = screen.getByRole("menuitem", { name: "组织" });
     fireEvent.click(entry);
     expect(onNavigate).toHaveBeenCalledWith("组织");
   });
@@ -201,7 +201,7 @@ describe("Sidebar", () => {
     render(
       <Sidebar {...base} onOpenSearch={onOpenSearch} onOpenSettings={onOpenSettings} />
     );
-    fireEvent.click(screen.getByRole("button", { name: "搜索" }));
+    fireEvent.click(screen.getByRole("button", { name: "搜索全部任务" }));
     expect(onOpenSearch).toHaveBeenCalled();
     fireEvent.click(screen.getByRole("button", { name: "设置" }));
     expect(onOpenSettings).toHaveBeenCalled();
@@ -255,7 +255,8 @@ describe("Sidebar", () => {
     expect(onToggleCollapse).toHaveBeenCalled();
   });
 
-  it("任务与项目折叠按钮暴露 aria-expanded 状态", () => {
+  it("任务与非空项目折叠按钮暴露 aria-expanded 状态", () => {
+    useProjectsStore.setState({projects:[{id:"fold",name:"客户项目",cwd:"/project",createdAt:"2026-10-25",connectors:[],experts:[],skills:[],plans:[],tasks:[],assets:[],members:[],conversations:[]} ]});
     render(<Sidebar {...base} />);
     const tasks = screen.getByRole("button", { name: /^\u4efb\u52a1/ });
     const projects = screen.getByRole("button", { name: /^\u9879\u76ee \(/ });
@@ -279,7 +280,8 @@ describe("Sidebar", () => {
 
     expect(screen.getByText("升级前任务")).toBeInTheDocument();
     expect(screen.queryByText("demo")).toBeNull();
-    expect(screen.getByRole("button", { name: "项目 (0)" })).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "项目 (0)" })).toBeNull();
+    expect(screen.getByRole("button", { name: "项目" })).toBeInTheDocument();
   });
 
   it("项目会话只在其真实项目下展示", () => {
@@ -386,7 +388,7 @@ describe("Sidebar", () => {
     await waitFor(() => expect(onDeleteSession).toHaveBeenCalledWith("project-session", "/workspace"));
   });
 
-  it("悬停「更多」自动展开，只展示知识库和定时任务且不抢走焦点", async () => {
+  it("悬停「更多」自动展开，展示次级功能且不抢走焦点", async () => {
     const onNavigate = vi.fn();
     const user = userEvent.setup();
     render(<Sidebar {...base} onNavigate={onNavigate} />);
@@ -399,8 +401,8 @@ describe("Sidebar", () => {
     expect(onNavigate).not.toHaveBeenCalled();
     expect(within(menu).getByText("知识库")).toBeInTheDocument();
     expect(within(menu).getByRole("menuitem", { name: "定时任务" })).toBeInTheDocument();
-    expect(within(menu).getAllByRole("menuitem")).toHaveLength(2);
-    for (const settingsEntry of ["我的文件", "个人记忆", "用量统计", "通知渠道", "云存储", "代码开发"]) {
+    expect(within(menu).getAllByRole("menuitem")).toHaveLength(4);
+    for (const settingsEntry of ["我的文件", "个人记忆", "用量统计", "通知渠道", "云存储"]) {
       expect(within(menu).queryByText(settingsEntry)).not.toBeInTheDocument();
     }
     for (const removed of ["灵感", "网页预览", "策略设置", "发现"]) {
@@ -523,11 +525,11 @@ describe("Sidebar", () => {
     expect(screen.getByRole("menuitem", { name: "定时任务" })).toHaveClass("sidebar__more-item--active");
   });
 
-  it("主导航可进入代码开发工作台", () => {
+  it("主导航可直接进入代码开发工作台", () => {
     const onNavigate = vi.fn();
     render(<Sidebar {...base} onNavigate={onNavigate} />);
 
-    fireEvent.click(screen.getByText("代码开发"));
+    fireEvent.click(screen.getByRole("button", {name:"代码开发"}));
 
     expect(onNavigate).toHaveBeenCalledWith("代码开发");
   });

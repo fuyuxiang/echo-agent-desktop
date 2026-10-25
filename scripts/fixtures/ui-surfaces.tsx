@@ -444,14 +444,25 @@ function ConversationLayoutFixture() {
         onSelect={(id) => { useSessionStore.getState().setSession(id); useSessionsStore.setState({ currentSessionId: id }); }} />
       <SidebarResizeHandle layout={layout} />
       <main className="app__main">
-        <ChatView onSend={() => {}} onCancel={() => {}}
+        <ChatView onSend={(text, attachments) => {
+          (window as any).workbenchCalls.push({command:"review_send",args:{sessionId,text,attachments}});
+          if (sessionId) useSessionStore.getState().resumeSession(sessionId);
+          return true;
+        }} onSendNow={async (text, attachments) => {
+          (window as any).workbenchCalls.push({command:"review_send_now",args:{sessionId,text,attachments}});
+          return query.get("rejectSend") !== "1";
+        }} onCancel={action => {
+          if (!sessionId) return false;
+          useSessionStore.getState().requestControl(sessionId, action ?? "pause");
+          useSessionStore.getState().confirmControl(sessionId, action ?? "pause");
+          return true;
+        }}
           navigation={{ sidebarCollapsed: layout.collapsed, onToggleSidebar: () => layout.setCollapsed(!layout.collapsed), onNewTask: () => { (window as any).workbenchNewTask = true; } }}
           cwd={query.get("surface") === "workbench" ? "/Users/review/项目/EchoAgent/一个很长的任务工作目录/desktop-client" : undefined}
           title={entry?.title ?? "聊天布局回归"}
           onRename={async title => { if (sessionId) useSessionsStore.getState().upsert({ sessionId, title }); }}
           sessionActions={{ pinned: entry?.pinned, onSessionsChanged: patch => { if (sessionId && patch) useSessionsStore.getState().upsert({sessionId, ...patch}); } }}
         />
-        <TasksPanel sessionId={sessionId ?? undefined} />
       </main>
     </div></SidebarLayoutContext.Provider>
   </div>;

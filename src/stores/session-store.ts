@@ -68,6 +68,7 @@ export type MessagePart =
 
 /** A tool-call card rendered inline. Mirrors a subset of ToolCallUpdate. */
 export interface ToolCallView {
+  completedAt?: number;
   documentProgress?: DocumentProgress;
   toolCallId: string;
   title: string;
@@ -1480,6 +1481,9 @@ export const useSessionStore = create<SessionState>((set, get) => {
               status: status === "completed" || status === "failed"
                 ? status
                 : "in_progress",
+              completedAt: status === "completed"
+                ? typeof updateMeta?.agentTimestampMs === "number" ? updateMeta.agentTimestampMs : isReplay ? undefined : Date.now()
+                : undefined,
               content: [
                 ...normalizeToolCallContent(raw.content),
                 ...(officeReceipt ? [{ type: "text" as const, text: JSON.stringify(officeReceipt) }] : []),
@@ -1510,6 +1514,8 @@ export const useSessionStore = create<SessionState>((set, get) => {
               deltaFields.status = raw.status === "completed" || raw.status === "failed"
                 ? raw.status
                 : "in_progress";
+              if (raw.status === "completed") deltaFields.completedAt = typeof updateMeta?.agentTimestampMs === "number"
+                ? updateMeta.agentTimestampMs : isReplay ? undefined : Date.now();
             }
             if (raw.content !== undefined) deltaFields.content = raw.content;
             if (raw.rawInput !== undefined) deltaFields.rawInput = boundedRawInput(raw.rawInput);

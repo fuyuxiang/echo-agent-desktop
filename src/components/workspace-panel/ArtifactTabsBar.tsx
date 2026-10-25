@@ -33,7 +33,7 @@ function clamp(value: number, min: number, max: number): number {
 
 /** 按 tab kind / label 选图标（SP2 起全部走 SVG）。 */
 function pickTabIcon(tab: UnifiedTab): React.ReactNode {
-  if (tab.kind === "preview") return <Globe size={12} aria-hidden />;
+  if (tab.kind === "browser") return <Globe size={12} aria-hidden />;
   // file / artifact / changes：用文件名后缀映射。
   const name =
     tab.kind === "file"

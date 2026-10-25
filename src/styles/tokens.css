@@ -251,7 +251,7 @@ body.dark,
   --echo-text-disable: var(--echo-color-text-disabled);
   --echo-text-white: var(--echo-palette-white-100);
   --echo-text-muted: var(--echo-color-text-disabled);
-  --echo-text-link: var(--echo-color-text-brand-default);
+  --echo-text-link: var(--echo-color-text-link-default);
   --echo-text-on-primary: var(--echo-palette-white-100);
   --echo-bg-primary: var(--echo-palette-gray-3);
   --echo-bg-secondary: var(--echo-palette-gray-2);

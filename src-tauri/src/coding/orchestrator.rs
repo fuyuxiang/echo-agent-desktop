@@ -1057,7 +1057,7 @@ fn apply_at_revision(
         if let Some(expected) = expected {
             let current = task::load(root, task_id).ok_or("任务不存在")?;
             if current.updated_at != expected {
-                return Err("任务状态已变化，本次验证未启动，请确认当前状态后重试".into());
+                return Err("任务状态已变化，请确认当前状态后重试".into());
             }
         }
         apply_unlocked(root, task_id, event)
@@ -1195,16 +1195,18 @@ pub async fn coding_task_report_interrupted(
     root: String,
     task_id: String,
     interruption: TaskInterruption,
+    expected_updated_at: Option<String>,
 ) -> Result<CodingTask, String> {
     let root = access.require_workspace(&root)?;
     // Preserve partial work before changing the phase. A stopped task remains
     // reviewable and can be resumed or rolled back without guessing from chat.
     changeset::sync_changes(&root, &task_id).await?;
-    apply_and_emit(
+    apply_and_emit_at_revision(
         app,
         root,
         task_id,
         OrchestratorEvent::ImplementationInterrupted { interruption },
+        expected_updated_at,
     )
     .await
 }
@@ -1906,6 +1908,79 @@ mod tests_v2 {
             task::load(dir.path(), &current.id).unwrap().phase,
             TaskPhase::Stopped
         );
+    }
+
+    #[test]
+    fn abandoned_followup_settles_only_its_own_revision() {
+        for newer_round in [false, true] {
+            let dir = tempfile::tempdir().unwrap();
+            let mut current = task::create_task(dir.path(), "task", "implement it").unwrap();
+            current.phase = TaskPhase::Delivered;
+            task::save(dir.path(), &current).unwrap();
+            let (reopened, _) = apply(
+                dir.path(),
+                &current.id,
+                OrchestratorEvent::FollowupStarted {
+                    requirement: "queued requirement".into(),
+                },
+            )
+            .unwrap();
+            if newer_round {
+                apply(
+                    dir.path(),
+                    &current.id,
+                    OrchestratorEvent::ImplementationInterrupted {
+                        interruption: TaskInterruption::Stopped,
+                    },
+                )
+                .unwrap();
+                assert!(apply_at_revision(
+                    dir.path(),
+                    &current.id,
+                    OrchestratorEvent::ImplementationInterrupted {
+                        interruption: TaskInterruption::Paused
+                    },
+                    Some(&reopened.updated_at),
+                )
+                .is_err());
+                assert_eq!(
+                    task::load(dir.path(), &current.id).unwrap().phase,
+                    TaskPhase::Stopped
+                );
+                let (newer, _) = apply(
+                    dir.path(),
+                    &current.id,
+                    OrchestratorEvent::FollowupStarted {
+                        requirement: "newer requirement".into(),
+                    },
+                )
+                .unwrap();
+                assert!(apply_at_revision(
+                    dir.path(),
+                    &current.id,
+                    OrchestratorEvent::ImplementationInterrupted {
+                        interruption: TaskInterruption::Paused
+                    },
+                    Some(&reopened.updated_at),
+                )
+                .is_err());
+                let latest = task::load(dir.path(), &current.id).unwrap();
+                assert_eq!(latest.updated_at, newer.updated_at);
+                assert_eq!(latest.phase, TaskPhase::Discovering);
+            } else {
+                let (paused, _) = apply_at_revision(
+                    dir.path(),
+                    &current.id,
+                    OrchestratorEvent::ImplementationInterrupted {
+                        interruption: TaskInterruption::Paused,
+                    },
+                    Some(&reopened.updated_at),
+                )
+                .unwrap();
+                assert_eq!(paused.phase, TaskPhase::Paused);
+                assert_eq!(paused.task_nodes[0].status, TaskNodeStatus::Pending);
+            }
+        }
     }
 
     #[test]

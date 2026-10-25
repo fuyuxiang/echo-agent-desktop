@@ -14,8 +14,6 @@ import { Toast, type ToastAction } from "./components/Toast";
 // PermissionDialog is now inline in ChatView (PermissionInlineCard), not a global modal.
 import { ThemeProvider } from "./components/ThemeProvider";
 import type { SettingsSectionId } from "./components/SettingsPanel";
-import { TasksPanel } from "./components/TasksPanel";
-import { SecondarySidebar } from "./components/SecondarySidebar";
 
 import { ChevronLeftIcon } from "./foundation/components/Icon/icons";
 import type { ModelOption } from "./components/ModelSelector";
@@ -72,6 +70,7 @@ import {
 import type { AgentEntry, SessionSummary } from "./lib/types";
 import { buildCodingWorkflowPrompt } from "./features/coding/lib/workflow";
 import { CodingTaskRuntimeManager } from "./features/coding/lib/coding-task-runtime";
+import { codingQueueOwner, settleCodingQueueTurn } from "./features/coding/lib/coding-followup";
 import { hydrateProjectsFromBackend, useProjectsStore, type ProjectMeta } from "./stores/projects-store";
 import {
   onSessionStatusPersistenceIssue,
@@ -744,6 +743,7 @@ function Shell() {
             );
             const summary = findSessionSummary(p.sessionId);
             const queuePolicy = queueTerminalPolicy(p.stopReason, p.cancellationCategory);
+            settleCodingQueueTurn(p);
             // prompt_complete is the authoritative terminal signal and arrives
             // before PromptRequest resolves. Settle the in-flight queue row now
             // so it cannot remain visually stuck while post-turn work finishes.
@@ -1302,9 +1302,9 @@ function Shell() {
     navigateNow(label);
     afterNavigate?.();
   };
-  const handleNavigate = (label: string) => navigateWithGuard(label);
-  const handleCreateExpert = () => {
-    navigateWithGuard("专家·技能·连接器", () => setCreateExpertRequested(true));
+  const handleNavigate = (label: string) => {
+    if (label === "已归档") { openSettings("archived"); return; }
+    navigateWithGuard(label);
   };
   const handlePlaceholder = (label: string) => {
     // Route a few sidebar shortcut buttons to real panels instead of toasts.
@@ -2025,6 +2025,9 @@ function Shell() {
     usePermissionStore.getState().clearSession(sessionId);
     useQuestionStore.getState().clearSession(sessionId);
     useMessageQueueStore.getState().clear(sessionId);
+    for (const key of Object.keys(useMessageQueueStore.getState().queues)) {
+      if (codingQueueOwner(key)?.sessionId === sessionId) useMessageQueueStore.getState().clear(key);
+    }
     useSubagentStore.getState().clearSession(sessionId);
     leaveSessionIfCurrent(sessionId);
     // Permanent deletion must also forget any parked, in-memory transcript.
@@ -2825,7 +2828,7 @@ function Shell() {
   return (
     <div className={`app${IS_MACOS ? " app--macos" : ""}${codingWorkspaceActive ? " app--coding" : ""}`}>
       {exitPreparing && !automationExitDialog && <div className="app__exit-overlay" role="status" aria-live="polite">正在保存录音与任务数据并准备退出…</div>}
-      {init?.ok && <CodingTaskRuntimeManager roots={[...new Set([
+      {init?.ok && <CodingTaskRuntimeManager apiReady={init.auth.ready} availableModelIds={models.map(model => model.id)} roots={[...new Set([
         ...codingWorkspaces.map((workspace) => workspace.cwd),
         codingWorkspaceCwd,
         activeCodingWorkspaceCwd,
@@ -2917,6 +2920,7 @@ function Shell() {
                 />
               ) : currentSessionId ? (
                 <ChatView
+                  taskRefreshSignal={taskRefreshSignal}
                   onOpenTeamGroup={team => {
                     if (!currentSessionId) return;
                     const referenceText = sessionStore.getState().messages.slice(-12).map(message => `${message.role === "user" ? "用户" : "助手"}：${message.parts.filter(part => part.kind === "text").map(part => part.kind === "text" ? part.text : "").join("")}`).join("\n\n").slice(-30000);
@@ -3073,14 +3077,8 @@ function Shell() {
           onToast={showToast}
         />
       </Suspense>
-      <TasksPanel
-        sessionId={currentSessionId ?? undefined}
-        refreshSignal={taskRefreshSignal}
-        onToast={showToast}
-      />
       <GroupActionsHost onFeedback={showActionToast} />
       {automationExitDialog}
-      <SecondarySidebar onSelectExpert={handleStartWithExpert} onCreateExpert={handleCreateExpert} onToast={showToast} />
     </div>
   );
 }

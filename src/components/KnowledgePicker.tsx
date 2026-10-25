@@ -225,7 +225,7 @@ export function KnowledgePicker({
       <button
         ref={triggerRef}
         type="button"
-        className={`knowledge-picker__trigger${selected.length > 0 ? " is-active" : ""}${hasUnavailableSelection ? " is-error" : ""}`}
+        className={`knowledge-picker__trigger${selected.length > 0 ? " is-active" : " is-empty"}${hasUnavailableSelection ? " is-error" : ""}`}
         onClick={(event) => {
           event.stopPropagation();
           setOpen((value) => !value);

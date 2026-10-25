@@ -702,10 +702,12 @@
   color: var(--echo-text-medium);
   cursor: pointer;
   line-height: 1.4;
+  min-width: 32px;
+  min-height: 32px;
 }
 .msg__action-btn:hover {
-  border-color: var(--echo-brand);
-  color: var(--echo-brand);
+  border-color: var(--echo-color-text-brand-default);
+  color: var(--echo-color-text-brand-default);
 }
 .msg__action-btn:active {
   transform: scale(0.96);
@@ -2001,6 +2003,8 @@
   color: var(--echo-text-medium);
   font-size: 0.75rem;
   cursor: pointer;
+  min-width: 32px;
+  min-height: 32px;
 }
 .queue-row__btn:hover:not(:disabled) {
   background: var(--echo-bg-tertiary);
@@ -2179,26 +2183,6 @@
   text-overflow: ellipsis;
   white-space: nowrap;
 }
-.msg__loading-tip {
-  display: flex;
-  align-items: baseline;
-  gap: 6px;
-  max-width: 100%;
-  margin-top: 2px;
-  color: var(--echo-text-tertiary);
-  font-size: 0.75rem;
-  line-height: 20px;
-}
-.msg__loading-tip > span:last-child {
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-  animation: companionCopyFade 0.35s ease;
-}
-@keyframes companionCopyFade {
-  from { opacity: 0; transform: translateY(2px); }
-  to { opacity: 1; transform: translateY(0); }
-}
 /* 文字扫光：横向渐变裁剪到文字，亮带随 background-position 左右扫过，
    形成「文字在 loading」的观感。移植自 echo-chat-ui 的 shining-text mixin
    （base 26% / highlight 55% 两档透明度）。基色取主题主文字色——浅色主题
@@ -2234,30 +2218,25 @@
 .execution-process {
   width: 100%;
   max-width: 100%;
-  margin: 2px 0 14px;
-  border: 1px solid var(--echo-border-default);
-  border-radius: 10px;
-  background: color-mix(in srgb, var(--echo-bg-secondary) 55%, var(--echo-bg-primary));
+  margin: 2px 0 10px;
+  border: 0;
+  border-radius: 6px;
+  background: transparent;
   overflow: hidden;
   box-sizing: border-box;
 }
-.execution-process--running {
-  border-color: color-mix(in srgb, var(--echo-brand) 35%, var(--echo-border-default));
-}
 .execution-process--attention {
-  border-color: color-mix(in srgb, var(--echo-status-error, #e5484d) 38%, var(--echo-border-default));
-}
-.execution-process--stopped {
-  border-color: color-mix(in srgb, var(--echo-text-tertiary) 45%, var(--echo-border-default));
+  border-left: 2px solid var(--echo-status-error);
+  padding-left: 8px;
 }
 .execution-process__header {
   display: flex;
   align-items: center;
   gap: 9px;
   width: 100%;
-  min-height: 42px;
+  min-height: 32px;
   margin: 0;
-  padding: 7px 10px;
+  padding: 4px 2px;
   border: 0;
   background: transparent;
   color: inherit;
@@ -2537,7 +2516,7 @@ button.knowledge-trace__item:hover {
   --md-code-title: var(--echo-text-strong, rgba(0, 0, 0, 0.9));
   --md-code-action: var(--echo-text-secondary, rgba(0, 0, 0, 0.55));
   --md-code-action-hover-bg: rgba(0, 0, 0, 0.06);
-  --md-link: var(--echo-brand, #5b5fc7);
+  --md-link: var(--echo-text-link, #1470b4);
   --md-blockquote-border: var(--echo-border-default, #e1e4e8);
   --md-blockquote-fg: var(--echo-text-medium, rgba(0, 0, 0, 0.65));
 }
@@ -3263,7 +3242,7 @@ button.knowledge-trace__item:hover {
 .tool-side-panel--maximized {
   position: absolute;
   inset: 0;
-  width: 100% !important;
+  width: 100%;
   z-index: 40;
 }
 /* 面板左边缘全宽拖拽条 */
@@ -3282,47 +3261,6 @@ button.knowledge-trace__item:hover {
   opacity: 0.3;
 }
 
-/* ---- 左导航列 ---- */
-.tool-side-panel__nav {
-  display: flex;
-  flex-direction: column;
-  min-height: 0;
-  border-right: 1px solid var(--echo-border-default);
-  background: var(--echo-bg-secondary);
-  flex: none;
-  overflow: hidden;
-}
-.tool-side-panel__nav:not(.tool-side-panel__nav--collapsed) {
-  min-width: 140px;
-  max-width: 360px;
-}
-.tool-side-panel__nav--collapsed {
-  width: 36px !important;
-}
-.tool-side-panel__nav--collapsed .tool-side-panel__nav-header {
-  justify-content: center;
-  padding: 0 4px;
-}
-.tool-side-panel__nav-expand {
-  flex: none;
-}
-.tool-side-panel__nav-header {
-  display: flex;
-  align-items: center;
-  gap: 4px;
-  height: 44px;
-  padding: 0 6px;
-  border-bottom: 1px solid var(--echo-border-default);
-  flex: none;
-  box-sizing: border-box;
-}
-.tool-side-panel__nav-body {
-  flex: 1;
-  min-height: 0;
-  overflow-y: auto;
-  padding: 6px;
-  box-sizing: border-box;
-}
 /* 导航列与主列之间的拖拽条 */
 .tool-side-panel__sash {
   width: 5px;
@@ -3338,31 +3276,17 @@ button.knowledge-trace__item:hover {
 }
 
 /* ---- 主内容列 ---- */
-.tool-side-panel__main {
-  flex: 1;
-  min-width: 0;
-  display: flex;
-  flex-direction: column;
-  min-height: 0;
-}
 .tool-side-panel__header {
   display: flex;
   align-items: center;
   justify-content: space-between;
   gap: 8px;
-  height: 44px;
-  padding: 0 6px 0 4px;
+  min-height: 52px;
+  padding: 8px 12px;
+  -webkit-app-region: no-drag;
   border-bottom: 1px solid var(--echo-border-default);
   flex: none;
   box-sizing: border-box;
-}
-.tool-side-panel__tabs {
-  display: flex;
-  align-items: center;
-  gap: 4px;
-  min-width: 0;
-  flex: 1;
-  overflow: hidden;
 }
 .tool-side-panel__actions {
   display: flex;
@@ -3371,9 +3295,9 @@ button.knowledge-trace__item:hover {
   flex: none;
 }
 .tool-side-panel__icon-btn {
-  width: 28px;
-  height: 28px;
-  flex: 0 0 28px;
+  width: 32px;
+  height: 32px;
+  flex: 0 0 32px;
   display: inline-flex;
   align-items: center;
   justify-content: center;
@@ -3392,24 +3316,6 @@ button.knowledge-trace__item:hover {
   opacity: 0.4;
   cursor: not-allowed;
 }
-.tool-side-panel__icon--flip {
-  transform: rotate(180deg);
-}
-.tool-side-panel__close {
-  width: 28px;
-  height: 28px;
-  border: none;
-  border-radius: 6px;
-  background: transparent;
-  color: var(--echo-text-medium);
-  font-size: 1.125rem;
-  line-height: 1;
-  cursor: pointer;
-}
-.tool-side-panel__close:hover {
-  background: var(--echo-bg-hover);
-  color: var(--echo-text-strong);
-}
 .tool-side-panel__body {
   flex: 1;
   min-height: 0;
@@ -3426,7 +3332,7 @@ button.knowledge-trace__item:hover {
 .tool-side-panel__link {
   background: none;
   border: none;
-  color: var(--echo-brand);
+  color: var(--echo-text-link);
   font-size: 0.75rem;
   cursor: pointer;
   padding: 0;
@@ -3457,7 +3363,7 @@ button.knowledge-trace__item:hover {
   align-items: center;
   gap: 6px;
   width: 100%;
-  height: 30px;
+  height: 32px;
   padding: 0 8px;
   border: 1px solid var(--echo-border-default);
   border-radius: 6px;
@@ -3471,7 +3377,7 @@ button.knowledge-trace__item:hover {
 .view-selector__pill:hover {
   background: var(--echo-bg-hover);
 }
-.view-selector__pill--open {
+.view-selector__pill[aria-expanded=true] {
   border-color: var(--echo-brand);
 }
 .view-selector__icon {
@@ -3487,50 +3393,8 @@ button.knowledge-trace__item:hover {
   text-overflow: ellipsis;
   white-space: nowrap;
 }
-.view-selector__chevron {
-  flex: none;
-  color: var(--echo-text-weak);
-  transition: transform 0.15s ease;
-}
-.view-selector__chevron--up {
-  transform: rotate(180deg);
-}
-.view-selector__menu {
-  position: absolute;
-  top: calc(100% + 4px);
-  left: 0;
-  right: 0;
-  margin: 0;
-  padding: 4px;
-  list-style: none;
-  background: var(--echo-bg-primary);
-  border: 1px solid var(--echo-border-default);
-  border-radius: 8px;
-  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.12);
-  z-index: 50;
-}
-.view-selector__option {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  width: 100%;
-  height: 32px;
-  padding: 0 8px;
-  border: none;
-  border-radius: 6px;
-  background: transparent;
-  color: var(--echo-text-medium);
-  font-size: 0.75rem;
-  cursor: pointer;
-  box-sizing: border-box;
-  text-align: left;
-}
-.view-selector__option:hover {
-  background: var(--echo-bg-hover);
-  color: var(--echo-text-strong);
-}
 .view-selector__option--active {
-  color: var(--echo-brand);
+  color: var(--echo-text-link);
   font-weight: 600;
 }
 
@@ -3943,7 +3807,7 @@ button.knowledge-trace__item:hover {
 }
 .artifacts-list__path {
   font-size: 0.6875rem;
-  color: var(--echo-text-weak);
+  color: var(--echo-text-medium);
   font-family: var(--echo-font-code-family);
   max-width: 100%;
   overflow: hidden;
@@ -6553,7 +6417,7 @@ button.diff__path {
   display: flex;
   align-items: center;
   justify-content: center;
-  color: var(--echo-text-weak);
+  color: var(--echo-text-medium);
 }
 
 /* 权限选择器放进卡片内 footer 时的左间距 */
@@ -10754,22 +10618,19 @@ button.diff__path {
 }
 
 /* ========================================================================
- * TasksPanel — 运行中任务浮层
+ * TasksPanel — 任务详情内的运行列表
  * ===================================================================== */
 .tasks-panel {
-  position: fixed;
-  bottom: 16px;
-  right: 16px;
-  z-index: 50;
-  width: min(320px, calc(100vw - 32px));
-  max-height: min(480px, calc(100vh - 32px));
+  position: static;
+  width: auto;
+  max-width: 100%;
+  margin-bottom: 16px;
   box-sizing: border-box;
   display: flex;
   flex-direction: column;
   background: var(--echo-bg-primary);
   border: 1px solid var(--echo-border-default);
   border-radius: 12px;
-  box-shadow: var(--echo-shadow-lg, 0 10px 40px rgba(0, 0, 0, 0.2));
   padding: 12px;
 }
 .tasks-panel__header {
@@ -10805,6 +10666,8 @@ button.diff__path {
   align-items: center;
   justify-content: center;
   border-radius: 4px;
+  min-width: 32px;
+  min-height: 32px;
 }
 .tasks-panel__control:hover:not(:disabled) {
   color: var(--echo-text-strong);
@@ -10871,6 +10734,8 @@ button.diff__path {
   display: flex;
   align-items: center;
   border-radius: 4px;
+  min-width: 32px;
+  min-height: 32px;
 }
 .tasks-panel__kill:hover {
   color: #e54848;

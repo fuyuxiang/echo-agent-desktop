@@ -15,7 +15,7 @@ export async function validateOfficeExportMenu(page, output, { width, height, th
     }
     await trigger.focus();
     await page.keyboard.press("ArrowDown");
-    await page.getByRole("menuitem", { name: "导出回复为办公文件" }).click();
+    await page.getByRole("menuitem", { name: "导出本条回复为办公文件" }).click();
     const menu = page.getByRole("menu", { name: "选择导出格式" });
     await menu.waitFor();
     const common = page.getByText(commonText, { exact: true });
@@ -69,7 +69,7 @@ export async function validateOfficeExportMenu(page, output, { width, height, th
     await menu.waitFor({ state: "hidden" });
     assert.ok(await focused(trigger), `${label}: Escape should restore trigger focus`);
     await page.keyboard.press("ArrowDown");
-    await page.getByRole("menuitem", { name: "导出回复为办公文件" }).click();
+    await page.getByRole("menuitem", { name: "导出本条回复为办公文件" }).click();
     await menu.waitFor();
     await page.keyboard.press("End");
     await page.keyboard.press("Tab");

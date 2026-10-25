@@ -42,9 +42,9 @@ describe("FilePreview", () => {
     expect(await screen.findByText("已复制")).toBeInTheDocument();
   });
 
-  it("text 渲染 lang=text", () => {
+  it("普通文本显示可读类型名称", () => {
     render(<FilePreview filename="notes.txt" content="一行文本" />);
-    expect(screen.getByText("text")).toBeInTheDocument();
+    expect(screen.getByText("纯文本")).toBeInTheDocument();
     expect(screen.getByText("一行文本")).toBeInTheDocument();
   });
 

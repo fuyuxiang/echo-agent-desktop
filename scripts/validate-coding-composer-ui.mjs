@@ -90,10 +90,10 @@ try {
   await page.goto(`${base}?width=300&state=followup`);
   const input = page.getByRole("textbox", { name: "补充开发要求" });
   await input.fill("第一条开发要求");
-  await input.press("Enter");
+  await input.press("Shift+Enter");
   assert.match(await input.inputValue(), /\n/);
   assert.match(await page.getByLabel("提交记录").textContent(), /^0 次/);
-  await input.press("ControlOrMeta+Enter");
+  await input.press("Enter");
   await page.waitForFunction(() => document.querySelector('[aria-label="提交记录"]').textContent.startsWith("1 次"));
   await page.waitForFunction(() => document.querySelector("textarea").value === "");
   await input.fill("通过按钮发送");
@@ -103,9 +103,15 @@ try {
     await page.goto(`${base}?width=300&state=${state}`);
     const editor = page.getByRole("textbox");
     await editor.fill("保留这条草稿\n".repeat(25));
-    const send = page.getByRole("button", { name: state === "streaming" || state === "verifying" ? "发送给 Agent" : "开始 Agent 任务" });
+    const send = page.getByRole("button", { name: state === "streaming" || state === "verifying" ? "加入待发送队列" : "开始 Agent 任务" });
     await send.scrollIntoViewIfNeeded();
-    if (["streaming", "verifying", "unconfigured"].includes(state)) assert(await send.isDisabled());
+    if (state === "unconfigured") assert(await send.isDisabled());
+    if (["streaming", "verifying"].includes(state)) {
+      assert(await send.isEnabled());
+      await editor.press("Enter");
+      await page.waitForFunction(() => document.querySelector('[aria-label="排队记录"]').textContent.startsWith("1 条"));
+      assert.match(await page.getByLabel("提交记录").textContent(), /^0 次/);
+    }
     if (state === "error") await page.getByRole("alert").waitFor();
     if (state === "context") {
       const remove = page.getByRole("button", { name: /移除上下文/ }).first();

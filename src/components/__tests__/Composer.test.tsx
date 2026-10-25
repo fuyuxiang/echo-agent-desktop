@@ -5,6 +5,26 @@ import { Composer } from "../Composer";
 const base = { streaming: false, onSend: vi.fn(), onCancel: vi.fn() };
 
 describe("Composer", () => {
+  it("running Enter queues; interruption is explicit and a rejected replacement keeps the draft", async () => {
+    const onEnqueue = vi.fn();
+    const onSendNow = vi.fn().mockResolvedValue(false);
+    render(<Composer {...base} streaming onEnqueue={onEnqueue} onSendNow={onSendNow} />);
+    const input = screen.getByRole("textbox");
+    fireEvent.change(input, {target: {value: "下一步核验"}});
+    fireEvent.keyDown(input, {key:"Enter", keyCode:229});
+    expect(onEnqueue).not.toHaveBeenCalled();
+    fireEvent.keyDown(input, {key:"Enter", shiftKey:true});
+    expect(onEnqueue).not.toHaveBeenCalled();
+    fireEvent.keyDown(input, {key:"Enter"});
+    expect(onEnqueue).toHaveBeenCalledExactlyOnceWith("下一步核验", []);
+    expect(onSendNow).not.toHaveBeenCalled();
+    fireEvent.change(input, {target: {value: "改为生成报告"}});
+    fireEvent.click(screen.getByRole("button", {name:"发送选项"}));
+    fireEvent.click(screen.getByRole("menuitem", {name:"中断当前轮次并发送"}));
+    await waitFor(()=>expect(onSendNow).toHaveBeenCalledExactlyOnceWith("改为生成报告", []));
+    expect(input).toHaveValue("改为生成报告");
+  });
+
   it("空文本且无附件时不可发送", () => {
     const onSend = vi.fn();
     render(<Composer {...base} onSend={onSend} />);
@@ -91,7 +111,6 @@ describe("Composer", () => {
   it("streaming 时显示停止按钮", () => {
     const onCancel = vi.fn();
     render(<Composer {...base} streaming onCancel={onCancel} />);
-    fireEvent.change(screen.getByRole("textbox"), { target: { value: "x" } });
     fireEvent.click(screen.getByRole("button", { name: "停止生成" }));
     expect(onCancel).toHaveBeenCalled();
   });

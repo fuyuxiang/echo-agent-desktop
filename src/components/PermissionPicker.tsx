@@ -265,6 +265,7 @@ export function PermissionPicker({
           if (open) closePicker(false);
           else setOpen(true);
         }}
+        aria-label={triggerLabel ?? current.label}
         title={`权限模式 · ${modeDescription(current)}${syncWarning ? ` · ${syncWarning}` : ""}`}
         aria-haspopup="menu"
         aria-expanded={open}

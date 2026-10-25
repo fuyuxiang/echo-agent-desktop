@@ -845,9 +845,7 @@ button,
 .app__main {
   container-type: inline-size;
   container-name: app-main;
-  background:
-    radial-gradient(circle at 96% -10%, color-mix(in srgb, var(--echo-brand) 7%, transparent), transparent 30%),
-    var(--ui-canvas);
+  background: var(--ui-canvas);
   border: 1px solid var(--ui-line);
   border-bottom: 0;
   border-radius: 18px 18px 0 0;
@@ -1051,8 +1049,8 @@ button,
   border-color: var(--ui-line-strong);
   border-radius: 14px;
   background: var(--ui-surface-raised);
-  box-shadow: var(--ui-shadow-md);
-  backdrop-filter: blur(18px);
+  box-shadow: var(--ui-shadow-xs);
+  backdrop-filter: none;
 }
 
 /* ---------- Home ---------- */
@@ -1104,14 +1102,14 @@ button,
   border: 1px solid var(--ui-line-strong);
   border-radius: 18px;
   background: var(--ui-surface-raised);
-  box-shadow: var(--ui-shadow-md);
-  backdrop-filter: blur(18px);
+  box-shadow: var(--ui-shadow-xs);
+  backdrop-filter: none;
   transition: border-color 160ms ease, box-shadow 160ms ease;
 }
 
 .echo-composer:focus-within {
   border-color: var(--ui-brand-line);
-  box-shadow: 0 20px 54px color-mix(in srgb, var(--echo-brand) 10%, rgba(18, 30, 28, 0.1));
+  box-shadow: 0 0 0 1px var(--echo-border-focus);
 }
 
 .home .echo-composer {
@@ -1218,7 +1216,7 @@ button,
   padding: 0 8px;
   border: 1px solid color-mix(in srgb, var(--echo-brand) 24%, var(--ui-line));
   border-radius: 999px;
-  background: color-mix(in srgb, var(--echo-brand) 8%, var(--ui-surface));
+  background: var(--ui-surface);
   color: var(--echo-brand);
   font-weight: 650;
 }
@@ -1475,23 +1473,6 @@ button,
   opacity: 0.55;
 }
 
-.chatview .echo-composer__footer {
-  height: auto;
-  min-height: 32px;
-  flex-wrap: wrap;
-  row-gap: 4px;
-}
-
-.chatview .echo-composer__footer .permission-picker {
-  flex: none;
-  white-space: nowrap;
-}
-
-.chatview .echo-composer__footer .echo-composer__send {
-  margin-left: auto;
-  flex: none;
-}
-
 /* Narrow chat columns can wrap the footer. Keep the setup message in flow
  * so it never covers those controls, while preserving any existing draft. */
 .chatview .echo-composer__setup-hint {
@@ -1514,16 +1495,16 @@ button,
 
 .chatview__inner,
 .chatview__footer {
-  max-width: 920px;
+  max-width: 840px;
 }
 
 .chatview__inner {
-  gap: 28px;
-  padding: 36px 32px 16px;
+  gap: 24px;
+  padding: 24px 24px 16px;
 }
 
 .chatview__footer {
-  padding: 12px 32px 28px;
+  padding: 10px 24px 16px;
 }
 
 .chatview__footer .echo-composer {
@@ -1533,8 +1514,8 @@ button,
 .msg__bubble {
   padding: 12px 16px;
   border: 1px solid var(--ui-line);
-  border-radius: 17px 17px 5px 17px;
-  background: color-mix(in srgb, var(--echo-brand) 8%, var(--ui-surface));
+  border-radius: 14px 14px 5px 14px;
+  background: var(--ui-surface);
   color: var(--echo-text-strong);
   box-shadow: var(--ui-shadow-xs);
 }
@@ -1542,7 +1523,7 @@ button,
 .msg--assistant .msg__avatar {
   overflow: hidden;
   background: transparent;
-  box-shadow: 0 3px 10px color-mix(in srgb, var(--echo-brand) 20%, transparent);
+  box-shadow: none;
 }
 
 .msg--assistant .msg__avatar img {
@@ -1646,7 +1627,7 @@ button,
   padding-inline: var(--ui-page-gutter);
   border-bottom: 1px solid var(--ui-line);
   background: color-mix(in srgb, var(--ui-canvas) 86%, transparent);
-  backdrop-filter: blur(18px);
+  backdrop-filter: none;
 }
 
 .automation-panel .atm-template-page,
@@ -1706,7 +1687,7 @@ button,
   padding: 16px var(--ui-page-gutter);
   border-bottom: 1px solid var(--ui-line);
   background: color-mix(in srgb, var(--ui-canvas) 86%, transparent);
-  backdrop-filter: blur(18px);
+  backdrop-filter: none;
 }
 
 .um-scroll {
@@ -1828,7 +1809,7 @@ button,
   border-color: var(--ui-line);
   background: var(--ui-surface-raised);
   box-shadow: var(--ui-shadow-sm);
-  backdrop-filter: blur(18px);
+  backdrop-filter: none;
 }
 
 /* Connected organizations share the project page's hero, gutter and type scale. */

@@ -5,6 +5,7 @@ vi.mock("@tauri-apps/api/core", () => ({ invoke: mocks.invoke }));
 vi.mock("../tauri-kb-reader", () => ({ isTauriAvailable: () => true }));
 import { indexTaskArtifacts, registerDocumentArtifact, loadTaskArtifacts, loadSessionDocumentArtifacts, authorizeDocumentArtifact } from "../artifact-catalog";
 import { exportOfficeDocument } from "../document-export";
+import { mergeSessionArtifacts } from "../session-artifacts";
 import type { ChatMessage } from "@/stores/session-store";
 const receipt = { path: "/synthetic/export.docx", format: "docx" as const, byteSize: 123, sha256: "a".repeat(64) };
 beforeEach(() => { mocks.invoke.mockReset(); localStorage.clear(); });
@@ -45,4 +46,22 @@ it("restores only the clicked native export capability and propagates invalid re
   mocks.invoke.mockClear();
   await authorizeDocumentArtifact("s", {...artifact, kind: "edit", toolCallId: "ordinary-tool"});
   expect(mocks.invoke).not.toHaveBeenCalled();
+});
+
+it("canonical display keys preserve the exact native receipt path", async () => {
+  const rawPath = "c:\\outside\\report.docx";
+  const [artifact] = mergeSessionArtifacts([{id:"legacy",path:rawPath,kind:"document_export",title:"报告",toolCallId:`document-export:${receipt.sha256}`,status:"completed"}]);
+  expect(artifact.path).toBe(rawPath);
+  expect(artifact.id).toBe("C:/outside/report.docx");
+  mocks.invoke.mockResolvedValueOnce(undefined);
+  await authorizeDocumentArtifact("s", artifact);
+  expect(mocks.invoke).toHaveBeenLastCalledWith("session_export_authorize", {sessionId:"s",path:rawPath,sha256:receipt.sha256});
+});
+
+it("reindexing old writes or deletes preserves the newer native receipt and its authorization", () => {
+  registerDocumentArtifact(receipt,"s","报告","/synthetic");
+  for (const kind of ["write","delete"]) {
+    indexTaskArtifacts("s","报告","/synthetic",[{id:kind,role:"assistant",complete:true,completedAt:1,parts:[{kind:"tool_call",toolCall:{toolCallId:kind,kind,title:kind,status:"completed",rawInput:{path:receipt.path},content:[]}}]}]);
+    expect(loadTaskArtifacts().find(item=>item.path===receipt.path)?.toolCallId).toBe(`document-export:${receipt.sha256}`);
+  }
 });

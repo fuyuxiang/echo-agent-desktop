@@ -1,4 +1,6 @@
 import { useEffect, useLayoutEffect, useMemo, useRef, useState, useCallback, type ReactNode } from "react";
+import { Play, Square } from "lucide-react";
+import { TasksPanel } from "./TasksPanel";
 import { PauseIcon } from "@/foundation/components/Icon/icons";
 import { useSessionStore, type ToolCallView } from "@/stores/session-store";
 import { useSessionsStore } from "@/stores/sessions-store";
@@ -11,6 +13,7 @@ import {
   findToolCall,
   type SessionArtifact,
 } from "@/lib/session-artifacts";
+import { artifactFileKey } from "@/lib/artifact-file-key";
 import { ARTIFACT_CATALOG_EVENT, loadSessionDocumentArtifacts } from "@/lib/artifact-catalog";
 import { MessageItem } from "./MessageItem";
 import { Composer } from "./Composer";
@@ -21,6 +24,8 @@ import { QuestionInlineCard } from "./QuestionInlineCard";
 import { ToolSidePanel, type ToolSidePanelMode } from "./ToolSidePanel";
 import { FindBar, isFindHit, type FindOccurrence } from "./FindBar";
 import { buildQuestionHistory, QuestionHistoryPopover } from "./QuestionHistoryPopover";
+import { ConversationNavigator } from "./ConversationNavigator";
+import { buildConversationTurns } from "@/lib/conversation-navigation";
 import { FileChangesPanel } from "./FileChangesPanel";
 import { SubagentPanel, mergePanelItems } from "./SubagentPanel";
 import { TeamStatusView } from "./TeamStatusView";
@@ -53,7 +58,8 @@ import type {
 } from "@/lib/message-retry";
 import type { SubagentOpenContext, SubagentScrollRestore } from "@/lib/subagent-navigation";
 
-type WorkspaceView = WorkspaceTarget | "tool" | "preview";
+type WorkspaceView = WorkspaceTarget | "tool";
+
 type RuntimePanelKey = "changes" | "subagents" | "teams" | "plan";
 function runtimePanelKey(view: WorkspaceView | null): RuntimePanelKey | null {
   return view === "changes" || view === "subagents" || view === "teams" || view === "plan" ? view : null;
@@ -100,6 +106,7 @@ export function ChatView({
   navigation,
   headerLeading,
   notice,
+  taskRefreshSignal,
 }: {
   onSend: (
     text: string,
@@ -155,6 +162,7 @@ export function ChatView({
   navigation?: SessionNavigationProps;
   headerLeading?: ReactNode;
   notice?: ReactNode;
+  taskRefreshSignal?: number;
   onOpenTeamGroup?: (team: import("@/lib/agent-client").RuntimeTeamInfo) => void;
 }) {
   const messages = useSessionStore((s) => s.messages);
@@ -183,6 +191,7 @@ export function ChatView({
   const questionHistoryTriggerRef = useRef<HTMLButtonElement | null>(null);
   const jumpHighlightTimerRef = useRef<number | null>(null);
   const questions = useMemo(() => buildQuestionHistory(messages), [messages]);
+  const conversationTurns = useMemo(() => buildConversationTurns(messages, questions), [messages, questions]);
   const closeFind = useCallback(() => {
     setFindOpen(false);
     setFindQuery("");
@@ -215,15 +224,21 @@ export function ChatView({
   }, []);
   // 文件变更聚合面板(对齐 EchoAgent file-changes-panel)。
   // A single session-owned view prevents files, plans and runtime details stacking.
-  const [workspaceView, setWorkspaceView] = useState<WorkspaceView | null>(null);
+  const sessionWorkspaceViews = useRef(new Map<string, WorkspaceView | null>()).current;
+  const detailsRef = useRef<HTMLDivElement>(null);
+  const lastWorkspaceViews = useRef(new Map<string, WorkspaceView>()).current;
+  const [workspaceView, setWorkspaceView] = useState<WorkspaceView | null>(() => sessionId ? sessionWorkspaceViews.get(sessionId) ?? null : null);
   // A tab activation changes both the view and selection in one React batch.
   // Selection callbacks must see the view selected earlier in that batch.
   const workspaceViewRef = useRef(workspaceView);
   workspaceViewRef.current = workspaceView;
-  const fileChangesOpen = workspaceView === "changes";
   const subagentsOpen = workspaceView === "subagents";
   const teamsOpen = workspaceView === "teams";
   const planOpen = workspaceView === "plan";
+  const visitedRuntime = useRef<{session: string | null; views: Set<RuntimePanelKey>}>({session: sessionId, views: new Set()});
+  if (visitedRuntime.current.session !== sessionId) visitedRuntime.current = {session: sessionId, views: new Set()};
+  const currentRuntime = runtimePanelKey(workspaceView);
+  if (currentRuntime) visitedRuntime.current.views.add(currentRuntime);
   const [historyAction, setHistoryAction] = useState<"rewind" | "fork" | null>(null);
   const historyDisabled = modelLoading || historyIsBusy({ streaming, sendNowPending, control });
   const modelLoadingRef = useRef(modelLoading);
@@ -271,6 +286,21 @@ export function ChatView({
     if (!sessionId || !streaming) return;
     await onCancel("pause");
   }, [sessionId, streaming, onCancel]);
+  const continuingRef = useRef(new Set<string>());
+  const [continuingSessions, setContinuingSessions] = useState(new Set<string>());
+  const continuing = !!sessionId && continuingSessions.has(sessionId);
+  const activeSessionRef = useRef(sessionId);
+  activeSessionRef.current = sessionId;
+  const continueTask = async () => {
+    if (!sessionId || continuingRef.current.has(sessionId) || automationMode !== "default" || !apiReady || modelLoading || awaitingQuestion || pendingPermission || awaitingPlan) return;
+    continuingRef.current.add(sessionId);
+    setContinuingSessions(new Set(continuingRef.current));
+    try {
+      const accepted = await onSend("继续", []);
+      if (accepted === false && activeSessionRef.current === sessionId) onToast?.("暂时无法继续，请检查当前任务状态后重试");
+    } catch (cause) { if (activeSessionRef.current === sessionId) onToast?.(`继续失败：${friendlyError(cause)}`); }
+    finally { continuingRef.current.delete(sessionId); setContinuingSessions(new Set(continuingRef.current)); }
+  };
   const handleTextControl = useCallback(async (action: SessionControlAction) => {
     // A desktop task may be between model turns. Native cancellation still has
     // to revoke physical execution; chat streaming is not its lifecycle.
@@ -454,11 +484,15 @@ export function ChatView({
   }, [messages, onToast, performRetry, requestConfirmation]);
 
   // ---- Phase 2/3: tool detail + artifacts side panel ----
-  const panelOpen = workspaceView === "tool" || workspaceView === "preview"
-    || workspaceView === "artifacts" || workspaceView === "fileTree" || workspaceView === "browser";
+  const panelOpen = workspaceView !== null;
   const panelMode: ToolSidePanelMode = panelOpen ? workspaceView as ToolSidePanelMode : "artifacts";
   const [activeTool, setActiveTool] = useState<ToolCallView | null>(null);
-  const [previewPath, setPreviewPath] = useState<string | null>(null);
+  const [previewRequest, setPreviewRequest] = useState<{ path: string; artifact?: SessionArtifact; sessionId: string | null; sequence: number } | null>(null);
+  const workspaceSelectionRef = useRef({tool: activeTool, preview: previewRequest});
+  workspaceSelectionRef.current = {tool: activeTool, preview: previewRequest};
+  const previewSequence = useRef(0);
+  const [workspaceNavigationId, setWorkspaceNavigationId] = useState(0);
+  const previewPath = previewRequest?.sessionId === sessionId ? previewRequest?.path ?? null : null;
 
   const [exportArtifacts, setExportArtifacts] = useState<{ sessionId: string; items: SessionArtifact[] } | null>(null);
   useEffect(() => {
@@ -482,25 +516,22 @@ export function ChatView({
     return () => { active = false; window.removeEventListener(ARTIFACT_CATALOG_EVENT, load); };
   }, [sessionId, modelLoading, onToast]);
   const artifacts = useMemo(() => {
-    const combined = new Map(collectSessionArtifacts(messages).map(item => [item.path, item]));
-    if (exportArtifacts?.sessionId === sessionId) for (const item of exportArtifacts.items) combined.set(item.path, item);
-    return [...combined.values()];
-  }, [messages, exportArtifacts, sessionId]);
+    const registered = exportArtifacts?.sessionId === sessionId ? exportArtifacts.items : [];
+    const justExported = previewRequest?.sessionId === sessionId && previewRequest.artifact?.verifiedOutput ? [previewRequest.artifact] : [];
+    return collectSessionArtifacts(messages, cwd, [...registered, ...justExported]);
+  }, [messages, exportArtifacts, sessionId, cwd, previewRequest]);
 
-  // Keep active tool fresh when streaming updates status/content.
-  useEffect(() => {
-    if (!activeTool) return;
-    const fresh = findToolCall(messages, activeTool.toolCallId);
-    if (fresh && fresh !== activeTool) setActiveTool(fresh);
-  }, [messages, activeTool]);
+  const artifactCatalogRef = useRef(artifacts);
+  artifactCatalogRef.current = artifacts;
 
-  // Close panel when switching sessions.
+  // Restore only the selected session's view; tool and preview payloads never cross sessions.
   useLayoutEffect(() => {
-    workspaceViewRef.current = null;
-    setWorkspaceView(null);
+    const restored = sessionId ? sessionWorkspaceViews.get(sessionId) ?? null : null;
+    workspaceViewRef.current = restored;
+    setWorkspaceView(restored);
     setHistoryAction(null);
     setActiveTool(null);
-    setPreviewPath(null);
+    setPreviewRequest(null);
   }, [sessionId]);
 
   useEffect(() => {
@@ -547,68 +578,74 @@ export function ChatView({
     streaming,
     sessionId,
   });
-  const runtimeScrollRestore = useRef<{ sessionId: string | null; top: number; following: boolean } | null>(null);
-  const pendingRuntimeScroll = useRef<{ sessionId: string | null; key: RuntimePanelKey; opening: boolean } | null>(null);
-  useLayoutEffect(() => {
-    // ChatView stays mounted when selecting another conversation. Its old
-    // panel positions must never override the new conversation's follow state.
-    runtimeScrollRestore.current = null;
-    pendingRuntimeScroll.current = null;
-  }, [sessionId]);
   const transitionWorkspace = useCallback((next: WorkspaceView | null) => {
     closeQuestionHistory();
-    const previous = workspaceViewRef.current;
-    if (next === previous) return;
+    if (workspaceViewRef.current === next) return;
     workspaceViewRef.current = next;
-    const previousRuntime = runtimePanelKey(previous);
-    const nextRuntime = runtimePanelKey(next);
-    if (nextRuntime) {
-      if (!previousRuntime) {
-        runtimeScrollRestore.current = { sessionId, top: scrollRef.current?.scrollTop ?? 0, following };
-      }
-      pauseFollowing();
-      pendingRuntimeScroll.current = { sessionId, key: nextRuntime, opening: true };
-    } else if (previousRuntime) {
-      pendingRuntimeScroll.current = { sessionId, key: previousRuntime, opening: false };
+    if (sessionId) {
+      sessionWorkspaceViews.set(sessionId, next === "tool" ? "artifacts" : next);
+      if (next) lastWorkspaceViews.set(sessionId, next);
+      if (lastWorkspaceViews.size > 50) lastWorkspaceViews.delete(lastWorkspaceViews.keys().next().value!);
+      if (sessionWorkspaceViews.size > 50) sessionWorkspaceViews.delete(sessionWorkspaceViews.keys().next().value!);
     }
     setWorkspaceView(next);
-  }, [closeQuestionHistory, sessionId, following, scrollRef, pauseFollowing]);
-  useLayoutEffect(() => {
-    const pending = pendingRuntimeScroll.current;
-    const viewport = scrollRef.current;
-    if (!pending || pending.sessionId !== sessionId || !viewport) return;
-    pendingRuntimeScroll.current = null;
-    if (pending.opening) {
-      const anchor = viewport.querySelector<HTMLElement>(`[data-runtime-panel-anchor="${pending.key}"]`);
-      if (anchor) viewport.scrollTop += anchor.getBoundingClientRect().top - viewport.getBoundingClientRect().top - 8;
-      return;
-    }
-    const restore = runtimeScrollRestore.current;
-    runtimeScrollRestore.current = null;
-    if (!restore || restore.sessionId !== sessionId) {
-      // An inherited/automatically opened panel has no reading position to
-      // restore. Keep following instead of treating its removal as a scroll up.
-      if (following) scrollToBottom();
-      return;
-    }
-    if (restore.following) scrollToBottom();
-    else {
-      pauseFollowing();
-      viewport.scrollTop = restore.top;
-    }
-  }, [sessionId, workspaceView, fileChangesOpen, subagentsOpen, teamsOpen, planOpen, following, pauseFollowing, scrollRef, scrollToBottom]);
+  }, [closeQuestionHistory, sessionId]);
 
+  type WorkspaceFrame = { view: WorkspaceView; tool: ToolCallView | null; path?: string; artifact?: SessionArtifact };
+  const workspaceTrail = useRef<WorkspaceFrame[]>([]);
+  const [workspaceTrailDepth, setWorkspaceTrailDepth] = useState(0);
+  useLayoutEffect(() => { workspaceTrail.current = []; setWorkspaceTrailDepth(0); }, [sessionId]);
+  const pushWorkspaceFrame = useCallback(() => {
+    const selection = workspaceSelectionRef.current;
+    workspaceTrail.current.push({ view: workspaceViewRef.current ?? "artifacts", tool: selection.tool,
+      path: selection.preview?.sessionId === sessionId ? selection.preview.path : undefined,
+      artifact: selection.preview?.sessionId === sessionId ? selection.preview.artifact : undefined });
+    if (workspaceTrail.current.length > 20) workspaceTrail.current.shift();
+    setWorkspaceTrailDepth(workspaceTrail.current.length);
+  }, [sessionId]);
   const handleOpenTool = useCallback((tc: ToolCallView) => {
+    if (workspaceViewRef.current !== "tool" || workspaceSelectionRef.current.tool?.toolCallId !== tc.toolCallId) pushWorkspaceFrame();
     setActiveTool(tc);
-    setPreviewPath(null);
+    setPreviewRequest(null);
     transitionWorkspace("tool");
-  }, [transitionWorkspace]);
+  }, [pushWorkspaceFrame, transitionWorkspace]);
   const handleSelectArtifact = useCallback((artifact: SessionArtifact) => {
-    setPreviewPath(artifact.path);
     const current = workspaceViewRef.current;
-    transitionWorkspace(current === "artifacts" || current === "fileTree" ? current : "preview");
+    if (current === "tool") pushWorkspaceFrame();
+    setPreviewRequest({ path: artifact.path, artifact, sessionId, sequence: ++previewSequence.current });
+    const catalogued = artifact.verifiedOutput || artifactCatalogRef.current.some(item => artifactFileKey(item.path, cwd) === artifactFileKey(artifact.path, cwd));
+    transitionWorkspace(current === "fileTree" ? "fileTree" : catalogued ? "artifacts" : "fileTree");
+  }, [cwd, pushWorkspaceFrame, sessionId, transitionWorkspace]);
+  const handleWorkspaceBack = () => {
+    const previous = workspaceTrail.current.pop();
+    setWorkspaceTrailDepth(workspaceTrail.current.length);
+    if (!previous) return;
+    setActiveTool(previous.tool);
+    setPreviewRequest(previous.path ? { path: previous.path, artifact: previous.artifact, sessionId, sequence: ++previewSequence.current } : null);
+    transitionWorkspace(previous.view);
+  };
+  const handleWorkspaceCategory = (next: ToolSidePanelMode) => {
+    workspaceTrail.current = [];
+    setWorkspaceTrailDepth(0);
+    transitionWorkspace(next);
+  };
+  // A rewind can remove the inspected operation; stale tool payloads must not survive it.
+  useEffect(() => {
+    if (!activeTool) return;
+    const fresh = findToolCall(messages, activeTool.toolCallId);
+    if (fresh) {
+      if (fresh !== activeTool) setActiveTool(fresh);
+    } else {
+      setActiveTool(null);
+      workspaceTrail.current = [];
+      setWorkspaceTrailDepth(0);
+      if (workspaceViewRef.current === "tool") transitionWorkspace("artifacts");
+    }
+  }, [messages, activeTool, transitionWorkspace]);
+  const handleOpenArtifacts = useCallback(() => {
+    setWorkspaceNavigationId(value => value + 1);
+    transitionWorkspace("artifacts");
   }, [transitionWorkspace]);
-  const handleOpenArtifacts = useCallback(() => transitionWorkspace("artifacts"), [transitionWorkspace]);
 
   const jumpToQuestion = useCallback((messageId: string) => {
     const row = Array.from(scrollRef.current?.querySelectorAll<HTMLElement>("[data-msg-id]") ?? [])
@@ -619,7 +656,7 @@ export function ChatView({
     if (jumpHighlightTimerRef.current !== null) window.clearTimeout(jumpHighlightTimerRef.current);
     setJumpTargetId(messageId);
     row.focus({ preventScroll: true });
-    row.scrollIntoView?.({ behavior: "smooth", block: "center" });
+    row.scrollIntoView?.({ behavior: window.matchMedia?.("(prefers-reduced-motion: reduce)").matches ? "auto" : "smooth", block: "center" });
     jumpHighlightTimerRef.current = window.setTimeout(() => {
       setJumpTargetId(null);
       jumpHighlightTimerRef.current = null;
@@ -627,34 +664,36 @@ export function ChatView({
   }, [closeQuestionHistory, pauseFollowing, scrollRef]);
 
   const restoredSequenceRef = useRef<number | null>(null);
+  const restoreFrameRef = useRef<number | null>(null);
   const restoreSubagentRow = useCallback((key: string) => {
-    if (!subagentScrollRestore || subagentScrollRestore.parentSessionId !== sessionId
+    if (workspaceView !== "subagents" || !subagentScrollRestore || subagentScrollRestore.parentSessionId !== sessionId
       || restoredSequenceRef.current === subagentScrollRestore.sequence) return;
-    const viewport = scrollRef.current;
-    const row = Array.from(viewport?.querySelectorAll<HTMLElement>("[data-subagent-key]") ?? [])
-      .find((node) => node.dataset.subagentKey === key);
-    if (!viewport || !row) return;
-    pauseFollowing();
-    const actualOffset = row.getBoundingClientRect().top - viewport.getBoundingClientRect().top;
-    viewport.scrollTop += actualOffset - subagentScrollRestore.rowOffset;
-    restoredSequenceRef.current = subagentScrollRestore.sequence;
-  }, [pauseFollowing, scrollRef, sessionId, subagentScrollRestore]);
-
+    if (restoreFrameRef.current !== null) window.cancelAnimationFrame(restoreFrameRef.current);
+    // Child rows mount before the workspace restores its own scroll cache.
+    // Apply the exact parent-row position after both layout passes have settled.
+    restoreFrameRef.current = window.requestAnimationFrame(() => {
+      restoreFrameRef.current = null;
+      if (activeSessionRef.current !== sessionId || workspaceViewRef.current !== "subagents") return;
+      const viewport = detailsRef.current;
+      const row = Array.from(viewport?.querySelectorAll<HTMLElement>("[data-subagent-key]") ?? [])
+        .find(node => node.dataset.subagentKey === key);
+      if (!viewport || !row) return;
+      viewport.scrollTop = subagentScrollRestore.scrollTop;
+      const actualOffset = row.getBoundingClientRect().top - viewport.getBoundingClientRect().top;
+      viewport.scrollTop += actualOffset - subagentScrollRestore.rowOffset;
+      restoredSequenceRef.current = subagentScrollRestore.sequence;
+    });
+  }, [sessionId, subagentScrollRestore, workspaceView]);
+  useEffect(() => () => {
+    if (restoreFrameRef.current !== null) window.cancelAnimationFrame(restoreFrameRef.current);
+  }, []);
   useLayoutEffect(() => {
-    if (!subagentScrollRestore || subagentScrollRestore.parentSessionId !== sessionId
-      || restoredSequenceRef.current === subagentScrollRestore.sequence) return;
-    const viewport = scrollRef.current;
-    if (!viewport) return;
-    // The transcript may still be replaying. Preserve the old position first,
-    // then refine it to the row once the subagent list is rendered.
-    pauseFollowing();
-    viewport.scrollTop = subagentScrollRestore.scrollTop;
-    restoreSubagentRow(subagentScrollRestore.subagentKey);
-  }, [messages, pauseFollowing, restoreSubagentRow, scrollRef, sessionId, subagentScrollRestore]);
+    if (subagentScrollRestore) restoreSubagentRow(subagentScrollRestore.subagentKey);
+  }, [messages, restoreSubagentRow, subagentScrollRestore]);
 
   const openSubagentSession = useCallback((childSessionId: string, childCwd: string | undefined, subagentKey: string) => {
     if (!sessionId || !onOpenSubagentSession) return;
-    const viewport = scrollRef.current;
+    const viewport = detailsRef.current;
     const row = Array.from(viewport?.querySelectorAll<HTMLElement>("[data-subagent-key]") ?? [])
       .find((node) => node.dataset.subagentKey === subagentKey);
     const rowOffset = viewport && row
@@ -667,7 +706,7 @@ export function ChatView({
       scrollTop: viewport?.scrollTop ?? 0,
       rowOffset,
     });
-  }, [cwd, onOpenSubagentSession, scrollRef, sessionId]);
+  }, [cwd, onOpenSubagentSession, sessionId]);
 
   // 会话内查找:Ctrl/Cmd+F 打开。
   useEffect(() => {
@@ -726,9 +765,11 @@ export function ChatView({
       block: "center",
     });
   }, [findActive, findOccurrences, findQuery]);
-  const runtimeKey = runtimePanelKey(workspaceView);
   const closeWorkspace = () => transitionWorkspace(null);
-  const openWorkspace = (view: WorkspaceTarget) => transitionWorkspace(workspaceViewRef.current === view ? null : view);
+  const openWorkspace = (view: WorkspaceTarget) => {
+    setWorkspaceNavigationId(value => value + 1);
+    transitionWorkspace(workspaceViewRef.current === view ? null : view);
+  };
   return (
     <>
     {sessionId && <SessionHeader key={sessionId} sessionId={sessionId} title={title || "新任务"} cwd={cwd}
@@ -743,6 +784,10 @@ export function ChatView({
         runningSubagents: collaboration.filter(a => a.status === "running" || a.status === "in_progress").length,
         teamCount: teams.length, status, attention: Boolean(pendingPermission || awaitingPlan || awaitingQuestion || error || failed),
       }} activeView={workspaceView} onView={openWorkspace} onCloseView={closeWorkspace}
+      onToggleWorkspace={() => {
+        const last = sessionId ? lastWorkspaceViews.get(sessionId) : undefined;
+        transitionWorkspace(workspaceViewRef.current ? null : last === "tool" && !activeTool ? "artifacts" : last ?? "artifacts");
+      }}
       onFind={() => findOpen ? closeFind() : openFind()} findOpen={findOpen}
       questionHistoryTriggerRef={questionHistoryTriggerRef}
       onQuestionHistory={questions.length ? () => { closeFind(); setQuestionHistoryOpen(true); } : undefined}
@@ -785,45 +830,10 @@ export function ChatView({
         />
 
         <div className="chatview__scroll-shell">
+          <ConversationNavigator key={sessionId} turns={conversationTurns} scrollRef={scrollRef} contentRef={contentRef}
+            onSelect={jumpToQuestion} onDirectory={trigger => { questionHistoryTriggerRef.current = trigger; closeFind(); setQuestionHistoryOpen(true); }} />
           <div className="chatview__scroll" ref={scrollRef}>
             <div className="chatview__inner" ref={contentRef}>
-              {runtimeKey && <section className="chatview__runtime-view" aria-label="任务工作视图">
-                <div data-runtime-panel-anchor={runtimeKey} />
-                <div className="chatview__runtime-heading"><strong>{planOpen ? "执行计划" : fileChangesOpen ? "文件变更" : subagentsOpen ? "协作详情" : "任务团队"}</strong><button type="button" className="main-topbar__btn" aria-label="关闭工作视图" onClick={closeWorkspace}>×</button></div>
-              {hasVisiblePlan && planOpen && <>
-                <PlanPanel sessionId={sessionId ?? undefined} onSend={onSend} onToast={onToast} />
-              </>}
-              {fileChangesOpen && (
-                <><FileChangesPanel messages={messages} /></>
-              )}
-              {subagentsOpen && (
-                <><SubagentPanel
-                  messages={messages}
-                  cwd={cwd}
-                  onOpenSession={onOpenSubagentSession ? openSubagentSession : undefined}
-                  restorePoint={subagentScrollRestore}
-                  onRestoreReady={restoreSubagentRow}
-                /></>
-              )}
-              {teamsOpen && (
-                <><TeamStatusView key={sessionId} sessionId={sessionId} messages={messages}
-                  onOpenGroup={onOpenTeamGroup}
-                  onUseTeam={(teamId) => {
-                    if (!sessionId) return;
-                    const next = draft.trim()
-                      ? `${draft}\n\n请使用团队“${teamId}”，按成员职责分工完成以上任务。`
-                      : `请使用团队“${teamId}”，按成员职责分工完成以下任务：\n`;
-                    setResendText(next);
-                    setResendAttachments(undefined);
-                    setResendNonce((nonce) => nonce + 1);
-                    onToast?.("已填入团队指令，请补充任务后发送");
-                  }}
-                  onViewTasks={() => {
-                    transitionWorkspace("subagents");
-                  }}
-                /></>
-              )}
-              </section>}
               {timeline.map((node) => {
                 // 时间线分隔符(对齐 EchoAgent message-timeline):日期/模型切换分隔。
                 // 当前 ChatMessage 无 modelId/createdAt,无分隔符时仅渲染消息节点。
@@ -862,9 +872,11 @@ export function ChatView({
                       sessionId={sessionId ?? undefined}
                       onToast={onToast}
                       onOpenTool={handleOpenTool}
+                      onOpenArtifact={handleSelectArtifact}
                       findQuery={findOpen ? findQuery : undefined}
                       onEditResend={handleEditResend}
                       autoExpandProcess={false}
+                      compactIdentity={m.role === "assistant" && messages[idx - 1]?.role === "assistant"}
                       latest={isLastAssistant}
                       retrying={isLastAssistant && retryingSessionId === sessionId}
                       onRetry={
@@ -894,6 +906,7 @@ export function ChatView({
         <div className="chatview__footer">
           <AutomationControls sessionId={sessionId} streaming={streaming} onToast={onToast}
             onContinue={() => onSend("继续")} onPause={() => onCancel("pause")} placement="toolbar" />
+          <div className="session-task-controls"><TasksPanel sessionId={sessionId ?? undefined} refreshSignal={taskRefreshSignal} onToast={onToast} presentation="summary" onOpen={() => transitionWorkspace("subagents")} /></div>
           {/* Inline permission / question cards: session-scoped, never block sidebar. */}
           <AutomationControls
             sessionId={sessionId}
@@ -908,24 +921,18 @@ export function ChatView({
             <div className="yield-banner" role="status">
               <span>
                 {control.phase === "pausing" && "正在暂停任务…"}
-                {control.phase === "paused" && "任务已暂停，发送“继续”即可续做"}
+                {control.phase === "paused" && "任务已暂停，可继续执行"}
                 {control.phase === "stopping" && "正在停止任务…"}
                 {control.phase === "stopped" && stoppedTaskLabel(stoppedCategory)}
               </span>
-
+              {control.phase === "paused" && <button type="button" className="btn btn--primary" disabled={continuing || !apiReady || modelLoading || awaitingQuestion || Boolean(pendingPermission) || awaitingPlan} onClick={() => void continueTask()}><Play size={14} />{continuing ? "正在继续…" : "继续任务"}</button>}
             </div>
           )}
-          {/* 流式时提供「暂停」按钮(软停止,区别于停止按钮的硬取消)。 */}
-          {sessionId && streaming && !control && automationMode === "default" && (
-            <button
-              type="button"
-              className="chatview__pause-btn"
-              onClick={handlePause}
-              title="暂停生成(保留会话,可继续)"
-            >
-              <PauseIcon size="sm" style={{ verticalAlign: "text-bottom" }} /> 暂停
-            </button>
-          )}
+          {sessionId && streaming && automationMode === "default" && !control && <div className="session-task-controls" role="group" aria-label="当前轮次执行控制">
+            <span role="status">正在执行，可继续补充要求</span>
+            <button type="button" onClick={() => void handlePause()} title="暂停当前任务，保留上下文"><PauseIcon size="sm" />暂停</button>
+            <button type="button" onClick={() => void onCancel("stop")} disabled={cancelling} title="停止当前轮次，保留会话记录"><Square size={13} />{cancelling ? "正在停止…" : "停止"}</button>
+          </div>}
           {/* 消息队列(对齐 EchoAgent message-queue):流式时可继续排队 prompt。
               非流式时面板为空(QueuePanel 内部 queue.length===0 直接 return null)。 */}
           {sessionId && (
@@ -933,7 +940,7 @@ export function ChatView({
               sessionId={sessionId}
               streaming={streaming}
               sendNowPending={sendNowPending}
-              awaitingQuestion={awaitingQuestion}
+              awaitingQuestion={awaitingQuestion || Boolean(pendingPermission) || awaitingPlan || control?.phase === "pausing" || control?.phase === "stopping"}
               onSendNow={streaming ? onSendNow : onSend}
             />
           )}
@@ -946,7 +953,7 @@ export function ChatView({
             onSend={onSend}
             onSendNow={onSendNow}
             sendNowPending={sendNowPending}
-            awaitingQuestion={awaitingQuestion}
+            awaitingQuestion={awaitingQuestion || Boolean(pendingPermission) || awaitingPlan}
             onEnqueue={
               sessionId
                 ? (text, attachments) => {
@@ -996,18 +1003,66 @@ export function ChatView({
         </div>
       </div>
 
-      <ToolSidePanel
+      <ToolSidePanel key={sessionId}
+        detailsRef={detailsRef}
+        details={<section className="chatview__runtime-view" aria-label="任务工作视图">
+
+              <section hidden={!planOpen}>
+              {visitedRuntime.current.views.has("plan") && (hasVisiblePlan
+                ? <PlanPanel sessionId={sessionId ?? undefined} onSend={onSend} onToast={onToast} />
+                : <p className="tool-side-panel__empty">当前任务暂无执行计划。</p>)}
+              </section>
+              <section hidden={workspaceView !== "changes"}>
+              {visitedRuntime.current.views.has("changes") && (
+                <><FileChangesPanel messages={messages} /></>
+              )}
+              </section>
+              <section hidden={!subagentsOpen}>
+              {visitedRuntime.current.views.has("subagents") && (
+                <><TasksPanel sessionId={sessionId ?? undefined} refreshSignal={taskRefreshSignal} onToast={onToast} /><SubagentPanel
+                  messages={messages}
+                  cwd={cwd}
+                  onOpenSession={onOpenSubagentSession ? openSubagentSession : undefined}
+                  restorePoint={subagentScrollRestore}
+                  onRestoreReady={restoreSubagentRow}
+                /></>
+              )}
+              </section>
+              <section hidden={!teamsOpen}>
+              {visitedRuntime.current.views.has("teams") && (
+                <><TeamStatusView key={sessionId} sessionId={sessionId} messages={messages}
+                  onOpenGroup={onOpenTeamGroup}
+                  onUseTeam={(teamId) => {
+                    if (!sessionId) return;
+                    const next = draft.trim()
+                      ? `${draft}\n\n请使用团队“${teamId}”，按成员职责分工完成以上任务。`
+                      : `请使用团队“${teamId}”，按成员职责分工完成以下任务：\n`;
+                    setResendText(next);
+                    setResendAttachments(undefined);
+                    setResendNonce((nonce) => nonce + 1);
+                    onToast?.("已填入团队指令，请补充任务后发送");
+                  }}
+                  onViewTasks={() => {
+                    transitionWorkspace("subagents");
+                  }}
+                /></>
+              )}
+              </section>
+              </section>}
         open={panelOpen}
         mode={panelMode}
         toolCall={activeTool}
         artifacts={artifacts}
         previewPath={previewPath}
+        previewRequestId={previewRequest?.sequence}
+        navigationRequestId={workspaceNavigationId}
         cwd={cwd}
         messages={messages}
         sessionId={sessionId ?? undefined}
         onToast={onToast}
         onClose={closeWorkspace}
-        onModeChange={transitionWorkspace}
+        onModeChange={handleWorkspaceCategory}
+        onBack={workspaceTrailDepth ? handleWorkspaceBack : undefined}
         onSelectTool={handleOpenTool}
         onSelectArtifact={handleSelectArtifact}
         onOpenArtifacts={handleOpenArtifacts}

@@ -48,20 +48,20 @@ describe("TopbarActions", () => {
     vi.mocked(exportTextFile).mockResolvedValue(null);
   });
 
-  it("更多操作 hover 提示通过全局 portal 渲染，不会被下层工具栏遮挡", async () => {
+  it("任务操作 hover 提示通过全局 portal 渲染，不会被下层工具栏遮挡", async () => {
     render(
       <>
         <TopbarActions sessionId="session-1" title="测试会话" />
         <GlobalTooltip />
       </>,
     );
-    const trigger = screen.getByRole("button", { name: "更多操作" });
+    const trigger = screen.getByRole("button", { name: "任务操作" });
     vi.spyOn(trigger, "getBoundingClientRect").mockReturnValue(rect(400, 12));
 
     fireEvent.pointerOver(trigger);
 
     const tooltip = await screen.findByRole("tooltip");
-    expect(tooltip).toHaveTextContent("更多操作");
+    expect(tooltip).toHaveTextContent("任务操作");
     expect(tooltip.parentElement).toBe(document.body);
     expect(tooltip).toHaveStyle({ position: "fixed", zIndex: "var(--echo-layer-tooltip)" });
 
@@ -72,7 +72,7 @@ describe("TopbarActions", () => {
 
   it("通过 body portal 以 fixed 浮层渲染，不受顶栏层叠上下文和裁剪影响", () => {
     render(<TopbarActions sessionId="session-1" title="测试会话" />);
-    const trigger = screen.getByRole("button", { name: "更多操作" });
+    const trigger = screen.getByRole("button", { name: "任务操作" });
     vi.spyOn(trigger, "getBoundingClientRect").mockReturnValue(rect(400, 20));
 
     fireEvent.click(trigger);
@@ -87,7 +87,7 @@ describe("TopbarActions", () => {
 
   it("程序化弹窗接管焦点时会关闭旧 portal 菜单", async () => {
     const view = render(<TopbarActions sessionId="session-1" title="测试会话" />);
-    fireEvent.click(screen.getByRole("button", { name: "更多操作" }));
+    fireEvent.click(screen.getByRole("button", { name: "任务操作" }));
     expect(screen.getByRole("menu", { name: "当前会话操作" })).toBeInTheDocument();
 
     view.rerender(
@@ -102,7 +102,7 @@ describe("TopbarActions", () => {
 
   it("视口底部空间不足时向上展开并保持在可视区域", () => {
     render(<TopbarActions sessionId="session-1" title="测试会话" />);
-    const trigger = screen.getByRole("button", { name: "更多操作" });
+    const trigger = screen.getByRole("button", { name: "任务操作" });
     vi.spyOn(trigger, "getBoundingClientRect").mockReturnValue(rect(960, 560));
 
     fireEvent.click(trigger);
@@ -127,7 +127,7 @@ describe("TopbarActions", () => {
       />,
     );
 
-    fireEvent.click(screen.getByRole("button", { name: "更多操作" }));
+    fireEvent.click(screen.getByRole("button", { name: "任务操作" }));
     fireEvent.click(screen.getByRole("menuitem", { name: "归档会话" }));
 
     expect(agentSetSessionArchived).toHaveBeenCalledTimes(1);
@@ -138,7 +138,7 @@ describe("TopbarActions", () => {
     });
     expect(onToast).toHaveBeenCalledWith("已归档，可在“设置 → 数据管理 → 已归档”中恢复");
     expect(screen.queryByRole("menu")).toBeNull();
-    await waitFor(() => expect(screen.getByRole("button", { name: "更多操作" })).toHaveFocus());
+    await waitFor(() => expect(screen.getByRole("button", { name: "任务操作" })).toHaveFocus());
   });
 
   it("归档失败时不改前端状态，并给出可读的错误提示", async () => {
@@ -156,18 +156,18 @@ describe("TopbarActions", () => {
       />,
     );
 
-    fireEvent.click(screen.getByRole("button", { name: "更多操作" }));
+    fireEvent.click(screen.getByRole("button", { name: "任务操作" }));
     fireEvent.click(screen.getByRole("menuitem", { name: "归档会话" }));
 
     await waitFor(() => expect(onToast).toHaveBeenCalledWith("归档失败：磁盘不可写"));
     expect(onSessionsChanged).not.toHaveBeenCalled();
     expect(onArchived).not.toHaveBeenCalled();
-    expect(screen.getByRole("button", { name: "更多操作" })).toBeEnabled();
+    expect(screen.getByRole("button", { name: "任务操作" })).toBeEnabled();
   });
 
   it("支持方向键、Home/End 和 Escape，关闭后恢复触发按钮焦点", async () => {
     render(<TopbarActions sessionId="session-1" title="测试会话" />);
-    const trigger = screen.getByRole("button", { name: "更多操作" });
+    const trigger = screen.getByRole("button", { name: "任务操作" });
     trigger.focus();
 
     fireEvent.keyDown(trigger, { key: "ArrowUp" });
@@ -198,8 +198,8 @@ describe("session menu migration", () => {
     vi.mocked(exportTextFile).mockResolvedValue(null);
     render(<TopbarActions sessionId="export-session" title="完整会话" />);
     const openShare = () => {
-      fireEvent.click(screen.getByRole("button", { name: "更多操作" }));
-      fireEvent.click(screen.getByRole("menuitem", { name: "导出与本地分享…" }));
+      fireEvent.click(screen.getByRole("button", { name: "任务操作" }));
+      fireEvent.click(screen.getByRole("menuitem", { name: "导出整个会话…" }));
     };
     openShare();
     const dialog = screen.getByRole("dialog", { name: "分享选项" });
@@ -216,13 +216,13 @@ describe("session menu migration", () => {
   it("重命名和历史操作调用注入的真实回调，运行期间不可回溯或分叉", () => {
     const onRename = vi.fn(), onRewind = vi.fn(), onFork = vi.fn(), onQuestionHistory = vi.fn();
     const view = render(<TopbarActions sessionId="scope-a" title="A" onRename={onRename} onRewind={onRewind} onFork={onFork} onQuestionHistory={onQuestionHistory} />);
-    const select = (name: string) => { fireEvent.click(screen.getByRole("button", { name: "更多操作" })); fireEvent.click(screen.getByRole("menuitem", { name })); };
+    const select = (name: string) => { fireEvent.click(screen.getByRole("button", { name: "任务操作" })); fireEvent.click(screen.getByRole("menuitem", { name })); };
     select("重命名会话"); expect(onRename).toHaveBeenCalledOnce();
     select("回溯…"); expect(onRewind).toHaveBeenCalledOnce();
     select("分叉…"); expect(onFork).toHaveBeenCalledOnce();
-    select("历史提问"); expect(onQuestionHistory).toHaveBeenCalledOnce();
+    select("对话目录"); expect(onQuestionHistory).toHaveBeenCalledOnce();
     view.rerender(<TopbarActions sessionId="scope-a" title="A" onRewind={onRewind} onFork={onFork} historyDisabled />);
-    fireEvent.click(screen.getByRole("button", { name: "更多操作" }));
+    fireEvent.click(screen.getByRole("button", { name: "任务操作" }));
     expect(screen.getByRole("menuitem", { name: "回溯…" })).toBeDisabled();
     expect(screen.getByRole("menuitem", { name: "分叉…" })).toBeDisabled();
     view.rerender(<TopbarActions sessionId="scope-b" title="B" />);

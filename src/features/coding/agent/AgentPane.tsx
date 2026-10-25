@@ -1,4 +1,4 @@
-import { useMemo } from "react";
+import { useMemo, type ReactNode } from "react";
 import {
   AlertTriangle,
   CheckCircle2,
@@ -29,6 +29,7 @@ interface AgentPaneProps {
   blocker?: string | null;
   awaitingPermission: boolean;
   awaitingQuestion: boolean;
+  planApproval?: ReactNode;
   sending: boolean;
   onContinue: () => void | Promise<void>;
   continueDisabled?: boolean;
@@ -53,6 +54,7 @@ export function AgentPane({
   blocker,
   awaitingPermission,
   awaitingQuestion,
+  planApproval,
   sending,
   onContinue,
   continueDisabled = false,
@@ -195,10 +197,11 @@ export function AgentPane({
           </div>
         )}
 
-        {(awaitingPermission || awaitingQuestion) && (
+        {(awaitingPermission || awaitingQuestion || planApproval) && (
           <div className="coding-agent__interaction" aria-label="等待你的操作">
             {awaitingPermission && <PermissionInlineCard sessionId={sessionId} />}
             {awaitingQuestion && <QuestionInlineCard sessionId={sessionId} />}
+            {planApproval}
           </div>
         )}
 

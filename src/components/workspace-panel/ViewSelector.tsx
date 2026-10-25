@@ -1,130 +1,56 @@
-/**
- * 视图选择器（下拉 pill）—— 对齐 EchoAgent `view-selector-pill`。
- *
- * 显示当前视图图标 + 名称，点击展开菜单切换。水平 pill 形态（非垂直图标栏）。
- * 可用视图按条件过滤（如「变更」仅在有 diff 时显示）。
- */
-import { useEffect, useRef, useState } from "react";
+import { useRef, type KeyboardEvent } from "react";
 import type { WorkspaceView } from "@/lib/use-unified-tabs";
-import {
-  FileTextIcon,
-  FolderIcon,
-  GlobeIcon,
-  ChevronDownIcon,
-} from "@/foundation/components/Icon/icons";
+import { FileText, Folder, Globe, ListChecks, Users, GitCompareArrows } from "lucide-react";
 
 export interface ViewDef {
   value: WorkspaceView;
   label: string;
-  /** 取图标元素。 */
   icon: () => React.ReactNode;
-  /** 是否隐藏该视图（如无数据时）。 */
   hidden?: boolean;
 }
+const taskViews: WorkspaceView[] = ["plan", "subagents", "teams"];
 
-export function ViewSelector({
-  view,
-  views,
-  onChange,
-}: {
-  view: WorkspaceView;
-  views: ViewDef[];
-  onChange: (v: WorkspaceView) => void;
+/** Category navigation and task navigation have separate, visible text labels. */
+export function ViewSelector({ view, views, onChange, secondary = false }: {
+  view: WorkspaceView; views: ViewDef[]; onChange: (value: WorkspaceView) => void; secondary?: boolean;
 }) {
-  const [open, setOpen] = useState(false);
-  const rootRef = useRef<HTMLDivElement>(null);
-
-  // 点击外部关闭。
-  useEffect(() => {
-    if (!open) return;
-    const onDown = (e: MouseEvent) => {
-      if (!rootRef.current?.contains(e.target as Node)) setOpen(false);
-    };
-    const onKey = (e: KeyboardEvent) => {
-      if (e.key === "Escape") setOpen(false);
-    };
-    window.addEventListener("mousedown", onDown);
-    window.addEventListener("keydown", onKey);
-    return () => {
-      window.removeEventListener("mousedown", onDown);
-      window.removeEventListener("keydown", onKey);
-    };
-  }, [open]);
-
-  const visible = views.filter((v) => !v.hidden);
-  const current = visible.find((v) => v.value === view) ?? visible[0];
-
-  if (!current) return null;
-
-  return (
-    <div className="view-selector" ref={rootRef}>
-      <button
-        type="button"
-        className={"view-selector__pill" + (open ? " view-selector__pill--open" : "")}
-        onClick={() => setOpen((v) => !v)}
-        aria-haspopup="listbox"
-        aria-expanded={open}
-      >
-        <span className="view-selector__icon">{current.icon()}</span>
-        <span className="view-selector__label">{current.label}</span>
-        <ChevronDownIcon
-          size="sm"
-          className={"view-selector__chevron" + (open ? " view-selector__chevron--up" : "")}
-        />
-      </button>
-      {open && (
-        <ul className="view-selector__menu" role="listbox">
-          {visible.map((v) => (
-            <li key={v.value}>
-              <button
-                type="button"
-                role="option"
-                aria-selected={v.value === view}
-                className={
-                  "view-selector__option" +
-                  (v.value === view ? " view-selector__option--active" : "")
-                }
-                onClick={() => {
-                  onChange(v.value);
-                  setOpen(false);
-                }}
-              >
-                <span className="view-selector__icon">{v.icon()}</span>
-                <span className="view-selector__label">{v.label}</span>
-              </button>
-            </li>
-          ))}
-        </ul>
-      )}
-    </div>
-  );
+  const lastTask = useRef<WorkspaceView>("plan");
+  if (taskViews.includes(view)) lastTask.current = view;
+  if (secondary && !taskViews.includes(view)) return null;
+  const visible = views.filter(item => !item.hidden);
+  const items = secondary
+    ? visible.filter(item => taskViews.includes(item.value)).map(item => ({ ...item, label: item.value === "plan" ? "计划" : item.value === "subagents" ? "运行" : "团队" }))
+    : visible.filter(item => !taskViews.includes(item.value));
+  if (!secondary && visible.some(item => taskViews.includes(item.value))) {
+    items.splice(Math.min(3, items.length), 0, { value: lastTask.current, label: "任务", icon: () => <ListChecks size={16} /> });
+  }
+  const selected = (value: WorkspaceView) => secondary ? view === value
+    : taskViews.includes(value) ? taskViews.includes(view) : view === value;
+  const onKeyDown = (event: KeyboardEvent<HTMLDivElement>) => {
+    if (!["ArrowRight", "ArrowLeft", "Home", "End"].includes(event.key)) return;
+    const buttons = Array.from(event.currentTarget.querySelectorAll<HTMLButtonElement>("[role=tab]"));
+    const current = buttons.indexOf(event.target as HTMLButtonElement);
+    const next = event.key === "Home" ? 0 : event.key === "End" ? buttons.length - 1
+      : (current + (event.key === "ArrowRight" ? 1 : -1) + buttons.length) % buttons.length;
+    event.preventDefault();
+    buttons[next]?.focus();
+    if (items[next]) onChange(items[next].value);
+  };
+  return <div className={secondary ? "workspace-task-tabs" : "view-selector workspace-view-tabs"}
+    role="tablist" aria-label={secondary ? "任务视图" : "工作区分类"} onKeyDown={onKeyDown}>
+    {items.map(item => <button type="button" role="tab" key={item.label} aria-selected={selected(item.value)}
+      tabIndex={selected(item.value) ? 0 : -1} onClick={() => onChange(item.value)}>{item.label}</button>)}
+  </div>;
 }
 
-/** 便捷工厂：默认四视图集合（调用方可覆盖 hidden）。 */
-export function defaultViews(opts: {
-  hasChanges: boolean;
-}): ViewDef[] {
+export function defaultViews(_opts: { hasChanges: boolean }): ViewDef[] {
   return [
-    {
-      value: "artifacts",
-      label: "产物",
-      icon: () => <FileTextIcon size="sm" />,
-    },
-    {
-      value: "fileTree",
-      label: "文件树",
-      icon: () => <FolderIcon size="sm" />,
-    },
-    {
-      value: "preview",
-      label: "浏览器",
-      icon: () => <GlobeIcon size="sm" />,
-    },
-    {
-      value: "changes",
-      label: "变更",
-      icon: () => <FileTextIcon size="sm" />,
-      hidden: !opts.hasChanges,
-    },
+    {value:"artifacts",label:"成果",icon:() => <FileText size={16} />},
+    {value:"fileTree",label:"文件",icon:() => <Folder size={16} />},
+    {value:"changes",label:"变更",icon:() => <GitCompareArrows size={16} />},
+    {value:"plan",label:"执行计划",icon:() => <ListChecks size={16} />},
+    {value:"subagents",label:"运行与协作",icon:() => <Users size={16} />},
+    {value:"teams",label:"任务团队",icon:() => <Users size={16} />},
+    {value:"browser",label:"网页",icon:() => <Globe size={16} />},
   ];
 }

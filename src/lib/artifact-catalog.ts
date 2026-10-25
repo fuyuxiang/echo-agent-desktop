@@ -3,6 +3,7 @@ import { isTauriAvailable } from "./tauri-kb-reader";
 import { collectSessionArtifacts, type SessionArtifact } from "@/lib/session-artifacts";
 import type { ChatMessage, SessionTranscript } from "@/stores/session-store";
 import type { DocumentExportReceipt } from "@/lib/document-export";
+import { artifactFileKey } from "./artifact-file-key";
 
 export interface TaskArtifact extends SessionArtifact {
   sessionId: string;
@@ -32,8 +33,9 @@ export function taskArtifactsFromMessages(
   cwd: string,
   messages: ChatMessage[],
   updatedAt = Date.now(),
+  catalog: SessionArtifact[] = [],
 ): TaskArtifact[] {
-  return collectSessionArtifacts(messages)
+  return collectSessionArtifacts(messages, cwd, catalog)
     .filter(isTaskArtifact)
     .map((artifact) => ({ ...artifact, sessionId, sessionTitle, cwd, updatedAt }));
 }
@@ -62,11 +64,12 @@ export function indexTaskArtifacts(
   cwd: string,
   messages: ChatMessage[],
 ): TaskArtifact[] {
-  const retained = loadTaskArtifacts().filter((item) => item.sessionId !== sessionId);
-  retained.push(...loadTaskArtifacts().filter((item) =>
-    item.sessionId === sessionId && item.toolCallId.startsWith("document-export:")));
+  const existing = loadTaskArtifacts();
+  const retained = existing.filter((item) => item.sessionId !== sessionId);
+  const exports = existing.filter(item => item.sessionId === sessionId && item.toolCallId.startsWith("document-export:"))
+    .map(item => ({...item, producedAt: item.producedAt ?? item.updatedAt}));
   const next = mergeTaskArtifacts(
-    taskArtifactsFromMessages(sessionId, sessionTitle, cwd, messages),
+    taskArtifactsFromMessages(sessionId, sessionTitle, cwd, messages, Date.now(), exports),
     retained,
   );
   if (typeof window !== "undefined") {
@@ -100,6 +103,7 @@ export function registerDocumentArtifact(
     sessionTitle,
     cwd,
     updatedAt: Date.now(),
+    producedAt: Date.now(),
   };
   const next = mergeTaskArtifacts([artifact], loadTaskArtifacts());
   if (typeof window !== "undefined") {
@@ -131,9 +135,11 @@ export function mergeTaskArtifacts(...groups: TaskArtifact[][]): TaskArtifact[] 
   const byKey = new Map<string, TaskArtifact>();
   for (const group of groups) {
     for (const item of group) {
-      const key = `${item.sessionId}:${(item.canonicalPath ?? item.path).replace(/\\/g, "/")}`;
+      const key = `${item.sessionId}:${artifactFileKey(item.canonicalPath ?? item.path, item.cwd)}`;
       const previous = byKey.get(key);
-      if (!previous || item.updatedAt >= previous.updatedAt) byKey.set(key, item);
+      const previousTime = previous?.producedAt ?? previous?.updatedAt ?? 0;
+      const itemTime = item.producedAt ?? item.updatedAt;
+      if (!previous || itemTime >= previousTime) byKey.set(key, item);
     }
   }
   return [...byKey.values()].sort((a, b) => b.updatedAt - a.updatedAt);
@@ -175,10 +181,11 @@ export interface DurableSessionExport {
 /** Read the native session history; the local catalog is a search cache only. */
 export async function loadSessionDocumentArtifacts(sessionId: string): Promise<SessionArtifact[]> {
   const entries = await invoke<DurableSessionExport[]>("session_exports_list", { sessionId });
-  return (entries ?? []).map(({ receipt, title }) => ({
+  return (entries ?? []).map(({ receipt, title, createdAt }) => ({
     id: `document-export:${receipt.sha256}:${receipt.path}`,
     path: receipt.path, kind: "document_export", title: `${title} · ${receipt.format.toUpperCase()}`,
     toolCallId: `document-export:${receipt.sha256}`, status: "completed", verifiedOutput: true,
+    producedAt: createdAt,
   }));
 }
 
@@ -186,7 +193,7 @@ export async function loadSessionDocumentArtifacts(sessionId: string): Promise<S
 export async function authorizeDocumentArtifact(sessionId: string, artifact: SessionArtifact): Promise<void> {
   if (artifact.kind !== "document_export" || !artifact.toolCallId.startsWith("document-export:")) return;
   await invoke("session_export_authorize", {
-    sessionId, path: artifact.path, sha256: artifact.toolCallId.slice("document-export:".length),
+    sessionId, path: artifact.authorizationPath ?? artifact.path, sha256: artifact.toolCallId.slice("document-export:".length),
   });
 }
 
@@ -198,5 +205,6 @@ export async function loadDocumentArtifactCatalog(): Promise<TaskArtifact[]> {
     kind: "document_export", title: `${title} · ${receipt.format.toUpperCase()}`,
     toolCallId: `document-export:${receipt.sha256}`, status: "completed", verifiedOutput: true,
     updatedAt: createdAt, sessionId, sessionTitle, cwd,
+    producedAt: createdAt,
   }));
 }

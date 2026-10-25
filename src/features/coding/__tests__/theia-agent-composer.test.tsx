@@ -28,6 +28,19 @@ beforeEach(() => {
 });
 
 describe("TheiaAgentComposer", () => {
+  it.each(["streaming", "verifying"])("Enter queues during %s without starting another coding turn", async phase => {
+    const onEnqueue=vi.fn(()=>true), input=props({task:{...task,phase:phase === "verifying" ? "verifying" : "implementing"},sessionId:"session-1",streaming:phase === "streaming",sending:phase === "streaming",onEnqueue,contextPaths:["/repo/a.ts"]});
+    const view=render(<TheiaAgentComposer {...input} />);
+    const editor=screen.getByRole("textbox",{name:"补充开发要求"});
+    fireEvent.change(editor,{target:{value:"补充边界测试"}}); fireEvent.keyDown(editor,{key:"Enter"});
+    expect(onEnqueue).toHaveBeenCalledExactlyOnceWith("补充边界测试",["/repo/a.ts"]);
+    expect(input.onSend).not.toHaveBeenCalled();
+    await waitFor(()=>expect(editor).toHaveValue(""));
+    view.rerender(<TheiaAgentComposer {...input} awaitingDecision />);
+    expect(editor).toBeDisabled();
+    expect(screen.getByRole("button",{name:"加入待发送队列"})).toBeDisabled();
+  });
+
   it("starts a task from the bottom composer and keeps its text on a failed start", async () => {
     const input = props({ startError: "启动失败" });
     render(<TheiaAgentComposer {...input} />);
@@ -79,16 +92,16 @@ describe("TheiaAgentComposer", () => {
     expect(input.onRemoveContext).toHaveBeenCalledWith("src/order.ts");
   });
 
-  it("Ctrl/Cmd+Enter sends once, while Enter and IME confirmation do not submit", async () => {
+  it("Enter and Ctrl/Cmd+Enter send; Shift+Enter and IME confirmation do not submit", async () => {
     const input = props();
     render(<TheiaAgentComposer {...input} />);
     const editor = screen.getByRole("textbox", { name: "任务描述" });
     fireEvent.change(editor, { target: { value: "检查中文输入" } });
-    fireEvent.keyDown(editor, { key: "Enter" });
+    fireEvent.keyDown(editor, { key: "Enter", shiftKey: true });
     fireEvent.keyDown(editor, { key: "Enter", metaKey: true, isComposing: true });
     fireEvent.keyDown(editor, { key: "Enter", ctrlKey: true, keyCode: 229 });
     expect(input.onStart).not.toHaveBeenCalled();
-    fireEvent.keyDown(editor, { key: "Enter", ctrlKey: true });
+    fireEvent.keyDown(editor, { key: "Enter" });
     expect(input.onStart).toHaveBeenCalledTimes(1);
     await waitFor(() => expect(screen.getByRole("button", { name: "开始 Agent 任务" })).toBeEnabled());
     fireEvent.keyDown(editor, { key: "Enter", metaKey: true });

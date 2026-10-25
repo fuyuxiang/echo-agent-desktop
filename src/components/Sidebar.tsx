@@ -15,6 +15,7 @@ import type { SessionSummary, SessionStatus } from "@/lib/types";
 import { isWaitingForUser } from "@/lib/turn-status";
 import {
   EchoNewTaskIcon,
+  ArchiveIcon,
   EchoProjectNavIcon,
   EchoExpertNavIcon,
   EchoAutomationNavIcon,
@@ -42,9 +43,8 @@ const logoMarkUrl = "/app-icon.png";
 
 const NAV = [
   { label: "项目", icon: EchoProjectNavIcon },
-  { label: "组织", icon: BuildingIcon },
-  { label: "专家·技能·连接器", icon: EchoExpertNavIcon },
   { label: "代码开发", icon: Code2Icon },
+  { label: "专家·技能·连接器", icon: EchoExpertNavIcon },
 ];
 
 /** Compact, locale-friendly relative time for the sidebar row tail. */
@@ -430,6 +430,9 @@ function MoreDropdown({
     icon: React.ReactNode;
     action: () => void;
   }[] = [
+    { id:"organization", label:"组织", icon:<BuildingIcon size="md" />, action:() => {closeMenu(); onNavigate("组织");} },
+    { id:"archived", label:"已归档", icon:<ArchiveIcon size="md" />, action:() => {closeMenu(); onNavigate("已归档");} },
+
     {
       id: "knowledge_base",
       label: "知识库",
@@ -993,7 +996,7 @@ export function Sidebar({
         >
           <SidebarToggleIcon size="md" />
         </button>}
-        <button className="sidebar__icon-btn" aria-label="搜索" onClick={onOpenSearch}>
+        <button className="sidebar__icon-btn" aria-label="搜索全部任务" title="搜索全部任务" onClick={onOpenSearch}>
           <SearchIcon size="md" />
         </button>
       </div>
@@ -1012,6 +1015,8 @@ export function Sidebar({
         {NAV.map(({ label, icon: Icon }) => (
           <button
             key={label}
+            aria-label={label === "专家·技能·连接器" ? CAPABILITY_SECTION_LABEL : label}
+            title={label === "专家·技能·连接器" ? "管理专家、技能与连接器" : undefined}
             className={
               "sidebar__nav-item" +
               (activeNav === label || (label === "专家·技能·连接器" && isCapabilityView(activeNav)) ? " sidebar__nav-item--active" : "")
@@ -1019,7 +1024,7 @@ export function Sidebar({
             onClick={() => onNavigate(label)}
           >
             <Icon size="md" />
-            <span>{label === "专家·技能·连接器" ? CAPABILITY_SECTION_LABEL : label}</span>
+            <span>{label === "专家·技能·连接器" ? "专家与技能" : label}</span>
           </button>
         ))}
         <MoreDropdown onNavigate={onNavigate} activeNav={activeNav} />
@@ -1120,7 +1125,7 @@ export function Sidebar({
         </div>
 
         {/* 项目分组: 仅展示真实项目实体。 */}
-        <div className={"sidebar__list-section sidebar__list-section--projects" + (projectsOpen && visibleProjectRowCount > 3 ? " sidebar__list-section--long" : "")}>
+        {projects.length > 0 && <div className={"sidebar__list-section sidebar__list-section--projects" + (projectsOpen && visibleProjectRowCount > 3 ? " sidebar__list-section--long" : "")}>
         <button
           type="button"
           className="sidebar__section-label"
@@ -1222,7 +1227,7 @@ export function Sidebar({
             })}
           </div>
         )}
-        </div>
+        </div>}
         <GroupSidebar
           active={activeNav === "专家团"}
           onOpen={() => onNavigate("专家团")}

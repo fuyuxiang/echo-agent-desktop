@@ -13,6 +13,7 @@ const api = vi.hoisted(() => ({
   beginVerification: vi.fn(),
   runVerification: vi.fn(),
   reportVerification: vi.fn(),
+  beginFollowup: vi.fn(),
 }));
 const beginAgentTurn = vi.hoisted(() => vi.fn(() => true));
 const agentLoadSession = vi.hoisted(() => vi.fn(async (_id: string, _root: string): Promise<string | null> => null));
@@ -31,6 +32,8 @@ vi.mock("@/lib/agent-client", () => ({ agentLoadSession }));
 import { registerWorkspaceEditor } from "../lib/workspace-editor";
 import { useSessionStore } from "@/stores/session-store";
 import { CodingTaskRuntimeManager, useCodingRuntimeStore } from "../lib/coding-task-runtime";
+import { useMessageQueueStore } from "@/stores/message-queue-store";
+import { codingQueueId } from "../lib/coding-followup";
 
 function task(root: string): CodingTask {
   return {
@@ -90,6 +93,51 @@ describe("CodingTaskRuntimeManager", () => {
     api.beginVerification.mockReset().mockImplementation(async (root: string) => task(root));
     api.runVerification.mockReset().mockResolvedValue({ status: "passed" });
     api.reportVerification.mockReset().mockResolvedValue(undefined);
+    api.beginFollowup.mockReset().mockImplementation(async (root: string) => ({...task(root),nextAction:null}));
+    useMessageQueueStore.setState({queues:{}});
+  });
+
+  it("dispatches queued requirements in both background projects without a mounted workbench", async () => {
+    api.listTasks.mockResolvedValue([]);
+    api.orchestratorState.mockImplementation(async (root: string) => ({task:{...task(root),phase:"delivered",nextAction:null},problems:[]}));
+    const keyA = codingQueueId("/a","/a-task","/a-session")!;
+    const keyB = codingQueueId("/b","/b-task","/b-session")!;
+    useMessageQueueStore.getState().enqueue(keyA,"A 的后续要求",["src/a.ts"]);
+    useMessageQueueStore.getState().enqueue(keyB,"B 的后续要求",[]);
+    render(<CodingTaskRuntimeManager roots={[]} />);
+    await waitFor(()=>expect(beginAgentTurn).toHaveBeenCalledTimes(2));
+    expect(beginAgentTurn).toHaveBeenCalledWith(expect.objectContaining({sessionId:"/a-session",allowBackgroundSession:true,promptId:expect.any(String),promptText:expect.stringContaining("src/a.ts")}));
+    expect(useSessionStore.getState().sessionId).toBe("/other-session");
+    expect(useMessageQueueStore.getState().getQueue(keyA)[0].status).toBe("sending");
+    const promptId = useMessageQueueStore.getState().getQueue(keyA)[0].promptId;
+    await act(async()=>useSessionStore.setState(state=>({transcripts:{...state.transcripts,"/a-session":{...state.transcripts["/a-session"],messages:[{id:"done",role:"assistant",parts:[],complete:true,promptId,stopReason:"end_turn"}]}}})));
+    await waitFor(()=>expect(useMessageQueueStore.getState().getQueue(keyA)).toEqual([]));
+    expect(useMessageQueueStore.getState().getQueue(keyB)).toHaveLength(1);
+  });
+
+  it("waits for authentication and a pending plan before automatically sending a queued requirement", async () => {
+    api.orchestratorState.mockImplementation(async (root: string) => ({task:{...task(root),phase:"delivered",nextAction:null},problems:[]}));
+    const key = codingQueueId("/a","/a-task","/a-session")!;
+    useMessageQueueStore.getState().enqueue(key,"等待确认后继续",[]);
+    useSessionStore.setState(state=>({transcripts:{...state.transcripts,"/a-session":{...state.transcripts["/a-session"],planApprovals:[{requestId:"p",sessionId:"/a-session",toolCallId:"p"}]}}}));
+    const view = render(<CodingTaskRuntimeManager roots={[]} apiReady={false} />);
+    await waitFor(()=>expect(api.orchestratorState).toHaveBeenCalled());
+    view.rerender(<CodingTaskRuntimeManager roots={[]} apiReady />);
+    expect(beginAgentTurn).not.toHaveBeenCalled();
+    await act(async()=>useSessionStore.setState(state=>({transcripts:{...state.transcripts,"/a-session":{...state.transcripts["/a-session"],planApprovals:[]}}})));
+    await waitFor(()=>expect(beginAgentTurn).toHaveBeenCalledOnce());
+  });
+
+  it("a late delivered event cannot clear a stop that is still awaiting native acknowledgement", async () => {
+    api.orchestratorState.mockImplementation(async (root: string) => ({task:{...task(root),phase:"delivered",nextAction:null},problems:[]}));
+    const key=codingQueueId("/a","/a-task","/a-session")!;
+    useMessageQueueStore.getState().enqueue(key,"停止后不要自动发送",[]);
+    useCodingRuntimeStore.getState().setStopping("/a","/a-task",true);
+    render(<CodingTaskRuntimeManager roots={[]} />);
+    await waitFor(()=>expect(api.orchestratorState).toHaveBeenCalled());
+    expect(useCodingRuntimeStore.getState().stopping[JSON.stringify(["/a","/a-task"])]).toBe(true);
+    expect(beginAgentTurn).not.toHaveBeenCalled();
+    expect(useMessageQueueStore.getState().getQueue(key)[0].status).toBe("queued");
   });
 
   it("continues tasks in both projects without changing the focused session", async () => {

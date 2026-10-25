@@ -72,6 +72,11 @@ describe("deriveBrowserLabel", () => {
 });
 
 describe("deriveActiveTab", () => {
+  it("uses one tab identity when the directory and artifact list open the same file", () => {
+    const options = baseOptions({artifacts:[artifact("/work/a.md","/work/a.md")],selectedArtifactId:"/work/a.md"});
+    expect(deriveActiveTab(options)?.id).toBe(deriveActiveTab({...options,currentView:"fileTree",selectedFilePath:"/work/a.md"})?.id);
+  });
+
   it("derives artifact tab from selectedArtifactId", () => {
     const a = artifact("a1", "/p/foo.ts");
     const tab = deriveActiveTab(
@@ -113,11 +118,11 @@ describe("deriveActiveTab", () => {
   it("derives preview tab from browserUrl", () => {
     const tab = deriveActiveTab(
       baseOptions({
-        currentView: "preview",
+        currentView: "browser",
         browserUrl: "https://example.com/page",
       }),
     );
-    expect(tab?.kind).toBe("preview");
+    expect(tab?.kind).toBe("browser");
     expect(tab?.browserUrl).toBe("https://example.com/page");
     expect(tab?.id).toBe("preview:current");
   });
@@ -138,6 +143,6 @@ describe("deriveActiveTab", () => {
   it("returns null when no selection", () => {
     expect(deriveActiveTab(baseOptions({ currentView: "artifacts" }))).toBeNull();
     expect(deriveActiveTab(baseOptions({ currentView: "fileTree" }))).toBeNull();
-    expect(deriveActiveTab(baseOptions({ currentView: "preview" }))).toBeNull();
+    expect(deriveActiveTab(baseOptions({ currentView: "browser" }))).toBeNull();
   });
 });

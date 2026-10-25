@@ -10,7 +10,7 @@ describe("LoadingRow", () => {
     vi.setSystemTime(1_000);
     render(<LoadingRow startedAt={1_000} />);
 
-    expect(screen.getByText("正在理解任务")).toBeInTheDocument();
+    expect(screen.getByText("正在请求模型")).toBeInTheDocument();
     expect(screen.queryByText("可切换会话，任务会继续运行")).toBeNull();
 
     act(() => {
@@ -22,7 +22,7 @@ describe("LoadingRow", () => {
     act(() => {
       vi.advanceTimersByTime(2_000);
     });
-    expect(document.querySelector(".msg__loading-tip")).toHaveTextContent("✦");
+    expect(document.querySelector(".msg__loading-tip")).toBeNull();
 
     act(() => {
       vi.advanceTimersByTime(4_000);

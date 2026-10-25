@@ -4,7 +4,6 @@ import { AlertTriangle, ArrowUp, LoaderCircle, X } from "lucide-react";
 import { ModelSelector, type ModelOption } from "@/components/ModelSelector";
 import { PermissionPicker } from "@/components/PermissionPicker";
 import { DRAFT_TTL_MS, useAiDraftStore } from "@/features/coding/store/ai-draft-store";
-import { shortcutLabel } from "@/lib/platform";
 
 import { codingTaskDraftKey } from "../lib/task-draft-key";
 import type { CodingTask } from "../lib/types";
@@ -21,9 +20,11 @@ interface TheiaAgentComposerProps {
   starting: boolean;
   sending: boolean;
   streaming: boolean;
+  awaitingDecision?: boolean;
   onModelChange: (modelId: string) => void | Promise<void>;
   onStart: (requirement: string) => void | Promise<void>;
   onSend: (text: string) => boolean | void | Promise<boolean | void>;
+  onEnqueue?: (text: string, contextPaths: string[]) => boolean | void;
   onRemoveContext: (path: string) => void;
   onDraftContextPaths: (paths: string[]) => void;
   onOpenSettings?: () => void;
@@ -58,9 +59,11 @@ export function TheiaAgentComposer({
   starting,
   sending,
   streaming,
+  awaitingDecision = false,
   onModelChange,
   onStart,
   onSend,
+  onEnqueue,
   onRemoveContext,
   onDraftContextPaths,
   onOpenSettings,
@@ -127,9 +130,10 @@ export function TheiaAgentComposer({
 
   const sessionUnavailable = Boolean(task && (!sessionId || task.sessionId !== sessionId));
   const verifying = task?.phase === "verifying";
-  const busy = submitting || sending || (!task && starting);
-  const canSend = !submitting && Boolean(text.trim()) && (task
-    ? !sessionUnavailable && !sending && !streaming && !verifying
+  const busy = submitting || sending && !streaming || (!task && starting);
+  const queueing = Boolean(task && onEnqueue && (streaming || verifying));
+  const canSend = !awaitingDecision && !submitting && Boolean(text.trim()) && (task
+    ? !sessionUnavailable && (queueing || !sending && !streaming && !verifying)
     : !starting && apiReady && Boolean(modelId));
 
   const submit = async () => {
@@ -142,7 +146,7 @@ export function TheiaAgentComposer({
         await onStart(prompt);
         return;
       }
-      const accepted = await onSend(prompt);
+      const accepted = queueing ? onEnqueue?.(prompt, [...contextPaths]) : await onSend(prompt);
       if (accepted !== false) setText((current) => current === text ? "" : current);
     } catch (error) {
       onToast?.(`发送失败：${String(error).replace(/^Error:\s*/, "")}`);
@@ -171,7 +175,7 @@ export function TheiaAgentComposer({
           value={text}
           onChange={(event) => setText(event.target.value)}
           onKeyDown={(event) => {
-            if (!event.nativeEvent.isComposing && event.nativeEvent.keyCode !== 229 && (event.metaKey || event.ctrlKey) && event.key === "Enter") {
+            if (!event.nativeEvent.isComposing && event.nativeEvent.keyCode !== 229 && !event.shiftKey && event.key === "Enter") {
               event.preventDefault();
               void submit();
             }
@@ -182,12 +186,12 @@ export function TheiaAgentComposer({
             : sessionUnavailable
               ? "当前任务未绑定 Agent 会话"
               : verifying
-                ? "可写入草稿，验证完成后手动发送…"
+                ? queueing ? "验证中可补充要求，Enter 加入队列…" : "可写入草稿，验证完成后手动发送…"
                 : streaming
-                  ? "可写入草稿，本轮完成后手动发送…"
+                  ? queueing ? "补充开发要求，Enter 加入队列…" : "可写入草稿，本轮完成后手动发送…"
                   : "给 Agent 补充要求或让它修改当前代码…"}
           aria-label={task ? "补充开发要求" : "任务描述"}
-          disabled={sessionUnavailable || sending}
+          disabled={awaitingDecision || sessionUnavailable || sending && !queueing}
         />
         {!task && !apiReady && (
           <div className="coding-agent__warning">
@@ -201,7 +205,7 @@ export function TheiaAgentComposer({
         <div className="echo-theia-agent__composer-tools" role="group" aria-label="开发任务输入选项">
           <PermissionPicker onToast={onToast} sessionId={sessionId ?? undefined} />
           <ModelSelector modelId={modelId} models={models} onModelChange={onModelChange} ariaLabel="开发任务模型" disabled={busy || sessionUnavailable} />
-          <button type="button" className="echo-theia-agent__send" disabled={!canSend} onClick={() => void submit()} aria-label={task ? "发送给 Agent" : "开始 Agent 任务"} aria-busy={busy} title={busy ? "正在发送…" : `${shortcutLabel("⌘ Enter", "Ctrl+Enter")} 发送；Enter 换行`}>
+          <button type="button" className="echo-theia-agent__send" disabled={!canSend} onClick={() => void submit()} aria-label={queueing ? "加入待发送队列" : task ? "发送给 Agent" : "开始 Agent 任务"} aria-busy={busy} title={queueing ? "Enter 排队；代码任务验证并交付后自动发送" : busy ? "正在发送…" : "Enter 发送；Shift+Enter 换行"}>
             {busy ? <LoaderCircle size={16} className="is-spinning" /> : <ArrowUp size={17} />}
           </button>
         </div>

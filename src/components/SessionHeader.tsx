@@ -1,10 +1,10 @@
 import { useState, type ReactNode, type MutableRefObject } from "react";
-import { Files, Folder, Search, X, PanelRight, Globe, ListChecks, Users, GitCompareArrows } from "lucide-react";
+import { Folder, PanelRight } from "lucide-react";
 import { SidebarToggleIcon, EchoNewTaskIcon } from "@/foundation/components/Icon/icons";
 import { displayPath, shortWorkspacePath } from "@/lib/display-path";
 import { TopbarTitle } from "./TopbarTitle";
 import { TopbarActions, type TopbarActionsProps } from "./TopbarActions";
-import { ActionMenu } from "./ActionMenu";
+import { openLocalPath } from "@/lib/markdown-host";
 
 export type WorkspaceTarget = "fileTree" | "changes" | "artifacts" | "browser" | "plan" | "subagents" | "teams";
 export interface SessionWorkspaceSummary {
@@ -39,7 +39,7 @@ export function SessionNavigation({ sidebarCollapsed, onToggleSidebar, onNewTask
 
 /** One non-scrolling session header. Domain state and workspace navigation stay in ChatView. */
 export function SessionHeader({ sessionId, title, cwd, onRename, actions, summary, activeView,
-  onView, onCloseView, onFind, findOpen, onQuestionHistory, navigation, leading, historyDisabled, questionHistoryTriggerRef,
+  onView, onCloseView, onToggleWorkspace, onFind, findOpen, onQuestionHistory, navigation, leading, historyDisabled, questionHistoryTriggerRef,
 }: {
   questionHistoryTriggerRef?: MutableRefObject<HTMLButtonElement | null>;
   sessionId: string;
@@ -51,6 +51,7 @@ export function SessionHeader({ sessionId, title, cwd, onRename, actions, summar
   activeView: string | null;
   onView: (view: WorkspaceTarget) => void;
   onCloseView: () => void;
+  onToggleWorkspace?: () => void;
   onFind: () => void;
   findOpen: boolean;
   onQuestionHistory?: () => void;
@@ -59,49 +60,32 @@ export function SessionHeader({ sessionId, title, cwd, onRename, actions, summar
   historyDisabled?: boolean;
 }) {
   const [renameRequest, setRenameRequest] = useState(0);
-  const context = summary.hasPlan ? { view: "plan" as const, label: summary.planTotal ? `计划 ${summary.planCompleted}/${summary.planTotal}` : "执行计划" }
-    : summary.changeCount ? { view: "changes" as const, label: `变更 ${summary.changeCount}` }
-    : summary.artifactCount ? { view: "artifacts" as const, label: `产物 ${summary.artifactCount}` }
-    : summary.subagentCount ? { view: "subagents" as const, label: `协作 ${summary.subagentCount}` }
-    : summary.teamCount ? { view: "teams" as const, label: `团队 ${summary.teamCount}` } : null;
   return <header className="main-topbar session-header" data-tauri-drag-region>
     <div className="session-header__navigation"><SessionNavigation {...navigation} />{leading}</div>
     <div className="session-header__identity" data-tauri-drag-region>
       {onRename ? <TopbarTitle key={sessionId} title={title} onRename={onRename} editRequest={renameRequest} /> : <span className="main-topbar__title" title={title}>{title}</span>}
-      {cwd && <span className="session-header__cwd" title={`本任务绑定的工作目录：${displayPath(cwd)}。如需切换目录，请新建任务。`}><Folder size={13} aria-hidden="true" /><span>{shortWorkspacePath(cwd)}</span></span>}
+      {cwd && <button type="button" className="session-header__cwd" aria-label="打开工作目录" onClick={() => void openLocalPath(cwd, {cwd, type:"directory", onToast:actions?.onToast})} title={`打开本任务的工作目录：${displayPath(cwd)}。如需切换目录，请新建任务。`}><Folder size={13} aria-hidden="true" /><span>{shortWorkspacePath(cwd)}</span></button>}
     </div>
     <div className="session-header__actions">
       {summary.status && <span className={"session-header__status" + (summary.attention ? " session-header__status--attention" : "")} role="status">{summary.status}</span>}
-      {context && <button type="button" className="session-header__context" aria-expanded={activeView === context.view} onClick={() => onView(context.view)}>{context.label}</button>}
-      {summary.searchable && <button type="button" className="main-topbar__btn" aria-label="查找当前会话" title="查找当前会话 (Ctrl/Cmd+F)" aria-expanded={findOpen} onClick={onFind}><Search size={17} /></button>}
-      <ActionMenu label="工作区" menuLabel="工作区视图" resetKey={sessionId}
-        triggerClassName="session-header__workspace" trigger={<><PanelRight size={16} /><span>工作区</span></>}>
-        {({ close }) => {
-          const select = (view: WorkspaceTarget) => { close(true); onView(view); };
-          return <>
-            <div className="action-menu__heading">工作目录与浏览</div>
-            {cwd && <button type="button" role="menuitem" className="topbar-actions__item" onClick={() => select("fileTree")}><Folder size={15} />文件<span className="action-menu__meta">工作目录</span></button>}
-            <button type="button" role="menuitem" className="topbar-actions__item" onClick={() => select("browser")}><Globe size={15} />网页预览</button>
-            {(summary.hasContent || summary.changeCount > 0 || summary.artifactCount > 0) && <>
-            <div role="separator" className="action-menu__separator" />
-            <div className="action-menu__heading">文件与交付</div>
-            <button type="button" role="menuitem" className="topbar-actions__item" onClick={() => select("changes")}><GitCompareArrows size={15} />文件变更<span className="action-menu__meta">{summary.changeCount || "暂无"}</span></button>
-            <button type="button" role="menuitem" className="topbar-actions__item" onClick={() => select("artifacts")}><Files size={15} />任务产物<span className="action-menu__meta">{summary.artifactCount || "暂无"}</span></button>
-            </>}
-            <div role="separator" className="action-menu__separator" />
-            <div className="action-menu__heading">任务详情</div>
-            {summary.hasPlan && <button type="button" role="menuitem" className="topbar-actions__item" onClick={() => select("plan")}><ListChecks size={15} />执行计划<span className="action-menu__meta">{summary.planTotal ? `${summary.planCompleted}/${summary.planTotal}` : "待确认"}</span></button>}
-            {summary.subagentCount > 0 && <button type="button" role="menuitem" className="topbar-actions__item" onClick={() => select("subagents")}><Users size={15} />协作详情<span className="action-menu__meta">{summary.runningSubagents ? `${summary.runningSubagents} 项进行中` : summary.subagentCount}</span></button>}
-            <button type="button" role="menuitem" className="topbar-actions__item" onClick={() => select("teams")}><Users size={15} />{summary.teamCount ? "团队详情" : "管理任务团队"}</button>
-            {activeView && <><div role="separator" className="action-menu__separator" /><button type="button" role="menuitem" className="topbar-actions__item" onClick={() => { close(true); onCloseView(); }}><X size={15} />关闭工作视图</button></>}
-          </>;
-        }}
-      </ActionMenu>
+      {summary.hasPlan && <button type="button" className="session-header__context"
+        aria-label={summary.planTotal ? `查看执行计划，已完成 ${summary.planCompleted}/${summary.planTotal} 步` : "查看执行计划"}
+        aria-expanded={activeView === "plan"} aria-controls="session-workspace" onClick={() => onView("plan")}>
+        {summary.planTotal ? `计划 ${summary.planCompleted}/${summary.planTotal}` : "执行计划"}
+      </button>}
       <TopbarActions key={sessionId} sessionId={sessionId} title={title} {...actions} historyDisabled={historyDisabled}
+        onFind={summary.searchable ? onFind : undefined} findOpen={findOpen}
         onRename={onRename ? () => setRenameRequest(value => value + 1) : undefined} onQuestionHistory={onQuestionHistory ? trigger => {
           if (questionHistoryTriggerRef) questionHistoryTriggerRef.current = trigger;
           onQuestionHistory();
         } : undefined} />
+      <button type="button" className="main-topbar__btn session-header__workspace-toggle"
+        aria-label={activeView ? "收起工作区" : "展开工作区"} data-tip={activeView ? "收起工作区" : "展开工作区"}
+        aria-expanded={Boolean(activeView)} aria-controls="session-workspace"
+        onClick={onToggleWorkspace ?? (() => activeView ? onCloseView() : onView("artifacts"))}>
+        <PanelRight size={18} aria-hidden="true" />
+        {summary.artifactCount > 0 && <span className="session-header__badge" aria-label={`${summary.artifactCount} 项成果`}>{summary.artifactCount > 99 ? "99+" : summary.artifactCount}</span>}
+      </button>
     </div>
   </header>;
 }

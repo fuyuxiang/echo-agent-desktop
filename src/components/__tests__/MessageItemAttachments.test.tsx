@@ -65,7 +65,7 @@ describe("MessageItem user attachments", () => {
   it("编辑重发同时传回文本和附件", () => {
     const onEditResend = vi.fn();
     renderMessage(onEditResend);
-    fireEvent.click(screen.getByRole("button", { name: "编辑" }));
+    fireEvent.click(screen.getByRole("button", { name: "编辑并重新发送" }));
     expect(onEditResend).toHaveBeenCalledWith(
       "请优化这份方案",
       ["/tmp/AI数据集平台-数据回流方案.docx"],

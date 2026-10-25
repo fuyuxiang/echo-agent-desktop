@@ -38,6 +38,7 @@ const task: CodingTask | null = ["followup", "streaming", "verifying"].includes(
 function Review() {
   const [modelId, setModelId] = useState(models[0].id);
   const [busy, setBusy] = useState(false);
+  const [queued, setQueued] = useState<string[]>([]);
   const [sent, setSent] = useState<string[]>([]);
   const [context, setContext] = useState(state === "context" ? ["src/一个名称很长的目录/开发任务输入卡片组件.tsx", "src/styles/coding-workbench.css"] : []);
   const [toast, setToast] = useState("");
@@ -55,6 +56,7 @@ function Review() {
       <div className="echo-theia-agent__heading">开发任务</div>
       <div style={{ flex: 1, minHeight: 0, overflow: "auto", padding: 16 }}>
         <strong>描述目标，开始开发</strong><p>选一个具体目标，或直接描述想完成的改动。</p>
+        <output aria-label="排队记录">{queued.length} 条待发送</output>
         <output aria-label="提交记录">{sent.length} 次提交{sent.length > 0 && `：${sent[sent.length - 1]}`}</output>
         {toast && <p role="status">{toast}</p>}
       </div>
@@ -63,6 +65,7 @@ function Review() {
         contextPaths={context} apiReady={state !== "unconfigured"} starting={!task && busy} sending={false} streaming={state === "streaming"}
         startError={state === "error" ? "启动失败，请保留草稿后重试。" : null}
         onModelChange={setModelId} onStart={send} onSend={async (text) => { await send(text); return true; }}
+        onEnqueue={(text) => {setQueued(previous => [...previous, text]); return true;}}
         onRemoveContext={(path) => setContext((previous) => previous.filter((item) => item !== path))}
         onDraftContextPaths={setContext} onOpenSettings={() => setToast("已打开模型设置")} onToast={setToast} />
     </aside>

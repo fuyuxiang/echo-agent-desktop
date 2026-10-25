@@ -5,15 +5,14 @@
  * 这里通过 `echo.agent/task/list` + `echo.agent/subagent/list_running` 观测它们，
  * 通过 `echo.agent/task/kill` / `echo.agent/subagent/cancel` 取消。
  *
- * 这个面板嵌入到 ChatView 右侧或作为浮层。监听 `agent://task-update` 自动刷新。
+ * 详情嵌入任务详情容器；输入区只显示数量摘要。通过 refreshSignal 刷新。
  */
-import { useCallback, useEffect, useLayoutEffect, useRef, useState, type CSSProperties } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import {
   TaskListIcon,
-  DeleteIcon,
+  CloseIcon,
   RefreshCwIcon,
   ChevronDownIcon,
-  CloseIcon,
 } from "@/foundation/components/Icon/icons";
 import { taskKill, tasksList } from "@/lib/agent-client";
 import type { RunningTask } from "@/lib/types";
@@ -25,79 +24,24 @@ interface TasksPanelProps {
    *  that increments on each `agent://task-update`. */
   refreshSignal?: number;
   onToast?: (msg: string) => void;
+  presentation?: "summary" | "details";
+  onOpen?: () => void;
 }
 
-export function TasksPanel({ sessionId, refreshSignal, onToast }: TasksPanelProps) {
+export function TasksPanel({ sessionId, refreshSignal, onToast, presentation = "details", onOpen }: TasksPanelProps) {
   const [tasks, setTasks] = useState<RunningTask[]>([]);
   const [tasksSessionId, setTasksSessionId] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [collapsed, setCollapsed] = useState(false);
-  const [dismissed, setDismissed] = useState(false);
   const [killingTaskKeys, setKillingTaskKeys] = useState<Set<string>>(() => new Set());
   const killingTaskKeysRef = useRef(new Set<string>());
   const sessionEpochRef = useRef(0);
   const currentSessionRef = useRef(sessionId);
   currentSessionRef.current = sessionId;
-  const [dockStyle, setDockStyle] = useState<CSSProperties>();
   const reloadGenerationRef = useRef(0);
   const lastRefreshSignalRef = useRef(refreshSignal);
   const onToastRef = useRef(onToast);
-
-  useLayoutEffect(() => {
-    if (!sessionId || tasksSessionId !== sessionId || dismissed || tasks.length === 0) return;
-    let composer: HTMLElement | null = null;
-    let resizeObserver: ResizeObserver | null = null;
-    const place = () => {
-      if (!composer) return;
-      const rect = composer.getBoundingClientRect();
-      // Keep permission decisions, questions and execution controls unobscured.
-      // The composer still determines horizontal alignment in every view.
-      let protectedTop = rect.top;
-      composer.closest(".chatview__footer")?.querySelectorAll<HTMLElement>(
-        ".perm-inline, .question-inline, .automation-approval, .task-execution-status, .yield-banner, .chatview__pause-btn, .queue-panel",
-      ).forEach(control => {
-        const controlRect = control.getBoundingClientRect();
-        if (controlRect.height > 0) protectedTop = Math.min(protectedTop, controlRect.top);
-      });
-      const nextStyle = {
-        bottom: Math.max(16, window.innerHeight - protectedTop + 12),
-        right: Math.max(16, window.innerWidth - rect.right),
-        width: Math.min(320, Math.max(220, rect.width - 24)),
-        maxHeight: Math.max(96, Math.min(480, protectedTop - 112)),
-      };
-      setDockStyle((current) => current
-        && current.bottom === nextStyle.bottom && current.right === nextStyle.right
-        && current.width === nextStyle.width && current.maxHeight === nextStyle.maxHeight
-        ? current : nextStyle);
-    };
-    const watchComposer = () => {
-      const next = document.querySelector<HTMLElement>(".chatview .echo-composer");
-      if (next === composer) { place(); return; }
-      resizeObserver?.disconnect();
-      composer = next;
-      if (composer && typeof ResizeObserver !== "undefined") {
-        resizeObserver = new ResizeObserver(place);
-        resizeObserver.observe(composer);
-        // A centered, max-width composer can move without changing size when
-        // the sidebar or tool pane opens. Follow its layout containers too.
-        for (let parent = composer.parentElement; parent && parent !== document.body; parent = parent.parentElement) {
-          resizeObserver.observe(parent);
-        }
-      }
-      if (composer) place();
-      else setDockStyle(undefined);
-    };
-    const observer = new MutationObserver(watchComposer);
-    observer.observe(document.body, { childList: true, subtree: true });
-    watchComposer();
-    window.addEventListener("resize", place);
-    return () => {
-      observer.disconnect();
-      resizeObserver?.disconnect();
-      window.removeEventListener("resize", place);
-    };
-  }, [dismissed, sessionId, tasks.length, tasksSessionId]);
 
   useEffect(() => {
     onToastRef.current = onToast;
@@ -133,7 +77,6 @@ export function TasksPanel({ sessionId, refreshSignal, onToast }: TasksPanelProp
     setTasksSessionId(null);
     setError(null);
     setCollapsed(false);
-    setDismissed(false);
     sessionEpochRef.current += 1;
     killingTaskKeysRef.current = new Set();
     setKillingTaskKeys(new Set());
@@ -149,9 +92,7 @@ export function TasksPanel({ sessionId, refreshSignal, onToast }: TasksPanelProp
     if (lastRefreshSignalRef.current === refreshSignal) return;
     lastRefreshSignalRef.current = refreshSignal;
     if (!sessionId) return;
-    // A new lifecycle event re-opens a panel the user previously dismissed,
-    // but preserves their compact/expanded preference.
-    setDismissed(false);
+    // Lifecycle updates preserve the reader's expanded preference.
     void reload();
   }, [refreshSignal, reload, sessionId]);
 
@@ -184,15 +125,13 @@ export function TasksPanel({ sessionId, refreshSignal, onToast }: TasksPanelProp
     [onToast, reload, sessionId],
   );
 
-  if (!sessionId || tasksSessionId !== sessionId || dismissed || tasks.length === 0) {
-    return null;
-  }
+  if (!sessionId || tasksSessionId !== sessionId && !error) return null;
+  if (presentation === "summary") return tasks.length || error ? <button type="button" className="session-background-tasks" onClick={onOpen}><TaskListIcon size="sm" />{error ? "检查后台任务" : `后台任务 ${tasks.length}`}</button> : null;
 
   return (
     <aside
-      className={`tasks-panel${collapsed ? " tasks-panel--collapsed" : ""}`}
+      className={`tasks-panel tasks-panel--inline${collapsed ? " tasks-panel--collapsed" : ""}`}
       aria-label="运行中任务"
-      style={dockStyle}
     >
       <div className="tasks-panel__header">
         <h3 className="tasks-panel__title">
@@ -219,14 +158,7 @@ export function TasksPanel({ sessionId, refreshSignal, onToast }: TasksPanelProp
           >
             <ChevronDownIcon size="sm" />
           </button>
-          <button
-            className="tasks-panel__control"
-            onClick={() => setDismissed(true)}
-            title="关闭；任务状态变化时将再次显示"
-            aria-label="关闭运行中任务"
-          >
-            <CloseIcon size="sm" />
-          </button>
+
         </div>
       </div>
       {!collapsed && (
@@ -236,6 +168,7 @@ export function TasksPanel({ sessionId, refreshSignal, onToast }: TasksPanelProp
               刷新失败：{error}。已保留上次结果。
             </div>
           )}
+          {tasks.length === 0 && !error && <p className="tool-side-panel__empty">当前没有运行中的后台任务</p>}
           <ul className="tasks-panel__list">
             {tasks.map((task) => {
               const taskKey = `${task.source}:${task.id}`;
@@ -247,12 +180,11 @@ export function TasksPanel({ sessionId, refreshSignal, onToast }: TasksPanelProp
                   </div>
                   <div className="tasks-panel__item-body">
                     <div className="tasks-panel__item-desc">
-                      {task.description ?? task.id}
+                      {task.description ?? "后台任务"}
                     </div>
                     <div className="tasks-panel__item-meta">
-                      {task.kind && <span>{task.kind}</span>}
-                      {task.status && <span>· {task.status}</span>}
-                      <span className="tasks-panel__item-id">#{task.id.slice(0, 8)}</span>
+                      <span>{({running:"运行中",working:"运行中",in_progress:"运行中",pending:"等待执行",completed:"已结束",failed:"执行失败",stopped:"已停止",paused:"已暂停"} as Record<string,string>)[task.status ?? ""] ?? "状态待确认"}</span>
+                      <details><summary>诊断信息</summary><code>{task.kind} · {task.source}:{task.id}</code></details>
                     </div>
                   </div>
                   <button
@@ -260,9 +192,9 @@ export function TasksPanel({ sessionId, refreshSignal, onToast }: TasksPanelProp
                     onClick={() => handleKill(task)}
                     disabled={killing}
                     title={killing ? "正在终止" : "终止"}
-                    aria-label={`终止任务：${task.description ?? task.id}`}
+                    aria-label={`终止任务：${task.description ?? "后台任务"}`}
                   >
-                    <DeleteIcon size="sm" />
+                    <CloseIcon size="sm" />
                   </button>
                 </li>
               );

@@ -57,6 +57,7 @@ const writeDocument = vi.fn(async (_root: string, path: string, content: string,
 }));
 
 vi.mock("@/lib/agent-client", () => ({
+  agentResolvePlanApproval: vi.fn(async () => true),
   filesystemPickDirectory: vi.fn(async () => "/picked"),
   listDir: vi.fn(async () => []),
   codingReadDocument: (root: string, path: string) => readDocument(root, path),
@@ -91,6 +92,9 @@ import type { CodingTask } from "../lib/types";
 import { useAiDraftStore } from "../store/ai-draft-store";
 import { useTaskStore } from "../store/task-store";
 import { SidebarLayoutContext, useAppSidebarLayout } from "@/lib/sidebar-layout";
+import { useMessageQueueStore } from "@/stores/message-queue-store";
+import { useSessionStore } from "@/stores/session-store";
+import { codingQueueId } from "../lib/coding-followup";
 
 function verificationTask(overrides: Partial<CodingTask> = {}): CodingTask {
   return {
@@ -135,6 +139,7 @@ describe("Theia workbench", () => {
       error: null,
     });
     useAiDraftStore.getState().clear();
+    useMessageQueueStore.setState({queues:{}});
   });
 
   it.each(["", "/repo"])("toggles the global sidebar in both directions and keeps focus in the coding header (%s)", async cwd => {
@@ -238,6 +243,32 @@ describe("Theia workbench", () => {
     expect(screen.getByRole("textbox", { name: "补充开发要求" })).toHaveValue("请处理边界情况");
     await user.click(screen.getByRole("tab", { name: "验证" }));
     expect(screen.getByRole("textbox", { name: "补充开发要求" })).toHaveValue("请处理边界情况");
+  });
+
+  it("disables queued manual sends throughout verification and explains when they become available", async () => {
+    const task=verificationTask({sessionId:"queue-session",modelId:"model-1"});
+    useTaskStore.setState({root:"/repo",task});
+    useSessionStore.getState().setSession("queue-session");
+    useMessageQueueStore.getState().enqueue(codingQueueId("/repo",task.id,task.sessionId)!,"验证后处理边界",[]);
+    render(<CodingWorkbench cwd="/repo" sessionId="queue-session" apiReady models={[{id:"model-1"}]} defaultModelId="model-1" />);
+    const send=await screen.findByRole("button",{name:"正在验证，完成后可发送"});
+    expect(send).toBeDisabled();
+    expect(invoke.mock.calls.some(([command])=>command==="coding_task_begin_followup")).toBe(false);
+    act(()=>useTaskStore.setState({task:{...task,phase:"delivered"}}));
+    expect(await screen.findByRole("button",{name:"立即发送"})).toBeEnabled();
+  });
+
+  it("keeps native plan approval reachable while ordinary coding input and queue sends wait", async () => {
+    const task=verificationTask({sessionId:"plan-session",modelId:"model-1",phase:"implementing"});
+    useTaskStore.setState({root:"/repo",task});
+    useSessionStore.getState().setSession("plan-session");
+    useSessionStore.getState().requestPlanApproval({requestId:"plan",sessionId:"plan-session",toolCallId:"plan-tool",planContent:"先检查接口契约，再实施修改"});
+    render(<CodingWorkbench cwd="/repo" sessionId="plan-session" apiReady models={[{id:"model-1"}]} defaultModelId="model-1" />);
+    expect(await screen.findByRole("group",{name:"计划审批"})).toBeInTheDocument();
+    expect(screen.getByRole("textbox",{name:"补充开发要求"})).toBeDisabled();
+    await userEvent.click(screen.getByRole("button",{name:"批准执行"}));
+    await waitFor(()=>expect(screen.queryByRole("group",{name:"计划审批"})).toBeNull());
+    expect(screen.getByRole("textbox",{name:"补充开发要求"})).toBeEnabled();
   });
 
   it("opens the delivery report from a named action in the default IDE", async () => {

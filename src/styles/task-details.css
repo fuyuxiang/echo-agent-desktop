@@ -1,0 +1,39 @@
+/* Unified task details: a list OR a readable preview until a wide split fits. */
+.task-details__shell { display:flex; flex:1; min-width:0; min-height:0; flex-direction:column; }
+.task-details .tool-side-panel__actions { margin-left:auto; flex:none; }
+.task-details__tabs { min-height:0; flex:none; border-bottom:1px solid var(--echo-border-default); overflow:hidden; }
+.task-details__content { display:flex; flex:1; min-height:0; min-width:0; }
+.task-details__list { flex:1; min-width:0; overflow:auto; padding:12px; }
+.task-details__list--split { flex:none; border-right:1px solid var(--echo-border-default); }
+.task-details__file-tree { min-height:0; }
+.task-details__body { flex:1; min-height:0; min-width:0; overflow:auto; padding:16px; }
+.task-details__body .file-changes-panel, .task-details__body .subagent-panel { max-width:none; }
+.task-details__heading { font:inherit; font-size:.875rem; font-weight:600; margin:0 0 16px; color:var(--echo-text-strong); }
+.task-details__breadcrumb { display:flex; align-items:center; gap:12px; min-height:40px; flex:none; padding:4px 12px; border-bottom:1px solid var(--echo-border-default); font-size:.75rem; }
+.task-details__breadcrumb button { display:inline-flex; align-items:center; flex:none; gap:4px; min-height:32px; border:0; background:transparent; color:var(--echo-text-link); font:inherit; cursor:pointer; }
+.task-details__breadcrumb span { min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+.task-details .view-selector { min-width:0; }
+.task-details .view-selector__pill { max-width:170px; min-height:32px; }
+.task-details .artifacts-list__meta { color:var(--echo-text-medium); }
+.tasks-panel--inline .tasks-panel__item-meta { display:flex; flex-wrap:wrap; }
+.tasks-panel--inline .tasks-panel__item-meta details { max-width:100%; }
+.tasks-panel--inline code { overflow-wrap:anywhere; }
+
+.task-details [data-preview-kind="text"] .file-preview__code { white-space:pre-wrap; overflow-wrap:anywhere; font-family:inherit; }
+.task-details .file-preview__copy { min-height:32px; }
+
+/* Keep visited editors mounted while changing category or collapsing the workspace. */
+.task-details[hidden], .task-details [hidden] { display:none !important; }
+.task-details > .task-details__shell > .tool-side-panel__header { gap:4px; padding:8px; flex-wrap:nowrap; }
+.task-details .workspace-view-tabs { display:flex; flex:1; gap:1px; min-width:0; overflow-x:auto; scrollbar-width:none; }
+.workspace-view-tabs button, .workspace-task-tabs button { flex:none; min-height:32px; padding:5px 6px; border:0; border-radius:6px; background:transparent; color:var(--echo-text-medium); font:inherit; font-size:.75rem; white-space:nowrap; cursor:pointer; }
+.workspace-view-tabs button[aria-selected=true], .workspace-task-tabs button[aria-selected=true] { background:var(--echo-bg-hover); color:var(--echo-text-strong); font-weight:600; }
+.workspace-view-tabs button:hover, .workspace-task-tabs button:hover { background:var(--echo-bg-hover); }
+.workspace-view-tabs button:focus-visible, .workspace-task-tabs button:focus-visible { outline:2px solid var(--echo-brand); outline-offset:-2px; }
+.workspace-task-tabs { display:flex; flex:none; gap:4px; padding:4px 12px 8px; border-bottom:1px solid var(--echo-border-default); }
+.task-details__single-content { display:flex; align-items:center; justify-content:space-between; gap:8px; padding:4px 12px; border-bottom:1px solid var(--echo-border-default); font-size:.75rem; color:var(--echo-text-medium); }
+.task-details__single-content > span { min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+.task-details__browser { height:100%; min-height:280px; }
+.task-details__single-content .task-details__back-list { display:inline-flex; flex:none; align-items:center; gap:4px; min-height:32px; padding:0; border:0; background:transparent; color:var(--echo-text-link); font:inherit; cursor:pointer; }
+.task-details__single-content > span { margin-right:auto; }
+.task-details__breadcrumb > .tool-side-panel__icon-btn { margin-left:auto; color:var(--echo-text-medium); }

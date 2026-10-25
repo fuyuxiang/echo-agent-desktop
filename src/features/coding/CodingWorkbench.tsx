@@ -28,6 +28,11 @@ import {
   filesystemPickDirectory,
 } from "@/lib/agent-client";
 
+import { QueuePanel } from "@/components/QueuePanel";
+import { PlanPanel } from "@/components/PlanPanel";
+import { useCodingFollowupQueue } from "./hooks/useCodingFollowupQueue";
+import { claimCodingAdmission, codingQueueId, codingQueueOwner, MANUAL_FOLLOWUP_PHASES, sendCodingQueuedFollowup } from "./lib/coding-followup";
+import { useMessageQueueStore } from "@/stores/message-queue-store";
 import { AgentPane } from "./agent/AgentPane";
 import { TaskEvidenceStrip } from "./agent/TaskEvidenceStrip";
 import { TheiaAgentComposer } from "./agent/TheiaAgentComposer";
@@ -756,6 +761,8 @@ export function CodingWorkbench({
         onToast?.("当前任务没有可用的 Agent 会话，请重新选择该任务或新建任务");
         return false;
       }
+      const releaseAdmission = claimCodingAdmission(cwd, task.id);
+      if (!releaseAdmission) return false;
       setSending(true);
       let reopened = false;
       try {
@@ -805,6 +812,7 @@ export function CodingWorkbench({
         onToast?.(`无法继续当前任务：${message}`);
         return false;
       } finally {
+        releaseAdmission();
         if (isTaskCurrent()) setSending(false);
       }
     },
@@ -944,6 +952,11 @@ export function CodingWorkbench({
       returnFocus,
       action: async () => {
         await useTaskStore.getState().deleteTask(summary.id);
+        for (const key of Object.keys(useMessageQueueStore.getState().queues)) {
+          const owner = codingQueueOwner(key);
+          if (owner?.root === cwd && owner.taskId === summary.id) useMessageQueueStore.getState().clear(key);
+        }
+        useCodingRuntimeStore.getState().untrack(cwd, summary.id);
         if (wasActive) {
           setPhaseReason(undefined);
           setBlocker(undefined);
@@ -1023,9 +1036,41 @@ export function CodingWorkbench({
     task,
   ]);
 
+  const codingQueueReady = Boolean(task?.sessionId && activeSessionId === task.sessionId && hostSessionId === task.sessionId
+    && apiReady && !streaming && !sending && !lifecycleSettling && !stopping && !transcript?.pendingSendNowPromptId
+    && !transcript?.planApprovals?.length && !awaitingPermission && !awaitingQuestion);
+  const codingQueueReadyRef = useRef(codingQueueReady);
+  codingQueueReadyRef.current = codingQueueReady;
+  const followupQueue = useCodingFollowupQueue({
+    workspace: cwd, taskId: task?.id, sessionId: activeSessionId,
+    autoReady: false,
+    manualReady: codingQueueReady && !!task && MANUAL_FOLLOWUP_PHASES.includes(task.phase),
+    send: (text, paths, promptId, manual) => {
+      const epoch = useCodingRuntimeStore.getState().actionEpochs[codingRuntimeKey(cwd, task!.id)] ?? 0;
+      return sendCodingQueuedFollowup({root: cwd, taskId: task!.id, sessionId: activeSessionId!, text, contextPaths: paths, promptId, manual,
+        prepare: prepareEditor,
+        canDispatch: () => isTaskCurrent() && codingQueueReadyRef.current && !useCodingRuntimeStore.getState().stopping[codingRuntimeKey(cwd, task!.id)]
+          && epoch === (useCodingRuntimeStore.getState().actionEpochs[codingRuntimeKey(cwd, task!.id)] ?? 0),
+        onChanged: () => useTaskStore.getState().refreshTaskState(),
+      });
+    },
+    onToast,
+  });
+
   const stopActiveTask = useCallback(async () => {
     if (!cwd || !task || !isBusyPhase(task.phase) || useCodingRuntimeStore.getState().stopping[codingRuntimeKey(cwd, task.id)]) return;
     useCodingRuntimeStore.getState().setStopping(cwd, task.id, true);
+    // Stop also fences pending requirements, even if a verification completion
+    // reaches the renderer before the native cancellation acknowledgement.
+    const queueId = codingQueueId(cwd, task.id, task.sessionId);
+    if (queueId) {
+      const queue = useMessageQueueStore.getState();
+      for (const item of queue.getQueue(queueId)) {
+        if (item.status === "queued" && !queue.setStatus(queueId, item.id, "paused")) {
+          onToast?.("任务停止已请求，但队列暂停未能保存，请检查本机存储后重试");
+        }
+      }
+    }
     let awaitingSettlement = false;
     try {
       if (activeRunId || backgroundRunId) await codingApi.cancelVerification(activeRunId ?? backgroundRunId!);
@@ -1523,7 +1568,7 @@ export function CodingWorkbench({
           dirtyCount={theiaDirtyCount}
           editorBlock={editorBlock}
           onOpenVerification={() => setTheiaPanel("verification")}
-          needsInput={awaitingPermission || awaitingQuestion || Boolean(task.blocker)}
+          needsInput={awaitingPermission || awaitingQuestion || Boolean(transcript?.planApprovals?.length) || Boolean(task.blocker)}
           onOpenPlan={() => { setTheiaReportOpen(false); setTheiaReviewPath(null); setTheiaPlanOpen(true); }}
           onOpenReport={() => { setTheiaPlanOpen(false); setTheiaReviewPath(null); setTheiaReportOpen(true); }}
         />}
@@ -1565,6 +1610,12 @@ export function CodingWorkbench({
               blocker={blocker !== undefined ? blocker : task.blocker}
               awaitingPermission={awaitingPermission}
               awaitingQuestion={awaitingQuestion}
+              planApproval={activeSessionId && Boolean(transcript?.planApprovals?.length) && (
+                hostSessionId === activeSessionId
+                  ? <PlanPanel sessionId={activeSessionId} onToast={onToast} />
+                  : <button type="button" className="btn btn--primary" disabled={!onActivateSession}
+                    onClick={() => void onActivateSession?.(activeSessionId,cwd).catch(error => onToast?.(`打开计划确认失败：${String(error).replace(/^Error:\s*/, "")}`))}>打开任务会话并确认计划</button>
+              )}
               sending={sending || lifecycleSettling}
               onContinue={continueInterruptedTask}
               continueDisabled={task.phase === "paused" && task.phaseReason === "等待红灯测试验证" && !tddEvidence?.redRecordId && !tddEvidence?.waiverReason}
@@ -1639,6 +1690,10 @@ export function CodingWorkbench({
             </>
           )}
         </div>
+        {followupQueue.queueId && <div className="echo-theia-agent__queue"><QueuePanel sessionId={followupQueue.queueId}
+          awaitingQuestion={!followupQueue.manualReady} blockedReason={task?.phase === "verifying" ? "正在验证，完成后可发送" : "请先处理当前任务状态或待确认事项"}
+          onSendNow={(_text, _paths, id) => id ? followupQueue.sendItem(id) : false}
+          hint="代码任务验证并交付后，自动发送下一条未暂停的要求" /></div>}
         <TheiaAgentComposer
           key={`${cwd}:${task?.id ?? "new"}`}
           workspaceRoot={cwd}
@@ -1650,11 +1705,13 @@ export function CodingWorkbench({
           apiReady={apiReady}
           startError={startError}
           starting={starting || creatingIsolatedWorkspace}
-          sending={sending || lifecycleSettling}
+          sending={sending || lifecycleSettling || followupQueue.sending}
           streaming={streaming}
           onModelChange={(next) => void changeTaskModel(next)}
           onStart={startTask}
           onSend={sendFollowup}
+          onEnqueue={followupQueue.enqueue}
+          awaitingDecision={awaitingPermission || awaitingQuestion || Boolean(transcript?.planApprovals?.length)}
           onRemoveContext={removeFromContext}
           onDraftContextPaths={addManyToContext}
           onOpenSettings={onOpenSettings}

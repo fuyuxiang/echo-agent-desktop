@@ -68,6 +68,30 @@ export function useStickToBottom({
   const lastScrollRangeRef = useRef(0);
   const touchYRef = useRef<number | null>(null);
   const previousSessionRef = useRef(sessionId);
+  type ReadingPosition = { top: number; following: boolean; anchor?: { id: string; offset: number } };
+  const positions = useRef(new Map<string | null, ReadingPosition>());
+  const rememberPosition = useCallback(() => {
+    const viewport = scrollRef.current;
+    if (!viewport) return;
+    const edge = viewport.getBoundingClientRect().top;
+    const row = Array.from(contentRef.current?.querySelectorAll<HTMLElement>("[data-msg-id]") ?? [])
+      .find(node => node.getBoundingClientRect().bottom > edge);
+    positions.current.set(previousSessionRef.current, { top: viewport.scrollTop, following: followRef.current,
+      anchor: row ? { id: row.dataset.msgId!, offset: row.getBoundingClientRect().top - edge } : undefined });
+    if (positions.current.size > 50) positions.current.delete(positions.current.keys().next().value!);
+  }, []);
+  const restoreReadingAnchor = useCallback(() => {
+    const viewport = scrollRef.current;
+    const position = positions.current.get(previousSessionRef.current);
+    if (!viewport || !position || followRef.current) return;
+    const row = Array.from(contentRef.current?.querySelectorAll<HTMLElement>("[data-msg-id]") ?? [])
+      .find(node => node.dataset.msgId === position.anchor?.id);
+    if (row && position.anchor) {
+      viewport.scrollTop += row.getBoundingClientRect().top - viewport.getBoundingClientRect().top - position.anchor.offset;
+    } else viewport.scrollTop = position.top;
+    lastScrollTopRef.current = viewport.scrollTop;
+    lastScrollRangeRef.current = Math.max(0, viewport.scrollHeight - viewport.clientHeight);
+  }, []);
   const streamingRef = useRef(streaming);
   streamingRef.current = streaming;
 
@@ -85,8 +109,9 @@ export function useStickToBottom({
 
   const pauseFollowing = useCallback(() => {
     updateFollowing(false);
+    rememberPosition();
     cancelScheduledAlignment();
-  }, [cancelScheduledAlignment, updateFollowing]);
+  }, [cancelScheduledAlignment, updateFollowing, rememberPosition]);
 
   const alignToBottom = useCallback(
     (force = false) => {
@@ -104,6 +129,7 @@ export function useStickToBottom({
       );
       lastScrollTopRef.current = element.scrollTop;
       lastScrollRangeRef.current = Math.max(0, element.scrollHeight - element.clientHeight);
+      rememberPosition();
       cancelScheduledAlignment();
       frameRef.current = window.requestAnimationFrame(() => {
         frameRef.current = null;
@@ -114,9 +140,10 @@ export function useStickToBottom({
         );
         lastScrollTopRef.current = element.scrollTop;
         lastScrollRangeRef.current = Math.max(0, element.scrollHeight - element.clientHeight);
+        rememberPosition();
       });
     },
-    [cancelScheduledAlignment, updateFollowing],
+    [cancelScheduledAlignment, updateFollowing, rememberPosition],
   );
 
   const scrollToBottom = useCallback(() => {
@@ -130,8 +157,15 @@ export function useStickToBottom({
     const sessionChanged = previousSessionRef.current !== sessionId;
     previousSessionRef.current = sessionId;
 
-    alignToBottom(sessionChanged);
-  }, [alignToBottom, contentVersion, sessionId, streaming]);
+    if (sessionChanged) {
+      cancelScheduledAlignment();
+      const saved = positions.current.get(sessionId);
+      updateFollowing(saved?.following ?? true);
+      if (saved && scrollRef.current) scrollRef.current.scrollTop = saved.top;
+    }
+    if (followRef.current) alignToBottom();
+    else restoreReadingAnchor();
+  }, [alignToBottom, cancelScheduledAlignment, contentVersion, restoreReadingAnchor, sessionId, streaming, updateFollowing]);
 
   useEffect(() => {
     const scrollElement = scrollRef.current;
@@ -160,6 +194,7 @@ export function useStickToBottom({
       }
       lastScrollTopRef.current = nextScrollTop;
       lastScrollRangeRef.current = scrollRange;
+      rememberPosition();
     };
     const handleWheel = (event: WheelEvent) => {
       if (event.deltaY < 0 && scrollElement.scrollTop > 0) pauseFollowing();
@@ -207,7 +242,10 @@ export function useStickToBottom({
         pauseFollowing();
       }
     };
-    const handleLateLayout = () => alignToBottom();
+    const handleLateLayout = () => {
+      if (followRef.current) alignToBottom();
+      else restoreReadingAnchor();
+    };
 
     scrollElement.addEventListener("scroll", handleScroll, { passive: true });
     scrollElement.addEventListener("wheel", handleWheel, { passive: true });
@@ -246,7 +284,7 @@ export function useStickToBottom({
       contentElement.removeEventListener("load", handleLateLayout, true);
       resizeObserver?.disconnect();
     };
-  }, [alignToBottom, pauseFollowing, sessionId, threshold, updateFollowing]);
+  }, [alignToBottom, pauseFollowing, rememberPosition, restoreReadingAnchor, sessionId, threshold, updateFollowing]);
 
   useEffect(() => cancelScheduledAlignment, [cancelScheduledAlignment]);
 

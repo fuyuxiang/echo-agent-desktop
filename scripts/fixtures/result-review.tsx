@@ -44,7 +44,7 @@ export default function ResultReviewFixture() {
     <div style={{ display: "flex", flexWrap: "wrap", alignItems: "center", justifyContent: "space-between", gap: 8, padding: "12px 16px", borderBottom: "1px solid var(--echo-border-default)" }}>
       <strong>任务成果与文件预览</strong><label style={{ display: "inline-flex", gap: 6, alignItems: "center", color: "var(--echo-text-medium)" }}><input type="checkbox" checked={copyFailure} onChange={(event) => setCopyFailure(event.target.checked)} />模拟复制失败</label>
     </div>
-    <div className="tool-side-panel__header"><div className="tool-side-panel__tabs"><ArtifactTabsBar tabs={tabs} activeTabId={current?.id} onSelect={setActive} onClose={(id) => setTabs((items) => items.filter((tab) => tab.id !== id))} onReorder={(ids) => setTabs((items) => ids.map((id) => items.find((tab) => tab.id === id)!))} /></div></div>
+    <div className="task-details__tabs"><ArtifactTabsBar tabs={tabs} activeTabId={current?.id} onSelect={setActive} onClose={(id) => setTabs((items) => items.filter((tab) => tab.id !== id))} onReorder={(ids) => setTabs((items) => ids.map((id) => items.find((tab) => tab.id === id)!))} /></div>
     <div className="tool-side-panel__body" style={{ padding: 16 }}>
       {current ? <div className="artifact-file-preview"><FilePreview filename={current.label} content={contentFor(current.id)} onCopyText={async () => !copyFailure}
         docExtractor={current.id === "empty" ? () => ({ readText: () => "<w:document />", listEntries: () => ["word/document.xml"] })

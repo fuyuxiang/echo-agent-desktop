@@ -19,6 +19,8 @@ import {
 
 interface QueuePanelProps {
   sessionId: string;
+  hint?: string;
+  blockedReason?: string;
   /** agent 正在回复时，「立即发送」使用 Runtime 的原子 sendNow。 */
   streaming?: boolean;
   sendNowPending?: boolean;
@@ -34,6 +36,8 @@ interface QueuePanelProps {
 
 export function QueuePanel({
   sessionId,
+  hint,
+  blockedReason,
   streaming = false,
   sendNowPending = false,
   awaitingQuestion = false,
@@ -60,11 +64,11 @@ export function QueuePanel({
     <div className="queue-panel" role="list" aria-label="待发送队列">
       <div className="queue-panel__head">
         <span>待发送队列({queue.length})</span>
-        <span className="queue-panel__hint">当前一轮正常结束后，自动发送下一条未暂停的消息</span>
+        <span className="queue-panel__hint">{hint ?? "当前一轮正常结束后，自动发送下一条未暂停的消息"}</span>
       </div>
       {dialog}
       {saveError?.sessionId === sessionId && <p role="alert" className="queue-panel__error">{saveError.message}</p>}
-      {queue.some((item) => item.recovery) && <p role="status" className="queue-panel__hint">已恢复上次保留的消息，暂未发送。请检查会话记录后逐条恢复。</p>}
+      {queue.some((item) => item.recovery) && <p role="status" className="queue-panel__hint">部分消息已暂停。请检查任务记录后逐条恢复。</p>}
       {queue.map((item, idx) => (
         <QueueRow
           key={`${sessionId}:${item.id}`}
@@ -77,7 +81,7 @@ export function QueuePanel({
           onDown={() => mutate(() => reorder(sessionId, idx, idx + 1))}
           onTogglePause={() => {
             if (item.recovery === "uncertain") {
-              requestConfirmation({ title: "确认再次发送这条消息？", description: "上次退出时未收到发送结果。这条消息可能已经执行，请先查看会话记录。继续会再次发送，可能重复修改文件或其他操作。", confirmLabel: "已检查，允许再次发送", action: async () => { mutate(() => setStatus(sessionId, item.id, "queued")); } });
+              requestConfirmation({ title: "确认再次发送这条消息？", description: "上次执行未能确认成功，可能已经部分执行。请先查看任务记录。继续会再次发送，可能重复修改文件或其他操作。", confirmLabel: "已检查，允许再次发送", action: async () => { mutate(() => setStatus(sessionId, item.id, "queued")); } });
             } else { mutate(() => setStatus(sessionId, item.id, item.status === "paused" ? "queued" : "paused")); }
           }}
           onCommitEdit={(text) => mutate(() => update(sessionId, item.id, text))}
@@ -89,7 +93,7 @@ export function QueuePanel({
                 : "发送"
           }
           sendTitle={
-            streaming
+            awaitingQuestion && blockedReason ? blockedReason : streaming
               ? "中断当前回复并立即发送这条"
               : "立即发送"
           }
@@ -208,6 +212,7 @@ function QueueRow({
             {item.text || "仅附件消息"}
           </button>
           {item.recovery === "uncertain" && <span className="queue-panel__hint">发送结果待确认</span>}
+          {item.sendError && <span className="queue-panel__hint" role="status">{item.sendError}</span>}
           {(item.attachments?.length ?? 0) > 0 && (
             <span className="queue-row__attachments" aria-label="队列附件">
               {item.attachments!.map((path) => (
