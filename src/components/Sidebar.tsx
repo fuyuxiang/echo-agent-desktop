@@ -553,7 +553,7 @@ export function Sidebar({
   onNavigate: (label: string) => void;
   onOpenSettings: () => void;
   /** Collapse the sidebar; an expand affordance is rendered over the main area. */
-  onToggleCollapse: () => void;
+  onToggleCollapse?: () => void;
   /** Open the session search overlay. */
   onOpenSearch: () => void;
   onPlaceholder: (label: string) => void;
@@ -985,14 +985,14 @@ export function Sidebar({
           <span className="sidebar__logo">EchoAgent</span>
         </div>
         <div className="sidebar__logo-spacer" {...(IS_MACOS ? { "data-tauri-drag-region": true } : {})} />
-        <button
+        {onToggleCollapse && <button
           className="sidebar__icon-btn"
           aria-label="收起侧边栏"
           data-tip="收起侧边栏"
           onClick={onToggleCollapse}
         >
           <SidebarToggleIcon size="md" />
-        </button>
+        </button>}
         <button className="sidebar__icon-btn" aria-label="搜索" onClick={onOpenSearch}>
           <SearchIcon size="md" />
         </button>

@@ -15,9 +15,15 @@ import {
   type ShareFormat,
 } from "@/lib/share";
 import type { ChatMessage } from "@/stores/session-store";
-import { openExternalUrl } from "@/lib/agent-client";
+import { useModalFocus } from "@/lib/use-modal-focus";
+import { buildSessionMarkdown, sanitizeFilename } from "@/lib/export-markdown";
+import { openExternalUrl, exportTextFile } from "@/lib/agent-client";
 
 interface ShareMenuProps {
+  controlledOpen?: boolean;
+  onClose?: () => void;
+  returnFocus?: HTMLElement | null;
+  saveMarkdown?: boolean;
   messages: ChatMessage[];
   title?: string;
   /** 宿主回调(打开系统邮件客户端)。依赖注入便于测试;缺省用 window.open。 */
@@ -25,8 +31,16 @@ interface ShareMenuProps {
   onDone?: (msg: string) => void;
 }
 
-export function ShareMenu({ messages, title, openUrl, onDone }: ShareMenuProps) {
-  const [open, setOpen] = useState(false);
+export function ShareMenu({ messages, title, openUrl, onDone, controlledOpen, onClose, returnFocus, saveMarkdown }: ShareMenuProps) {
+  const [localOpen, setLocalOpen] = useState(false);
+  const [busy, setBusy] = useState(false);
+  const open = controlledOpen ?? localOpen;
+  const setOpen = (next: boolean | ((prev: boolean) => boolean)) => {
+    const value = typeof next === "function" ? next(open) : next;
+    if (controlledOpen === undefined) setLocalOpen(value);
+    if (!value) onClose?.();
+  };
+  const dialogRef = useModalFocus<HTMLDivElement>(controlledOpen === true, () => setOpen(false), returnFocus);
   const [includeProcess, setIncludeProcess] = useState(false);
   const ref = useRef<HTMLDivElement>(null);
   const triggerRef = useRef<HTMLButtonElement>(null);
@@ -35,7 +49,7 @@ export function ShareMenu({ messages, title, openUrl, onDone }: ShareMenuProps) 
   const [position, setPosition] = useState({ top: 0, left: 0 });
 
   useLayoutEffect(() => {
-    if (!open) return;
+    if (!open || controlledOpen !== undefined) return;
     const place = () => {
       const trigger = triggerRef.current?.getBoundingClientRect();
       const popover = popoverRef.current;
@@ -58,10 +72,10 @@ export function ShareMenu({ messages, title, openUrl, onDone }: ShareMenuProps) 
       window.removeEventListener("resize", place);
       window.removeEventListener("scroll", place, true);
     };
-  }, [open]);
+  }, [open, controlledOpen]);
 
   useEffect(() => {
-    if (!open) return;
+    if (!open || controlledOpen !== undefined) return;
     const onDown = (e: MouseEvent) => {
       if (!ref.current?.contains(e.target as Node) && !popoverRef.current?.contains(e.target as Node)) setOpen(false);
     };
@@ -80,11 +94,23 @@ export function ShareMenu({ messages, title, openUrl, onDone }: ShareMenuProps) 
     };
   }, [open]);
 
-  const exportAs = (format: ShareFormat) => {
-    const payload = buildSharePayload(messages, format, title, { includeProcess });
-    triggerDownload(payload);
-    setOpen(false);
-    onDone?.(`已导出 ${payload.filename}`);
+  const exportAs = async (format: ShareFormat) => {
+    if (busy) return;
+    if (format === "markdown" && saveMarkdown) {
+      setBusy(true);
+      try {
+        const path = await exportTextFile(sanitizeFilename(title || "对话导出") + ".md", buildSessionMarkdown(messages, title, { includeProcess }), "md");
+        if (path) { onDone?.(`已导出到 ${path}`); setOpen(false); }
+      } catch (error) { onDone?.(`导出失败：${String(error).replace(/^Error:\s*/, "")}`); }
+      finally { setBusy(false); }
+      return;
+    }
+    try {
+      const payload = buildSharePayload(messages, format, title, { includeProcess });
+      triggerDownload(payload);
+      setOpen(false);
+      onDone?.(`已导出 ${payload.filename}`);
+    } catch (error) { onDone?.(`导出失败：${String(error).replace(/^Error:\s*/, "")}`); }
   };
 
   const shareMail = () => {
@@ -128,12 +154,12 @@ export function ShareMenu({ messages, title, openUrl, onDone }: ShareMenuProps) 
 
   return (
     <div className="share-menu" ref={ref}>
-      <button
+      {controlledOpen === undefined && <button
         ref={triggerRef}
         type="button"
         className={
-          "chatview__artifacts-toggle" +
-          (open ? " chatview__artifacts-toggle--active" : "")
+          "share-menu__trigger" +
+          (open ? " share-menu__trigger--active" : "")
         }
         onClick={(e) => {
           e.stopPropagation();
@@ -144,9 +170,11 @@ export function ShareMenu({ messages, title, openUrl, onDone }: ShareMenuProps) 
         aria-controls={open ? popoverId : undefined}
       >
         分享
-      </button>
+      </button>}
       {open && createPortal(
-        <div id={popoverId} ref={popoverRef} className="share-menu__popover" role="group" aria-label="分享选项" style={position} onClick={(e) => e.stopPropagation()}>
+        <div className={controlledOpen !== undefined ? "workbench-dialog-overlay" : undefined} onMouseDown={event => { if (event.target === event.currentTarget) setOpen(false); }}>
+        <div id={popoverId} ref={controlledOpen !== undefined ? dialogRef : popoverRef} className={"share-menu__popover" + (controlledOpen !== undefined ? " share-menu__popover--dialog" : "")} role={controlledOpen !== undefined ? "dialog" : "group"} aria-modal={controlledOpen !== undefined ? true : undefined} aria-label="分享选项" style={controlledOpen === undefined ? position : undefined} onClick={(e) => e.stopPropagation()}>
+          {controlledOpen !== undefined && <div className="workbench-dialog__header"><strong>导出与本地分享</strong><button type="button" className="main-topbar__btn" aria-label="关闭分享选项" onClick={() => setOpen(false)}>×</button></div>}
           <div className="share-menu__note">本地分享，不会自动上传会话</div>
           <label className="share-menu__option">
             <input
@@ -169,19 +197,20 @@ export function ShareMenu({ messages, title, openUrl, onDone }: ShareMenuProps) 
             </button>
           )}
           <div className="share-menu__divider" />
-          <button type="button" className="share-menu__item" onClick={() => exportAs("markdown")}>
-            导出 Markdown
+          <button type="button" className="share-menu__item" disabled={busy} onClick={() => void exportAs("markdown")}>
+            {busy ? "正在保存…" : "导出 Markdown"}
           </button>
-          <button type="button" className="share-menu__item" onClick={() => exportAs("html")}>
+          <button type="button" className="share-menu__item" disabled={busy} onClick={() => void exportAs("html")}>
             导出 HTML
           </button>
-          <button type="button" className="share-menu__item" onClick={() => exportAs("text")}>
+          <button type="button" className="share-menu__item" disabled={busy} onClick={() => void exportAs("text")}>
             导出纯文本
           </button>
           <div className="share-menu__divider" />
           <button type="button" className="share-menu__item" onClick={shareMail}>
             通过邮件分享
           </button>
+        </div>
         </div>,
         document.body,
       )}

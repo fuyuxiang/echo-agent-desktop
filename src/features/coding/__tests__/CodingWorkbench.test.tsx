@@ -137,19 +137,25 @@ describe("Theia workbench", () => {
     useAiDraftStore.getState().clear();
   });
 
-  it("restores the global sidebar from the coding header without leaving the workbench", () => {
+  it.each(["", "/repo"])("toggles the global sidebar in both directions and keeps focus in the coding header (%s)", async cwd => {
     function Shell() {
       const layout = useAppSidebarLayout();
       return <SidebarLayoutContext.Provider value={layout.context}>
-        <button onClick={() => layout.setCollapsed(true)}>收起全局导航</button>
-        <CodingWorkbench cwd="" models={[]} />
+        <CodingWorkbench cwd={cwd} models={[]} />
       </SidebarLayoutContext.Provider>;
     }
     render(<Shell />);
-    fireEvent.click(screen.getByText("收起全局导航"));
+    const toggle = screen.getByRole("button", { name: "收起侧边栏" });
+    toggle.focus();
+    fireEvent.click(toggle);
+    expect(toggle).toHaveAttribute("aria-expanded", "false");
+    expect(toggle).toHaveFocus();
     fireEvent.click(screen.getByRole("button", { name: "展开侧边栏" }));
     expect(screen.queryByRole("button", { name: "展开侧边栏" })).not.toBeInTheDocument();
-    expect(screen.getByText("打开代码库开始开发")).toBeInTheDocument();
+    expect(toggle).toHaveAttribute("aria-expanded", "true");
+    expect(toggle).toHaveFocus();
+    if (cwd) expect(await screen.findByTitle("Echo Code IDE")).toBeInTheDocument();
+    else expect(screen.getByText("打开代码库开始开发")).toBeInTheDocument();
   });
 
   it("keeps the Agent pane beside Theia and allows resizing independently", async () => {

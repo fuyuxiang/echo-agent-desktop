@@ -51,11 +51,20 @@ export function TasksPanel({ sessionId, refreshSignal, onToast }: TasksPanelProp
     const place = () => {
       if (!composer) return;
       const rect = composer.getBoundingClientRect();
+      // Keep permission decisions, questions and execution controls unobscured.
+      // The composer still determines horizontal alignment in every view.
+      let protectedTop = rect.top;
+      composer.closest(".chatview__footer")?.querySelectorAll<HTMLElement>(
+        ".perm-inline, .question-inline, .automation-approval, .task-execution-status, .yield-banner, .chatview__pause-btn, .queue-panel",
+      ).forEach(control => {
+        const controlRect = control.getBoundingClientRect();
+        if (controlRect.height > 0) protectedTop = Math.min(protectedTop, controlRect.top);
+      });
       const nextStyle = {
-        bottom: Math.max(16, window.innerHeight - rect.top + 12),
+        bottom: Math.max(16, window.innerHeight - protectedTop + 12),
         right: Math.max(16, window.innerWidth - rect.right),
         width: Math.min(320, Math.max(220, rect.width - 24)),
-        maxHeight: Math.max(96, Math.min(480, rect.top - 112)),
+        maxHeight: Math.max(96, Math.min(480, protectedTop - 112)),
       };
       setDockStyle((current) => current
         && current.bottom === nextStyle.bottom && current.right === nextStyle.right
@@ -64,7 +73,7 @@ export function TasksPanel({ sessionId, refreshSignal, onToast }: TasksPanelProp
     };
     const watchComposer = () => {
       const next = document.querySelector<HTMLElement>(".chatview .echo-composer");
-      if (next === composer) return;
+      if (next === composer) { place(); return; }
       resizeObserver?.disconnect();
       composer = next;
       if (composer && typeof ResizeObserver !== "undefined") {

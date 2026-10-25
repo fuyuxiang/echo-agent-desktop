@@ -1502,19 +1502,8 @@ export function Composer({
             onToast={onToast}
           />
           <div className="echo-composer__spacer" />
-          {/* 发送前成本预估徽章(对齐 EchoAgent credit-estimate):纯本地 token 估算,
-              仅在文本非空时显示。不依赖计费后端(BYOK 无计费通道)。 */}
-          {text.trim() && (
-            <span
-              className={"echo-composer__cost echo-composer__cost--" + cost.severity}
-              title={`预计新增约 ${cost.newTokens} token${
-                cost.projectedPct > 0 ? ` · 占上下文 ${cost.projectedPct}%` : ""
-              }`}
-            >
-              {cost.label}
-            </span>
-          )}
-          {usageSessionId && <ContextUsagePill sessionId={usageSessionId} onRefreshSignal={usageMsgCount} />}
+          <ContextUsagePill key={usageSessionId ?? "new-task"} sessionId={usageSessionId} onRefreshSignal={usageMsgCount}
+            estimate={text.trim() ? cost : undefined} />
           {showModelPicker ? (
             <ModelSelector
               modelId={modelId}

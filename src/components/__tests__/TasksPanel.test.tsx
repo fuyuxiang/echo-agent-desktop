@@ -153,3 +153,26 @@ describe("TasksPanel", () => {
     await act(async () => finishes[1]());
   });
 });
+
+describe("task dock protects decisions and execution controls", () => {
+  it.each(["perm-inline", "question-inline", "automation-approval", "task-execution-status", "yield-banner", "queue-panel"])("%s 出现时停靠在其上方，消失后恢复输入框对齐", async protectedClass => {
+    vi.mocked(tasksList).mockResolvedValue([{ id:"task-dock",source:"task",description:"后台核验",status:"running",sessionId:"dock-session" }]);
+    const measure = vi.spyOn(HTMLElement.prototype,"getBoundingClientRect").mockImplementation(function(this:HTMLElement) {
+      return this.classList.contains("echo-composer") ? new DOMRect(200,650,600,100)
+        : this.classList.contains(protectedClass) ? new DOMRect(200,450,600,120) : new DOMRect();
+    });
+    const content = (protectedVisible: boolean) => <div className="chatview"><div className="chatview__footer">
+      {protectedVisible && <div className={protectedClass}>待处理操作</div>}
+      <div className="echo-composer" /><TasksPanel sessionId="dock-session" />
+    </div></div>;
+    const view = render(content(false));
+    const panel = await screen.findByRole("complementary",{name:"运行中任务"});
+    await waitFor(()=>expect(panel).toHaveStyle({bottom:`${window.innerHeight-650+12}px`}));
+    view.rerender(content(true));
+    await waitFor(()=>expect(panel).toHaveStyle({bottom:`${window.innerHeight-450+12}px`}));
+    expect(screen.getByRole("button",{name:"终止任务：后台核验"})).toBeEnabled();
+    view.rerender(content(false));
+    await waitFor(()=>expect(panel).toHaveStyle({bottom:`${window.innerHeight-650+12}px`}));
+    measure.mockRestore();
+  });
+});

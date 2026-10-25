@@ -78,7 +78,8 @@ try {
   const chatErrors = []; chat.on("pageerror", (error) => chatErrors.push(error.message));
   await chat.goto(`http://127.0.0.1:${chatServer.httpServer.address().port}/__ui-review?surface=execution&state=running&theme=light`);
   await chat.locator('[data-execution-ready="true"]').waitFor();
-  await chat.getByRole("button", { name: "团队", exact: true }).click();
+  await chat.getByRole("button", { name: "工作区", exact: true }).click();
+  await chat.getByRole("menuitem", { name: /团队详情|管理任务团队/ }).click();
   await chat.getByText("review-isolated-team", { exact: true }).waitFor();
   await chat.locator(".echo-composer__input").fill("请分析我已填写的需求");
   await chat.getByRole("button", { name: "使用此团队" }).click();

@@ -16,10 +16,12 @@ vi.mock("@/lib/artifact-catalog", async (importOriginal) => ({
 let storeState: {
   messages: unknown[];
   streaming: boolean;
+  sendNowPending?: boolean;
   streamingMessageId: string | null;
   error: string | null;
   plan: Plan | null;
   planRevisionDirty?: boolean;
+  planApproval?: {requestId: string; sessionId: string; toolCallId: string; planContent?: string};
   transcripts?: Record<string, { planRevisionDirty: boolean }>;
   sessionId: string | null;
   agentMode: "default" | "browser_use" | "computer_use";
@@ -100,6 +102,7 @@ vi.mock("@/lib/agent-client", async () => {
     mod[name] = name.startsWith("on") ? handler : asyncArr;
   }
   // 个别需要特定返回。
+  mod.sessionFork = vi.fn(async () => "new-fork");
   mod.rewindExecute = vi.fn(asyncEmpty);
   mod.rewindPoints = vi.fn(asyncArr);
   mod.setCodingMode = vi.fn(asyncEmpty);
@@ -126,8 +129,21 @@ vi.mock("@/lib/automation-client", async (importOriginal) => ({
 import { automationResume, automationPause } from "@/lib/automation-client";
 import { ChatView } from "../ChatView";
 import { ThemeProvider } from "../ThemeProvider";
-import { rewindExecute, rewindPoints, setCodingMode, commandsList } from "@/lib/agent-client";
+import { rewindExecute, rewindPoints, sessionFork, setCodingMode, commandsList } from "@/lib/agent-client";
 import { useSubagentStore } from "@/stores/subagent-store";
+
+function workspaceItem(name: string) {
+  fireEvent.click(screen.getByRole("button", { name: "工作区" }));
+  fireEvent.click(screen.getByRole("menuitem", { name: new RegExp(name) }));
+}
+function sessionItem(name: string) {
+  fireEvent.click(screen.getByRole("button", { name: "更多操作" }));
+  fireEvent.click(screen.getByRole("menuitem", { name }));
+}
+function replyItem(name: string) {
+  fireEvent.click(screen.getAllByRole("button", { name: "更多回复操作" }).slice(-1)[0]);
+  fireEvent.click(screen.getByRole("menuitem", { name }));
+}
 
 /** 用 ThemeProvider 包裹(ChatView 内的 MessageItem/Markdown 需要 useTheme)。 */
 function renderChat() {
@@ -164,6 +180,7 @@ describe("ChatView pause/yield/resume 闭环", () => {
     setStore({
       messages: [{ id: "u1", role: "user", complete: true, parts: [{ kind: "text", text: "hi" }] }],
       streaming: false,
+      sendNowPending: false,
       streamingMessageId: null,
       error: null,
       plan: null,
@@ -195,9 +212,9 @@ describe("ChatView pause/yield/resume 闭环", () => {
     setStore({ plan: { entries: [] }, planRevisionDirty: true, transcripts: { s1: { planRevisionDirty: true } } });
     rerender(<ThemeProvider><ChatView {...baseProps} /></ThemeProvider>);
     expect(screen.getByRole("textbox", { name: "新增步骤" })).toHaveValue("保留待确认的新增草稿");
-    fireEvent.click(screen.getByRole("button", { name: "计划 0/0" }));
+    fireEvent.click(screen.getByRole("button", { name: "执行计划" }));
     expect(screen.queryByRole("textbox", { name: "新增步骤" })).not.toBeInTheDocument();
-    fireEvent.click(screen.getByRole("button", { name: "计划 0/0" }));
+    fireEvent.click(screen.getByRole("button", { name: "执行计划" }));
     expect(screen.getByRole("textbox", { name: "新增步骤" })).toBeInTheDocument();
   });
 
@@ -225,13 +242,15 @@ describe("ChatView pause/yield/resume 闭环", () => {
     delete (HTMLElement.prototype as { scrollIntoView?: unknown }).scrollIntoView;
   });
 
-  it("会话工具入口统一位于响应式工具栏内", () => {
+  it("普通对话只呈现统一头部，工作视图与会话操作通过分组入口访问", () => {
     const { container } = renderChat();
-    const toolbar = container.querySelector(".chatview__utility-actions");
-    expect(toolbar).not.toBeNull();
-    for (const label of ["查找", "变更", "子代理", "团队", "浏览器", "分享"]) {
-      expect(toolbar).toContainElement(screen.getByRole("button", { name: label }));
-    }
+    expect(container.querySelectorAll(".session-header")).toHaveLength(1);
+    expect(container.querySelector(".chatview__utility-actions")).toBeNull();
+    expect(screen.getByRole("button", { name: "查找当前会话" })).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "子代理" })).toBeNull();
+    workspaceItem("文件变更");
+    expect(container.querySelector(".file-changes")).toBeInTheDocument();
+    expect(container.querySelector(".rewind-bar")).toBeNull();
   });
 
   it.each(["变更", "团队"])("跨会话关闭%s面板不会恢复旧会话的位置或停止跟随", (label) => {
@@ -243,11 +262,13 @@ describe("ChatView pause/yield/resume 闭环", () => {
     viewport.scrollTop = 600;
     fireEvent.wheel(viewport, { deltaY: -1 });
     fireEvent.scroll(viewport);
-    fireEvent.click(screen.getByRole("button", { name: label }));
+    workspaceItem(label === "团队" ? "管理任务团队" : "文件变更");
     setStore({ sessionId: "s2", messages: [...storeState.messages] });
     rerender(<ThemeProvider><ChatView {...baseProps} /></ThemeProvider>);
     expect(viewport.scrollTop).toBe(1600);
-    fireEvent.click(screen.getByRole("button", { name: label }));
+    expect(screen.queryByRole("region", { name: "任务工作视图" })).toBeNull();
+    workspaceItem(label === "团队" ? "管理任务团队" : "文件变更");
+    fireEvent.click(screen.getByRole("button", { name: "关闭工作视图" }));
     fireEvent.scroll(viewport);
     expect(viewport.scrollTop).toBe(1600);
     expect(screen.queryByRole("button", { name: "回到最新消息并恢复自动跟随" })).toBeNull();
@@ -265,10 +286,10 @@ describe("ChatView pause/yield/resume 闭环", () => {
     viewport.scrollTop = 600;
     fireEvent.wheel(viewport, { deltaY: -1 });
     fireEvent.scroll(viewport);
-    fireEvent.click(screen.getByRole("button", { name: "变更" }));
+    workspaceItem("文件变更");
     viewport.scrollTop = 0;
     fireEvent.scroll(viewport);
-    fireEvent.click(screen.getByRole("button", { name: "变更" }));
+    workspaceItem("文件变更");
     expect(viewport.scrollTop).toBe(600);
     expect(screen.getByRole("button", { name: "回到最新消息并恢复自动跟随" })).toBeInTheDocument();
   });
@@ -290,7 +311,7 @@ describe("ChatView pause/yield/resume 闭环", () => {
       const viewport = container.querySelector<HTMLElement>(".chatview__scroll")!;
       Object.defineProperty(viewport, "scrollHeight", { configurable: true, value: 1000 });
       Object.defineProperty(viewport, "clientHeight", { configurable: true, value: 400 });
-      fireEvent.click(screen.getByRole("button", { name: "子代理" }));
+      workspaceItem("协作详情");
       fireEvent.click(screen.getByRole("button", { name: /核验任务/ }));
       viewport.scrollTop = 350;
       fireEvent.click(screen.getByRole("button", { name: "打开完整工作记录" }));
@@ -334,7 +355,7 @@ describe("ChatView pause/yield/resume 闭环", () => {
       }],
     });
     renderChat();
-    fireEvent.click(screen.getByRole("button", { name: "查找" }));
+    fireEvent.click(screen.getByRole("button", { name: "查找当前会话" }));
     fireEvent.change(screen.getByRole("textbox", { name: "查找" }), {
       target: { value: "鸟" },
     });
@@ -368,7 +389,7 @@ describe("ChatView pause/yield/resume 闭环", () => {
     });
     renderChat();
 
-    fireEvent.click(screen.getByRole("button", { name: "历史提问" }));
+    sessionItem("历史提问");
     const dialog = screen.getByRole("dialog", { name: "历史提问" });
     expect(within(dialog).getAllByRole("button").map((button) => button.textContent)).toEqual([
       "", "2后来的问题", "1最初的问题",
@@ -385,7 +406,7 @@ describe("ChatView pause/yield/resume 闭环", () => {
 
   it("切换会话后清空历史提问浮层和旧查询", async () => {
     const { rerender } = renderChat();
-    fireEvent.click(screen.getByRole("button", { name: "历史提问" }));
+    sessionItem("历史提问");
     fireEvent.change(screen.getByRole("searchbox", { name: "筛选历史提问" }), { target: { value: "hi" } });
 
     setStore({
@@ -394,7 +415,7 @@ describe("ChatView pause/yield/resume 闭环", () => {
     });
     rerender(<ThemeProvider><ChatView {...baseProps} /></ThemeProvider>);
     await waitFor(() => expect(screen.queryByRole("dialog", { name: "历史提问" })).toBeNull());
-    fireEvent.click(screen.getByRole("button", { name: "历史提问" }));
+    sessionItem("历史提问");
     const dialog = screen.getByRole("dialog", { name: "历史提问" });
     expect(within(dialog).getByRole("searchbox", { name: "筛选历史提问" })).toHaveValue("");
     expect(within(dialog).getByRole("button", { name: /新会话的问题/ })).toBeInTheDocument();
@@ -538,7 +559,7 @@ describe("ChatView pause/yield/resume 闭环", () => {
     });
     renderChat();
 
-    fireEvent.click(screen.getByRole("button", { name: "重新生成" }));
+    replyItem("重新生成");
 
     await waitFor(() => expect(rewindPoints).toHaveBeenCalledWith("s1"));
     expect(baseProps.onRetrySend).not.toHaveBeenCalled();
@@ -575,7 +596,7 @@ describe("ChatView pause/yield/resume 闭环", () => {
     });
     renderChat();
 
-    fireEvent.click(screen.getByRole("button", { name: "重新生成" }));
+    replyItem("重新生成");
 
     await waitFor(() => expect(rewindExecute).toHaveBeenCalledWith("s1", 4, "conversation_only", true));
     expect(baseProps.onRetrySend).toHaveBeenCalledWith({
@@ -614,7 +635,7 @@ describe("ChatView pause/yield/resume 闭环", () => {
     vi.mocked(rewindPoints).mockResolvedValue([{ promptIndex: 0 }]);
     renderChat();
 
-    fireEvent.click(screen.getByRole("button", { name: "重新执行" }));
+    replyItem("重新执行");
     const dialog = screen.getByRole("alertdialog", { name: "重新执行本轮任务？" });
     expect(dialog).toBeInTheDocument();
     expect(screen.getByText(/1 个工具/)).toBeInTheDocument();
@@ -655,15 +676,15 @@ it("历史任务使用自己的目录发现命令，新建动作不会重绑旧�
   vi.mocked(commandsList).mockResolvedValue([{name:"project-a-skill", description:"A 的技能"}]);
   const onNewTask = vi.fn();
   const onSend = vi.fn();
-  const {rerender} = render(<ThemeProvider><ChatView {...baseProps} onSend={onSend} cwd="/workspace/A" onNewTask={onNewTask} /></ThemeProvider>);
-  expect(screen.getByTitle("本任务工作目录：/workspace/A")).toBeInTheDocument();
+  const {rerender} = render(<ThemeProvider><ChatView {...baseProps} onSend={onSend} cwd="/workspace/A" navigation={{ sidebarCollapsed: true, onNewTask }} onNewTask={onNewTask} /></ThemeProvider>);
+  expect(screen.getByTitle(/本任务绑定的工作目录：\/workspace\/A/)).toBeInTheDocument();
   const input = screen.getByRole("textbox");
   fireEvent.change(input, {target:{value:"/project-a"}});
   await waitFor(() => expect(commandsList).toHaveBeenLastCalledWith("session-a", "/workspace/A"));
   fireEvent.click(screen.getByRole("button", {name:"新建任务"}));
   expect(onNewTask).toHaveBeenCalledOnce();
   // A future task may choose C, while this mounted historical task stays A.
-  rerender(<ThemeProvider><ChatView {...baseProps} onSend={onSend} cwd="/workspace/A" onNewTask={onNewTask} commandRefreshKey={1} /></ThemeProvider>);
+  rerender(<ThemeProvider><ChatView {...baseProps} onSend={onSend} cwd="/workspace/A" navigation={{ sidebarCollapsed: true, onNewTask }} onNewTask={onNewTask} commandRefreshKey={1} /></ThemeProvider>);
   await waitFor(() => expect(commandsList).toHaveBeenLastCalledWith("session-a", "/workspace/A"));
   expect(screen.queryByRole("button", {name:/工作目录/})).toBeNull();
   expect(await screen.findByText("/project-a-skill")).toBeInTheDocument();
@@ -701,4 +722,183 @@ it("两轮模型调用之间仍能通过停一下撤销电脑执行", async () =
   await waitFor(()=>expect(baseProps.onCancel).toHaveBeenCalledWith("pause"));
   expect(baseProps.onSend).not.toHaveBeenCalled();
 });
+});
+
+
+describe("session workbench entry paths", () => {
+  beforeEach(() => {
+    Object.defineProperty(HTMLElement.prototype, "scrollIntoView", { configurable: true, value: vi.fn() });
+    artifactMocks.load.mockReset().mockResolvedValue([]);
+    useSubagentStore.setState({bySession:{}});
+    setStore({planApproval:undefined,planRevisionDirty:false,agentMode:"default",sessionId:"workbench",messages:[{id:"u-entry",role:"user",complete:true,parts:[{kind:"text",text:"完成交付"}]}],streaming:false,sendNowPending:false,streamingMessageId:null,error:null,plan:null,control:undefined});
+    vi.mocked(rewindExecute).mockClear();
+    vi.mocked(sessionFork).mockClear();
+  });
+  afterEach(() => { delete (HTMLElement.prototype as { scrollIntoView?: unknown }).scrollIntoView; });
+  it("空任务保留文件和网页浏览，只隐藏没有内容的查找、交付与历史操作", () => {
+    setStore({messages:[]});
+    render(<ThemeProvider><ChatView {...baseProps} cwd="/bound/workspace" /></ThemeProvider>);
+    expect(screen.queryByRole("button",{name:"查找当前会话"})).toBeNull();
+    expect(screen.getByRole("button",{name:"工作区"})).toBeVisible();
+    expect(screen.getByTitle(/本任务绑定的工作目录/)).toBeVisible();
+    expect(screen.getByRole("textbox")).toBeVisible();
+    fireEvent.click(screen.getByRole("button",{name:"工作区"}));
+    expect(screen.queryByRole("menuitem",{name:/文件变更|任务产物/})).toBeNull();
+    fireEvent.click(screen.getByRole("menuitem",{name:"文件工作目录"}));
+    expect(screen.getByRole("complementary",{name:"工作区面板"})).toBeVisible();
+    workspaceItem("网页预览");
+    expect(screen.getByRole("textbox",{name:"预览网址"})).toBeVisible();
+    fireEvent.click(screen.getByRole("button",{name:"更多操作"}));
+    expect(screen.queryByRole("menuitem",{name:"导出与本地分享…"})).toBeNull();
+    expect(screen.queryByRole("menuitem",{name:"回溯…"})).toBeNull();
+  });
+  it("仅附件提问的历史定位不依赖查找按钮，关闭后返回更多操作", async () => {
+    setStore({messages:[{id:"attachment-question",role:"user",complete:true,parts:[],attachments:["/bound/report.docx"]}]});
+    renderChat();
+    expect(screen.queryByRole("button",{name:"查找当前会话"})).toBeNull();
+    sessionItem("历史提问");
+    const history=screen.getByRole("dialog",{name:"历史提问"});
+    expect(history).toBeVisible();
+    expect(within(history).getByRole("button",{name:/report.docx/})).toBeVisible();
+    fireEvent.keyDown(document,{key:"Escape"});
+    expect(screen.queryByRole("dialog",{name:"历史提问"})).toBeNull();
+    await waitFor(()=>expect(screen.getByRole("button",{name:"更多操作"})).toHaveFocus());
+  });
+  it("计划、网页预览和变更保持互斥，并提供相同关闭路径", () => {
+    setStore({plan:{entries:[{content:"执行交付核验",status:"pending",priority:"high"}]}});
+    renderChat();
+    workspaceItem("执行计划");
+    expect(screen.getByText("执行交付核验")).toBeVisible();
+    workspaceItem("网页预览");
+    expect(screen.queryByText("执行交付核验")).toBeNull();
+    expect(screen.getByRole("complementary",{name:"工作区面板"})).toBeVisible();
+    workspaceItem("文件变更");
+    expect(screen.queryByRole("complementary",{name:"工作区面板"})).toBeNull();
+    expect(screen.getByRole("region",{name:"文件变更"})).toBeVisible();
+    fireEvent.click(screen.getByRole("button",{name:"关闭工作视图"}));
+    expect(screen.queryByRole("region",{name:"文件变更"})).toBeNull();
+  });
+  it("只有文本计划的审批也直接提示，并可进入原计划审批组件", () => {
+    setStore({plan:null,planApproval:{requestId:"plan-text",sessionId:"workbench",toolCallId:"plan-tool",planContent:"先核对当前任务，再生成交付文档"}});
+    renderChat();
+    fireEvent.click(screen.getByRole("button",{name:"查看并确认计划"}));
+    expect(screen.getByText("先核对当前任务，再生成交付文档")).toBeVisible();
+    expect(screen.getByRole("group",{name:"计划审批"})).toBeVisible();
+  });
+  it("从浏览器标签切回产物时，选择回调不会覆盖同一批次选定的视图", async () => {
+    artifactMocks.load.mockResolvedValue([{ id: "workbench-report", path: "/bound/report.md", kind: "file", title: "report.md", toolCallId: "", status: "completed" }]);
+    render(<ThemeProvider><ChatView {...baseProps} cwd="/bound" /></ThemeProvider>);
+    workspaceItem("任务产物");
+    fireEvent.click(await screen.findByRole("button", { name: /^report\.md/ }));
+    expect(await screen.findByRole("tab", { name: /report\.md/ })).toHaveAttribute("aria-selected", "true");
+    workspaceItem("网页预览");
+    fireEvent.click(screen.getByRole("tab", { name: /report\.md/ }));
+    expect(screen.getByRole("button", { name: "产物" })).toBeInTheDocument();
+    expect(screen.getByRole("tab", { name: /report\.md/ })).toHaveAttribute("aria-selected", "true");
+    expect(screen.getByRole("button", { name: "查看关联工具" })).toBeInTheDocument();
+  });
+  it("从更多进入回溯，仅在确认范围后调用当前会话并刷新", async () => {
+    vi.mocked(rewindPoints).mockResolvedValue([{promptIndex:3,promptPreview:"交付核验"}]);
+    const onRewound=vi.fn();
+    render(<ThemeProvider><ChatView {...baseProps} onRewound={onRewound} /></ThemeProvider>);
+    sessionItem("回溯…");
+    fireEvent.click(screen.getByRole("button",{name:"仅文件"}));
+    fireEvent.click(await screen.findByRole("button",{name:/回溯到此处/}));
+    expect(rewindExecute).not.toHaveBeenCalled();
+    expect(screen.getByRole("alertdialog",{name:"确认回溯（仅文件）？"})).toHaveTextContent("第 4 步执行前：交付核验");
+    expect(screen.getByRole("alertdialog",{name:"确认回溯（仅文件）？"})).toHaveTextContent("保留对话");
+    fireEvent.click(screen.getByRole("button",{name:"确认回溯"}));
+    await waitFor(()=>expect(rewindExecute).toHaveBeenCalledWith("workbench",3,"files_only",true));
+    expect(onRewound).toHaveBeenCalledWith("workbench");
+  });
+  it("分叉取消后可以重新进入，确认后沿用原工作目录导航", async () => {
+    const onForked=vi.fn();
+    render(<ThemeProvider><ChatView {...baseProps} cwd="/bound/workspace" onForked={onForked} /></ThemeProvider>);
+    sessionItem("分叉…");
+    fireEvent.click(screen.getByRole("button",{name:"取消"}));
+    await waitFor(()=>expect(screen.queryByRole("dialog",{name:"分叉此会话？"})).toBeNull());
+    expect(sessionFork).not.toHaveBeenCalled();
+    sessionItem("分叉…");
+    fireEvent.click(screen.getByRole("button",{name:"创建分叉"}));
+    await waitFor(()=>expect(onForked).toHaveBeenCalledWith("new-fork","workbench","/bound/workspace"));
+    expect(sessionFork).toHaveBeenCalledWith("workbench","/bound/workspace");
+  });
+
+  const busyStates = [
+    ["开始运行", { streaming: true }, false],
+    ["立即发送切换中", { sendNowPending: true }, false],
+    ["正在暂停", { control: { action: "pause", phase: "pausing", requestedAt: 1 } }, false],
+    ["正在停止", { control: { action: "stop", phase: "stopping", requestedAt: 1 } }, false],
+    ["加载会话或模型", {}, true],
+  ] as const;
+  describe.each(["rewind", "fork"] as const)("%s 确认的状态失效", action => {
+    it.each(busyStates)("%s 时立即关闭，任务稳定后也不复活旧确认", async (_label, patch, loading) => {
+      vi.mocked(rewindPoints).mockResolvedValue([{ promptIndex: 0, promptPreview: "待回溯步骤" }]);
+      const view = renderChat();
+      sessionItem(action === "rewind" ? "回溯…" : "分叉…");
+      if (action === "rewind") fireEvent.click(await screen.findByRole("button", { name: /回溯到此处/ }));
+      expect(screen.getByRole("button", { name: action === "rewind" ? "确认回溯" : "创建分叉" })).toBeEnabled();
+      setStore(patch);
+      view.rerender(<ThemeProvider><ChatView {...baseProps} modelLoading={loading} /></ThemeProvider>);
+      expect(screen.queryByRole("button", { name: "确认回溯" })).toBeNull();
+      expect(screen.queryByRole("button", { name: "创建分叉" })).toBeNull();
+      fireEvent.click(screen.getByRole("button", { name: "更多操作" }));
+      expect(screen.getByRole("menuitem", { name: "回溯…" })).toBeDisabled();
+      expect(screen.getByRole("menuitem", { name: "分叉…" })).toBeDisabled();
+      setStore({ streaming: false, sendNowPending: false, control: undefined });
+      view.rerender(<ThemeProvider><ChatView {...baseProps} /></ThemeProvider>);
+      await act(async () => {});
+      expect(screen.queryByRole("button", { name: "确认回溯" })).toBeNull();
+      expect(screen.queryByRole("button", { name: "创建分叉" })).toBeNull();
+      expect(rewindExecute).not.toHaveBeenCalled();
+      expect(sessionFork).not.toHaveBeenCalled();
+    });
+  });
+
+  it("React 提交更新前也会检查最新运行状态，不发送强制回溯", async () => {
+    vi.mocked(rewindPoints).mockResolvedValue([{ promptIndex: 0 }]);
+    renderChat();
+    sessionItem("回溯…");
+    fireEvent.click(await screen.findByRole("button", { name: /回溯到此处/ }));
+    setStore({ streaming: true });
+    fireEvent.click(screen.getByRole("button", { name: "确认回溯" }));
+    await act(async () => {});
+    expect(rewindExecute).not.toHaveBeenCalled();
+  });
+
+  it.each([true, false])("消息工具入口离开工作视图后消费旧快照，并重新记录后续阅读位置（跟随=%s）", following => {
+    setStore({ messages: [
+      { id: "u-tool", role: "user", complete: true, parts: [{ kind: "text", text: "更新文档" }] },
+      { id: "a-tool", role: "assistant", complete: true, parts: [{ kind: "tool_call", toolCall: {
+        toolCallId: "write-report", kind: "edit", title: "更新交付文档", status: "completed", content: [],
+      } }, { kind: "text", text: "已完成文档" }] },
+    ] });
+    const view = renderChat();
+    const viewport = view.container.querySelector<HTMLElement>(".chatview__scroll")!;
+    Object.defineProperty(viewport, "scrollHeight", { configurable: true, value: 2000 });
+    Object.defineProperty(viewport, "clientHeight", { configurable: true, value: 400 });
+    setStore({ messages: [...storeState.messages] });
+    view.rerender(<ThemeProvider><ChatView {...baseProps} /></ThemeProvider>);
+    if (!following) {
+      viewport.scrollTop = 600;
+      fireEvent.wheel(viewport, { deltaY: -1 });
+      fireEvent.scroll(viewport);
+    }
+    workspaceItem("文件变更");
+    viewport.scrollTop = 0;
+    fireEvent.scroll(viewport);
+    const process = view.container.querySelector<HTMLButtonElement>(".execution-process__header")!;
+    if (process.getAttribute("aria-expanded") !== "true") fireEvent.click(process);
+    fireEvent.click(screen.getByRole("button", { name: /edit 更新交付文档 完成/ }));
+    expect(viewport.scrollTop).toBe(following ? 1600 : 600);
+    expect(screen.queryByRole("region", { name: "任务工作视图" })).toBeNull();
+    fireEvent.click(screen.getByRole("button", { name: "关闭面板" }));
+    viewport.scrollTop = 900;
+    fireEvent.wheel(viewport, { deltaY: -1 });
+    fireEvent.scroll(viewport);
+    workspaceItem("文件变更");
+    fireEvent.click(screen.getByRole("button", { name: "关闭工作视图" }));
+    expect(viewport.scrollTop).toBe(900);
+    expect(screen.getByRole("button", { name: "回到最新消息并恢复自动跟随" })).toBeInTheDocument();
+  });
 });

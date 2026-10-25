@@ -1,5 +1,4 @@
-import { useEffect, useLayoutEffect, useMemo, useRef, useState, useCallback } from "react";
-import { History, Folder, Plus } from "lucide-react";
+import { useEffect, useLayoutEffect, useMemo, useRef, useState, useCallback, type ReactNode } from "react";
 import { PauseIcon } from "@/foundation/components/Icon/icons";
 import { useSessionStore, type ToolCallView } from "@/stores/session-store";
 import { useSessionsStore } from "@/stores/sessions-store";
@@ -23,17 +22,21 @@ import { ToolSidePanel, type ToolSidePanelMode } from "./ToolSidePanel";
 import { FindBar, isFindHit, type FindOccurrence } from "./FindBar";
 import { buildQuestionHistory, QuestionHistoryPopover } from "./QuestionHistoryPopover";
 import { FileChangesPanel } from "./FileChangesPanel";
-import { SubagentPanel } from "./SubagentPanel";
+import { SubagentPanel, mergePanelItems } from "./SubagentPanel";
 import { TeamStatusView } from "./TeamStatusView";
-import { ShareMenu } from "./ShareMenu";
+import { SessionHeader, type SessionNavigationProps, type WorkspaceTarget } from "./SessionHeader";
+import type { TopbarActionsProps } from "./TopbarActions";
+import { aggregateFileChanges } from "@/lib/file-changes";
+import { deriveSubagents } from "@/lib/subagents";
+import { deriveTeams } from "@/lib/team-derive";
+import { selectPermissionForSession, usePermissionStore } from "@/stores/permission-store";
 import { QueuePanel } from "./QueuePanel";
-import { displayPath, shortWorkspacePath } from "@/lib/display-path";
 import { useMessageQueueStore } from "@/stores/message-queue-store";
 import { selectQuestionForSession, useQuestionStore } from "@/stores/question-store";
 import { buildTimeline } from "@/lib/timeline-utils";
 import { formatAgentError, friendlyError } from "@/lib/error-format";
 import { useSubagentStore } from "@/stores/subagent-store";
-import { stoppedTaskLabel, type SessionControlAction } from "@/lib/session-control";
+import { stoppedTaskLabel, type SessionControl, type SessionControlAction } from "@/lib/session-control";
 import type { ModelOption } from "./ModelSelector";
 import type { AgentEntry } from "@/lib/types";
 import type { SlashCommandInvocation } from "@/lib/slash-commands";
@@ -49,6 +52,17 @@ import type {
   MessageRetrySendRequest,
 } from "@/lib/message-retry";
 import type { SubagentOpenContext, SubagentScrollRestore } from "@/lib/subagent-navigation";
+
+type WorkspaceView = WorkspaceTarget | "tool" | "preview";
+type RuntimePanelKey = "changes" | "subagents" | "teams" | "plan";
+function runtimePanelKey(view: WorkspaceView | null): RuntimePanelKey | null {
+  return view === "changes" || view === "subagents" || view === "teams" || view === "plan" ? view : null;
+}
+
+function historyIsBusy(state: { streaming: boolean; sendNowPending?: boolean; control?: SessionControl }): boolean {
+  return state.streaming || Boolean(state.sendNowPending)
+    || state.control?.phase === "pausing" || state.control?.phase === "stopping";
+}
 
 /** Center chat column: scrollable message list + composer pinned at bottom. */
 export function ChatView({
@@ -81,6 +95,11 @@ export function ChatView({
   onClientSlashCommand,
   title,
   onOpenTeamGroup,
+  onRename,
+  sessionActions,
+  navigation,
+  headerLeading,
+  notice,
 }: {
   onSend: (
     text: string,
@@ -131,6 +150,11 @@ export function ChatView({
   ) => boolean | void | Promise<boolean | void>;
   /** Current persisted session title, used by export/share filenames. */
   title?: string;
+  onRename?: (title: string) => Promise<void>;
+  sessionActions?: Omit<TopbarActionsProps, "sessionId" | "title">;
+  navigation?: SessionNavigationProps;
+  headerLeading?: ReactNode;
+  notice?: ReactNode;
   onOpenTeamGroup?: (team: import("@/lib/agent-client").RuntimeTeamInfo) => void;
 }) {
   const messages = useSessionStore((s) => s.messages);
@@ -139,9 +163,10 @@ export function ChatView({
   const streamingMessageId = useSessionStore((s) => s.streamingMessageId);
   const error = useSessionStore((s) => s.error);
   const plan = useSessionStore((s) => s.plan);
+  const planApproval = useSessionStore(s => s.planApproval);
   const planRevisionDirty = useSessionStore((s) => s.planRevisionDirty);
-  const hasVisiblePlan = Boolean(plan && (plan.entries.length > 0 || planRevisionDirty));
   const sessionId = useSessionStore((s) => s.sessionId);
+  const hasVisiblePlan = Boolean(plan && (plan.entries.length > 0 || planRevisionDirty) || planApproval?.sessionId === sessionId && planApproval);
   const traceLoadError = useKnowledgeStore(state => sessionId ? state.traceLoadErrors[sessionId] : undefined);
   const agentMode = useSessionStore((s) => s.agentMode);
   const control = useSessionStore((s) => s.control);
@@ -155,7 +180,7 @@ export function ChatView({
   const [findActive, setFindActive] = useState<FindOccurrence | null>(null);
   const [questionHistoryOpen, setQuestionHistoryOpen] = useState(false);
   const [jumpTargetId, setJumpTargetId] = useState<string | null>(null);
-  const questionHistoryTriggerRef = useRef<HTMLButtonElement>(null);
+  const questionHistoryTriggerRef = useRef<HTMLButtonElement | null>(null);
   const jumpHighlightTimerRef = useRef<number | null>(null);
   const questions = useMemo(() => buildQuestionHistory(messages), [messages]);
   const closeFind = useCallback(() => {
@@ -189,10 +214,29 @@ export function ChatView({
     if (jumpHighlightTimerRef.current !== null) window.clearTimeout(jumpHighlightTimerRef.current);
   }, []);
   // 文件变更聚合面板(对齐 EchoAgent file-changes-panel)。
-  const [fileChangesOpen, setFileChangesOpen] = useState(false);
-  // 子代理运行时面板(对齐 EchoAgent team-runtime)。
-  const [subagentsOpen, setSubagentsOpen] = useState(false);
-  const [teamsOpen, setTeamsOpen] = useState(false);
+  // A single session-owned view prevents files, plans and runtime details stacking.
+  const [workspaceView, setWorkspaceView] = useState<WorkspaceView | null>(null);
+  // A tab activation changes both the view and selection in one React batch.
+  // Selection callbacks must see the view selected earlier in that batch.
+  const workspaceViewRef = useRef(workspaceView);
+  workspaceViewRef.current = workspaceView;
+  const fileChangesOpen = workspaceView === "changes";
+  const subagentsOpen = workspaceView === "subagents";
+  const teamsOpen = workspaceView === "teams";
+  const planOpen = workspaceView === "plan";
+  const [historyAction, setHistoryAction] = useState<"rewind" | "fork" | null>(null);
+  const historyDisabled = modelLoading || historyIsBusy({ streaming, sendNowPending, control });
+  const modelLoadingRef = useRef(modelLoading);
+  modelLoadingRef.current = modelLoading;
+  // Invalidate the workflow, rather than reopening its old confirmation when
+  // the next turn finishes. RewindBar also checks the live store before IPC.
+  useLayoutEffect(() => {
+    if (historyDisabled) setHistoryAction(null);
+  }, [historyDisabled]);
+  const canExecuteHistory = useCallback(() => {
+    const current = useSessionStore.getState();
+    return current.sessionId === sessionId && !modelLoadingRef.current && !historyIsBusy(current);
+  }, [sessionId]);
   const [automationModeChanging, setAutomationModeChanging] = useState(false);
   const terminalMessage = [...messages].reverse().find(message => message.role === "assistant"
     && (!control?.promptId || message.promptId === control.promptId));
@@ -253,12 +297,15 @@ export function ChatView({
     const entry = s.independent.find((x) => x.sessionId === sessionId);
     return entry?.expertAvatar;
   });
-  const [planOpen, setPlanOpen] = useState(false);
 
   // ---- 消息"编辑重发":把消息文本回填到输入框 ----
   const [resendText, setResendText] = useState<string | undefined>(undefined);
   const [resendAttachments, setResendAttachments] = useState<string[] | undefined>(undefined);
   const [resendNonce, setResendNonce] = useState(0);
+  useLayoutEffect(() => {
+    setResendText(undefined);
+    setResendAttachments(undefined);
+  }, [sessionId]);
   const handleEditResend = useCallback((text: string, attachments: string[]) => {
     if (!text.trim() && attachments.length === 0) return;
     setResendText(text);
@@ -407,8 +454,9 @@ export function ChatView({
   }, [messages, onToast, performRetry, requestConfirmation]);
 
   // ---- Phase 2/3: tool detail + artifacts side panel ----
-  const [panelOpen, setPanelOpen] = useState(false);
-  const [panelMode, setPanelMode] = useState<ToolSidePanelMode>("tool");
+  const panelOpen = workspaceView === "tool" || workspaceView === "preview"
+    || workspaceView === "artifacts" || workspaceView === "fileTree" || workspaceView === "browser";
+  const panelMode: ToolSidePanelMode = panelOpen ? workspaceView as ToolSidePanelMode : "artifacts";
   const [activeTool, setActiveTool] = useState<ToolCallView | null>(null);
   const [previewPath, setPreviewPath] = useState<string | null>(null);
 
@@ -447,41 +495,36 @@ export function ChatView({
   }, [messages, activeTool]);
 
   // Close panel when switching sessions.
-  useEffect(() => {
-    setPanelOpen(false);
+  useLayoutEffect(() => {
+    workspaceViewRef.current = null;
+    setWorkspaceView(null);
+    setHistoryAction(null);
     setActiveTool(null);
     setPreviewPath(null);
   }, [sessionId]);
 
   useEffect(() => {
-    setSubagentsOpen(subagentScrollRestore?.parentSessionId === sessionId);
+    if (subagentScrollRestore?.parentSessionId === sessionId) {
+      workspaceViewRef.current = "subagents";
+      setWorkspaceView("subagents");
+    }
   }, [sessionId, subagentScrollRestore?.sequence]);
-
-  // Auto-open subagent panel when a subagent starts running.
-  const liveSubagentCount = useSubagentStore((s) =>
-    sessionId ? s.getForSession(sessionId).filter((a) => a.status === "running").length : 0,
-  );
-  useEffect(() => {
-    if (liveSubagentCount > 0) setSubagentsOpen(true);
-  }, [liveSubagentCount]);
-
-  const handleOpenTool = useCallback((tc: ToolCallView) => {
-    setActiveTool(tc);
-    setPreviewPath(null);
-    setPanelMode("tool");
-    setPanelOpen(true);
-  }, []);
-
-  const handleSelectArtifact = useCallback((a: SessionArtifact) => {
-    setPreviewPath(a.path);
-    setPanelMode("preview");
-    setPanelOpen(true);
-  }, []);
-
-  const handleOpenArtifacts = useCallback(() => {
-    setPanelMode("artifacts");
-    setPanelOpen(true);
-  }, []);
+  const liveMap = useSubagentStore(s => sessionId ? s.bySession[sessionId] : undefined);
+  const liveSubagents = useMemo(() => Object.values(liveMap ?? {}), [liveMap]);
+  const derivedSubagents = useMemo(() => deriveSubagents(messages), [messages]);
+  const teams = useMemo(() => deriveTeams(messages), [messages]);
+  const changes = useMemo(() => aggregateFileChanges(messages), [messages]);
+  const pendingPermission = usePermissionStore(selectPermissionForSession(sessionId));
+  const collaboration = useMemo(() => mergePanelItems(liveSubagents, derivedSubagents), [liveSubagents, derivedSubagents]);
+  const subagentCount = collaboration.length;
+  const searchable = messages.some(m => m.parts.some(p => p.kind === "text" && p.text.trim()));
+  const hasContent = messages.some(m => m.parts.length > 0 || m.attachments?.length);
+  const awaitingPlan = planApproval?.sessionId === sessionId;
+  const failed = !streaming && terminalMessage?.stopReason === "error";
+  const status = pendingPermission ? "等待审批" : awaitingPlan ? "等待计划确认" : awaitingQuestion ? "等待回答"
+    : control?.phase === "pausing" ? "正在暂停" : control?.phase === "paused" ? "已暂停"
+    : control?.phase === "stopping" ? "正在停止" : control?.phase === "stopped" ? "已停止"
+    : error || failed ? "任务出错" : streaming ? "进行中" : undefined;
 
   const markdownConfig = useMemo(
     () =>
@@ -504,23 +547,32 @@ export function ChatView({
     streaming,
     sessionId,
   });
-  type RuntimePanelKey = "changes" | "subagents" | "teams";
-  const runtimeScrollRestore = useRef<Partial<Record<RuntimePanelKey, { sessionId: string | null; top: number; following: boolean }>>>({});
+  const runtimeScrollRestore = useRef<{ sessionId: string | null; top: number; following: boolean } | null>(null);
   const pendingRuntimeScroll = useRef<{ sessionId: string | null; key: RuntimePanelKey; opening: boolean } | null>(null);
   useLayoutEffect(() => {
     // ChatView stays mounted when selecting another conversation. Its old
     // panel positions must never override the new conversation's follow state.
-    runtimeScrollRestore.current = {};
+    runtimeScrollRestore.current = null;
     pendingRuntimeScroll.current = null;
   }, [sessionId]);
-  const toggleRuntimePanel = (key: RuntimePanelKey, open: boolean, setOpen: (value: boolean) => void) => {
-    if (!open) {
-      runtimeScrollRestore.current[key] = { sessionId, top: scrollRef.current?.scrollTop ?? 0, following };
+  const transitionWorkspace = useCallback((next: WorkspaceView | null) => {
+    closeQuestionHistory();
+    const previous = workspaceViewRef.current;
+    if (next === previous) return;
+    workspaceViewRef.current = next;
+    const previousRuntime = runtimePanelKey(previous);
+    const nextRuntime = runtimePanelKey(next);
+    if (nextRuntime) {
+      if (!previousRuntime) {
+        runtimeScrollRestore.current = { sessionId, top: scrollRef.current?.scrollTop ?? 0, following };
+      }
       pauseFollowing();
+      pendingRuntimeScroll.current = { sessionId, key: nextRuntime, opening: true };
+    } else if (previousRuntime) {
+      pendingRuntimeScroll.current = { sessionId, key: previousRuntime, opening: false };
     }
-    pendingRuntimeScroll.current = { sessionId, key, opening: !open };
-    setOpen(!open);
-  };
+    setWorkspaceView(next);
+  }, [closeQuestionHistory, sessionId, following, scrollRef, pauseFollowing]);
   useLayoutEffect(() => {
     const pending = pendingRuntimeScroll.current;
     const viewport = scrollRef.current;
@@ -531,8 +583,8 @@ export function ChatView({
       if (anchor) viewport.scrollTop += anchor.getBoundingClientRect().top - viewport.getBoundingClientRect().top - 8;
       return;
     }
-    const restore = runtimeScrollRestore.current[pending.key];
-    delete runtimeScrollRestore.current[pending.key];
+    const restore = runtimeScrollRestore.current;
+    runtimeScrollRestore.current = null;
     if (!restore || restore.sessionId !== sessionId) {
       // An inherited/automatically opened panel has no reading position to
       // restore. Keep following instead of treating its removal as a scroll up.
@@ -544,7 +596,19 @@ export function ChatView({
       pauseFollowing();
       viewport.scrollTop = restore.top;
     }
-  }, [sessionId, fileChangesOpen, subagentsOpen, teamsOpen, following, pauseFollowing, scrollRef, scrollToBottom]);
+  }, [sessionId, workspaceView, fileChangesOpen, subagentsOpen, teamsOpen, planOpen, following, pauseFollowing, scrollRef, scrollToBottom]);
+
+  const handleOpenTool = useCallback((tc: ToolCallView) => {
+    setActiveTool(tc);
+    setPreviewPath(null);
+    transitionWorkspace("tool");
+  }, [transitionWorkspace]);
+  const handleSelectArtifact = useCallback((artifact: SessionArtifact) => {
+    setPreviewPath(artifact.path);
+    const current = workspaceViewRef.current;
+    transitionWorkspace(current === "artifacts" || current === "fileTree" ? current : "preview");
+  }, [transitionWorkspace]);
+  const handleOpenArtifacts = useCallback(() => transitionWorkspace("artifacts"), [transitionWorkspace]);
 
   const jumpToQuestion = useCallback((messageId: string) => {
     const row = Array.from(scrollRef.current?.querySelectorAll<HTMLElement>("[data-msg-id]") ?? [])
@@ -662,9 +726,30 @@ export function ChatView({
       block: "center",
     });
   }, [findActive, findOccurrences, findQuery]);
+  const runtimeKey = runtimePanelKey(workspaceView);
+  const closeWorkspace = () => transitionWorkspace(null);
+  const openWorkspace = (view: WorkspaceTarget) => transitionWorkspace(workspaceViewRef.current === view ? null : view);
   return (
+    <>
+    {sessionId && <SessionHeader key={sessionId} sessionId={sessionId} title={title || "新任务"} cwd={cwd}
+      onRename={onRename} navigation={navigation ?? { onNewTask }} leading={headerLeading}
+      actions={{ ...sessionActions, onToast,
+        onRewind: hasContent ? () => setHistoryAction("rewind") : undefined,
+        onFork: hasContent ? () => setHistoryAction("fork") : undefined,
+      }} historyDisabled={historyDisabled}
+      summary={{ searchable, hasContent, changeCount: changes.totalFiles, artifactCount: artifacts.length,
+        hasPlan: hasVisiblePlan, planCompleted: plan?.entries.filter(e => e.status === "completed").length ?? 0,
+        planTotal: plan?.entries.length ?? 0, subagentCount,
+        runningSubagents: collaboration.filter(a => a.status === "running" || a.status === "in_progress").length,
+        teamCount: teams.length, status, attention: Boolean(pendingPermission || awaitingPlan || awaitingQuestion || error || failed),
+      }} activeView={workspaceView} onView={openWorkspace} onCloseView={closeWorkspace}
+      onFind={() => findOpen ? closeFind() : openFind()} findOpen={findOpen}
+      questionHistoryTriggerRef={questionHistoryTriggerRef}
+      onQuestionHistory={questions.length ? () => { closeFind(); setQuestionHistoryOpen(true); } : undefined}
+    />}
     <div className={"chatview" + (panelOpen ? " chatview--with-panel" : "")}>
       <div className="chatview__main">
+        {notice}
         {traceLoadError && <div className="chatview__error-banner" role="alert">
           <span>{traceLoadError}</span>
           <button type="button" onClick={() => { if (sessionId) void hydrateKnowledgeTraces(sessionId).then(() => useKnowledgeStore.getState().setTraceLoadError(sessionId)).catch(error => onToast?.(`恢复来源失败：${friendlyError(error)}`)); }}>重试恢复知识来源</button>
@@ -683,215 +768,8 @@ export function ChatView({
             </button>
           </div>
         )}
-        {/* Context and session tools share one responsive utility bar. */}
-        <div className="chatview__utility-bar">
-          <div className="chatview__utility-context">
-            <AutomationControls
-              sessionId={sessionId}
-              streaming={streaming}
-              onToast={onToast}
-              onContinue={() => onSend("继续")}
-              onPause={() => onCancel("pause")}
-              placement="toolbar"
-            />
-            {cwd && (
-              <div className="chatview__workspace-bar">
-                <span className="chatview__workspace-label" title={`本任务工作目录：${displayPath(cwd)}`}>
-                  <Folder size={14} aria-hidden="true" />
-                  <span>{shortWorkspacePath(cwd)}</span>
-                </span>
-                {onNewTask && <button type="button" className="chatview__new-task" onClick={onNewTask} data-tip="在新任务中选择其他工作目录">
-                  <Plus size={14} aria-hidden="true" />新建任务
-                </button>}
-              </div>
-            )}
-          </div>
-          <div className="chatview__utility-actions">
-            {plan && hasVisiblePlan && (
-            <button
-              className={`chatview__plan-toggle ${planOpen ? "chatview__plan-toggle--active" : ""}`}
-              onClick={() => setPlanOpen((v) => !v)}
-              title="执行计划"
-            >
-              计划 {plan.entries.filter((e) => e.status === "completed").length}/
-              {plan.entries.length}
-            </button>
-            )}
-
-            {artifacts.length > 0 && (
-              <button
-                type="button"
-                className={
-                  "chatview__artifacts-toggle" +
-                  (panelOpen && panelMode === "artifacts"
-                    ? " chatview__artifacts-toggle--active"
-                    : "")
-                }
-                onClick={() => {
-                  if (panelOpen && panelMode === "artifacts") {
-                    setPanelOpen(false);
-                  } else {
-                    handleOpenArtifacts();
-                  }
-                }}
-                title="本会话产物"
-              >
-                产物 {artifacts.length}
-              </button>
-            )}
-
-            {messages.length > 0 && (
-              <button
-                type="button"
-                className={
-                  "chatview__artifacts-toggle" +
-                  (findOpen ? " chatview__artifacts-toggle--active" : "")
-                }
-                onClick={() => {
-                  if (findOpen) closeFind();
-                  else {
-                    openFind();
-                  }
-                }}
-                title="在当前对话中查找 (Ctrl/Cmd+F)"
-              >
-                查找
-              </button>
-            )}
-
-            {questions.length > 0 && (
-              <button
-                ref={questionHistoryTriggerRef}
-                type="button"
-                className={"chatview__artifacts-toggle" + (questionHistoryOpen ? " chatview__artifacts-toggle--active" : "")}
-                onClick={() => {
-                  if (!questionHistoryOpen) closeFind();
-                  setQuestionHistoryOpen((open) => !open);
-                }}
-                aria-label="历史提问"
-                aria-expanded={questionHistoryOpen}
-                aria-controls={questionHistoryOpen ? "question-history-popover" : undefined}
-                title="查看本会话的历史提问"
-              >
-                <History size={14} aria-hidden="true" />
-                提问
-              </button>
-            )}
-
-            {messages.length > 0 && (
-              <button
-                type="button"
-                className={
-                  "chatview__artifacts-toggle" +
-                  (fileChangesOpen ? " chatview__artifacts-toggle--active" : "")
-                }
-                onClick={() => toggleRuntimePanel("changes", fileChangesOpen, setFileChangesOpen)}
-                aria-expanded={fileChangesOpen}
-                title="本会话文件变更"
-              >
-                变更
-              </button>
-            )}
-
-            {messages.length > 0 && (
-              <button
-                type="button"
-                className={
-                  "chatview__artifacts-toggle" +
-                  (subagentsOpen ? " chatview__artifacts-toggle--active" : "")
-                }
-                onClick={() => toggleRuntimePanel("subagents", subagentsOpen, setSubagentsOpen)}
-                aria-expanded={subagentsOpen}
-                title="子代理运行时"
-              >
-                子代理
-              </button>
-            )}
-
-            {messages.length > 0 && (
-              <button
-                type="button"
-                className={
-                  "chatview__artifacts-toggle" +
-                  (teamsOpen ? " chatview__artifacts-toggle--active" : "")
-                }
-                onClick={() => toggleRuntimePanel("teams", teamsOpen, setTeamsOpen)}
-                aria-expanded={teamsOpen}
-                title="团队状态"
-              >
-                团队
-              </button>
-            )}
-
-            {cwd && (
-              <button
-                type="button"
-                className={
-                  "chatview__artifacts-toggle" +
-                  (panelOpen && panelMode === "fileTree"
-                    ? " chatview__artifacts-toggle--active"
-                    : "")
-                }
-                onClick={() => {
-                  if (panelOpen && panelMode === "fileTree") {
-                    setPanelOpen(false);
-                  } else {
-                    setPanelMode("fileTree");
-                    setPanelOpen(true);
-                  }
-                }}
-                title="工作区文件树"
-              >
-                文件树
-              </button>
-            )}
-
-            <button
-              type="button"
-              className={
-                "chatview__artifacts-toggle" +
-                (panelOpen && panelMode === "browser"
-                  ? " chatview__artifacts-toggle--active"
-                  : "")
-              }
-              onClick={() => {
-                if (panelOpen && panelMode === "browser") {
-                  setPanelOpen(false);
-                } else {
-                  setPanelMode("browser");
-                  setPanelOpen(true);
-                }
-              }}
-              title="网页预览"
-            >
-              浏览器
-            </button>
-
-            {messages.length > 0 && (
-              <ShareMenu messages={messages} title={title} onDone={onToast} />
-            )}
-          </div>
-          {questionHistoryOpen && (
-            <QuestionHistoryPopover
-              items={questions}
-              triggerRef={questionHistoryTriggerRef}
-              onSelect={jumpToQuestion}
-              onClose={closeQuestionHistory}
-              onFind={openFind}
-            />
-          )}
-        </div>
-
-        {plan && hasVisiblePlan && planOpen && (
-          <div className="chatview__plan-panel">
-            <PlanPanel
-              sessionId={sessionId ?? undefined}
-              onSend={onSend}
-              onToast={onToast}
-            />
-          </div>
-        )}
-
+        {questionHistoryOpen && <QuestionHistoryPopover items={questions} triggerRef={questionHistoryTriggerRef}
+          onSelect={jumpToQuestion} onClose={closeQuestionHistory} onFind={openFind} />}
         <FindBar
           occurrences={findOccurrences}
           open={findOpen}
@@ -909,11 +787,17 @@ export function ChatView({
         <div className="chatview__scroll-shell">
           <div className="chatview__scroll" ref={scrollRef}>
             <div className="chatview__inner" ref={contentRef}>
+              {runtimeKey && <section className="chatview__runtime-view" aria-label="任务工作视图">
+                <div data-runtime-panel-anchor={runtimeKey} />
+                <div className="chatview__runtime-heading"><strong>{planOpen ? "执行计划" : fileChangesOpen ? "文件变更" : subagentsOpen ? "协作详情" : "任务团队"}</strong><button type="button" className="main-topbar__btn" aria-label="关闭工作视图" onClick={closeWorkspace}>×</button></div>
+              {hasVisiblePlan && planOpen && <>
+                <PlanPanel sessionId={sessionId ?? undefined} onSend={onSend} onToast={onToast} />
+              </>}
               {fileChangesOpen && (
-                <><div data-runtime-panel-anchor="changes" /><FileChangesPanel messages={messages} /></>
+                <><FileChangesPanel messages={messages} /></>
               )}
               {subagentsOpen && (
-                <><div data-runtime-panel-anchor="subagents" /><SubagentPanel
+                <><SubagentPanel
                   messages={messages}
                   cwd={cwd}
                   onOpenSession={onOpenSubagentSession ? openSubagentSession : undefined}
@@ -922,7 +806,7 @@ export function ChatView({
                 /></>
               )}
               {teamsOpen && (
-                <><div data-runtime-panel-anchor="teams" /><TeamStatusView key={sessionId} sessionId={sessionId} messages={messages}
+                <><TeamStatusView key={sessionId} sessionId={sessionId} messages={messages}
                   onOpenGroup={onOpenTeamGroup}
                   onUseTeam={(teamId) => {
                     if (!sessionId) return;
@@ -935,11 +819,11 @@ export function ChatView({
                     onToast?.("已填入团队指令，请补充任务后发送");
                   }}
                   onViewTasks={() => {
-                    setTeamsOpen(false);
-                    toggleRuntimePanel("subagents", false, setSubagentsOpen);
+                    transitionWorkspace("subagents");
                   }}
                 /></>
               )}
+              </section>}
               {timeline.map((node) => {
                 // 时间线分隔符(对齐 EchoAgent message-timeline):日期/模型切换分隔。
                 // 当前 ChatMessage 无 modelId/createdAt,无分隔符时仅渲染消息节点。
@@ -969,7 +853,7 @@ export function ChatView({
                     : " msg-wrap--find-hit"
                   : "";
                 return (
-                  <div key={m.id} className={"msg-wrap" + findCls + (m.id === jumpTargetId ? " msg-wrap--jump-target" : "")} data-msg-id={m.id} tabIndex={-1}>
+                  <div key={`${sessionId}:${m.id}`} className={"msg-wrap" + findCls + (m.id === jumpTargetId ? " msg-wrap--jump-target" : "")} data-msg-id={m.id} tabIndex={-1}>
                     <MessageItem
                       message={m}
                       streaming={streaming && m.id === streamingMessageId}
@@ -980,6 +864,7 @@ export function ChatView({
                       onOpenTool={handleOpenTool}
                       findQuery={findOpen ? findQuery : undefined}
                       onEditResend={handleEditResend}
+                      autoExpandProcess={false}
                       latest={isLastAssistant}
                       retrying={isLastAssistant && retryingSessionId === sessionId}
                       onRetry={
@@ -1007,6 +892,8 @@ export function ChatView({
           )}
         </div>
         <div className="chatview__footer">
+          <AutomationControls sessionId={sessionId} streaming={streaming} onToast={onToast}
+            onContinue={() => onSend("继续")} onPause={() => onCancel("pause")} placement="toolbar" />
           {/* Inline permission / question cards: session-scoped, never block sidebar. */}
           <AutomationControls
             sessionId={sessionId}
@@ -1015,6 +902,7 @@ export function ChatView({
             placement="approval"
           />
           <PermissionInlineCard sessionId={sessionId} />
+          {awaitingPlan && <div className="yield-banner" role="status"><span>执行计划等待确认</span><button type="button" className="btn btn--ghost" onClick={() => { if (!planOpen) openWorkspace("plan"); }}>查看并确认计划</button></div>}
           <QuestionInlineCard sessionId={sessionId} />
           {control && automationMode === "default" && (
             <div className="yield-banner" role="status">
@@ -1037,16 +925,6 @@ export function ChatView({
             >
               <PauseIcon size="sm" style={{ verticalAlign: "text-bottom" }} /> 暂停
             </button>
-          )}
-          {/* Rewind / fork: 会话级工具，放在输入框正上方（不再漂浮到左上角挡标题栏）。 */}
-          {sessionId && !streaming && (
-            <RewindBar
-              sessionId={sessionId}
-              cwd={cwd}
-              onRewound={onRewound}
-              onForked={onForked}
-              onToast={onToast}
-            />
           )}
           {/* 消息队列(对齐 EchoAgent message-queue):流式时可继续排队 prompt。
               非流式时面板为空(QueuePanel 内部 queue.length===0 直接 return null)。 */}
@@ -1128,18 +1006,19 @@ export function ChatView({
         messages={messages}
         sessionId={sessionId ?? undefined}
         onToast={onToast}
-        onClose={() => setPanelOpen(false)}
-        onSelectTool={(tc) => {
-          setActiveTool(tc);
-          setPreviewPath(null);
-          setPanelMode("tool");
-          setPanelOpen(true);
-        }}
+        onClose={closeWorkspace}
+        onModeChange={transitionWorkspace}
+        onSelectTool={handleOpenTool}
         onSelectArtifact={handleSelectArtifact}
         onOpenArtifacts={handleOpenArtifacts}
         findToolCall={(id) => findToolCall(messages, id)}
       />
       {retryDialog}
+      {sessionId && historyAction && !historyDisabled && <RewindBar key={sessionId} sessionId={sessionId} cwd={cwd}
+        canExecute={canExecuteHistory}
+        action={historyAction} onActionDone={() => { if (useSessionStore.getState().sessionId === sessionId) setHistoryAction(null); }} onRewound={onRewound}
+        onForked={onForked} onToast={onToast} />}
     </div>
+    </>
   );
 }

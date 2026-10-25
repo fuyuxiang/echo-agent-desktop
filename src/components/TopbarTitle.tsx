@@ -14,8 +14,10 @@ import { EditToolIcon } from "@/foundation/components/Icon/icons";
 export function TopbarTitle({
   title,
   onRename,
+  editRequest = 0,
 }: {
   title: string;
+  editRequest?: number;
   onRename: (newTitle: string) => Promise<void>;
 }) {
   const [editing, setEditing] = useState(false);
@@ -49,6 +51,13 @@ export function TopbarTitle({
     },
     [title],
   );
+
+  useEffect(() => {
+    if (!editRequest || submittingRef.current) return;
+    setValue(title);
+    editingRef.current = true;
+    setEditing(true);
+  }, [editRequest]);
 
   const commit = useCallback(async () => {
     if (!editingRef.current || submittingRef.current) return;
@@ -88,6 +97,7 @@ export function TopbarTitle({
     return (
       <input
         ref={inputRef}
+        aria-label="会话标题"
         type="text"
         className="main-topbar__title-input"
         value={value}

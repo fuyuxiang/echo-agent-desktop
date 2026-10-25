@@ -82,6 +82,7 @@ interface ToolSidePanelProps {
   sessionId?: string;
   onToast?: (msg: string) => void;
   onClose: () => void;
+  onModeChange?: (mode: ToolSidePanelMode) => void;
   onSelectTool: (tc: ToolCallView) => void;
   onSelectArtifact: (a: SessionArtifact) => void;
   onOpenArtifacts: () => void;
@@ -99,20 +100,26 @@ export function ToolSidePanel({
   sessionId,
   onToast,
   onClose,
+  onModeChange,
   onSelectTool,
   onSelectArtifact,
   findToolCall,
 }: ToolSidePanelProps) {
   // ---- 视图状态：把外部 mode 映射到内部 WorkspaceView ----
-  const [view, setView] = useState<WorkspaceView>("artifacts");
+  const [legacyView, setView] = useState<WorkspaceView>("artifacts");
+  const view: WorkspaceView = onModeChange
+    ? mode === "browser" ? "preview" : mode === "preview" ? "fileTree"
+      : mode === "fileTree" || mode === "changes" ? mode : "artifacts"
+    : legacyView;
   useEffect(() => {
+    if (onModeChange) return;
     if (mode === "artifacts") setView("artifacts");
     else if (mode === "preview") setView("fileTree"); // 单文件预览映射到文件树视图
     else if (mode === "fileTree") setView("fileTree");
     else if (mode === "browser") setView("preview");
     else if (mode === "changes") setView("changes");
     // "tool" 模式不改 view（工具详情在主列覆盖渲染）
-  }, [mode]);
+  }, [mode, onModeChange]);
 
   // ---- selection 状态 ----
   const [selectedArtifactId, setSelectedArtifactId] = useState<string | undefined>();
@@ -128,8 +135,9 @@ export function ToolSidePanel({
 
   // ---- 视图切换 ----
   const handleViewChange = useCallback((v: WorkspaceView) => {
-    setView(v);
-  }, []);
+    if (onModeChange) onModeChange(v === "preview" ? "browser" : v);
+    else setView(v);
+  }, [onModeChange]);
 
   const handleArtifactSelect = useCallback(
     (id?: string) => {
@@ -259,6 +267,9 @@ export function ToolSidePanel({
   const views = defaultViews({ hasChanges });
   // tool 模式：主列渲染工具详情；其余按工作区视图渲染。
   const showToolDetail = mode === "tool";
+  // Browser navigation lives in its toolbar; an otherwise empty file list
+  // must not take half the panel away from the address field and page.
+  const browserView = view === "preview" && !showToolDetail;
 
   return (
     <aside
@@ -283,7 +294,7 @@ export function ToolSidePanel({
         />
       )}
       {/* 左导航列 */}
-      <div
+      {!browserView && <div
         className={
           "tool-side-panel__nav" +
           (effectiveNavCollapsed ? " tool-side-panel__nav--collapsed" : "")
@@ -349,10 +360,10 @@ export function ToolSidePanel({
             />
           </div>
         )}
-      </div>
+      </div>}
 
       {/* Sash：调整左列宽度 */}
-      {!effectiveNavCollapsed && (
+      {!browserView && !effectiveNavCollapsed && (
         <div
           className="tool-side-panel__sash"
           onPointerDown={(e) =>
@@ -371,6 +382,7 @@ export function ToolSidePanel({
           className="tool-side-panel__header"
           {...(IS_MACOS ? { "data-tauri-drag-region": true } : {})}
         >
+          {browserView && <ViewSelector view={view} views={views} onChange={handleViewChange} />}
           <div
             className="tool-side-panel__tabs"
             {...(IS_MACOS ? { "data-tauri-drag-region": true } : {})}

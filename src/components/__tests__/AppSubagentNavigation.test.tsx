@@ -30,6 +30,7 @@ vi.mock("@/features/groups/GroupWorkspace", () => ({ GroupWorkspace: () => <div 
 vi.mock("../ChatView", () => ({ ChatView: (props: ComponentProps<typeof import("../ChatView").ChatView>) => {
   const child = props.title === "母任务" ? "child" : "grandchild";
   return <div>
+    {props.headerLeading}
     <span data-testid="active-task">{props.title}</span>
     <span data-testid="restored-row">{props.subagentScrollRestore?.subagentKey ?? ""}</span>
     {props.title !== "孙子代理记录" && <button onClick={() => void props.onOpenSubagentSession?.(child, "/workspace", {

@@ -28,6 +28,13 @@ function renderMessage(
   );
 }
 
+function openReplyItem(name: string, click = true) {
+  fireEvent.click(screen.getByRole("button", { name: "更多回复操作" }));
+  const item = screen.getByRole("menuitem", { name });
+  if (click) fireEvent.click(item);
+  return item;
+}
+
 describe("assistant message actions", () => {
   it("只有未闭合推理标签时不提供复制或导出内部文本的入口", () => {
     renderMessage({ id: "reasoning-only", role: "assistant", complete: true, parts: [{ kind: "text", text: "<analysis>内部内容" }] });
@@ -45,12 +52,12 @@ describe("assistant message actions", () => {
   it("真实消息反馈关闭重开保留草稿，并使用重新选择的方向提交", () => {
     useFeedbackStore.getState().__replace({});
     renderMessage(completedMessage, { latest: true, sessionId: "feedback-session" });
-    fireEvent.click(screen.getByRole("button", { name: "赞" }));
+    openReplyItem("赞");
     fireEvent.click(screen.getByLabelText("4 星"));
     fireEvent.change(screen.getByPlaceholderText("补充说明(可选)"), { target: { value: "这段备注仍可继续编辑" } });
     fireEvent.click(screen.getByRole("button", { name: "关闭" }));
     expect(screen.queryByRole("dialog")).toBeNull();
-    fireEvent.click(screen.getByRole("button", { name: "踩" }));
+    openReplyItem("踩");
     expect(screen.getByText(/这条回复有待改进/)).toBeInTheDocument();
     expect(screen.getByPlaceholderText("补充说明(可选)")).toHaveValue("这段备注仍可继续编辑");
     expect(screen.getByText("较好")).toBeInTheDocument();
@@ -80,7 +87,7 @@ describe("assistant message actions", () => {
     });
     renderMessage();
 
-    const trigger = screen.getByRole("button", { name: "更多复制选项" });
+    const trigger = screen.getByRole("button", { name: "更多回复操作" });
     fireEvent.click(trigger);
     expect(trigger).toHaveAttribute("aria-expanded", "true");
     const plainItem = screen.getByRole("menuitem", { name: "复制纯文本" });
@@ -92,7 +99,7 @@ describe("assistant message actions", () => {
     fireEvent.click(markdownItem);
 
     await waitFor(() => expect(writeText).toHaveBeenCalledWith("**第一段**\n\n第二段"));
-    expect(screen.queryByRole("menu", { name: "选择复制格式" })).toBeNull();
+    expect(screen.queryByRole("menu", { name: "当前回复操作" })).toBeNull();
     expect(screen.getByRole("button", { name: "已复制 Markdown" })).toBeInTheDocument();
   });
 
@@ -120,32 +127,32 @@ describe("assistant message actions", () => {
     expect(writeText).not.toHaveBeenCalledWith(expect.stringContaining("I should inspect"));
   });
 
-  it("Escape 关闭复制菜单并把焦点还给触发器", () => {
+  it("Escape 关闭复制菜单并把焦点还给触发器", async () => {
     renderMessage();
-    const trigger = screen.getByRole("button", { name: "更多复制选项" });
+    const trigger = screen.getByRole("button", { name: "更多回复操作" });
     fireEvent.click(trigger);
 
     fireEvent.keyDown(document, { key: "Escape" });
-    expect(screen.queryByRole("menu", { name: "选择复制格式" })).toBeNull();
-    expect(trigger).toHaveFocus();
+    expect(screen.queryByRole("menu", { name: "当前回复操作" })).toBeNull();
+    await waitFor(() => expect(trigger).toHaveFocus());
   });
 
-  it("导出格式菜单支持键盘导航与 Escape 返回", () => {
+  it("导出格式菜单支持键盘导航与 Escape 返回", async () => {
     renderMessage();
-    const trigger = screen.getByRole("button", { name: "导出回复为办公文件" });
-    fireEvent.keyDown(trigger, { key: "ArrowDown" });
+    const trigger = screen.getByRole("button", { name: "更多回复操作" });
+    openReplyItem("导出回复为办公文件");
     const word = screen.getByRole("menuitem", { name: "Word" });
     expect(word).toHaveFocus();
     fireEvent.keyDown(word, { key: "ArrowDown" });
     expect(screen.getByRole("menuitem", { name: "PDF" })).toHaveFocus();
     fireEvent.keyDown(document, { key: "Escape" });
     expect(screen.queryByRole("menu", { name: "选择导出格式" })).toBeNull();
-    expect(trigger).toHaveFocus();
+    await waitFor(() => expect(trigger).toHaveFocus());
   });
 
   it("选择办公格式前说明公式、图表及 Excel 的导出范围，且保留四个可用入口", () => {
     renderMessage();
-    fireEvent.click(screen.getByRole("button", { name: "导出回复为办公文件" }));
+    openReplyItem("导出回复为办公文件");
 
     const commonNote = screen.getByText("公式和 Mermaid 图表以原始文本保留。图表可从图表菜单下载 SVG。");
     const spreadsheetNote = screen.getByText("Excel：回复含表格时，仅导出表格。");
@@ -168,7 +175,7 @@ describe("assistant message actions", () => {
 
   it("导出说明不改变菜单首尾导航及离开菜单的焦点行为", () => {
     renderMessage();
-    fireEvent.click(screen.getByRole("button", { name: "导出回复为办公文件" }));
+    openReplyItem("导出回复为办公文件");
     const word = screen.getByRole("menuitem", { name: "Word" });
     const ppt = screen.getByRole("menuitem", { name: "PPT" });
     fireEvent.keyDown(word, { key: "End" });
@@ -180,7 +187,7 @@ describe("assistant message actions", () => {
     fireEvent.keyDown(ppt, { key: "Home" });
     expect(word).toHaveFocus();
 
-    const nextAction = screen.getByRole("button", { name: "朗读回复" });
+    const nextAction = screen.getByRole("button", { name: "复制纯文本" });
     act(() => nextAction.focus());
     expect(screen.queryByRole("menu", { name: "选择导出格式" })).toBeNull();
     expect(nextAction).toHaveFocus();
@@ -189,7 +196,7 @@ describe("assistant message actions", () => {
   it("根据终态区分重新生成和重新执行", () => {
     const onRetry = vi.fn();
     const { rerender } = renderMessage(completedMessage, { onRetry });
-    expect(screen.getByRole("button", { name: "重新生成" })).toBeEnabled();
+    expect(openReplyItem("重新生成", false)).toBeEnabled();
 
     rerender(
       <ThemeProvider>
@@ -234,7 +241,7 @@ describe("assistant message actions", () => {
       ],
     }, { onRetry });
 
-    const button = screen.getByRole("button", { name: "重新执行" });
+    const button = openReplyItem("重新执行", false);
     expect(button).toHaveAttribute("title", "重新执行本轮任务（可能再次调用工具）");
     fireEvent.click(button);
     expect(onRetry).toHaveBeenCalledWith("reexecute");
@@ -243,5 +250,35 @@ describe("assistant message actions", () => {
   it("流式回复完成前不显示读后操作", () => {
     renderMessage({ ...completedMessage, complete: false }, { streaming: true });
     expect(screen.queryByRole("group", { name: "回复操作" })).toBeNull();
+  });
+});
+
+describe("progressive reply actions preserve business scope", () => {
+  it("更多菜单朗读后，停止控制直接可用", async () => {
+    const { registerTtsProvider, resetVoiceRegistry } = await import("@/lib/voice-contract");
+    const stop = vi.fn(), speak = vi.fn(() => stop);
+    registerTtsProvider({id:"test-reply-tts",isAvailable:()=>true,speak});
+    renderMessage();
+    expect(screen.queryByRole("button",{name:"朗读回复"})).toBeNull();
+    openReplyItem("朗读回复");
+    expect(speak).toHaveBeenCalledWith("第一段 第二段", "zh-CN", expect.anything());
+    fireEvent.click(screen.getByRole("button",{name:"停止朗读"}));
+    expect(stop).toHaveBeenCalledOnce();
+    resetVoiceRegistry();
+  });
+  it("办公导出只导出当前回复并登记到当前会话，忙碌状态直接可见", async () => {
+    const documents = await import("@/lib/document-export");
+    const catalog = await import("@/lib/artifact-catalog");
+    let finish!: (value: never) => void;
+    const exportSpy = vi.spyOn(documents,"exportOfficeDocument").mockImplementation(() => new Promise(resolve=>{finish=resolve;}));
+    const registerSpy = vi.spyOn(catalog,"registerDocumentArtifact").mockImplementation(()=>({} as never));
+    renderMessage(completedMessage,{sessionId:"reply-scope",cwd:"/reply-workspace"});
+    openReplyItem("导出回复为办公文件");
+    fireEvent.click(screen.getByRole("menuitem",{name:"Word"}));
+    expect(exportSpy).toHaveBeenCalledWith("**第一段**", "**第一段**\n\n第二段", "docx", "reply-scope");
+    expect(screen.getByRole("status")).toHaveTextContent("正在导出 DOCX");
+    await act(async()=>finish({path:"/reply-workspace/reply.docx",format:"docx"} as never));
+    expect(registerSpy).toHaveBeenCalledWith(expect.objectContaining({path:"/reply-workspace/reply.docx"}),"reply-scope","**第一段**","/reply-workspace");
+    exportSpy.mockRestore(); registerSpy.mockRestore();
   });
 });

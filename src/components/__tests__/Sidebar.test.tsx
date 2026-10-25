@@ -67,7 +67,7 @@ describe("Sidebar", () => {
   });
 
   it.each(["collapsed", "resizing"] as const)("侧栏 %s 时关闭更多浮层并阻止重新展开", async (state) => {
-    const layout = { collapsed: false, resizing: false, panelMaxWidth: 600, registerPanel: vi.fn(), expandSidebar: vi.fn() };
+    const layout = { collapsed: false, resizing: false, panelMaxWidth: 600, registerPanel: vi.fn(), expandSidebar: vi.fn(), toggleSidebar: vi.fn() };
     const { rerender } = render(<SidebarLayoutContext.Provider value={layout}><Sidebar {...base} /></SidebarLayoutContext.Provider>);
     await userEvent.hover(screen.getByRole("button", { name: /更多/ }));
     expect(screen.getByRole("menu", { name: "更多功能" })).toBeInTheDocument();

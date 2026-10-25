@@ -6,7 +6,7 @@ import { join } from "node:path";
 export async function validateOfficeExportMenu(page, output, { width, height, theme }) {
   const commonText = "公式和 Mermaid 图表以原始文本保留。图表可从图表菜单下载 SVG。";
   const excelText = "Excel：回复含表格时，仅导出表格。";
-  const trigger = page.getByRole("button", { name: "导出回复为办公文件" }).last();
+  const trigger = page.getByRole("button", { name: "更多回复操作" }).last();
   const focused = (item) => item.evaluate((element) => document.activeElement === element);
   let layouts = 0;
   for (const enlarged of [false, true]) {
@@ -15,6 +15,7 @@ export async function validateOfficeExportMenu(page, output, { width, height, th
     }
     await trigger.focus();
     await page.keyboard.press("ArrowDown");
+    await page.getByRole("menuitem", { name: "导出回复为办公文件" }).click();
     const menu = page.getByRole("menu", { name: "选择导出格式" });
     await menu.waitFor();
     const common = page.getByText(commonText, { exact: true });
@@ -68,6 +69,7 @@ export async function validateOfficeExportMenu(page, output, { width, height, th
     await menu.waitFor({ state: "hidden" });
     assert.ok(await focused(trigger), `${label}: Escape should restore trigger focus`);
     await page.keyboard.press("ArrowDown");
+    await page.getByRole("menuitem", { name: "导出回复为办公文件" }).click();
     await menu.waitFor();
     await page.keyboard.press("End");
     await page.keyboard.press("Tab");

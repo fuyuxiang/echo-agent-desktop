@@ -1,4 +1,8 @@
 import { useCallback, useEffect, useRef, useState } from "react";
+import { createPortal } from "react-dom";
+import { Info } from "lucide-react";
+import { useAnchoredFloating } from "@/lib/use-anchored-floating";
+import type { estimateSendCost } from "@/lib/token-estimate";
 import { agentSessionInfo, agentSessionUsage } from "@/lib/agent-client";
 import type { ContextInfo, SessionUsage } from "@/lib/types";
 
@@ -58,18 +62,24 @@ function buildRows(ctx: ContextInfo): CategoryRow[] {
   return rows;
 }
 
-export function ContextUsagePill({ sessionId, onRefreshSignal }: { sessionId: string; onRefreshSignal?: number }) {
+export function ContextUsagePill({ sessionId, onRefreshSignal, estimate }: { sessionId?: string; onRefreshSignal?: number; estimate?: ReturnType<typeof estimateSendCost> }) {
   const [snap, setSnap] = useState<Snapshot | null>(null);
   const [open, setOpen] = useState(false);
   const ref = useRef<HTMLDivElement>(null);
+  const triggerRef = useRef<HTMLButtonElement>(null);
+  const popoverRef = useRef<HTMLDivElement>(null);
+  const generationRef = useRef(0);
+  const { style } = useAnchoredFloating(triggerRef, popoverRef, open, { align: "end", width: 320 });
 
   const refresh = useCallback(async () => {
+    if (!sessionId) return;
+    const generation = ++generationRef.current;
     try {
       const info = await agentSessionInfo(sessionId);
       if (info?.context?.total) {
         let usage: SessionUsage | undefined;
         try { usage = await agentSessionUsage(sessionId); } catch { /* nice-to-have */ }
-        setSnap({ ctx: info.context, usage });
+        if (generation === generationRef.current) setSnap({ ctx: info.context, usage });
       }
     } catch { /* session not live in agent — pill stays hidden */ }
   }, [sessionId]);
@@ -79,6 +89,7 @@ export function ContextUsagePill({ sessionId, onRefreshSignal }: { sessionId: st
     setSnap(null);
     setOpen(false);
     void refresh();
+    return () => { generationRef.current += 1; };
   }, [sessionId, refresh]);
 
   // Re-fetch when parent signals (e.g. agent://complete).
@@ -90,10 +101,11 @@ export function ContextUsagePill({ sessionId, onRefreshSignal }: { sessionId: st
   useEffect(() => {
     if (!open) return;
     void refresh();
+    popoverRef.current?.focus();
     const onDown = (e: MouseEvent) => {
-      if (ref.current && !ref.current.contains(e.target as Node)) setOpen(false);
+      if (ref.current && !ref.current.contains(e.target as Node) && !popoverRef.current?.contains(e.target as Node)) setOpen(false);
     };
-    const onKey = (e: KeyboardEvent) => { if (e.key === "Escape") setOpen(false); };
+    const onKey = (e: KeyboardEvent) => { if (e.key === "Escape") { setOpen(false); triggerRef.current?.focus(); } };
     document.addEventListener("mousedown", onDown);
     document.addEventListener("keydown", onKey);
     return () => {
@@ -103,13 +115,13 @@ export function ContextUsagePill({ sessionId, onRefreshSignal }: { sessionId: st
   }, [open, refresh]);
 
   const ctx = snap?.ctx;
-  if (!ctx || !ctx.total) return null;
+  if (!ctx?.total && !estimate) return null;
 
-  const pct = ctx.usagePct;
-  const useWan = ctx.total >= 1_000_000;
-  const rows = buildRows(ctx);
+  const pct = ctx?.usagePct ?? 0;
+  const useWan = (ctx?.total ?? 0) >= 1_000_000;
+  const rows = ctx ? buildRows(ctx) : [];
   const cacheHit =
-    snap.usage && snap.usage.inputTokens > 0
+    snap?.usage && snap.usage.inputTokens > 0
       ? `${((snap.usage.cachedReadTokens / snap.usage.inputTokens) * 100).toFixed(1)}%`
       : "—";
 
@@ -122,11 +134,15 @@ export function ContextUsagePill({ sessionId, onRefreshSignal }: { sessionId: st
     <div className="context-usage" ref={ref}>
       <button
         type="button"
-        className={"context-usage__pill" + (open ? " context-usage__pill--open" : "")}
+        ref={triggerRef}
+        aria-label={pct >= 60 ? `上下文已使用 ${pct}%` : "上下文与用量详情"}
+        aria-haspopup="dialog"
+        aria-expanded={open}
+        className={"context-usage__pill" + (open ? " context-usage__pill--open" : "") + (pct >= 60 || estimate?.severity !== "ok" && estimate ? " context-usage__pill--attention" : "")}
         onClick={(e) => { e.stopPropagation(); setOpen((o) => !o); }}
-        title={`${pct}% · ${fmtToken(ctx.used, useWan)} / ${fmtToken(ctx.total, useWan)} 上下文已使用`}
+        title={ctx ? `${pct}% · ${fmtToken(ctx.used, useWan)} / ${fmtToken(ctx.total, useWan)} 上下文已使用` : `本地估算：约 ${estimate?.newTokens} token，非计费结果`}
       >
-        <svg width="18" height="18" viewBox="0 0 18 18" className="context-usage__ring">
+        {pct >= 60 ? <svg width="18" height="18" viewBox="0 0 18 18" className="context-usage__ring">
           <circle cx="9" cy="9" r={r} fill="none" className="context-usage__ring-track" />
           <circle
             cx="9" cy="9" r={r} fill="none"
@@ -134,14 +150,13 @@ export function ContextUsagePill({ sessionId, onRefreshSignal }: { sessionId: st
             strokeDasharray={c}
             strokeDashoffset={offset}
           />
-        </svg>
-        <span className="context-usage__pill-text">
-          {pct}%
-        </span>
+        </svg> : <Info size={15} />}
+        {pct >= 60 && <span className="context-usage__pill-text">{pct}%</span>}
       </button>
-      {open && (
-        <div className="context-usage__popover" onClick={(e) => e.stopPropagation()}>
-          <div className="context-usage__popover-header">
+      {open && createPortal(
+        <div style={style} ref={popoverRef} role="dialog" aria-label="上下文详情" tabIndex={-1} className="context-usage__popover" onClick={(e) => e.stopPropagation()}>
+          {estimate && <p className="context-usage__estimate">本次输入约 {estimate.newTokens.toLocaleString()} token。仅为本地估算，非计费结果。</p>}
+          {ctx && <><div className="context-usage__popover-header">
             <span className="context-usage__popover-title">上下文容量</span>
             <span className="context-usage__popover-summary">
               {fmtToken(ctx.used, useWan)}/{fmtToken(ctx.total, useWan)}（{pct}%）
@@ -171,7 +186,8 @@ export function ContextUsagePill({ sessionId, onRefreshSignal }: { sessionId: st
             <span>平均缓存命中率</span>
             <span className="context-usage__footer-value">{cacheHit}</span>
           </div>
-        </div>
+          </>}
+        </div>, document.body
       )}
     </div>
   );

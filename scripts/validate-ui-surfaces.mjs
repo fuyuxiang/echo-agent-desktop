@@ -105,11 +105,12 @@ page.setDefaultNavigationTimeout(60000);
         continue;
       }
       if (surface === "conversation") {
-        await page.getByRole("button", { name: "历史提问" }).click();
+        await page.getByRole("button", { name: "更多操作" }).click();
+        await page.getByRole("menuitem", { name: "历史提问" }).click();
         const dialog = page.getByRole("dialog", { name: "历史提问" });
         await dialog.getByRole("searchbox", { name: "筛选历史提问" }).waitFor();
         const box = await dialog.boundingBox();
-        const toolbar = await page.locator(".chatview__utility-bar").boundingBox();
+        const toolbar = await page.locator(".session-header").boundingBox();
         assert.ok(box && toolbar && box.x >= 0 && box.x + box.width <= width && box.y >= toolbar.y + toolbar.height && box.y + box.height <= height, "question navigator clips or overlaps toolbar");
         assert.equal(await dialog.locator(".question-history__item").count(), 7);
         assert.ok(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth + 1), "conversation: horizontal page overflow");

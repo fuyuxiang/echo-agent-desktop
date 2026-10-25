@@ -126,7 +126,7 @@ function sameActivity(runtime: SubagentRuntime, activity: SubagentActivity): boo
   );
 }
 
-function mergePanelItems(
+export function mergePanelItems(
   live: SubagentRuntime[],
   fallback: SubagentActivity[],
 ): PanelItem[] {

@@ -1,4 +1,6 @@
 import { useEffect, useMemo, useRef, useState, type RefObject } from "react";
+import { createPortal } from "react-dom";
+import { useAnchoredFloating } from "@/lib/use-anchored-floating";
 import { Search, X } from "lucide-react";
 import type { ChatMessage } from "@/stores/session-store";
 import { attachmentBasename, stripInjectedUserContext } from "@/lib/user-message";
@@ -48,6 +50,7 @@ export function QuestionHistoryPopover({
 }) {
   const [query, setQuery] = useState("");
   const rootRef = useRef<HTMLDivElement>(null);
+  const { style } = useAnchoredFloating(triggerRef, rootRef, true, { preferredPlacement: "bottom", align: "end", width: 380, maxHeight: 480, offset: 16 });
   const inputRef = useRef<HTMLInputElement>(null);
   const visible = useMemo(() => {
     const normalized = query.trim().toLocaleLowerCase();
@@ -81,8 +84,8 @@ export function QuestionHistoryPopover({
     };
   }, [onClose, onFind, triggerRef]);
 
-  return (
-    <div ref={rootRef} id="question-history-popover" className="question-history" role="dialog" aria-label="历史提问">
+  return createPortal(
+    <div style={style} ref={rootRef} id="question-history-popover" className="question-history" role="dialog" aria-label="历史提问">
       <div className="question-history__header">
         <strong>历史提问 <span>{items.length}</span></strong>
         <button type="button" className="question-history__close" onClick={() => { onClose(); triggerRef.current?.focus(); }} aria-label="关闭历史提问"><X size={16} /></button>
@@ -118,6 +121,6 @@ export function QuestionHistoryPopover({
           </button>
         ))}
       </div>
-    </div>
+    </div>, document.body
   );
 }

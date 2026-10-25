@@ -14,6 +14,7 @@ export const SidebarLayoutContext = createContext<{
   collapsed: boolean;
   resizing: boolean;
   expandSidebar: () => void;
+  toggleSidebar: () => void;
 } | null>(null);
 
 function clampWidth(value: number) {
@@ -109,8 +110,9 @@ export function useAppSidebarLayout() {
     containerWidth - (collapsed ? 0 : width) - Math.min(MAIN_CONTENT_MIN_WIDTH, Math.max(240, containerWidth - 280)),
   );
   const expandSidebar = useCallback(() => setCollapsed(false), [setCollapsed]);
-  const context = useMemo(() => ({ panelMaxWidth, registerPanel, collapsed, resizing, expandSidebar }),
-    [panelMaxWidth, registerPanel, collapsed, resizing, expandSidebar]);
+  const toggleSidebar = useCallback(() => setCollapsed(value => !value), [setCollapsed]);
+  const context = useMemo(() => ({ panelMaxWidth, registerPanel, collapsed, resizing, expandSidebar, toggleSidebar }),
+    [panelMaxWidth, registerPanel, collapsed, resizing, expandSidebar, toggleSidebar]);
   return {
     bodyRef, context, collapsed, setCollapsed, width, preferredWidth,
     maxWidth: bounds.maxWidth, restoreMaxWidth, commitWidth, setPreviewWidth, resizing, setResizing,

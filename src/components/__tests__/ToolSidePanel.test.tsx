@@ -115,8 +115,13 @@ describe("ToolSidePanel navigation collapse", () => {
       const nav = container.querySelector<HTMLElement>(".tool-side-panel__nav");
 
       expect(panel?.style.width).toBe("280px");
-      expect(nav?.style.width).toBe("140px");
-      expect(container.querySelector(".tool-side-panel__nav-body")).toBeInTheDocument();
+      if (mode === "fileTree") {
+        expect(nav?.style.width).toBe("140px");
+        expect(container.querySelector(".tool-side-panel__nav-body")).toBeInTheDocument();
+      } else {
+        expect(nav).toBeNull();
+        expect(screen.getByRole("textbox", { name: "预览网址" })).toBeInTheDocument();
+      }
 
       await waitFor(() => {
         expect(localStorage.getItem("tool-side-panel-width")).toBe("280");
@@ -124,6 +129,17 @@ describe("ToolSidePanel navigation collapse", () => {
       });
     },
   );
+
+  it("keeps browser navigation usable without a blank list column and can switch back to files", async () => {
+    const { container } = renderPanel("browser");
+    fireEvent.change(screen.getByRole("textbox", { name: "预览网址" }), { target: { value: "https://example.com/review" } });
+    fireEvent.click(screen.getByRole("button", { name: "预览" }));
+    expect(container.querySelector("iframe")).toHaveAttribute("src", "https://example.com/review");
+    fireEvent.click(screen.getByRole("button", { name: "浏览器" }));
+    fireEvent.click(screen.getByRole("option", { name: "文件树" }));
+    expect(await screen.findByText(/没有可见文件/)).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "收起导航" })).toBeInTheDocument();
+  });
 
   it("waits for the persisted export receipt before reading a historical file", async () => {
     let authorize!: () => void;

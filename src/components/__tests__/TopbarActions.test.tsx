@@ -138,6 +138,7 @@ describe("TopbarActions", () => {
     });
     expect(onToast).toHaveBeenCalledWith("已归档，可在“设置 → 数据管理 → 已归档”中恢复");
     expect(screen.queryByRole("menu")).toBeNull();
+    await waitFor(() => expect(screen.getByRole("button", { name: "更多操作" })).toHaveFocus());
   });
 
   it("归档失败时不改前端状态，并给出可读的错误提示", async () => {
@@ -182,5 +183,49 @@ describe("TopbarActions", () => {
 
     expect(screen.queryByRole("menu")).toBeNull();
     await waitFor(() => expect(trigger).toHaveFocus());
+  });
+});
+
+describe("session menu migration", () => {
+  it("统一导出入口仍保存整个会话，默认排除过程；显式选择后包含过程", async () => {
+    const { useSessionStore } = await import("@/stores/session-store");
+    useSessionStore.getState().setSession("export-session");
+    useSessionStore.getState().setMessages([
+      { id: "u-export", role: "user", complete: true, parts: [{ kind: "text", text: "第一轮用户问题" }] },
+      { id: "a-export", role: "assistant", complete: true, parts: [{ kind: "thought", text: "内部执行过程" }, { kind: "text", text: "第一轮正式回答" }] },
+      { id: "u-export-2", role: "user", complete: true, parts: [{ kind: "text", text: "第二轮问题" }] },
+    ]);
+    vi.mocked(exportTextFile).mockResolvedValue(null);
+    render(<TopbarActions sessionId="export-session" title="完整会话" />);
+    const openShare = () => {
+      fireEvent.click(screen.getByRole("button", { name: "更多操作" }));
+      fireEvent.click(screen.getByRole("menuitem", { name: "导出与本地分享…" }));
+    };
+    openShare();
+    const dialog = screen.getByRole("dialog", { name: "分享选项" });
+    expect(within(dialog).getByText("本地分享，不会自动上传会话")).toBeVisible();
+    fireEvent.click(within(dialog).getByRole("button", { name: "导出 Markdown" }));
+    await waitFor(() => expect(exportTextFile).toHaveBeenLastCalledWith("完整会话.md", expect.stringContaining("第二轮问题"), "md"));
+    expect(vi.mocked(exportTextFile).mock.lastCall?.[1]).toContain("第一轮正式回答");
+    expect(vi.mocked(exportTextFile).mock.lastCall?.[1]).not.toContain("内部执行过程");
+    fireEvent.click(within(dialog).getByRole("checkbox", { name: /包含执行过程/ }));
+    fireEvent.click(within(dialog).getByRole("button", { name: "导出 Markdown" }));
+    await waitFor(() => expect(vi.mocked(exportTextFile).mock.lastCall?.[1]).toContain("内部执行过程"));
+  });
+
+  it("重命名和历史操作调用注入的真实回调，运行期间不可回溯或分叉", () => {
+    const onRename = vi.fn(), onRewind = vi.fn(), onFork = vi.fn(), onQuestionHistory = vi.fn();
+    const view = render(<TopbarActions sessionId="scope-a" title="A" onRename={onRename} onRewind={onRewind} onFork={onFork} onQuestionHistory={onQuestionHistory} />);
+    const select = (name: string) => { fireEvent.click(screen.getByRole("button", { name: "更多操作" })); fireEvent.click(screen.getByRole("menuitem", { name })); };
+    select("重命名会话"); expect(onRename).toHaveBeenCalledOnce();
+    select("回溯…"); expect(onRewind).toHaveBeenCalledOnce();
+    select("分叉…"); expect(onFork).toHaveBeenCalledOnce();
+    select("历史提问"); expect(onQuestionHistory).toHaveBeenCalledOnce();
+    view.rerender(<TopbarActions sessionId="scope-a" title="A" onRewind={onRewind} onFork={onFork} historyDisabled />);
+    fireEvent.click(screen.getByRole("button", { name: "更多操作" }));
+    expect(screen.getByRole("menuitem", { name: "回溯…" })).toBeDisabled();
+    expect(screen.getByRole("menuitem", { name: "分叉…" })).toBeDisabled();
+    view.rerender(<TopbarActions sessionId="scope-b" title="B" />);
+    expect(screen.queryByRole("menu")).toBeNull();
   });
 });

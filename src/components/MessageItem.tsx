@@ -1,7 +1,7 @@
 import { memo, useCallback, useEffect, useId, useRef, useState } from "react";
 import {
   Check,
-  ChevronDown,
+  MoreHorizontal,
   Copy,
   Download,
   FileCode2,
@@ -14,6 +14,7 @@ import {
 import { Markdown, type MarkdownConfig } from "./markdown/index";
 import { LoadingRow } from "./LoadingRow";
 import { ExecutionProcess } from "./ExecutionProcess";
+import { ActionMenu } from "./ActionMenu";
 import { FeedbackDialog } from "./FeedbackDialog";
 import { AttachmentVisual } from "./AttachmentVisual";
 import { useTheme } from "./ThemeProvider";
@@ -127,8 +128,14 @@ export const MessageItem = memo(function MessageItem({
   const { theme } = useTheme();
   const [speaking, setSpeaking] = useState(false);
   const [copiedKind, setCopiedKind] = useState<"plain" | "markdown" | null>(null);
-  const [copyMenuOpen, setCopyMenuOpen] = useState(false);
-  const [exportMenuOpen, setExportMenuOpen] = useState(false);
+  const [actionView, setActionView] = useState("main");
+  const [feedbackDialog, setFeedbackDialog] = useState<FeedbackRating | null>(null);
+  const feedback = useFeedbackStore(s => sessionId ? s.entries[`${sessionId}:${message.id}`]?.rating ?? null : null);
+  const rateReply = (rating: FeedbackRating) => {
+    if (!sessionId) return;
+    useFeedbackStore.getState().setRating(sessionId, message.id, rating);
+    if (feedback !== rating) setFeedbackDialog(rating);
+  };
   const [exporting, setExporting] = useState<OfficeFormat | null>(null);
   const knowledgeTrace = useKnowledgeStore((state) => (
     sessionId && message.promptId
@@ -137,12 +144,6 @@ export const MessageItem = memo(function MessageItem({
   ));
   const stopSpeakingRef = useRef<(() => void) | null>(null);
   const copyResetTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
-  const copyMenuRef = useRef<HTMLDivElement>(null);
-  const copyMenuTriggerRef = useRef<HTMLButtonElement>(null);
-  const copyMenuListRef = useRef<HTMLDivElement>(null);
-  const exportMenuRef = useRef<HTMLDivElement>(null);
-  const exportMenuTriggerRef = useRef<HTMLButtonElement>(null);
-  const exportMenuListRef = useRef<HTMLDivElement>(null);
   const exportDescriptionId = useId();
   const exportSpreadsheetDescriptionId = useId();
 
@@ -150,52 +151,6 @@ export const MessageItem = memo(function MessageItem({
     stopSpeakingRef.current?.();
     if (copyResetTimerRef.current) clearTimeout(copyResetTimerRef.current);
   }, []);
-
-  const closeCopyMenu = useCallback((restoreFocus = false) => {
-    setCopyMenuOpen(false);
-    if (restoreFocus) copyMenuTriggerRef.current?.focus();
-  }, []);
-
-  useEffect(() => {
-    if (!copyMenuOpen) return;
-    copyMenuListRef.current?.querySelector<HTMLButtonElement>('[role="menuitem"]')?.focus();
-
-    const closeOnOutside = (event: PointerEvent) => {
-      if (!copyMenuRef.current?.contains(event.target as Node)) closeCopyMenu();
-    };
-    const closeOnEscape = (event: KeyboardEvent) => {
-      if (event.key !== "Escape") return;
-      event.preventDefault();
-      closeCopyMenu(true);
-    };
-    document.addEventListener("pointerdown", closeOnOutside);
-    document.addEventListener("keydown", closeOnEscape);
-    return () => {
-      document.removeEventListener("pointerdown", closeOnOutside);
-      document.removeEventListener("keydown", closeOnEscape);
-    };
-  }, [closeCopyMenu, copyMenuOpen]);
-
-  useEffect(() => {
-    if (!exportMenuOpen) return;
-    exportMenuListRef.current?.querySelector<HTMLButtonElement>('[role="menuitem"]')?.focus();
-    const closeOnOutside = (event: PointerEvent) => {
-      if (!exportMenuRef.current?.contains(event.target as Node)) setExportMenuOpen(false);
-    };
-    const closeOnEscape = (event: KeyboardEvent) => {
-      if (event.key === "Escape") {
-        event.preventDefault();
-        setExportMenuOpen(false);
-        exportMenuTriggerRef.current?.focus();
-      }
-    };
-    document.addEventListener("pointerdown", closeOnOutside);
-    document.addEventListener("keydown", closeOnEscape);
-    return () => {
-      document.removeEventListener("pointerdown", closeOnOutside);
-      document.removeEventListener("keydown", closeOnEscape);
-    };
-  }, [exportMenuOpen]);
 
   const markCopied = useCallback((kind: "plain" | "markdown") => {
     setCopiedKind(kind);
@@ -299,7 +254,6 @@ export const MessageItem = memo(function MessageItem({
   }, [onToast, plainText, speaking]);
 
   const exportAnswer = async (format: OfficeFormat) => {
-    setExportMenuOpen(false);
     setExporting(format);
     try {
       const title = markdownText.match(/^#\s+(.+)$/m)?.[1]?.trim()
@@ -458,270 +412,54 @@ export const MessageItem = memo(function MessageItem({
             )}
         </div>
         {message.complete && (hasAnswerText || onRetry) && (
-          <div
-            className={
-              "msg__actions msg__actions--footer" +
-              (latest ? " msg__actions--latest" : "")
-            }
-            role="group"
-            aria-label="回复操作"
-          >
-            <div className="msg__action-cluster">
-              {hasAnswerText && (
-                <>
-                  <div
-                    className="msg__copy-split"
-                    ref={copyMenuRef}
-                    onBlur={(event) => {
-                      if (!event.currentTarget.contains(event.relatedTarget)) closeCopyMenu();
-                    }}
-                  >
-                    <button
-                      type="button"
-                      className="msg__action-btn msg__copy-main"
-                      data-chat-copy="true"
-                      onClick={() => {
-                        closeCopyMenu();
-                        void copyText(plainText, "plain");
-                      }}
-                      title={copyMainLabel}
-                      aria-label={copyMainLabel}
-                      aria-live="polite"
-                    >
-                      {copiedKind ? <Check size={14} /> : <Copy size={14} />}
-                      <span>{copiedKind ? "已复制" : "复制"}</span>
-                    </button>
-                    <button
-                      type="button"
-                      className="msg__action-btn msg__copy-menu-trigger"
-                      ref={copyMenuTriggerRef}
-                      aria-label="更多复制选项"
-                      aria-haspopup="menu"
-                      aria-expanded={copyMenuOpen}
-                      title="更多复制选项"
-                      onClick={() => setCopyMenuOpen((open) => !open)}
-                      onKeyDown={(event) => {
-                        if (event.key === "ArrowDown" || event.key === "ArrowUp") {
-                          event.preventDefault();
-                          setCopyMenuOpen(true);
-                        }
-                      }}
-                    >
-                      <ChevronDown size={13} />
-                    </button>
-                    {copyMenuOpen && (
-                      <div
-                        className="msg__copy-menu"
-                        role="menu"
-                        aria-label="选择复制格式"
-                        ref={copyMenuListRef}
-                        onKeyDown={(event) => {
-                          const items = Array.from(
-                            copyMenuListRef.current?.querySelectorAll<HTMLButtonElement>('[role="menuitem"]') ?? [],
-                          );
-                          const index = items.indexOf(document.activeElement as HTMLButtonElement);
-                          if (event.key === "ArrowDown" || event.key === "ArrowUp") {
-                            event.preventDefault();
-                            const delta = event.key === "ArrowDown" ? 1 : -1;
-                            items[(index + delta + items.length) % items.length]?.focus();
-                          } else if (event.key === "Home" || event.key === "End") {
-                            event.preventDefault();
-                            items[event.key === "Home" ? 0 : items.length - 1]?.focus();
-                          }
-                        }}
-                      >
-                        <button
-                          type="button"
-                          role="menuitem"
-                          data-chat-copy="true"
-                          onClick={() => {
-                            closeCopyMenu();
-                            void copyText(plainText, "plain");
-                          }}
-                        >
-                          <Copy size={14} />
-                          <span>复制纯文本</span>
-                        </button>
-                        <button
-                          type="button"
-                          role="menuitem"
-                          data-chat-copy="true"
-                          onClick={() => {
-                            closeCopyMenu();
-                            void copyText(markdownText, "markdown");
-                          }}
-                        >
-                          <FileCode2 size={14} />
-                          <span>复制 Markdown</span>
-                        </button>
-                      </div>
-                    )}
-                  </div>
-                  <button
-                    type="button"
-                    className="msg__action-btn"
-                    onClick={toggleSpeak}
-                    title={speaking ? "停止朗读" : "朗读回复"}
-                    aria-label={speaking ? "停止朗读" : "朗读回复"}
-                    aria-pressed={speaking}
-                  >
-                    {speaking ? <Square size={13} /> : <Volume2 size={14} />}
-                    <span>{speaking ? "停止" : "朗读"}</span>
-                  </button>
-                  <div className="msg__copy-split" ref={exportMenuRef}
-                    onBlur={(event) => {
-                      if (!event.currentTarget.contains(event.relatedTarget)) setExportMenuOpen(false);
-                    }}>
-                    <button
-                      type="button"
-                      className="msg__action-btn"
-                      ref={exportMenuTriggerRef}
-                      aria-haspopup="menu"
-                      aria-expanded={exportMenuOpen}
-                      aria-label={exporting ? `正在导出 ${exporting.toUpperCase()}` : "导出回复为办公文件"}
-                      title="导出回复为办公文件"
-                      disabled={exporting !== null}
-                      onClick={() => setExportMenuOpen((open) => !open)}
-                      onKeyDown={(event) => {
-                        if (event.key === "ArrowDown" || event.key === "ArrowUp") {
-                          event.preventDefault();
-                          setExportMenuOpen(true);
-                        }
-                      }}
-                    >
-                      <Download size={14} />
-                      <span>{exporting ? "导出中…" : "导出"}</span>
-                      <ChevronDown size={13} />
-                    </button>
-                    {exportMenuOpen && (
-                      <div className="msg__copy-menu msg__export-menu">
-                        <p className="msg__export-note" id={exportDescriptionId}>
-                          公式和 Mermaid 图表以原始文本保留。图表可从图表菜单下载 SVG。
-                        </p>
-                        <p className="msg__export-note" id={exportSpreadsheetDescriptionId}>
-                          Excel：回复含表格时，仅导出表格。
-                        </p>
-                        <div className="msg__export-formats" role="menu" aria-label="选择导出格式"
-                          ref={exportMenuListRef}
-                          onKeyDown={(event) => {
-                            const items = Array.from(exportMenuListRef.current?.querySelectorAll<HTMLButtonElement>('[role="menuitem"]') ?? []);
-                            const index = items.indexOf(document.activeElement as HTMLButtonElement);
-                            if (event.key === "ArrowDown" || event.key === "ArrowUp") {
-                              event.preventDefault();
-                              const delta = event.key === "ArrowDown" ? 1 : -1;
-                              items[(index + delta + items.length) % items.length]?.focus();
-                            } else if (event.key === "Home" || event.key === "End") {
-                              event.preventDefault();
-                              items[event.key === "Home" ? 0 : items.length - 1]?.focus();
-                            }
-                          }}>
-                          {(["docx", "pdf", "xlsx", "pptx"] as const).map((format) => (
-                            <button
-                              type="button"
-                              role="menuitem"
-                              aria-describedby={format === "xlsx"
-                                ? `${exportDescriptionId} ${exportSpreadsheetDescriptionId}`
-                                : exportDescriptionId}
-                              key={format}
-                              onClick={() => void exportAnswer(format)}
-                            >
-                              <span>{format === "docx" ? "Word" : format === "xlsx" ? "Excel" : format === "pptx" ? "PPT" : "PDF"}</span>
-                            </button>
-                          ))}
-                        </div>
-                      </div>
-                    )}
-                  </div>
-                </>
-              )}
-              {onRetry && (
-                <button
-                  type="button"
-                  className="msg__action-btn"
-                  onClick={() => onRetry(retryKind)}
-                  title={messageRetryTitle(retryKind)}
-                  disabled={retrying}
-                  aria-busy={retrying}
-                >
-                  <RefreshCw size={14} className={retrying ? "msg__action-spin" : undefined} />
-                  <span>{retryLabel}</span>
-                </button>
-              )}
-            </div>
-            {sessionId && hasAnswerText && (
-              <FeedbackButtons sessionId={sessionId} messageId={message.id} />
-            )}
+          <div className={"msg__actions msg__actions--footer" + (latest ? " msg__actions--latest" : "") + (speaking || exporting || retrying ? " msg__actions--active" : "")}
+            role="group" aria-label="回复操作">
+            {hasAnswerText && <button type="button" className="msg__action-btn" data-chat-copy="true"
+              onClick={() => void copyText(plainText, "plain")} title={copyMainLabel} aria-label={copyMainLabel} aria-live="polite">
+              {copiedKind ? <Check size={14} /> : <Copy size={14} />}<span>{copiedKind ? "已复制" : "复制"}</span>
+            </button>}
+            {speaking && <button type="button" className="msg__action-btn" onClick={toggleSpeak} aria-label="停止朗读"><Square size={13} />停止朗读</button>}
+            {exporting && <span className="msg__action-status" role="status">正在导出 {exporting.toUpperCase()}…</span>}
+            {onRetry && (retryKind === "retry" || message.stopReason && message.stopReason !== "end_turn" || retrying) && <button type="button" className="msg__action-btn" onClick={() => onRetry(retryKind)}
+              title={messageRetryTitle(retryKind)} disabled={retrying} aria-busy={retrying}><RefreshCw size={14} className={retrying ? "msg__action-spin" : undefined} />{retryLabel}</button>}
+            <ActionMenu label="更多回复操作" menuLabel={actionView === "export" ? "选择导出格式" : "当前回复操作"}
+              resetKey={`${sessionId}:${message.id}`} contentKey={actionView} onBack={actionView === "export" ? () => setActionView("main") : undefined}
+              onOpenChange={open => { if (!open) setActionView("main"); }}
+              triggerClassName="msg__action-btn msg__more-trigger" trigger={<MoreHorizontal size={16} />}
+              menuClassName={"topbar-actions__menu msg__more-menu" + (actionView === "export" ? " msg__export-menu" : "")}>
+              {({ close }) => <>
+                {actionView === "export" ? <>
+                  <button type="button" tabIndex={-1} aria-keyshortcuts="ArrowLeft" className="topbar-actions__item" onClick={() => setActionView("main")}>‹ 返回回复操作</button>
+                  <p className="msg__export-note" id={exportDescriptionId}>公式和 Mermaid 图表以原始文本保留。图表可从图表菜单下载 SVG。</p>
+                  <p className="msg__export-note" id={exportSpreadsheetDescriptionId}>Excel：回复含表格时，仅导出表格。</p>
+                  {(["docx", "pdf", "xlsx", "pptx"] as const).map(format => <button type="button" role="menuitem" className="topbar-actions__item" key={format}
+                    aria-describedby={format === "xlsx" ? `${exportDescriptionId} ${exportSpreadsheetDescriptionId}` : exportDescriptionId}
+                    disabled={Boolean(exporting)} onClick={() => { close(true); void exportAnswer(format); }}>
+                    {format === "docx" ? "Word" : format === "xlsx" ? "Excel" : format === "pptx" ? "PPT" : "PDF"}
+                  </button>)}
+                </> : <>
+                  <div className="action-menu__heading">当前回复</div>
+                  {hasAnswerText && <>
+                    <button type="button" role="menuitem" className="topbar-actions__item" data-chat-copy="true" onClick={() => { close(true); void copyText(plainText, "plain"); }}><Copy size={14} />复制纯文本</button>
+                    <button type="button" role="menuitem" className="topbar-actions__item" data-chat-copy="true" onClick={() => { close(true); void copyText(markdownText, "markdown"); }}><FileCode2 size={14} />复制 Markdown</button>
+                    <button type="button" role="menuitem" className="topbar-actions__item" onClick={() => { close(true); toggleSpeak(); }}><Volume2 size={14} />{speaking ? "停止朗读" : "朗读回复"}</button>
+                    <button type="button" role="menuitem" className="topbar-actions__item" disabled={Boolean(exporting)} onClick={() => setActionView("export")}><Download size={14} />导出回复为办公文件</button>
+                  </>}
+                  {onRetry && <button type="button" role="menuitem" className="topbar-actions__item" title={messageRetryTitle(retryKind)} disabled={retrying} onClick={() => { close(true); onRetry(retryKind); }}><RefreshCw size={14} />{retryLabel}</button>}
+                  {sessionId && hasAnswerText && <>
+                    <div role="separator" className="action-menu__separator" />
+                    <button type="button" role="menuitem" className="topbar-actions__item" aria-label={feedback === "up" ? "取消赞" : "赞"} onClick={() => { close(true); rateReply("up"); }}><ThumbsUp size={14} />{feedback === "up" ? "取消赞" : "有帮助"}</button>
+                    <button type="button" role="menuitem" className="topbar-actions__item" aria-label={feedback === "down" ? "取消踩" : "踩"} onClick={() => { close(true); rateReply("down"); }}><ThumbsDown size={14} />{feedback === "down" ? "取消踩" : "需要改进"}</button>
+                  </>}
+                </>}
+              </>}
+            </ActionMenu>
           </div>
         )}
+        {sessionId && <FeedbackDialog open={feedbackDialog !== null} sessionId={sessionId} messageId={message.id}
+          rating={feedbackDialog ?? feedback ?? "up"} onClose={() => setFeedbackDialog(null)} />}
+
       </div>
     </div>
   );
 });
-
-/**
- * 反馈按钮(👍/👎)—— 对齐 EchoAgent message-feedback。
- *
- * 本地持久化(toggle:再点同向取消)。无后端上报(EchoAgent 是 BYOK,无可上报通道)。
- * 选中的方向高亮(填充),未选中保持描边。
- */
-function FeedbackButtons({
-  sessionId,
-  messageId,
-}: {
-  sessionId: string;
-  messageId: string;
-}) {
-  const entry = useFeedbackStore(
-    (s) => s.entries[`${sessionId}:${messageId}`] ?? null,
-  );
-  const setRating = useFeedbackStore((s) => s.setRating);
-  const current = entry?.rating ?? null;
-  // 点赞/踩:记录方向并打开完整评分弹窗(对齐 EchoAgent rating bar + 弹窗)。
-  const [dialogOpen, setDialogOpen] = useState<FeedbackRating | null>(null);
-  const click = (r: FeedbackRating) => {
-    // 再点已选中方向 → 取消(不弹窗)。
-    if (current === r) {
-      setRating(sessionId, messageId, r);
-      return;
-    }
-    setRating(sessionId, messageId, r);
-    setDialogOpen(r);
-  };
-  return (
-    <span className="msg__feedback">
-      <button
-        type="button"
-        className={
-          "msg__action-btn msg__feedback-btn" +
-          (current === "up" ? " msg__feedback-btn--active" : "")
-        }
-        onClick={() => click("up")}
-        title={current === "up" ? "取消赞" : "赞"}
-        aria-label={current === "up" ? "取消赞" : "赞"}
-        aria-pressed={current === "up"}
-      >
-        <ThumbsUp size={14} fill={current === "up" ? "currentColor" : "none"} />
-      </button>
-      <button
-        type="button"
-        className={
-          "msg__action-btn msg__feedback-btn" +
-          (current === "down" ? " msg__feedback-btn--active" : "")
-        }
-        onClick={() => click("down")}
-        title={current === "down" ? "取消踩" : "踩"}
-        aria-label={current === "down" ? "取消踩" : "踩"}
-        aria-pressed={current === "down"}
-      >
-        <ThumbsDown size={14} fill={current === "down" ? "currentColor" : "none"} />
-      </button>
-      <FeedbackDialog
-        open={dialogOpen !== null}
-        sessionId={sessionId}
-        messageId={messageId}
-        rating={dialogOpen ?? current ?? "up"}
-        onClose={() => setDialogOpen(null)}
-      />
-    </span>
-  );
-}

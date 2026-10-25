@@ -59,6 +59,11 @@ describe("RewindBar wiring", () => {
       name: new RegExp(`回溯到此处.*${modeLabel}`),
     });
     fireEvent.click(actionBtn);
+    expect(rewindExecute).not.toHaveBeenCalled();
+    const confirmation = screen.getByRole("alertdialog", { name: `确认回溯（${modeLabel}）？` });
+    expect(confirmation).toHaveTextContent("第 1 步执行前：first prompt");
+    expect(confirmation).toHaveTextContent("撤销此步骤及后续");
+    fireEvent.click(screen.getByRole("button", { name: "确认回溯" }));
     await waitFor(() => expect(onRewound).toHaveBeenCalledWith("s1"));
     expect(rewindExecute).toHaveBeenCalledWith("s1", 0, wireMode, true);
     expect(onToast).toHaveBeenCalled();
@@ -94,6 +99,19 @@ describe("RewindBar wiring", () => {
     expect(sessionFork).not.toHaveBeenCalled();
   });
 
+  it.each(["rewind", "fork"] as const)("%s 确认前实时检查执行条件，不使用打开时的旧状态", async action => {
+    let allowed = true;
+    const onActionDone = vi.fn();
+    render(<RewindBar sessionId="s1" action={action} canExecute={() => allowed} onActionDone={onActionDone} />);
+    if (action === "rewind") fireEvent.click(await screen.findByRole("button", { name: /回溯到此处/ }));
+    // The live session can change before React has committed another render.
+    allowed = false;
+    fireEvent.click(screen.getByRole("button", { name: action === "rewind" ? "确认回溯" : "创建分叉" }));
+    await waitFor(() => expect(onActionDone).toHaveBeenCalled());
+    expect(rewindExecute).not.toHaveBeenCalled();
+    expect(sessionFork).not.toHaveBeenCalled();
+  });
+
   it("回溯点加载失败显示可重试错误", async () => {
     vi.mocked(rewindPoints).mockRejectedValueOnce(new Error("offline"));
     render(<RewindBar sessionId="s1" />);
@@ -113,7 +131,7 @@ describe("RewindBar wiring", () => {
     const action = await screen.findByRole("button", { name: /回溯到此处/ });
     action.focus();
     fireEvent.keyDown(document, { key: "Tab" });
-    expect(screen.getByRole("button", { name: "刷新回溯点" })).toHaveFocus();
+    expect(screen.getByRole("button", { name: "关闭回溯时间线" })).toHaveFocus();
 
     fireEvent.keyDown(document, { key: "Escape" });
     expect(screen.queryByRole("dialog", { name: "回溯时间线" })).toBeNull();

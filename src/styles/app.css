@@ -62,22 +62,11 @@
 .app__body--sidebar-resizing,
 .app__body--sidebar-resizing * { cursor: ew-resize !important; user-select: none !important; }
 .app__body--sidebar-resizing iframe { pointer-events: none; }
-/* Chat-only top bar: in-flow header so it reserves height and pushes content
- * down. Other pages use the compact controls below when the sidebar closes. */
-.main-topbar {
-  flex: none;
-  height: 48px;
-  display: flex;
-  align-items: center;
-  padding: 0 16px;
-  box-sizing: border-box;
-  /* Empty area drags the window, like the title bar; interactive children opt out. */
-  -webkit-app-region: drag;
-}
+
 /* Reserve a narrow row for global controls instead of covering page headers. */
 .main-page-controls {
-  flex: 0 0 40px;
-  min-height: 40px;
+  flex: 0 0 56px;
+  min-height: 56px;
   display: flex;
   align-items: center;
   gap: 4px;
@@ -91,13 +80,6 @@
 .app--macos .app__body--collapsed .main-page-controls {
   /* 三个红绿灯总宽约 70px,左侧留 84px */
   padding-left: 84px;
-}
-.main-topbar__left {
-  display: flex;
-  align-items: center;
-  gap: 4px;
-  min-width: 0;
-  -webkit-app-region: no-drag;
 }
 /* Transparent icon buttons — no background until hover (EchoAgent style). */
 .main-topbar__btn {
@@ -212,26 +194,6 @@
 }
 
 /* ---- Expert badge (topbar) ---- */
-.expert-badge {
-  display: inline-flex;
-  align-items: center;
-  gap: 3px;
-  margin-left: 8px;
-  padding: 2px 8px;
-  font-size: 0.6875rem;
-  font-weight: 500;
-  color: var(--echo-accent, #6366f1);
-  background: color-mix(in srgb, var(--echo-accent, #6366f1) 10%, transparent);
-  border: 1px solid color-mix(in srgb, var(--echo-accent, #6366f1) 25%, transparent);
-  border-radius: 999px;
-  white-space: nowrap;
-  max-width: 160px;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  flex-shrink: 0;
-  cursor: default;
-  user-select: none;
-}
 
 /* ---- TopbarActions: 更多操作下拉菜单 ---- */
 .topbar-actions {
@@ -239,9 +201,7 @@
   display: inline-flex;
 }
 .topbar-actions__menu {
-  /* TopbarActions portals this menu to document.body. This keeps it outside
-   * .main-topbar's backdrop-filter stacking context, where the later chat
-   * error/utility bars would otherwise cover it and intercept its clicks. */
+  /* Shared menus live in body portals, outside clipping and stacking contexts. */
   position: fixed;
   z-index: var(--echo-layer-popover);
   min-width: 168px;
@@ -397,6 +357,9 @@
 }
 .chatview__scroll {
   height: 100%;
+  /* useStickToBottom owns follow/restore; native anchoring must not move the
+     new transcript when a session-owned runtime view is removed. */
+  overflow-anchor: none;
   overflow-y: auto;
   overflow-x: hidden;
 }
@@ -446,51 +409,7 @@
   padding: 8px 24px 20px;
   box-sizing: border-box;
 }
-.chatview__workspace-bar {
-  position: absolute;
-  top: 12px;
-  left: 16px;
-  z-index: 30;
-}
-.chatview__workspace-bar .workspace-picker__trigger {
-  height: 26px;
-  font-size: 0.6875rem;
-  padding: 0 8px;
-  border-radius: 6px;
-  opacity: 0.85;
-}
-.chatview__workspace-bar .workspace-picker__trigger:hover {
-  opacity: 1;
-}
-.chatview__artifacts-toggle {
-  position: absolute;
-  top: 56px;
-  right: 16px;
-  z-index: 30;
-  height: 28px;
-  padding: 0 10px;
-  border: 1px solid var(--echo-border-default);
-  border-radius: 8px;
-  background: var(--echo-bg-primary);
-  color: var(--echo-text-medium);
-  font-size: 0.75rem;
-  cursor: pointer;
-  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.06);
-}
-.chatview__artifacts-toggle:hover,
-.chatview__artifacts-toggle--active {
-  background: var(--echo-bg-tertiary);
-  color: var(--echo-text-strong);
-}
-.chatview--with-panel .chatview__artifacts-toggle {
-  right: 16px;
-}
-.chatview--with-panel .chatview__plan-toggle {
-  right: 16px;
-}
-.chatview--with-panel .chatview__plan-panel {
-  right: 16px;
-}
+
 .chatview__error {
   color: var(--echo-status-error, #e5484d);
   font-size: 0.8125rem;
@@ -571,10 +490,6 @@
 /* Current conversation question navigator. It sits outside the scrollable
    utility actions so the horizontal toolbar cannot clip the popover. */
 .question-history {
-  position: absolute;
-  top: calc(100% + 6px);
-  right: 16px;
-  z-index: 50;
   display: flex;
   flex-direction: column;
   width: min(360px, calc(100% - 24px));
@@ -765,10 +680,11 @@
   gap: 8px;
   min-height: 28px;
   margin-top: 10px;
-  opacity: 0.5;
+  opacity: 0;
 }
-.msg__actions--footer.msg__actions--latest {
-  opacity: 0.82;
+.msg__actions--footer.msg__actions--latest,
+.msg__actions--footer.msg__actions--active {
+  opacity: 1;
 }
 .msg__action-cluster {
   display: inline-flex;
@@ -828,76 +744,8 @@
   background: var(--echo-bg-hover);
   color: var(--echo-text-strong);
 }
-.msg__copy-split {
-  position: relative;
-  display: inline-flex;
-  align-items: stretch;
-}
-.msg__copy-main {
-  border-radius: 7px 0 0 7px !important;
-}
-.msg__copy-menu-trigger {
-  min-width: 22px !important;
-  margin-left: -1px;
-  padding-right: 4px !important;
-  padding-left: 4px !important;
-  border-radius: 0 7px 7px 0 !important;
-}
-.msg__copy-menu-trigger::before {
-  position: absolute;
-  left: 0;
-  width: 1px;
-  height: 14px;
-  background: var(--echo-border-default);
-  content: "";
-}
-.msg__copy-menu {
-  position: absolute;
-  bottom: calc(100% + 7px);
-  left: 0;
-  z-index: 30;
-  display: flex;
-  width: max-content;
-  min-width: 156px;
-  flex-direction: column;
-  gap: 2px;
-  padding: 5px;
-  border: 1px solid var(--echo-border-default);
-  background: var(--echo-bg-primary);
-  border-radius: 9px;
-  box-shadow: 0 10px 28px rgba(18, 30, 28, 0.14), 0 2px 8px rgba(18, 30, 28, 0.08);
-}
-.msg__copy-menu button {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  width: 100%;
-  min-height: 32px;
-  padding: 6px 9px;
-  border: 0;
-  background: transparent;
-  border-radius: 6px;
-  color: var(--echo-text-medium);
-  font: inherit;
-  font-size: 0.75rem;
-  text-align: left;
-  cursor: pointer;
-}
-.msg__copy-menu button:hover,
-.msg__copy-menu button:focus-visible {
-  background: var(--echo-bg-hover);
-  color: var(--echo-text-strong);
-  outline: none;
-}
-.msg__export-menu {
-  width: 260px;
-  max-width: calc(100vw - 32px);
-}
-.msg__export-formats {
-  display: flex;
-  flex-direction: column;
-  gap: 2px;
-}
+
+
 .msg__export-note {
   margin: 0;
   padding: 5px 9px;
@@ -912,32 +760,12 @@
 @keyframes msg-action-spin {
   to { transform: rotate(360deg); }
 }
-/* 消息反馈(对齐 EchoAgent message-feedback):赞/踩,选中态高亮 */
-.msg__feedback {
-  display: inline-flex;
-  align-items: center;
-  gap: 2px;
-  padding-left: 8px;
-  border-left: 1px solid var(--echo-border-default);
-}
-.msg__feedback-btn {
-  min-width: 28px;
-  padding: 4px 6px;
-  line-height: 1;
-}
-.msg__feedback-btn--active {
-  border-color: var(--echo-brand);
-  background: rgba(0, 122, 255, 0.1);
-  color: var(--echo-brand) !important;
-}
+
 @media (hover: none), (pointer: coarse) {
   .msg .msg__actions {
     opacity: 1;
   }
-  .msg__actions--footer .msg__action-btn,
-  .msg__copy-menu button {
-    min-height: 36px;
-  }
+
 }
 @media (max-width: 560px) {
   .msg__actions--footer {
@@ -945,10 +773,7 @@
     flex-direction: column;
     gap: 5px;
   }
-  .msg__feedback {
-    padding-left: 0;
-    border-left: 0;
-  }
+
 }
 @media (prefers-reduced-motion: reduce) {
   .msg__action-spin {
@@ -5678,7 +5503,6 @@ button.diff__path {
   padding-left: 84px;
 }
 
-
 /* ===== Toast ===== */
 .toast {
   position: fixed;
@@ -10398,7 +10222,6 @@ button.diff__path {
   font-size: 0.75rem;
 }
 
-
 /* ========================================================================
  * PlanPanel — 执行计划浮层
  * ===================================================================== */
@@ -10665,40 +10488,6 @@ button.diff__path {
 .plan-panel__row-action--danger:hover {
   border-color: #ef4444;
   color: #ef4444;
-}
-.chatview__plan-toggle {
-  position: absolute;
-  top: 12px;
-  right: 16px;
-  z-index: 10;
-  padding: 4px 10px;
-  border: 1px solid var(--echo-brand);
-  background: var(--echo-bg-primary);
-  color: var(--echo-brand);
-  border-radius: 6px;
-  font-size: 0.6875rem;
-  font-weight: 500;
-  font-variant-numeric: tabular-nums;
-  cursor: pointer;
-}
-.chatview__plan-toggle--active {
-  background: var(--echo-brand-soft);
-  color: var(--echo-color-text-brand-default);
-}
-.chatview__plan-panel {
-  position: absolute;
-  top: 44px;
-  right: 16px;
-  z-index: 10;
-  width: max(320px, 20rem);
-  max-width: calc(100% - 32px);
-  max-height: 60vh;
-  overflow-y: auto;
-  padding: 14px;
-  background: var(--echo-bg-primary);
-  border: 1px solid var(--echo-border-default);
-  border-radius: 12px;
-  box-shadow: var(--echo-shadow-lg, 0 10px 40px rgba(0, 0, 0, 0.2));
 }
 
 /* ========================================================================
@@ -11601,10 +11390,6 @@ body:has([aria-modal="true"]) .global-tooltip:not(.global-tooltip--dialog) {
   width: min(320px, 100%);
 }
 
-
-
-
-
 .resources-panel__tabs {
   display: flex;
   gap: 4px;
@@ -11727,8 +11512,6 @@ body:has([aria-modal="true"]) .global-tooltip:not(.global-tooltip--dialog) {
   flex-shrink: 0;
 }
 
-
-
 .resources-panel__empty {
   flex: 1;
   display: flex;
@@ -11803,7 +11586,6 @@ body:has([aria-modal="true"]) .global-tooltip:not(.global-tooltip--dialog) {
   color: var(--echo-text-medium);
   flex: 1;
 }
-
 
 .memory-editor__content {
   flex: 1;
@@ -13827,7 +13609,6 @@ body:has([aria-modal="true"]) .global-tooltip:not(.global-tooltip--dialog) {
 .sk-inst-upload { border: none; background: transparent; cursor: pointer; color: var(--echo-text-weak); padding: 4px; border-radius: 6px; display: inline-flex; }
 .sk-inst-upload:hover { background: rgba(0,194,154,.1); color: var(--echo-brand); }
 
-
 .sk-toggle { position: relative; display: inline-block; width: 40px; height: 22px; flex: 0 0 auto; cursor: pointer; }
 .sk-toggle input { position: absolute; opacity: 0; width: 0; height: 0; }
 .sk-toggle-track { position: absolute; inset: 0; border-radius: 999px; background: var(--echo-bg-tertiary); transition: background .15s; }
@@ -14063,7 +13844,6 @@ body:has([aria-modal="true"]) .global-tooltip:not(.global-tooltip--dialog) {
 .mcp-code-input { flex: 1 1 auto; min-width: 0; padding: 12px 14px; border: none; outline: none; resize: none; background: transparent; color: var(--echo-text-strong); font: inherit; white-space: pre; overflow: auto; tab-size: 2; }
 .mcp-editor-error { padding: 8px 20px; font-size: 0.78125rem; color: #e5484d; background: rgba(229,72,77,0.08); }
 
-
 .capabilities-panel { --ec-ribbon-bg: #f0f0f0; --ec-ribbon-fg: #3d3d3d; }
 [data-theme="dark"] .capabilities-panel { --ec-ribbon-bg: rgba(255,255,255,0.12); --ec-ribbon-fg: rgba(255,255,255,0.85); }
 .um-thumb-wrap { vertical-align: middle; flex: 0 0 auto; }
@@ -14082,7 +13862,6 @@ body:has([aria-modal="true"]) .global-tooltip:not(.global-tooltip--dialog) {
 /* section sub-label (e.g. "内置技能 · 共 N 个") */
 
 /* connector MCP config code preview inside the detail modal */
-
 
 /* featured sparkle glyph next to a skill card name */
 .sk-card-star { color: var(--echo-brand, #6366f1); margin-right: 4px; vertical-align: middle; }
@@ -14138,16 +13917,11 @@ body:has([aria-modal="true"]) .global-tooltip:not(.global-tooltip--dialog) {
   line-height: 1;
 }
 .context-usage__popover {
-  position: absolute;
-  bottom: calc(100% + 8px);
-  right: 0;
-  width: 260px;
   padding: 12px 14px;
   background: var(--echo-bg-primary);
   border: 1px solid var(--echo-border-default);
   border-radius: var(--echo-radius-md, 6px);
   box-shadow: var(--echo-shadow-lg, 0 8px 24px rgba(0, 0, 0, 0.16));
-  z-index: 50;
 }
 .context-usage__popover-header {
   display: flex;
@@ -14273,9 +14047,6 @@ body:has([aria-modal="true"]) .global-tooltip:not(.global-tooltip--dialog) {
 .quota-panel__subtitle{margin:4px 0 0;max-width:620px;font-size:0.75rem;line-height:1.5;color:var(--echo-text-light)}
 .quota-panel__actions{display:flex;align-items:center;gap:6px;flex-wrap:wrap;justify-content:flex-end}
 
-
-
-
 .quota-panel__toolbar{display:flex;align-items:center;justify-content:space-between;padding:12px 20px 0}
 .quota-panel__period{display:inline-flex;gap:3px;padding:3px;border-radius:8px;background:var(--echo-bg-tertiary)}
 .quota-panel__period-btn{padding:4px 14px;border:0;background:transparent;color:var(--echo-text-medium);border-radius:6px;font-size:0.75rem;cursor:pointer}
@@ -14335,18 +14106,15 @@ body:has([aria-modal="true"]) .global-tooltip:not(.global-tooltip--dialog) {
 .notify-panel__row-endpoint{flex:none;font-size:0.6875rem;color:var(--echo-text-light);max-width:200px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .notify-panel__row-actions{flex:none;display:inline-flex;gap:4px}
 
-
 /* 启用状态圆点：CSS 绘制（文本 ●/○ U+25CF/25CB 依赖字体回退，macOS 可能异常） */
 .notify-dot{display:inline-block;width:8px;height:8px;border-radius:50%;border:1.5px solid var(--echo-text-medium, #888);box-sizing:border-box;vertical-align:middle}
 .notify-dot--on{background:var(--echo-status-success, #1a7f37);border-color:var(--echo-status-success, #1a7f37)}
-
 
 .notify-panel__empty{padding:20px;text-align:center;color:var(--echo-text-light)}
 .notify-panel__add{display:grid;grid-template-columns:minmax(110px,.7fr) minmax(140px,1fr) minmax(180px,1.5fr) auto;align-items:end;gap:12px;padding:16px;border-top:1px solid var(--echo-border-default)}
 .notify-panel__field{display:flex;flex-direction:column;gap:7px;min-width:0;font-size:0.75rem;color:var(--echo-text-medium)}
 @media(max-width:1100px){.notify-panel__add{grid-template-columns:1fr 1fr}.notify-panel__field--endpoint{grid-column:1/-1}.notify-panel__add>.form-button{justify-self:end;grid-column:1/-1}}
 @media(max-width:640px){.notify-panel__add{grid-template-columns:minmax(0,1fr)}}
-
 
 /* 云存储面板 */
 .storage-panel{border:1px solid var(--echo-border-default);border-radius:10px;background:var(--echo-bg-primary);overflow:hidden;font-size:0.8125rem}
@@ -14373,7 +14141,6 @@ body:has([aria-modal="true"]) .global-tooltip:not(.global-tooltip--dialog) {
 .storage-panel__entry-name--button{padding:0;border:0;background:transparent;font:inherit;text-align:left}
 .storage-panel__entry-size{flex:none;font-size:0.6875rem;color:var(--echo-text-light);font-variant-numeric:tabular-nums}
 .storage-panel__entry-actions{flex:none;display:inline-flex;gap:4px}
-
 
 .storage-panel__loading,.storage-panel__empty{padding:20px;text-align:center;color:var(--echo-text-light)}
 .storage-panel__preview{border-top:1px solid var(--echo-border-default);padding:10px 14px}

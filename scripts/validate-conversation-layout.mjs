@@ -31,9 +31,13 @@ export async function validateConversationLayout(page, output) {
     await page.goto(`http://127.0.0.1:1439/__ui-review?surface=conversation-layout&theme=${theme}`);
     await page.getByRole("complementary", { name: "运行中任务" }).waitFor();
     await dockAligned();
-    const toolbar = page.locator(".chatview__utility-bar");
+    const toolbar = page.locator(".session-header");
+    const openView = async name => {
+      await toolbar.getByRole("button", { name: "工作区", exact: true }).click();
+      await page.getByRole("menuitem", { name: new RegExp(name) }).click();
+    };
     const originalComposer = await page.locator(".chatview .echo-composer").boundingBox();
-    await toolbar.getByRole("button", { name: "浏览器", exact: true }).click();
+    await openView("网页预览");
     await dockAligned();
     const movedComposer = await page.locator(".chatview .echo-composer").boundingBox();
     if (width === 1920) {
@@ -42,7 +46,7 @@ export async function validateConversationLayout(page, output) {
     }
     await page.screenshot({ path: join(output, `conversation-dock-${width}-${theme}.png`) });
     layouts += 1;
-    await toolbar.getByRole("button", { name: "浏览器", exact: true }).click();
+    await openView("网页预览");
     await dockAligned();
     await page.getByRole("button", { name: "收起侧边栏", exact: true }).click();
     await dockAligned();
@@ -59,13 +63,15 @@ export async function validateConversationLayout(page, output) {
         element.dispatchEvent(new Event("scroll"));
       });
       await page.getByRole("button", { name: "回到最新消息并恢复自动跟随" }).waitFor();
-      await toolbar.getByRole("button", { name: label, exact: true }).click();
-      await toolbar.getByRole("button", { name: label, exact: true }).click();
+      await openView(label === "团队" ? "管理任务团队" : "文件变更");
+      await openView(label === "团队" ? "管理任务团队" : "文件变更");
       await page.waitForFunction(() => Math.abs(document.querySelector(".chatview__scroll").scrollTop - 650) < 2);
-      await toolbar.getByRole("button", { name: label, exact: true }).click();
+      await openView(label === "团队" ? "管理任务团队" : "文件变更");
       await page.locator('.sidebar__conv[data-session-id="review-other"] .sidebar__conv-select').click();
       await atBottom();
-      await toolbar.getByRole("button", { name: label, exact: true }).click();
+      assert.equal(await page.locator(".chatview__runtime-view").count(), 0, "new session must not inherit a runtime panel");
+      await openView(label === "团队" ? "管理任务团队" : "文件变更");
+      await page.getByRole("button", { name: "关闭工作视图", exact: true }).click();
       await atBottom();
     }
 

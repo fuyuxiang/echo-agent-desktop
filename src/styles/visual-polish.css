@@ -824,8 +824,6 @@
   }
 }
 
-
-
 button,
 input,
 select,
@@ -837,8 +835,6 @@ button,
 [role="button"] {
   -webkit-tap-highlight-color: transparent;
 }
-
-
 
 /* ---------- Application shell and sidebar ---------- */
 
@@ -1142,11 +1138,6 @@ button,
   .echo-composer--home .echo-composer__input { min-height: 80px; }
 }
 
-.chatview__workspace-label { display: inline-flex; align-items: center; gap: 6px; min-width: 0; color: var(--echo-text-medium); font-size: 0.75rem; }
-.chatview__workspace-label > span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.chatview__workspace-label > svg { flex: none; }
-.chatview__new-task { display: inline-flex; align-items: center; gap: 4px; padding: 4px 8px; border: 1px solid var(--ui-line); border-radius: 6px; background: var(--ui-surface); color: var(--echo-text-medium); font: inherit; font-size: 0.75rem; white-space: nowrap; cursor: pointer; }
-.chatview__new-task:hover { background: var(--echo-bg-hover); }
 .workspace-picker__error { max-width: 360px; padding: 8px 12px; color: var(--echo-status-error); white-space: normal; overflow-wrap: anywhere; font-size: 0.75rem; }
 
 /* 拖拽图片时的全卡片覆盖提示。Tauri onDragDropEvent 在 enter/over 期间触发,
@@ -1208,46 +1199,6 @@ button,
   border: 0;
 }
 
-.main-topbar {
-  height: 56px;
-  border-bottom: 1px solid var(--ui-line);
-  background: color-mix(in srgb, var(--ui-canvas) 86%, transparent);
-  backdrop-filter: blur(18px);
-}
-
-.main-topbar__title {
-  font-size: 0.875rem;
-  font-weight: 650;
-}
-
-.chatview__utility-bar {
-  position: relative;
-  z-index: 35;
-  min-height: 48px;
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 16px;
-  padding: 8px 16px;
-  box-sizing: border-box;
-  flex: 0 0 auto;
-  border-bottom: 1px solid var(--ui-line);
-  background: color-mix(in srgb, var(--ui-canvas) 88%, transparent);
-  backdrop-filter: blur(18px);
-}
-
-.chatview__utility-context,
-.chatview__utility-actions {
-  display: flex;
-  align-items: center;
-  min-width: 0;
-}
-
-.chatview__utility-context {
-  flex: 1 1 auto;
-  gap: 8px;
-  overflow: hidden;
-}
 
 .automation-control {
   display: inline-flex;
@@ -1524,18 +1475,6 @@ button,
   opacity: 0.55;
 }
 
-.chatview__utility-actions {
-  flex: 0 1 auto;
-  justify-content: flex-end;
-  gap: 6px;
-  overflow-x: auto;
-  scrollbar-width: none;
-}
-
-.chatview__utility-actions::-webkit-scrollbar {
-  display: none;
-}
-
 .chatview .echo-composer__footer {
   height: auto;
   min-height: 32px;
@@ -1563,44 +1502,6 @@ button,
 
 .chatview .echo-composer--disabled .echo-composer__input:placeholder-shown {
   display: none;
-}
-
-.chatview__utility-bar .chatview__workspace-bar,
-.chatview__utility-bar .chatview__artifacts-toggle,
-.chatview__utility-bar .chatview__plan-toggle {
-  position: static;
-  inset: auto;
-}
-
-.chatview__utility-bar .chatview__workspace-bar {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  min-width: 0;
-  z-index: auto;
-}
-
-.chatview__utility-bar .chatview__artifacts-toggle,
-.chatview__utility-bar .chatview__plan-toggle {
-  height: 30px;
-  flex: 0 0 auto;
-  padding: 0 10px;
-  border-color: var(--ui-line);
-  border-radius: 8px;
-  background: var(--ui-surface);
-  box-shadow: none;
-  white-space: nowrap;
-}
-
-.chatview__utility-bar .chatview__plan-toggle--active,
-.chatview__utility-bar .chatview__artifacts-toggle--active {
-  border-color: var(--ui-brand-line);
-  background: var(--ui-brand-soft);
-  color: var(--echo-brand);
-}
-
-.chatview__plan-panel {
-  top: 54px;
 }
 
 .chatview__main > .findbar {
@@ -2716,15 +2617,6 @@ button,
 }
 
 @container chat-main (max-width: 760px) {
-  .chatview__utility-bar {
-    align-items: stretch;
-    flex-direction: column;
-    gap: 6px;
-  }
-
-  .chatview__utility-actions {
-    justify-content: flex-start;
-  }
 
   .automation-control__summary {
     display: none;
@@ -2739,10 +2631,6 @@ button,
     justify-content: flex-end;
   }
 
-  .chatview__plan-panel,
-  .chatview__main > .findbar {
-    top: 90px;
-  }
 }
 
 @container app-main (max-width: 760px) {
@@ -3712,10 +3600,6 @@ button,
   white-space: nowrap;
 }
 
-
-
-
-
 .archived-settings__error {
   padding: 10px 12px;
   border: 1px solid color-mix(in srgb, #e5484d 35%, transparent);
@@ -3836,12 +3720,6 @@ button,
   --control-height: var(--echo-size-control-sm);
   padding: 4px 10px;
 }
-
-
-
-
-
-
 
 .archived-settings__empty {
   display: flex;
@@ -4145,10 +4023,6 @@ a.help-card:hover {
   text-overflow: ellipsis;
   white-space: nowrap;
 }
-
-
-
-
 
 .permission-rule-builder {
   display: grid;
@@ -4872,7 +4746,6 @@ a.help-card:hover {
 .notify-panel__row-label { min-width: 0; overflow-wrap: anywhere; }
 .notify-panel__channel-description { color: var(--echo-text-medium); font-size: 0.75rem; overflow-wrap: anywhere; }
 .notify-panel__row-actions { flex-wrap: wrap; gap: 6px; }
-
 
 .notify-panel__empty { padding: 4px 0 16px; text-align: left; font-size: 0.75rem; line-height: 1.6; }
 .notify-panel__add-button { margin-top: 12px; }

@@ -1,3 +1,4 @@
+import { SessionNavigation } from "./components/SessionHeader";
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import { lazy, Suspense, useCallback, useEffect, useRef, useState } from "react";
@@ -15,8 +16,8 @@ import { ThemeProvider } from "./components/ThemeProvider";
 import type { SettingsSectionId } from "./components/SettingsPanel";
 import { TasksPanel } from "./components/TasksPanel";
 import { SecondarySidebar } from "./components/SecondarySidebar";
-import { TopbarActions } from "./components/TopbarActions";
-import { SidebarToggleIcon, EchoNewTaskIcon, ChevronLeftIcon } from "./foundation/components/Icon/icons";
+
+import { ChevronLeftIcon } from "./foundation/components/Icon/icons";
 import type { ModelOption } from "./components/ModelSelector";
 import {
   isConfiguredModelId,
@@ -34,8 +35,7 @@ import {
   useQuestionStore,
 } from "./stores/question-store";
 import { usePendingExpertStore } from "./stores/pending-expert-store";
-import { TopbarTitle } from "./components/TopbarTitle";
-import { ThumbImg } from "./components/experts-panel/shared/ThumbImg";
+
 import {
   agentInit,
   agentNewSession,
@@ -2815,6 +2815,13 @@ function Shell() {
     automationRefreshSignal,
   };
 
+  const modelCatalogNotice = init?.ok && modelCatalogError ? (
+    <div className="app__notice app__notice--err" role="alert">
+      模型列表加载失败：{modelCatalogError}
+      <button type="button" className="btn btn--ghost" onClick={() => void refreshModels()}>重试</button>
+    </div>
+  ) : null;
+
   return (
     <div className={`app${IS_MACOS ? " app--macos" : ""}${codingWorkspaceActive ? " app--coding" : ""}`}>
       {exitPreparing && !automationExitDialog && <div className="app__exit-overlay" role="status" aria-live="polite">正在保存录音与任务数据并准备退出…</div>}
@@ -2840,7 +2847,6 @@ function Shell() {
           onSelect={handleSelectSession}
           onNavigate={handleNavigate}
           onOpenSettings={() => openSettings("general")}
-          onToggleCollapse={() => setSidebarCollapsed(true)}
           onOpenSearch={openSearch}
           onPlaceholder={handlePlaceholder}
           onToast={showToast}
@@ -2854,96 +2860,12 @@ function Shell() {
         />
         <SidebarResizeHandle layout={sidebarLayout} />
         <main className="app__main">
-          {/* 对话页使用会话顶栏。侧栏折叠后的其它页面使用占位的紧凑工具栏，
-              避免展开/新建按钮覆盖各页面自己的标题和导航。
-              注:Tauri 2 只认 data-tauri-drag-region(CSS 的 -webkit-app-region
-              不生效);按钮等子元素不是拖拽目标,不影响点击。 */}
-          {!placeholderView && currentSessionId ? (
-            <header className="main-topbar" data-tauri-drag-region>
-              <div className="main-topbar__left">
-                {sidebarCollapsed && (
-                  <>
-                    <button
-                      className="main-topbar__btn"
-                      aria-label="展开侧边栏"
-                      data-tip="展开侧边栏"
-                      onClick={() => setSidebarCollapsed(false)}
-                    >
-                      <SidebarToggleIcon size="md" />
-                    </button>
-                    <button
-                      className="main-topbar__btn"
-                      aria-label="新建任务"
-                      data-tip="新建任务"
-                      onClick={handleNewSession}
-                    >
-                      <EchoNewTaskIcon size="md" />
-                    </button>
-                  </>
-                )}
-                {activeSubagentParent && (
-                  <button type="button" className="main-topbar__return"
-                    onClick={handleReturnToParentSession}
-                    aria-label={`返回上级任务：${parentSessionTitle}`}
-                    title={`返回上级任务：${parentSessionTitle}`}>
-                    <ChevronLeftIcon size="sm" />
-                    <span>返回上级任务</span>
-                  </button>
-                )}
-                <TopbarTitle key={currentSessionId ?? "new"} title={currentTitle} onRename={handleRenameTitle} />
-                {currentEntry?.expertName && (
-                  <span className="expert-badge" data-tip={`专家：${currentEntry.expertName}`}>
-                    <ThumbImg name={currentEntry.expertName} local={currentEntry.expertAvatar} size={18} shape="circle" />
-                    {currentEntry.expertName}
-                  </span>
-                )}
-                {currentSessionId && (
-                  <TopbarActions
-                    sessionId={currentSessionId}
-                    title={currentTitle}
-                    pinned={currentEntry?.pinned}
-                    onToast={showToast}
-                    onSessionsChanged={(patch) => {
-                      if (patch) sessionsStore.getState().upsert({ sessionId: currentSessionId, ...patch });
-                    }}
-                    onArchived={(archived) => {
-                      syncArchivedSessionState(currentSessionId, archived);
-                      if (archived) showArchivedSessionActions(currentSessionId);
-                    }}
-                  />
-                )}
-              </div>
+          {(!currentSessionId || placeholderView) && !codingWorkspaceActive && (
+            <header className="main-page-controls" data-tauri-drag-region>
+              <SessionNavigation sidebarCollapsed={sidebarCollapsed} onToggleSidebar={() => setSidebarCollapsed(!sidebarCollapsed)} onNewTask={handleNewSession} />
             </header>
-          ) : (
-            sidebarCollapsed && !codingWorkspaceActive && (
-              <header className="main-page-controls" data-tauri-drag-region>
-                <button
-                  className="main-topbar__btn"
-                  aria-label="展开侧边栏"
-                  data-tip="展开侧边栏"
-                  onClick={() => setSidebarCollapsed(false)}
-                >
-                  <SidebarToggleIcon size="md" />
-                </button>
-                <button
-                  className="main-topbar__btn"
-                  aria-label="新建任务"
-                  data-tip="新建任务"
-                  onClick={handleNewSession}
-                >
-                  <EchoNewTaskIcon size="md" />
-                </button>
-              </header>
-            )
           )}
-          {init?.ok && modelCatalogError && (
-            <div className="app__notice app__notice--err" role="alert">
-              模型列表加载失败：{modelCatalogError}
-              <button type="button" className="btn btn--ghost" onClick={() => void refreshModels()}>
-                重试
-              </button>
-            </div>
-          )}
+          {(!currentSessionId || placeholderView) && modelCatalogNotice}
           {init?.ok && (codingWorkspaceActive || hasOpenedCodingWorkspace) && (
             <div className="app__coding-surface" hidden={!codingWorkspaceActive}>
               <Suspense fallback={<div className="app__notice" role="status">正在加载界面…</div>}>
@@ -3002,6 +2924,20 @@ function Shell() {
                     handleNavigate("专家团");
                   }}
                   title={currentTitle}
+                  notice={modelCatalogNotice}
+                  onRename={handleRenameTitle}
+                  navigation={{ sidebarCollapsed, onToggleSidebar: () => setSidebarCollapsed(!sidebarCollapsed), onNewTask: handleNewSession }}
+                  headerLeading={activeSubagentParent ? <button type="button" className="main-topbar__return"
+                    onClick={handleReturnToParentSession} aria-label={`返回上级任务：${parentSessionTitle}`} title={`返回上级任务：${parentSessionTitle}`}>
+                    <ChevronLeftIcon size="sm" /><span>返回上级任务</span>
+                  </button> : undefined}
+                  sessionActions={{ pinned: currentEntry?.pinned,
+                    onSessionsChanged: patch => { if (patch) sessionsStore.getState().upsert({ sessionId: currentSessionId, ...patch }); },
+                    onArchived: archived => {
+                      syncArchivedSessionState(currentSessionId, archived);
+                      if (archived) showArchivedSessionActions(currentSessionId);
+                    },
+                  }}
                   onSend={handleSendCurrent}
                   onSendNow={handleSendNowCurrent}
                   onCancel={handleCancel}
