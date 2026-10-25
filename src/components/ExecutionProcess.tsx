@@ -20,6 +20,7 @@ interface ExecutionProcessProps {
   messageId?: string;
   parts: MessagePart[];
   active: boolean;
+  settled?: boolean;
   autoExpand?: boolean;
   startedAt?: number;
   completedAt?: number;
@@ -126,6 +127,7 @@ export function ExecutionProcess({
   messageId,
   parts,
   active,
+  settled,
   autoExpand = true,
   startedAt,
   completedAt,
@@ -148,10 +150,10 @@ export function ExecutionProcess({
       stopReason,
       cancellationCategory,
       cancelTrigger,
+      { settled },
     ),
-    [active, cancellationCategory, cancelTrigger, parts, stopReason],
+    [active, cancellationCategory, cancelTrigger, parts, settled, stopReason],
   );
-  const needsAttention = summary.state === "attention" || summary.state === "stopped";
   const hasUnfinishedTools = parts.some((part) =>
     part.kind === "tool_call" && part.toolCall.status === "in_progress",
   );
@@ -207,7 +209,7 @@ export function ExecutionProcess({
   const meta: string[] = [];
   if (summary.toolCount > 0) {
     meta.push(active
-      ? `${summary.completedToolCount}/${summary.toolCount} 项`
+      ? `${summary.completedToolCount + summary.failedToolCount}/${summary.toolCount} 项`
       : `${summary.toolCount} 项操作`);
   } else if (summary.thoughtCount > 0) {
     meta.push(`${summary.thoughtCount} 段思考过程`);
@@ -221,24 +223,24 @@ export function ExecutionProcess({
     meta.unshift(`${knowledgeTrace.personal.resultCount} 个知识片段`);
   }
   const knowledgeOnly = parts.length === 0 && Boolean(knowledgeTrace);
-  const title = knowledgeTrace?.personal?.state === "searching"
+  const title = active && knowledgeTrace?.personal?.state === "searching"
     ? "正在检索个人知识库"
-    : active && finalAnswerStarted && !needsAttention
-      ? summary.toolCount > 0 ? "已完成执行过程" : "已完成思考"
-    : knowledgeOnly && !active
+    : active && finalAnswerStarted
+      ? "正在生成回复"
+    : knowledgeOnly && summary.state === "complete"
       ? "知识检索完成"
       : summary.title;
-  const displayState = active && finalAnswerStarted && summary.state === "running"
-    ? "complete"
-    : summary.state;
+  const recovered = summary.state === "complete" && summary.recoveredTools.length > 0;
+  const recoveredById = new Map(summary.recoveredTools.map(recovery => [recovery.failedToolCallId,recovery.successfulToolCallId]));
 
   return (
-    <section className={`execution-process execution-process--${displayState}${documentSummary ? " execution-process--documents" : ""}`}>
+    <section className={`execution-process execution-process--${summary.state}${recovered ? " execution-process--recovered" : ""}${documentSummary ? " execution-process--documents" : ""}`}>
       <button
         type="button"
         className="execution-process__header"
         aria-expanded={open}
         aria-controls={bodyId}
+        aria-describedby={summary.description ? `${bodyId}-summary` : undefined}
         onClick={() => {
           userToggled.current = true;
           const next = !open;
@@ -263,10 +265,15 @@ export function ExecutionProcess({
         </span>
       </button>
 
+      {summary.description && <p id={`${bodyId}-summary`} className="execution-process__outcome-detail">{summary.description}</p>}
+
       {open && (
         <div className="execution-process__body" id={bodyId}>
+          {summary.recoveredTools.length > 0 && <p className="execution-process__recovery-detail">
+            {summary.recoveredTools.length} 次中间失败已由后续同一操作的重试恢复，原始记录保留如下。
+          </p>}
           {!active && agentResult && (
-            <p className="execution-process__terminal-detail" role="alert">
+            <p className="execution-process__terminal-detail" role={summary.state === "failed" ? "alert" : undefined}>
               {agentResult}
             </p>
           )}
@@ -279,11 +286,10 @@ export function ExecutionProcess({
           {processRows.map((row, index) => {
             if (row.kind === "tool") {
               return (
-                <ToolCallCard
-                  key={row.part.toolCall.toolCallId || `tool-${index}`}
-                  tc={row.part.toolCall}
-                  onOpen={onOpenTool}
-                />
+                <div key={row.part.toolCall.toolCallId || `tool-${index}`} className="execution-process__tool">
+                  <ToolCallCard tc={row.part.toolCall} onOpen={onOpenTool} />
+                  {recoveredById.has(row.part.toolCall.toolCallId) && <span className="execution-process__recovery-detail">该次失败已通过后续重试恢复</span>}
+                </div>
               );
             }
             return (

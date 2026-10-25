@@ -2150,7 +2150,7 @@
     opacity: 0;
   }
 }
-/* 「等待中」loading 行：只展示可验证的请求阶段与已等待时间。 */
+/* 真实状态保持主层级，低频陪伴文案在下方独立展示。 */
 .msg__loading {
   display: flex;
   flex-direction: column;
@@ -2160,7 +2160,9 @@
 }
 .msg__loading-status {
   display: flex;
+  flex-wrap: wrap;
   align-items: baseline;
+  gap: 2px 8px;
   min-width: 0;
   max-width: 100%;
 }
@@ -2171,17 +2173,24 @@
 }
 .msg__loading-context {
   display: inline-flex;
+  flex-wrap: wrap;
   align-items: baseline;
-  gap: 7px;
+  gap: 0 7px;
   min-width: 0;
-  margin-left: 8px;
+  max-width: 100%;
   color: var(--echo-text-weak);
   font-size: 0.75rem;
 }
 .msg__loading-background-hint {
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
+  overflow-wrap: anywhere;
+}
+.msg__loading-tip {
+  margin: 4px 0 0;
+  max-width: 100%;
+  color: var(--echo-text-medium);
+  font-size: 0.8125rem;
+  line-height: 1.6;
+  overflow-wrap: anywhere;
 }
 /* 文字扫光：横向渐变裁剪到文字，亮带随 background-position 左右扫过，
    形成「文字在 loading」的观感。移植自 echo-chat-ui 的 shining-text mixin
@@ -2225,8 +2234,13 @@
   overflow: hidden;
   box-sizing: border-box;
 }
-.execution-process--attention {
+.execution-process--failed {
   border-left: 2px solid var(--echo-status-error);
+  padding-left: 8px;
+}
+.execution-process--partial,
+.execution-process--attention {
+  border-left: 2px solid var(--echo-color-text-warning-default);
   padding-left: 8px;
 }
 .execution-process__header {
@@ -2266,8 +2280,15 @@
 .execution-process--complete .execution-process__status {
   background: var(--echo-status-success, #1a7f37);
 }
-.execution-process--attention .execution-process__status {
+.execution-process--failed .execution-process__status {
   background: var(--echo-status-error, #e5484d);
+}
+.execution-process--partial .execution-process__status,
+.execution-process--attention .execution-process__status {
+  background: var(--echo-color-text-warning-default);
+}
+.execution-process--recovered .execution-process__status {
+  background: var(--echo-text-medium);
 }
 .execution-process--stopped .execution-process__status {
   background: var(--echo-text-tertiary);
@@ -2389,11 +2410,27 @@
   max-height: 160px;
   margin: 6px 4px;
   overflow: auto;
-  color: var(--echo-status-error, #e5484d);
+  color: var(--echo-text-medium);
   font-size: 0.6875rem;
   line-height: 18px;
   overflow-wrap: anywhere;
   white-space: pre-wrap;
+}
+.execution-process--failed .execution-process__terminal-detail {
+  color: var(--echo-status-error, #e5484d);
+}
+.execution-process__outcome-detail,
+.execution-process__recovery-detail {
+  display: block;
+  margin: 2px 4px 6px;
+  color: var(--echo-text-medium);
+  font-size: 0.75rem;
+  line-height: 1.6;
+  overflow-wrap: anywhere;
+}
+.execution-process--partial .execution-process__outcome-detail,
+.execution-process--attention .execution-process__outcome-detail {
+  color: var(--echo-color-text-warning-default);
 }
 .execution-process__hint {
   padding-top: 5px;

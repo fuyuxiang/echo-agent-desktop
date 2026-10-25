@@ -163,6 +163,22 @@ export async function agentNewSession(
   }
 }
 
+/** Stable request ids make automatic directory allocation safe to retry. */
+export async function agentPrepareTaskWorkspace(requestId: string): Promise<string> {
+  return invoke<string>("agent_prepare_task_workspace", { requestId });
+}
+
+export interface SessionWorkspaceStatus {
+  cwd: string;
+  loaded?: boolean;
+  status: "ready" | "missing" | "unavailable";
+  message?: string | null;
+}
+
+export async function agentSessionWorkspaceStatus(sessionId: string, cwd: string): Promise<SessionWorkspaceStatus> {
+  return invoke<SessionWorkspaceStatus>("agent_session_workspace_status", { sessionId, cwd });
+}
+
 // Loading replays history through agent://update and returns the runtime's
 // actual session model. Never substitute the global default for this value.
 export async function agentLoadSession(sessionId: string, cwd: string): Promise<string | null> {
@@ -443,8 +459,12 @@ async function synchronizeKnowledgeSources(
 
 /** Validate all selected Runtime knowledge integrations before a destructive
  * conversation replacement. The subsequent send reuses this acknowledgement. */
-export async function agentPrepareSend(sessionId: string): Promise<void> {
+export async function agentPrepareSend(sessionId: string, cwd: string): Promise<void> {
   await synchronizeKnowledgeSources(sessionId);
+  const workspace = await agentSessionWorkspaceStatus(sessionId, cwd);
+  if (workspace?.status !== "ready" || workspace.loaded !== true) {
+    throw new Error(workspace?.message || "请先恢复本任务的工作目录并重新加载会话，原回复已保留");
+  }
 }
 
 /** Send a user prompt; streamed updates arrive via the events below. */

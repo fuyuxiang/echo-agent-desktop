@@ -70,6 +70,12 @@ impl FilesystemAccess {
     pub fn new() -> Self {
         let access = Self::default();
 
+        // The native default root covers all automatically allocated tasks;
+        // restore it before historical children consume the root budget.
+        if let Ok(root) = crate::paths::default_workspace_dir() {
+            let _ = access.authorize_workspace(&root.to_string_lossy());
+        }
+
         // A persisted Runtime session is the durable capability record for a
         // workspace selected in an earlier run. Invalid/missing paths are
         // ignored rather than broadening access through lexical strings.
@@ -244,9 +250,10 @@ impl FilesystemAccess {
             .roots
             .lock()
             .map_err(|_| "文件系统授权状态已损坏".to_string())?;
-        if roots.contains(&canonical) {
+        if roots.iter().any(|root| canonical.starts_with(root)) {
             return Ok(canonical);
         }
+        roots.retain(|root| !root.starts_with(&canonical));
         if roots.len() >= MAX_AUTHORIZED_ROOTS {
             return Err(format!("已授权工作区不能超过 {MAX_AUTHORIZED_ROOTS} 个"));
         }
@@ -2058,6 +2065,31 @@ mod tests {
         let error = write_text_atomically(&link, b"replacement").unwrap_err();
         assert!(error.contains("符号链接"));
         assert_eq!(std::fs::read_to_string(target).unwrap(), "original");
+    }
+
+    #[test]
+    fn task_children_do_not_exhaust_workspace_authorization_slots() {
+        let base = tempfile::tempdir().unwrap();
+        let child = base.path().join("first");
+        std::fs::create_dir(&child).unwrap();
+        let access = FilesystemAccess::default();
+        access
+            .authorize_workspace(&child.to_string_lossy())
+            .unwrap();
+        access
+            .authorize_workspace(&base.path().to_string_lossy())
+            .unwrap();
+        for index in 0..20 {
+            let task = base.path().join(format!("task-{index}"));
+            std::fs::create_dir(&task).unwrap();
+            access.authorize_workspace(&task.to_string_lossy()).unwrap();
+            assert_eq!(
+                access.require_workspace(&task.to_string_lossy()).unwrap(),
+                task.canonicalize().unwrap()
+            );
+        }
+        assert_eq!(access.roots.lock().unwrap().len(), 1);
+        assert!(access.require_workspace(&child.to_string_lossy()).is_ok());
     }
 
     #[test]

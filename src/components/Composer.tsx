@@ -1,8 +1,9 @@
+import { useWorkspaceMentions } from "@/lib/use-workspace-mentions";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { draftAttachments, saveDraftAttachments } from "@/lib/draft-attachments";
 import { draftRevision, useDraftRevision } from "@/lib/draft-lifecycle";
 import { useStorageHealth } from "@/lib/durable-ui-state";
-import { ArrowUp, Square, MoreHorizontal, Globe2, Mic, Monitor, X, type LucideIcon } from "lucide-react";
+import { ArrowUp, Square, Pause, MoreHorizontal, Globe2, Mic, Monitor, X, type LucideIcon } from "lucide-react";
 import { ChevronDownIcon } from "@/foundation/components/Icon/icons";
 import { ActionMenu } from "./ActionMenu";
 import { ModelSelector, type ModelOption } from "./ModelSelector";
@@ -33,7 +34,7 @@ import {
   slashTokenAtCursor,
   type SlashCommandInvocation,
 } from "@/lib/slash-commands";
-import { replaceAtToken } from "@/lib/at-commands";
+import { atTokenAtCursor, replaceAtToken } from "@/lib/at-commands";
 import { InputAddMenu } from "./InputAddMenu";
 import { useMeetingTranscriptionCapability } from "@/lib/use-meeting-transcription-capability";
 import { KnowledgePicker } from "./KnowledgePicker";
@@ -106,11 +107,13 @@ export function Composer({
   sendNowPending = false,
   awaitingQuestion = false,
   disabled,
-  filePaths = [],
-  workspaceSymbols = [],
+  sendDisabled = false,
+  filePaths,
+  workspaceSymbols,
   onSend,
   onSendNow,
   onCancel,
+  onPause,
   onControl,
   placeholder,
   apiReady = true,
@@ -130,6 +133,8 @@ export function Composer({
   cwd,
   workspaces,
   onSelectWorkspace,
+  automaticWorkspace,
+  defaultWorkspaceCwd,
   // Seed text (from HomePage chips). Consumed once, then cleared via callback.
   initialText,
   onInitialTextConsumed,
@@ -184,6 +189,8 @@ export function Composer({
   /** A structured AskUserQuestion card owns input until it is resolved. */
   awaitingQuestion?: boolean;
   disabled?: boolean;
+  /** Block execution while preserving an editable draft (e.g. a missing task directory). */
+  sendDisabled?: boolean;
   /** SP4: workspace-relative file paths to back the `@` candidate picker. */
   filePaths?: string[];
   /** SP4: workspace symbols (mirrors `SymbolIndexClient.symbols()`). */
@@ -193,6 +200,7 @@ export function Composer({
   onSend: (text: string, attachments?: string[]) => boolean | void | Promise<boolean | void>;
   onSendNow?: (text: string, attachments?: string[]) => boolean | void | Promise<boolean | void>;
   onCancel: () => boolean | void | Promise<boolean | void>;
+  onPause?: () => boolean | void | Promise<boolean | void>;
   /** Exact local pause/stop commands are handled without sending them to AI. */
   onControl?: (
     action: SessionControlAction,
@@ -222,6 +230,8 @@ export function Composer({
   cwd?: string;
   workspaces?: WorkspaceInfo[];
   onSelectWorkspace?: (cwd: string) => void;
+  automaticWorkspace?: boolean;
+  defaultWorkspaceCwd?: string;
   /** Optional initial text to seed the input (one-shot, then cleared). */
   initialText?: string;
   onInitialTextConsumed?: () => void;
@@ -305,6 +315,8 @@ export function Composer({
   const isCurrentDraftEpoch = (epoch: number) => mountedRef.current && scopeEpochRef.current === epoch;
   const [text, setText] = useState("");
   const textRef = useRef("");
+  const [pausing, setPausing] = useState(false);
+  const pausePendingRef = useRef<number | null>(null);
   const [attachments, setAttachments] = useState<string[]>([]);
   const [automationSupport, setAutomationSupport] = useState<AutomationCapabilities | null>(null);
   const automationModeAvailable = Boolean(onAutomationModeChange);
@@ -581,6 +593,8 @@ export function Composer({
       draftRef.current = "";
       localRevisionRef.current += 1;
       setSending(false);
+      pausePendingRef.current = null;
+      setPausing(false);
     }
     draftScopeRef.current = scope;
     if (scope !== undefined && textRef.current !== (draft ?? "")) {
@@ -908,6 +922,28 @@ export function Composer({
   };
 
   const [sending, setSending] = useState(false);
+  const [workspacePicking, setWorkspacePicking] = useState(false);
+  const workspacePickingRef = useRef(false);
+  const pause = async () => {
+    if (!onPause || pausePendingRef.current !== null || cancelling || disabled || sendNowPending || workspacePickingRef.current) return;
+    const epoch = scopeEpochRef.current;
+    pausePendingRef.current = epoch;
+    setPausing(true);
+    try {
+      await onPause();
+    } catch (error) {
+      if (isCurrentDraftEpoch(epoch)) onToast?.(`暂停失败：${String(error).replace(/^Error:\s*/, "")}`);
+    } finally {
+      if (pausePendingRef.current === epoch) {
+        pausePendingRef.current = null;
+        setPausing(false);
+      }
+      if (isCurrentDraftEpoch(epoch) && !document.querySelector('[aria-modal="true"], [role="menu"]')
+        && (document.activeElement === document.body || document.activeElement?.getAttribute("aria-label") === "发送选项")) {
+        ref.current?.focus({preventScroll:true});
+      }
+    }
+  };
   const submissionLock = useRef<number | null>(null);
 
   const captureSubmission = (): DraftSubmission => ({
@@ -940,7 +976,7 @@ export function Composer({
   };
 
   const dispatchControlIntent = async (submittedText: string): Promise<boolean> => {
-    if (submissionLock.current === scopeEpochRef.current || awaitingQuestion || disabled) return false;
+    if (submissionLock.current === scopeEpochRef.current || awaitingQuestion || disabled || sendDisabled || pausePendingRef.current !== null || workspacePickingRef.current) return false;
     if (attachmentsRef.current.length > 0 || !onControl) return false;
     const action = parseSessionControlIntent(submittedText);
     if (!action) return false;
@@ -966,7 +1002,7 @@ export function Composer({
     const t = textRef.current.trim();
     // A scene tag is contextual metadata, not a user prompt. Require actual
     // text or at least one attachment for every submission path.
-    if ((!t && attachmentsRef.current.length === 0) || sending || disabled || awaitingQuestion || submissionLock.current === scopeEpochRef.current) return;
+    if ((!t && attachmentsRef.current.length === 0) || sending || disabled || sendDisabled || pausePendingRef.current !== null || workspacePickingRef.current || awaitingQuestion || submissionLock.current === scopeEpochRef.current) return;
     if (t && attachmentsRef.current.length === 0 && onControl && parseSessionControlIntent(t)) {
       await dispatchControlIntent(t);
       return;
@@ -1033,7 +1069,7 @@ export function Composer({
   /** Atomically replace the active turn; no manual stop round-trip required. */
   const sendNow = async () => {
     const t = textRef.current.trim();
-    if ((!t && attachmentsRef.current.length === 0) || sending || disabled || awaitingQuestion || submissionLock.current === scopeEpochRef.current) return;
+    if ((!t && attachmentsRef.current.length === 0) || sending || disabled || sendDisabled || pausePendingRef.current !== null || workspacePickingRef.current || awaitingQuestion || submissionLock.current === scopeEpochRef.current) return;
     if (t && attachmentsRef.current.length === 0 && onControl && parseSessionControlIntent(t)) {
       await dispatchControlIntent(t);
       return;
@@ -1082,7 +1118,7 @@ export function Composer({
   /** 流式时入队(对齐 EchoAgent message-queue):文本或附件任一非空即可入队。 */
   const enqueue = () => {
     const t = textRef.current.trim();
-    if ((!t && attachmentsRef.current.length === 0) || !onEnqueue || awaitingQuestion || disabled || sending || sendNowPending || !apiReady || submissionLock.current === scopeEpochRef.current) return;
+    if ((!t && attachmentsRef.current.length === 0) || !onEnqueue || awaitingQuestion || disabled || sendDisabled || pausePendingRef.current !== null || workspacePickingRef.current || sending || sendNowPending || !apiReady || submissionLock.current === scopeEpochRef.current) return;
     if (attachmentsRef.current.length === 0 && parseSessionControlIntent(t) && onControl) {
       void dispatchControlIntent(t);
       return;
@@ -1120,6 +1156,7 @@ export function Composer({
 
   // Cursor tracking for slash-command autocomplete.
   const [cursorPos, setCursorPos] = useState(0);
+  const mentionCandidates = useWorkspaceMentions(cwd, Boolean(atTokenAtCursor(text, cursorPos)) && filePaths === undefined);
   const slashCommandsRef = useRef<SlashCommandsHandle>(null);
   const atMenuRef = useRef<AtMentionHandle>(null);
   const composingRef = useRef(false);
@@ -1420,8 +1457,8 @@ export function Composer({
           ref={atMenuRef}
           text={text}
           cursor={cursorPos}
-          filePaths={filePaths}
-          workspaceSymbols={workspaceSymbols}
+          filePaths={filePaths ?? mentionCandidates.filePaths}
+          workspaceSymbols={workspaceSymbols ?? mentionCandidates.workspaceSymbols}
           members={mentionMembers}
           onPick={(mention, _replacement, memberId) => {
             if (memberId) onMentionMember?.(memberId);
@@ -1510,7 +1547,7 @@ export function Composer({
           <KnowledgePicker
             sessionId={knowledgeSessionId}
             deferRuntimeSync={knowledgeDeferred}
-            disabled={!apiReady || awaitingQuestion || disabled || streaming}
+            disabled={!apiReady || awaitingQuestion || disabled || sendDisabled || workspacePickingRef.current || streaming}
             onManage={onOpenKnowledgeBase}
             onOpenOrganization={onOpenOrganization}
             onToast={onToast}
@@ -1553,20 +1590,28 @@ export function Composer({
           </button>
           {streaming ? (
             <div className="composer-submit-group">
-              {text.trim() || attachments.length > 0 ? <>
+              {(text.trim() || attachments.length > 0) && <>
                 <button type="button" className="echo-composer__send echo-composer__send--enqueue"
                   onClick={e => {e.stopPropagation(); if (onEnqueue) enqueue(); else void sendNow();}}
-                  disabled={disabled || awaitingQuestion || !apiReady || sending || sendNowPending || !onEnqueue && !onSendNow}
+                  disabled={disabled || sendDisabled || pausing || awaitingQuestion || !apiReady || sending || sendNowPending || !onEnqueue && !onSendNow}
                   aria-label={onEnqueue ? "加入待发送队列" : "中断并发送"}
                   title={onEnqueue ? "当前一轮正常结束后自动发送（Enter）" : "中断当前轮次并发送新要求"}>
                   <ArrowUp size={17} /><span>{sendNowPending ? "切换中" : onEnqueue ? "排队" : "中断并发送"}</span>
                 </button>
-                {onSendNow && onEnqueue && <ActionMenu label="发送选项" menuLabel="发送方式" trigger={<MoreHorizontal size={17} />}>
-                  {({close}) => <button type="button" role="menuitem" className="topbar-actions__item" disabled={disabled || awaitingQuestion || !apiReady || sending || sendNowPending}
+              </>}
+              {(onPause || (text.trim() || attachments.length > 0) && onSendNow && onEnqueue) && <ActionMenu label="发送选项" menuLabel="任务与发送选项" trigger={<MoreHorizontal size={17} />}>
+                {({close}) => <>
+                  {onPause && <button type="button" role="menuitem" className="topbar-actions__item"
+                    disabled={pausing || cancelling || disabled || sendNowPending || workspacePicking}
+                    title="暂停任务，保留上下文和未发送内容" onClick={() => {close(true); void pause();}}>
+                    <Pause size={14} />{pausing ? "正在暂停…" : "暂停任务"}
+                  </button>}
+                  {(text.trim() || attachments.length > 0) && onSendNow && onEnqueue && <button type="button" role="menuitem" className="topbar-actions__item" disabled={disabled || sendDisabled || awaitingQuestion || !apiReady || sending || sendNowPending || pausing}
                     onClick={() => {close(true); void sendNow();}}>中断当前轮次并发送</button>}
-                </ActionMenu>}
-              </> : <button type="button" className="echo-composer__send echo-composer__send--stop" onClick={e => {e.stopPropagation(); if (!cancelling) void onCancel();}}
-                disabled={cancelling || disabled || sendNowPending} aria-label={cancelling ? "正在停止生成" : "停止生成"} title="停止当前轮次，保留会话记录"><Square size={14} fill="currentColor" /></button>}
+                </>}
+              </ActionMenu>}
+              <button type="button" className="echo-composer__send echo-composer__send--stop" onClick={e => {e.stopPropagation(); if (!cancelling) void onCancel();}}
+                disabled={cancelling || pausing || disabled || workspacePickingRef.current || sendNowPending} aria-label={cancelling ? "正在停止生成" : "停止生成"} title="停止当前轮次，保留会话记录"><Square size={14} fill="currentColor" /></button>
             </div>
           ) : (
             <button
@@ -1580,7 +1625,7 @@ export function Composer({
                 e.stopPropagation();
                 send();
               }}
-              disabled={disabled || !apiReady || sending || (text.trim() === "" && attachments.length === 0)}
+              disabled={disabled || sendDisabled || workspacePicking || !apiReady || sending || (text.trim() === "" && attachments.length === 0)}
               aria-label="发送"
               title={!apiReady ? setupHint : sending ? "正在发送" : "发送消息"}
             >
@@ -1598,6 +1643,10 @@ export function Composer({
               cwd={cwd}
               workspaces={workspaces!}
               onSelectWorkspace={onSelectWorkspace!}
+              automaticWorkspace={automaticWorkspace}
+              defaultWorkspaceCwd={defaultWorkspaceCwd}
+              disabled={disabled || sending}
+              onBusyChange={busy => { workspacePickingRef.current = busy; setWorkspacePicking(busy); }}
             />
           ) : null}
           <AutomationBoundaryNotice
@@ -1608,9 +1657,9 @@ export function Composer({
         </div>
       )}
       {showDisclaimer && (
-        <div className="echo-composer__disclaimer"><span className="composer-shortcuts">Enter {streaming ? "排队" : "发送"} · Shift+Enter 换行 · @ 引用 · / 技能</span><span>
-          内容由 AI 生成，请核实重要信息
-        </span></div>
+        <div className="echo-composer__disclaimer">
+          AI 可能出错，请核实重要信息
+        </div>
       )}
     </div>
   );

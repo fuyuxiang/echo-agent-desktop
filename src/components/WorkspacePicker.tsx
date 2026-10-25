@@ -20,6 +20,10 @@ export function WorkspacePicker({
   cwd,
   workspaces,
   onSelectWorkspace,
+  disabled = false,
+  automaticWorkspace = false,
+  defaultWorkspaceCwd,
+  onBusyChange,
   menuPlacement = "top",
   menuAlign = "start",
 }: {
@@ -27,6 +31,10 @@ export function WorkspacePicker({
   cwd?: string;
   workspaces: WorkspaceInfo[];
   onSelectWorkspace: (cwd: string) => void;
+  disabled?: boolean;
+  automaticWorkspace?: boolean;
+  defaultWorkspaceCwd?: string;
+  onBusyChange?: (busy: boolean) => void;
   /** Prefer below the trigger in top utility bars and above it in composers. */
   menuPlacement?: FloatingPlacement;
   menuAlign?: FloatingAlignment;
@@ -93,9 +101,11 @@ export function WorkspacePicker({
     return () => document.removeEventListener("keydown", onKeyDown);
   }, [close, open]);
 
+  useEffect(() => { if (disabled) close(false); }, [disabled, close]);
+
   const handleMenuKeyDown = (event: React.KeyboardEvent<HTMLUListElement>) => {
     const items = Array.from(
-      menuRef.current?.querySelectorAll<HTMLElement>('[role="menuitem"], [role="menuitemradio"]') ?? [],
+      menuRef.current?.querySelectorAll<HTMLElement>('[role="menuitem"]:not(:disabled), [role="menuitemradio"]:not(:disabled)') ?? [],
     );
     const index = items.indexOf(document.activeElement as HTMLElement);
     const focusAt = (nextIndex: number) => {
@@ -120,12 +130,16 @@ export function WorkspacePicker({
   // Shorten a cwd for display: show last 2 path segments.
   const shortName = shortWorkspacePath;
 
-  const triggerLabel = cwd ? shortName(cwd) : "选择工作目录";
+  const recentWorkspaces = defaultWorkspaceCwd
+    ? workspaces.filter(w => !isAutomaticTaskWorkspace(defaultWorkspaceCwd, w.cwd))
+    : workspaces;
+  const triggerLabel = automaticWorkspace ? "默认任务目录" : cwd ? shortName(cwd) : "选择工作目录";
 
   // 打开系统目录选择框，切换到任意文件夹（不限于历史目录）。
   const pickFolder = async () => {
-    if (pickingRef.current) return;
+    if (pickingRef.current || disabled) return;
     pickingRef.current = true;
+    onBusyChange?.(true);
     setPicking(true);
     setPickError(null);
     try {
@@ -138,6 +152,11 @@ export function WorkspacePicker({
     } finally {
       pickingRef.current = false;
       setPicking(false);
+      onBusyChange?.(false);
+      window.requestAnimationFrame(() => {
+        // Native dialogs return before React re-enables their trigger.
+        (menuRef.current?.querySelector<HTMLButtonElement>("button:not(:disabled)") ?? triggerRef.current)?.focus();
+      });
     }
   };
 
@@ -150,11 +169,12 @@ export function WorkspacePicker({
           setOpen((value) => !value);
         }}
         type="button"
-        aria-label={cwd ? `工作目录：${displayPath(cwd)}。点击切换` : "选择工作目录"}
+        disabled={disabled || picking}
+        aria-label={automaticWorkspace ? "工作目录：默认任务目录。创建时自动分配独立文件夹" : cwd ? `工作目录：${displayPath(cwd)}。点击切换` : "选择工作目录"}
         aria-haspopup="menu"
         aria-expanded={open}
         aria-controls={open ? menuId : undefined}
-        data-tip={cwd ? `当前工作目录：${displayPath(cwd)}` : "选择工作目录"}
+        data-tip={automaticWorkspace ? "每个新任务使用独立文件夹；也可在创建前选择现有目录" : cwd ? `当前工作目录：${displayPath(cwd)}` : "选择工作目录"}
         ref={triggerRef}
         onKeyDown={(event) => {
           if (event.key === "ArrowDown" || event.key === "ArrowUp") {
@@ -167,7 +187,7 @@ export function WorkspacePicker({
         <span className="workspace-picker__label">{triggerLabel}</span>
         <ChevronDown size={14} strokeWidth={1.75} className="workspace-picker__arrow" />
       </button>
-      {open && typeof document !== "undefined" && createPortal(
+      {open && !disabled && typeof document !== "undefined" && createPortal(
         <ul
           className="workspace-picker__menu"
           id={menuId}
@@ -193,10 +213,18 @@ export function WorkspacePicker({
             </button>
           </li>
           {pickError && <li role="none" className="workspace-picker__error"><span role="alert">{pickError}</span></li>}
-          {workspaces.length === 0 && (
+          {defaultWorkspaceCwd && <li role="none">
+            <button type="button" role="menuitemradio" aria-checked={automaticWorkspace}
+              className="workspace-picker__item" disabled={picking} onClick={() => { onSelectWorkspace(""); close(); }}>
+              <Folder size={14} /><span className="workspace-picker__item-name">默认任务目录</span>
+              {automaticWorkspace && <Check size={14} />}
+            </button>
+            <div className="workspace-picker__hint">自动创建独立文件夹，已有任务的目录保持固定</div>
+          </li>}
+          {recentWorkspaces.length === 0 && (
             <li className="workspace-picker__empty">暂无历史工作目录</li>
           )}
-          {workspaces.map((w) => (
+          {recentWorkspaces.map((w) => (
             <li key={w.cwd} role="none">
               <button
                 type="button"
@@ -209,7 +237,8 @@ export function WorkspacePicker({
                   close();
                 }}
                 role="menuitemradio"
-                aria-checked={w.cwd === cwd}
+                disabled={picking}
+                aria-checked={!automaticWorkspace && w.cwd === cwd}
                 title={displayPath(w.cwd)}
               >
                 <span className="workspace-picker__item-name">{shortName(w.cwd)}</span>
@@ -225,4 +254,12 @@ export function WorkspacePicker({
       )}
     </div>
   );
+}
+
+/** Hide implementation directories from the recent-folder chooser. */
+export function isAutomaticTaskWorkspace(base: string, cwd: string): boolean {
+  const normalize = (path: string) => path.replace(/\\/g, "/").replace(/\/$/, "");
+  const prefix = `${normalize(base)}/Tasks/`;
+  const value = normalize(cwd);
+  return value.startsWith(prefix) && /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/.test(value.slice(prefix.length));
 }

@@ -6,11 +6,47 @@ vi.mock("@/lib/agent-client", () => ({
   filesystemPickDirectory: vi.fn().mockResolvedValue(null),
 }));
 
-import { WorkspacePicker } from "../WorkspacePicker";
+import { isAutomaticTaskWorkspace, WorkspacePicker } from "../WorkspacePicker";
 import { filesystemPickDirectory } from "@/lib/agent-client";
 import { GlobalTooltip } from "../GlobalTooltip";
 
 describe("WorkspacePicker", () => {
+  it("自动目录与手动目录可在创建前选择，自动分配的历史任务不污染候选列表", () => {
+    const select = vi.fn();
+    const id = "019a3c14-99e0-7654-bff0-baa788d4bbdd";
+    render(<WorkspacePicker automaticWorkspace defaultWorkspaceCwd="/default" workspaces={[
+      {cwd:`/default/Tasks/${id}`, sessionCount:1}, {cwd:"/repo", sessionCount:2},
+    ]} onSelectWorkspace={select} />);
+    fireEvent.click(screen.getByRole("button", {name:/默认任务目录/}));
+    expect(screen.getByRole("menuitemradio", {name:"默认任务目录"})).toHaveAttribute("aria-checked", "true");
+    expect(screen.queryByTitle(`/default/Tasks/${id}`)).toBeNull();
+    fireEvent.click(screen.getByRole("menuitemradio", {name:/repo/}));
+    expect(select).toHaveBeenCalledWith("/repo");
+    fireEvent.click(screen.getByRole("button", {name:/默认任务目录/}));
+    fireEvent.click(screen.getByRole("menuitemradio", {name:"默认任务目录"}));
+    expect(select).toHaveBeenLastCalledWith("");
+    expect(isAutomaticTaskWorkspace("C:\\Default", `C:\\Default\\Tasks\\${id}`)).toBe(true);
+    expect(isAutomaticTaskWorkspace("/default", "/default/Tasks/my-project")).toBe(false);
+  });
+
+  it("创建期间关闭目录菜单，阻止切换；系统选择框期间其他候选也保持锁定", async () => {
+    let resolve!: (cwd: string | null) => void;
+    vi.mocked(filesystemPickDirectory).mockImplementationOnce(() => new Promise(accept => { resolve = accept; }));
+    const busy = vi.fn(), select = vi.fn();
+    const props = {cwd:"/repo",workspaces:[{cwd:"/other",sessionCount:1}],onSelectWorkspace:select,onBusyChange:busy};
+    const view = render(<WorkspacePicker {...props} />);
+    fireEvent.click(screen.getByRole("button", {name:/工作目录/}));
+    fireEvent.click(screen.getByRole("menuitem", {name:"选择文件夹…"}));
+    expect(busy).toHaveBeenLastCalledWith(true);
+    expect(screen.getByRole("menuitemradio", {name:/other/})).toBeDisabled();
+    resolve(null);
+    await waitFor(() => expect(busy).toHaveBeenLastCalledWith(false));
+    expect(select).not.toHaveBeenCalled();
+    view.rerender(<WorkspacePicker {...props} disabled />);
+    expect(screen.queryByRole("menu")).toBeNull();
+    expect(screen.getByRole("button", {name:/工作目录/})).toBeDisabled();
+  });
+
   it("打开目录菜单后清除触发器提示，自动聚焦的选项不覆盖菜单", async () => {
     render(
       <>

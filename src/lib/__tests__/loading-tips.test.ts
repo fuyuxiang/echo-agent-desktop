@@ -26,4 +26,13 @@ describe("loading companion copy", () => {
     expect(pickLoadingTip(() => 0)).toBe(LOADING_TIPS[0]);
     expect(pickLoadingTip(() => 1)).toBe(LOADING_TIPS[LOADING_TIPS.length - 1]);
   });
+
+  it("即使随机数连续相同，也不会重复上一条提示", () => {
+    for (const value of [0, 0.5, 1]) {
+      const previous = pickLoadingTip(() => value);
+      const next = pickLoadingTip(() => value, previous);
+      expect(LOADING_TIPS).toContain(next);
+      expect(next).not.toBe(previous);
+    }
+  });
 });

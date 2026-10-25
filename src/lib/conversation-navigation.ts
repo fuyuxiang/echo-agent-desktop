@@ -1,6 +1,6 @@
 import type { ChatMessage } from "@/stores/session-store";
 import type { QuestionHistoryItem } from "@/components/QuestionHistoryPopover";
-import { partitionAssistantParts, summarizeExecutionProcess } from "./execution-process";
+import { isExecutionSettled, partitionAssistantParts, summarizeExecutionProcess } from "./execution-process";
 
 export interface ConversationTurn extends QuestionHistoryItem {
   answer: string;
@@ -20,7 +20,7 @@ export function buildConversationTurns(messages: ChatMessage[], questions: Quest
     } else if (message.role === "assistant" && current) {
       const groups = partitionAssistantParts(message.parts);
       current.status = summarizeExecutionProcess(groups.processParts, !message.complete,
-        message.stopReason, message.cancellationCategory, message.cancelTrigger).title;
+        message.stopReason, message.cancellationCategory, message.cancelTrigger, {settled:isExecutionSettled(message)}).title;
       if (message.complete) {
         const answer = groups.responseParts.map(part => part.text).join(" ")
           .replace(/!\[[^\]]*\]\([^)]*\)/g, "[图片]")

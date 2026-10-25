@@ -1,7 +1,13 @@
-import type { MessagePart, ToolCallView } from "@/stores/session-store";
+import type { ChatMessage, MessagePart, ToolCallView } from "@/stores/session-store";
 import { detectToolRenderer } from "@/lib/tool-renderers";
+import { findToolRecoveries, type ToolRecovery } from "@/lib/tool-recovery";
 
 export type TextMessagePart = Extract<MessagePart, { kind: "text" }>;
+
+/** Closing a replay bubble only stops its spinner; it is not a terminal ACK. */
+export function isExecutionSettled(message: Pick<ChatMessage,"complete" | "replayed" | "stopReason">): boolean {
+  return message.complete && (!message.replayed || Boolean(message.stopReason));
+}
 
 const INTERNAL_REASONING_TAGS = ["think", "thinking", "reasoning", "analysis"] as const;
 const INTERNAL_REASONING_OPENING = /^\s*<(think|thinking|reasoning|analysis)(?:\s[^>]*)?>/i;
@@ -112,11 +118,15 @@ function isPendingReasoningOpening(value: string): boolean {
 }
 
 export interface ExecutionProcessSummary {
-  state: "running" | "complete" | "attention" | "stopped";
+  state: "running" | "complete" | "partial" | "failed" | "attention" | "stopped";
   title: string;
+  description?: string;
   toolCount: number;
   completedToolCount: number;
   failedToolCount: number;
+  unfinishedToolCount: number;
+  unresolvedToolCount: number;
+  recoveredTools: ToolRecovery[];
   thoughtCount: number;
   changedFiles: string[];
 }
@@ -128,6 +138,7 @@ export function summarizeExecutionProcess(
   stopReason?: string,
   cancellationCategory?: string,
   cancelTrigger?: string,
+  options: { settled?: boolean } = {},
 ): ExecutionProcessSummary {
   const tools = parts
     .filter((part): part is Extract<MessagePart, { kind: "tool_call" }> => part.kind === "tool_call")
@@ -137,6 +148,8 @@ export function summarizeExecutionProcess(
   const completedToolCount = tools.filter((tool) => tool.status === "completed").length;
   const unfinishedToolCount = tools.filter((tool) => tool.status === "in_progress").length;
   const currentTool = [...tools].reverse().find((tool) => tool.status === "in_progress");
+  const recoveredTools = findToolRecoveries(parts);
+  const unresolvedToolCount = failedToolCount - recoveredTools.length;
   const changedFiles = [...new Set(
     tools.filter((tool) => tool.status === "completed").flatMap(toolDiffPaths),
   )];
@@ -155,42 +168,47 @@ export function summarizeExecutionProcess(
     "max_turns_reached",
     "action_stationarity",
   ].includes(cancellationCategory ?? "");
-  const state = !active && stopReason === "cancelled" && !abnormalCancellation
-    ? "stopped"
-    : failedToolCount > 0
-        || (!active && (abnormalStop || abnormalCancellation || unfinishedToolCount > 0))
-      ? "attention"
-    : active
-      ? "running"
-      : "complete";
-
+  let state: ExecutionProcessSummary["state"];
   let title: string;
-  if (state === "stopped") {
+  let description: string | undefined;
+  if (active) {
+    state = "running";
+    title = currentTool ? activeToolLabel(currentTool) : unresolvedToolCount ? "正在继续处理" : "正在分析任务";
+  } else if (abnormalStop || abnormalCancellation) {
+    state = "failed";
+    title = abnormalCancellation ? cancelledProcessTitle(cancellationCategory) : abnormalProcessTitle(stopReason);
+    description = "本轮执行未正常结束，已保留执行记录和已有内容，可查看原因后重试。";
+  } else if (cancellationCategory === "session_replay_incomplete") {
+    state = "attention";
+    title = "执行记录不完整";
+    description = "历史记录缺少完成结果，无法确认这些操作是否完成。";
+  } else if (stopReason === "cancelled") {
+    state = "stopped";
     title = cancelledProcessTitle(cancellationCategory, cancelTrigger);
-  } else if (state === "attention") {
-    title = active
-      ? "执行遇到问题，正在继续处理"
-      : abnormalCancellation
-        ? cancelledProcessTitle(cancellationCategory)
-      : abnormalStop
-        ? abnormalProcessTitle(stopReason)
-        : unfinishedToolCount > 0
-          ? "执行已结束，但有操作未收尾"
-          : "执行过程有失败项";
-  } else if (active) {
-    title = currentTool ? activeToolLabel(currentTool) : "正在分析任务";
-  } else if (tools.length > 0) {
-    title = "已完成执行过程";
+  } else if (options.settled === false || stopReason && stopReason !== "end_turn") {
+    state = "attention";
+    title = "执行状态待确认";
+    description = "尚未收到可确认的完成状态，已有回复不代表执行已经完成。";
+  } else if (unresolvedToolCount || unfinishedToolCount) {
+    state = completedToolCount > 0 ? "partial" : unfinishedToolCount > 0 ? "attention" : "failed";
+    title = state === "partial" ? "部分操作未完成" : state === "attention" ? "执行结果待确认" : "操作执行未完成";
+    description = [unresolvedToolCount ? `${unresolvedToolCount} 项失败操作尚未确认恢复` : "",
+      unfinishedToolCount ? `${unfinishedToolCount} 项操作未记录完成结果` : ""].filter(Boolean).join("；") + "。展开可查看具体操作和原因。";
   } else {
-    title = "已完成思考";
+    state = "complete";
+    title = recoveredTools.length ? "执行过程" : tools.length > 0 ? "已完成执行过程" : "已完成思考";
   }
 
   return {
     state,
     title,
+    description,
     toolCount: tools.length,
     completedToolCount,
     failedToolCount,
+    unfinishedToolCount,
+    unresolvedToolCount,
+    recoveredTools,
     thoughtCount: thoughts.length,
     changedFiles,
   };

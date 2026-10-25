@@ -172,7 +172,7 @@ describe("ToolSidePanel navigation collapse", () => {
   it("exposes list layout controls only when a readable split fits", async () => {
     Object.defineProperty(window, "innerWidth", {configurable:true, value:1024});
     const { container } = renderPanel("fileTree");
-    await screen.findByText(/没有可见文件/);
+    await screen.findByText("当前目录暂无可见文件。");
     expect(container.querySelector(".task-details__list--split")).toBeInTheDocument();
     fireEvent.click(screen.getByRole("button", {name: "详情布局"}));
     fireEvent.click(screen.getByRole("menuitem", {name: "收起列表"}));
@@ -215,7 +215,7 @@ describe("ToolSidePanel navigation collapse", () => {
     fireEvent.click(screen.getByRole("button", { name: "预览" }));
     expect(container.querySelector("iframe")).toHaveAttribute("src", "https://example.com/review");
     fireEvent.click(screen.getByRole("tab", { name: "文件" }));
-    expect(await screen.findByText(/没有可见文件/)).toBeInTheDocument();
+    expect(await screen.findByText("当前目录暂无可见文件。")).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "详情布局" })).toBeInTheDocument();
   });
 

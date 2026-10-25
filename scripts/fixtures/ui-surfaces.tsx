@@ -262,6 +262,8 @@ Object.assign(window, {
         if (extensionAttempts[command] === 1) throw new Error("隔离验收：列表暂不可用");
       }
       switch (command) {
+        case "agent_session_workspace_status": return {cwd:args.cwd, loaded:true, status: query.get("workspace") === "missing" && !(window as any).workspaceReady ? "missing" : "ready", message: query.get("workspace") === "missing" ? "原目录已被移动" : null};
+        case "filesystem_pick_directory": return query.get("pickedFolder") ?? null;
         case "export_text_file": return "/review/exported-session.md";
         case "agent_set_session_pinned": return args.pinned;
         case "agent_set_session_archived": return args.archived;
@@ -458,10 +460,14 @@ function ConversationLayoutFixture() {
           return true;
         }}
           navigation={{ sidebarCollapsed: layout.collapsed, onToggleSidebar: () => layout.setCollapsed(!layout.collapsed), onNewTask: () => { (window as any).workbenchNewTask = true; } }}
+          onNewTask={() => { (window as any).workbenchNewTask = true; }}
+          onReloadWorkspace={async () => { (window as any).workspaceReloaded = true; }}
+          modelId={query.has("composerModel") ? "review/MiniMax-M3.1-Flash" : undefined}
+          models={query.has("composerModel") ? [{id:"review/MiniMax-M3.1-Flash",label:"MiniMax-M3.1-Flash"}] : undefined}
+          onModelChange={query.has("composerModel") ? () => {} : undefined}
           cwd={query.get("surface") === "workbench" ? "/Users/review/项目/EchoAgent/一个很长的任务工作目录/desktop-client" : undefined}
           title={entry?.title ?? "聊天布局回归"}
           onRename={async title => { if (sessionId) useSessionsStore.getState().upsert({ sessionId, title }); }}
-          sessionActions={{ pinned: entry?.pinned, onSessionsChanged: patch => { if (sessionId && patch) useSessionsStore.getState().upsert({sessionId, ...patch}); } }}
         />
       </main>
     </div></SidebarLayoutContext.Provider>
@@ -470,14 +476,14 @@ function ConversationLayoutFixture() {
 
 function HomeReviewFixture() {
   const layout = useAppSidebarLayout();
-  const [cwd, setCwd] = useState("/review/EchoAgent");
+  const [cwd, setCwd] = useState(query.has("automaticWorkspace") ? "" : "/review/EchoAgent");
   return <div className="app"><SidebarLayoutContext.Provider value={layout.context}>
     <div ref={layout.bodyRef} style={layout.style} className={"app__body" + (layout.collapsed ? " app__body--collapsed" : "") + (layout.resizing ? " app__body--sidebar-resizing" : "")}>
       <Sidebar activeNav="新建任务" onNewSession={() => {}} onSelect={() => {}} onNavigate={() => {}} onOpenSettings={() => {}} onOpenSearch={() => {}} onToggleCollapse={() => layout.setCollapsed(true)} />
       <SidebarResizeHandle layout={layout} />
       <main className="app__main">
         {layout.collapsed && <div className="main-page-controls"><button className="main-topbar__btn" aria-label="展开侧边栏" onClick={() => layout.setCollapsed(false)}>展开侧边栏</button></div>}
-        <HomePage onSend={() => {}} streaming={false} apiReady={query.get("state") !== "unconfigured"} creatingSession={query.get("state") === "loading"} sendError={query.get("state") === "error" ? "会话创建失败，请重试" : null} onOpenSettings={() => {}} onPlaceholder={() => {}} models={[{ id: "review/model", label: "评审模型", providerId: "review", providerKind: "custom" }]} modelId="review/model" onModelChange={() => {}} cwd={cwd} workspaces={[{cwd:"/review/EchoAgent",sessionCount:1},{cwd:"/review/Other",sessionCount:1}]} onSelectWorkspace={setCwd} />
+        <HomePage onSend={() => {}} streaming={false} apiReady={query.get("state") !== "unconfigured"} creatingSession={query.get("state") === "loading"} sendError={query.get("state") === "error" ? "会话创建失败，请重试" : null} onOpenSettings={() => {}} onPlaceholder={() => {}} models={[{ id: "review/model", label: "评审模型", providerId: "review", providerKind: "custom" }]} modelId="review/model" onModelChange={() => {}} cwd={cwd} automaticWorkspace={!cwd} defaultWorkspaceCwd="/review/EchoAgent" workspaces={[{cwd:"/review/EchoAgent",sessionCount:1},{cwd:"/review/Other",sessionCount:1}]} onSelectWorkspace={setCwd} />
       </main>
     </div>
   </SidebarLayoutContext.Provider></div>;

@@ -1,6 +1,8 @@
 //! Compile and exercise the exact production native modules independently of
 //! Tauri's platform webview/linker dependencies. This is not Runtime acceptance.
 #![allow(dead_code)]
+#[path = "../../src-tauri/src/session_creation.rs"]
+mod session_creation;
 #[path = "../../src-tauri/src/automation/accessibility/mod.rs"]
 mod accessibility;
 #[path = "../../src-tauri/src/automation/computer.rs"]

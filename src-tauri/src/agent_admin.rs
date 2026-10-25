@@ -1398,12 +1398,14 @@ fn rewind_execute_payload(
 #[tauri::command]
 pub async fn rewind_execute(
     state: State<'_, AppState>,
+    filesystem: State<'_, FilesystemAccess>,
     session_id: String,
     target_prompt_index: u32,
     mode: Option<String>,
     force: Option<bool>,
 ) -> Result<RewindExecution, String> {
     require_live_session(&state, &session_id)?;
+    crate::commands::trusted_existing_session_cwd(&state, &filesystem, &session_id, None)?;
     let tx = state
         .tx
         .lock()

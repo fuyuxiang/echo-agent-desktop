@@ -48,9 +48,10 @@ export const THINKING_COMPANION_TIPS = [
   "让信息先各就各位。",
 ] as const;
 
-export function pickLoadingTip(random = Math.random): string {
+export function pickLoadingTip(random = Math.random, previous?: string): string {
+  const tips = previous ? LOADING_TIPS.filter(tip => tip !== previous) : LOADING_TIPS;
   const value = Math.max(0, Math.min(0.999_999, random()));
-  return LOADING_TIPS[Math.floor(value * LOADING_TIPS.length)];
+  return tips[Math.floor(value * tips.length)];
 }
 
 export function pickThinkingCompanion(random = Math.random): string {

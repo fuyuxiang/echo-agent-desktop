@@ -1,10 +1,8 @@
-import { useState, type ReactNode, type MutableRefObject } from "react";
-import { Folder, PanelRight } from "lucide-react";
+import type { ReactNode } from "react";
+import { PanelRight } from "lucide-react";
 import { SidebarToggleIcon, EchoNewTaskIcon } from "@/foundation/components/Icon/icons";
-import { displayPath, shortWorkspacePath } from "@/lib/display-path";
 import { TopbarTitle } from "./TopbarTitle";
 import { TopbarActions, type TopbarActionsProps } from "./TopbarActions";
-import { openLocalPath } from "@/lib/markdown-host";
 
 export type WorkspaceTarget = "fileTree" | "changes" | "artifacts" | "browser" | "plan" | "subagents" | "teams";
 export interface SessionWorkspaceSummary {
@@ -38,13 +36,11 @@ export function SessionNavigation({ sidebarCollapsed, onToggleSidebar, onNewTask
 }
 
 /** One non-scrolling session header. Domain state and workspace navigation stay in ChatView. */
-export function SessionHeader({ sessionId, title, cwd, onRename, actions, summary, activeView,
-  onView, onCloseView, onToggleWorkspace, onFind, findOpen, onQuestionHistory, navigation, leading, historyDisabled, questionHistoryTriggerRef,
+export function SessionHeader({ sessionId, title, onRename, actions, summary, activeView,
+  onView, onCloseView, onToggleWorkspace, onFind, findOpen, navigation, leading, historyDisabled,
 }: {
-  questionHistoryTriggerRef?: MutableRefObject<HTMLButtonElement | null>;
   sessionId: string;
   title: string;
-  cwd?: string;
   onRename?: (title: string) => Promise<void>;
   actions?: Omit<TopbarActionsProps, "sessionId" | "title">;
   summary: SessionWorkspaceSummary;
@@ -54,17 +50,14 @@ export function SessionHeader({ sessionId, title, cwd, onRename, actions, summar
   onToggleWorkspace?: () => void;
   onFind: () => void;
   findOpen: boolean;
-  onQuestionHistory?: () => void;
   navigation?: SessionNavigationProps;
   leading?: ReactNode;
   historyDisabled?: boolean;
 }) {
-  const [renameRequest, setRenameRequest] = useState(0);
   return <header className="main-topbar session-header" data-tauri-drag-region>
     <div className="session-header__navigation"><SessionNavigation {...navigation} />{leading}</div>
     <div className="session-header__identity" data-tauri-drag-region>
-      {onRename ? <TopbarTitle key={sessionId} title={title} onRename={onRename} editRequest={renameRequest} /> : <span className="main-topbar__title" title={title}>{title}</span>}
-      {cwd && <button type="button" className="session-header__cwd" aria-label="打开工作目录" onClick={() => void openLocalPath(cwd, {cwd, type:"directory", onToast:actions?.onToast})} title={`打开本任务的工作目录：${displayPath(cwd)}。如需切换目录，请新建任务。`}><Folder size={13} aria-hidden="true" /><span>{shortWorkspacePath(cwd)}</span></button>}
+      {onRename ? <TopbarTitle key={sessionId} title={title} onRename={onRename} /> : <span className="main-topbar__title" title={title}>{title}</span>}
     </div>
     <div className="session-header__actions">
       {summary.status && <span className={"session-header__status" + (summary.attention ? " session-header__status--attention" : "")} role="status">{summary.status}</span>}
@@ -74,11 +67,7 @@ export function SessionHeader({ sessionId, title, cwd, onRename, actions, summar
         {summary.planTotal ? `计划 ${summary.planCompleted}/${summary.planTotal}` : "执行计划"}
       </button>}
       <TopbarActions key={sessionId} sessionId={sessionId} title={title} {...actions} historyDisabled={historyDisabled}
-        onFind={summary.searchable ? onFind : undefined} findOpen={findOpen}
-        onRename={onRename ? () => setRenameRequest(value => value + 1) : undefined} onQuestionHistory={onQuestionHistory ? trigger => {
-          if (questionHistoryTriggerRef) questionHistoryTriggerRef.current = trigger;
-          onQuestionHistory();
-        } : undefined} />
+        onFind={summary.searchable ? onFind : undefined} findOpen={findOpen} />
       <button type="button" className="main-topbar__btn session-header__workspace-toggle"
         aria-label={activeView ? "收起工作区" : "展开工作区"} data-tip={activeView ? "收起工作区" : "展开工作区"}
         aria-expanded={Boolean(activeView)} aria-controls="session-workspace"

@@ -34,7 +34,7 @@ import { copyShareText } from "@/lib/share";
 import { exportOfficeDocument, type OfficeFormat } from "@/lib/document-export";
 import type { SessionArtifact } from "@/lib/session-artifacts";
 import { registerDocumentArtifact } from "@/lib/artifact-catalog";
-import { partitionAssistantParts } from "@/lib/execution-process";
+import { isExecutionSettled, partitionAssistantParts } from "@/lib/execution-process";
 import {
   messageRetryKind,
   messageRetryLabel,
@@ -92,6 +92,7 @@ function speechText(markdown: string): string {
 export const MessageItem = memo(function MessageItem({
   message,
   streaming,
+  waitingForModel = true,
   markdownConfig,
   cwd,
   sessionId,
@@ -101,6 +102,8 @@ export const MessageItem = memo(function MessageItem({
   onEditResend,
   onRetry,
   retrying = false,
+  retryDisabled = false,
+  retryDisabledReason,
   latest = false,
   onToast,
   findQuery,
@@ -112,6 +115,8 @@ export const MessageItem = memo(function MessageItem({
   compactIdentity?: boolean;
   onOpenArtifact?: (artifact: SessionArtifact) => void;
   streaming: boolean;
+  /** Suppress model-wait copy while a decision, cancellation or error takes priority. */
+  waitingForModel?: boolean;
   autoExpandProcess?: boolean;
   markdownConfig?: MarkdownConfig;
   /** Workspace used to resolve relative attachment paths. */
@@ -127,6 +132,8 @@ export const MessageItem = memo(function MessageItem({
   onRetry?: (kind: MessageRetryKind) => void;
   /** Prevent duplicate retry gestures and expose progress in the local action. */
   retrying?: boolean;
+  retryDisabled?: boolean;
+  retryDisabledReason?: string;
   /** The latest completed assistant reply keeps its actions more discoverable. */
   latest?: boolean;
   /** 会话内查找的当前关键词,Markdown 渲染时把命中处染出。 */
@@ -372,8 +379,8 @@ export const MessageItem = memo(function MessageItem({
           <span className="msg__name">{authorName ?? "EchoAgent"}</span>
         </div>
         <div className="msg__body">
-          {message.parts.length === 0 && !message.complete && (
-            <LoadingRow startedAt={message.startedAt} />
+          {streaming && waitingForModel && !message.complete && message.parts.length === 0 && !hasKnowledgeTrace && (
+            <LoadingRow key={`${sessionId}:${message.id}`} startedAt={message.startedAt} />
           )}
           {assistantGroups
             && (assistantGroups.processParts.length > 0 || hasTerminalProcessStatus || hasKnowledgeTrace)
@@ -383,6 +390,7 @@ export const MessageItem = memo(function MessageItem({
                 messageId={message.id}
                 parts={assistantGroups.processParts}
                 active={streaming && !message.complete}
+                settled={isExecutionSettled(message)}
                 autoExpand={autoExpandProcess}
                 startedAt={message.startedAt}
                 completedAt={message.completedAt}
@@ -428,14 +436,17 @@ export const MessageItem = memo(function MessageItem({
             </button>}
             {hasAnswerText && <button type="button" className="msg__action-btn" onClick={toggleSpeak} aria-label={speaking ? "停止朗读" : "朗读回复"}
               data-tip={speaking ? "停止朗读" : "朗读回复"} aria-pressed={speaking}>{speaking ? <Square size={14} /> : <Volume2 size={14} />}</button>}
+            {onRetry && <button type="button" className="msg__action-btn" onClick={() => onRetry(retryKind)}
+              aria-label={retryLabel} data-tip={retryDisabledReason ?? messageRetryTitle(retryKind)} title={retryDisabledReason ?? messageRetryTitle(retryKind)} disabled={retrying || retryDisabled} aria-busy={retrying}>
+              <RefreshCw size={14} className={retrying ? "msg__action-spin" : undefined} />
+              {(retryKind === "retry" || !hasAnswerText || message.stopReason && message.stopReason !== "end_turn" || retrying) && retryLabel}
+            </button>}
             {sessionId && hasAnswerText && <>
               <button type="button" className="msg__action-btn" aria-label={feedback === "up" ? "取消赞" : "赞"} data-tip="有帮助" aria-pressed={feedback === "up"} onClick={() => rateReply("up")}><ThumbsUp size={14} /></button>
               <button type="button" className="msg__action-btn" aria-label={feedback === "down" ? "取消踩" : "踩"} data-tip="需要改进" aria-pressed={feedback === "down"} onClick={() => rateReply("down")}><ThumbsDown size={14} /></button>
             </>}
             {exporting && <span className="msg__action-status" role="status">正在导出 {exporting.toUpperCase()}…</span>}
-            {onRetry && (retryKind === "retry" || message.stopReason && message.stopReason !== "end_turn" || retrying) && <button type="button" className="msg__action-btn" onClick={() => onRetry(retryKind)}
-              title={messageRetryTitle(retryKind)} disabled={retrying} aria-busy={retrying}><RefreshCw size={14} className={retrying ? "msg__action-spin" : undefined} />{retryLabel}</button>}
-            <ActionMenu label="更多回复操作" menuLabel={actionView === "export" ? "选择导出格式" : "当前回复操作"}
+            {hasAnswerText && <ActionMenu label="更多回复操作" menuLabel={actionView === "export" ? "选择导出格式" : "当前回复操作"}
               resetKey={`${sessionId}:${message.id}`} contentKey={actionView} onBack={actionView === "export" ? () => setActionView("main") : undefined}
               onOpenChange={open => { if (!open) setActionView("main"); }}
               triggerClassName="msg__action-btn msg__more-trigger" trigger={<MoreHorizontal size={16} />}
@@ -457,11 +468,9 @@ export const MessageItem = memo(function MessageItem({
                     <button type="button" role="menuitem" className="topbar-actions__item" data-chat-copy="true" onClick={() => { close(true); void copyText(markdownText, "markdown"); }}><FileCode2 size={14} />复制 Markdown</button>
                     <button type="button" role="menuitem" className="topbar-actions__item" disabled={Boolean(exporting)} onClick={() => setActionView("export")}><Download size={14} />导出本条回复为办公文件</button>
                   </>}
-                  {onRetry && <button type="button" role="menuitem" className="topbar-actions__item" title={messageRetryTitle(retryKind)} disabled={retrying} onClick={() => { close(true); onRetry(retryKind); }}><RefreshCw size={14} />{retryLabel}</button>}
-
                 </>}
               </>}
-            </ActionMenu>
+            </ActionMenu>}
           </div>
         )}
         {exportedArtifact && onOpenArtifact && <button type="button" className="msg__exported-artifact" title={exportedArtifact.path}

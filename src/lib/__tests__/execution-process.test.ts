@@ -136,10 +136,10 @@ describe("summarizeExecutionProcess", () => {
     expect(summary.changedFiles).toEqual(["src/App.tsx"]);
   });
 
-  it("失败项保持为注意状态", () => {
+  it("所有操作均未成功时明确展示失败", () => {
     const summary = summarizeExecutionProcess([tool("failed", "bash")], false);
-    expect(summary.state).toBe("attention");
-    expect(summary.title).toContain("失败");
+    expect(summary.state).toBe("failed");
+    expect(summary.title).toBe("操作执行未完成");
   });
 
   it("用户取消后明确显示已停止，而不是伪装成完成", () => {
@@ -155,7 +155,7 @@ describe("summarizeExecutionProcess", () => {
     expect(rejected.title)
       .toBe("权限未批准，执行已停止");
     expect(blocked).toMatchObject({
-      state: "attention",
+      state: "failed",
       title: "执行被安全规则阻止",
     });
   });
@@ -163,7 +163,35 @@ describe("summarizeExecutionProcess", () => {
   it("终止时仍有未收尾操作会标记为需要注意", () => {
     const summary = summarizeExecutionProcess([tool("in_progress", "bash")], false, "end_turn");
     expect(summary.state).toBe("attention");
-    expect(summary.title).toContain("未收尾");
+    expect(summary.description).toContain("未记录完成结果");
+  });
+
+  it("成功与未恢复失败混合时为部分完成，正文声明成功不改变判定", () => {
+    const summary = summarizeExecutionProcess([tool("completed"),tool("failed","bash"),{kind:"text",text:"全部完成！"}],false,"end_turn");
+    expect(summary.state).toBe("partial");
+    expect(summary.title).toBe("部分操作未完成");
+    expect(summary.unresolvedToolCount).toBe(1);
+  });
+  it.each(["error","rate_limit","max_tokens","max_turns","refusal"])("即使已有成功工具，%s 终止也不能判定完成", reason => {
+    expect(summarizeExecutionProcess([tool("completed")],false,reason).state).toBe("failed");
+  });
+  it("失败后仍在继续运行时显示当前进度，不提前宣告失败", () => {
+    const summary = summarizeExecutionProcess([tool("failed"),tool("in_progress","bash")],true);
+    expect(summary.state).toBe("running");
+    expect(summary.title).toBe("正在运行命令");
+  });
+  it("缺失或未知结束状态不伪装为完成", () => {
+    expect(summarizeExecutionProcess([tool("completed")],false,undefined,undefined,undefined,{settled:false}).state).toBe("attention");
+    expect(summarizeExecutionProcess([tool("completed")],false,"unknown-future-reason").state).toBe("attention");
+    expect(summarizeExecutionProcess([],false,"cancelled","session_replay_incomplete").title).toBe("执行记录不完整");
+  });
+  it("恢复全部中间失败后展示普通执行过程，终止错误仍优先", () => {
+    const parts: MessagePart[] = [
+      {kind:"tool_call",toolCall:{toolCallId:"failed",kind:"read",title:"Read report.md",status:"failed",content:[],rawInput:{path:"report.md"},finishedAt:1_000}},
+      {kind:"tool_call",toolCall:{toolCallId:"retry",kind:"read",title:"Read report.md",status:"completed",content:[],rawInput:{path:"report.md"},startedAt:2_000}},
+    ];
+    expect(summarizeExecutionProcess(parts,false,"end_turn")).toMatchObject({state:"complete",title:"执行过程",unresolvedToolCount:0,failedToolCount:1});
+    expect(summarizeExecutionProcess(parts,false,"error").state).toBe("failed");
   });
 });
 

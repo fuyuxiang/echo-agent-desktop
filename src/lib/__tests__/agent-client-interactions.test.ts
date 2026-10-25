@@ -8,6 +8,8 @@ import {
   agentListAllSessions,
   agentListSessions,
   agentNewSession,
+  agentPrepareSend,
+  invalidateAgentKnowledgeSourceSync,
   agentResolvePlanApproval,
   agentResolveQuestion,
   automationsRun,
@@ -19,11 +21,37 @@ import {
   taskKill,
   tasksList,
 } from "../agent-client";
+import { useKnowledgeStore } from "@/stores/knowledge-store";
 
 const invokeMock = vi.mocked(invoke);
 
 describe("agent interaction command contracts", () => {
   beforeEach(() => invokeMock.mockReset());
+
+  it.each([
+    {status:"missing",loaded:true,message:"原目录已丢失"},
+    {status:"unavailable",loaded:true,message:"原目录暂不可访问"},
+    {status:"ready",loaded:false},
+    null,
+  ])("回复替换预检拒绝不可执行的工作目录：%j", async workspace => {
+    invalidateAgentKnowledgeSourceSync();
+    useKnowledgeStore.setState({defaultSources:[],sessionSources:{},sessionOrganizationScopeIds:{}});
+    invokeMock.mockImplementation(async command => command === "agent_session_workspace_status" ? workspace : {
+      personalSelected:false,organizationSelected:false,personalAttached:false,organizationAttached:false,
+    });
+    await expect(agentPrepareSend("retry-session", "/original")).rejects.toThrow();
+    expect(invokeMock).toHaveBeenLastCalledWith("agent_session_workspace_status", {sessionId:"retry-session",cwd:"/original"});
+    expect(invokeMock.mock.calls.some(([command]) => command === "rewind_execute" || command === "agent_send")).toBe(false);
+  });
+
+  it("工作目录和 Runtime 均已确认才允许替换回复", async () => {
+    invalidateAgentKnowledgeSourceSync();
+    useKnowledgeStore.setState({defaultSources:[],sessionSources:{},sessionOrganizationScopeIds:{}});
+    invokeMock.mockImplementation(async command => command === "agent_session_workspace_status" ? {status:"ready",loaded:true,cwd:"/original"} : {
+      personalSelected:false,organizationSelected:false,personalAttached:false,organizationAttached:false,
+    });
+    await expect(agentPrepareSend("retry-session", "/original")).resolves.toBeUndefined();
+  });
 
   it("passes exact typed question and plan outcomes", async () => {
     invokeMock.mockResolvedValue(true);

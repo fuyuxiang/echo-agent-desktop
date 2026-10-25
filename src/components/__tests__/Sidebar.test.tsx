@@ -61,7 +61,7 @@ describe("Sidebar", () => {
     const nav = container.querySelector(".sidebar__nav");
     expect(nav).not.toBeNull();
     expect(within(nav as HTMLElement).getAllByRole("button").map((button) => button.textContent?.trim())).toEqual([
-      "新建任务", "项目", "代码开发", "专家与技能", "更多知识与工具",
+      "新建任务", "项目", "组织", "代码开发", "专家·技能·连接器", "更多知识与工具",
     ]);
     expect(screen.queryByText("助理")).not.toBeInTheDocument();
   });
@@ -85,11 +85,12 @@ describe("Sidebar", () => {
     expect(onNavigate).toHaveBeenCalledWith("项目");
   });
 
-  it("组织可从次级导航进入并保留真实路由", () => {
+  it("组织可从主导航进入并显示选中状态", () => {
     const onNavigate = vi.fn();
     render(<Sidebar {...base} activeNav="组织" onNavigate={onNavigate} />);
-    fireEvent.click(screen.getByRole("button", { name: /更多/ }));
-    const entry = screen.getByRole("menuitem", { name: "组织" });
+    const entry = screen.getByRole("button", { name: "组织" });
+    expect(entry).toHaveClass("sidebar__nav-item--active");
+    expect(screen.getByRole("button", { name: /更多/ })).not.toHaveClass("sidebar__nav-item--active");
     fireEvent.click(entry);
     expect(onNavigate).toHaveBeenCalledWith("组织");
   });
@@ -401,11 +402,11 @@ describe("Sidebar", () => {
     expect(onNavigate).not.toHaveBeenCalled();
     expect(within(menu).getByText("知识库")).toBeInTheDocument();
     expect(within(menu).getByRole("menuitem", { name: "定时任务" })).toBeInTheDocument();
-    expect(within(menu).getAllByRole("menuitem")).toHaveLength(4);
-    for (const settingsEntry of ["我的文件", "个人记忆", "用量统计", "通知渠道", "云存储"]) {
+    expect(within(menu).getAllByRole("menuitem")).toHaveLength(2);
+    for (const settingsEntry of ["我的文件", "个人记忆", "用量统计", "通知渠道", "云存储", "已归档"]) {
       expect(within(menu).queryByText(settingsEntry)).not.toBeInTheDocument();
     }
-    for (const removed of ["灵感", "网页预览", "策略设置", "发现"]) {
+    for (const removed of ["组织", "灵感", "网页预览", "策略设置", "发现"]) {
       expect(within(menu).queryByText(removed)).not.toBeInTheDocument();
     }
   });

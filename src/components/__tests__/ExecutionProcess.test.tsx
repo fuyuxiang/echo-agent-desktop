@@ -234,7 +234,7 @@ describe("assistant execution process", () => {
       </ThemeProvider>,
     );
     expect(screen.getByText("这是正式答案的第一部分。")).toBeInTheDocument();
-    await waitFor(() => expect(screen.getByRole("button", { name: /已完成思考/ }))
+    await waitFor(() => expect(screen.getByRole("button", { name: /正在生成回复/ }))
       .toHaveAttribute("aria-expanded", "false"));
   });
 
@@ -293,8 +293,8 @@ describe("assistant execution process", () => {
       ...preface.parts, { kind: "text", text: "这是工具完成后的最终答复。" },
     ] }} streaming /></ThemeProvider>);
     expect(screen.getByText("这是工具完成后的最终答复。")).toBeInTheDocument();
-    await waitFor(() => expect(screen.getByRole("button", { name: /已完成执行过程/ })).toHaveAttribute("aria-expanded", "false"));
-    expect(container.querySelector(".execution-process--complete")).toBeInTheDocument();
+    await waitFor(() => expect(screen.getByRole("button", { name: /正在生成回复/ })).toHaveAttribute("aria-expanded", "false"));
+    expect(container.querySelector(".execution-process--running")).toBeInTheDocument();
   });
 
   it("已有文本之后的新思考不被当作最终答复，用户选择保持不变", () => {
@@ -314,7 +314,7 @@ describe("assistant execution process", () => {
     rerender(<ThemeProvider><MessageItem message={{ ...liveMessage, parts: [
       ...liveMessage.parts, { kind: "text", text: "现在开始最终答复。" },
     ] }} streaming /></ThemeProvider>);
-    expect(screen.getByRole("button", { name: /已完成思考/ })).toHaveAttribute("aria-expanded", "false");
+    expect(screen.getByRole("button", { name: /正在生成回复/ })).toHaveAttribute("aria-expanded", "false");
   });
 
   it("调用者已有答案标志也不能覆盖未完成工具，终态仍显示需要注意", () => {
@@ -328,7 +328,7 @@ describe("assistant execution process", () => {
     expect(container.querySelector(".execution-process__header")).not.toHaveTextContent("已完成");
     rerender(<ThemeProvider><ExecutionProcess parts={parts} active={false} hasFinalAnswer stopReason="end_turn" /></ThemeProvider>);
     expect(container.querySelector(".execution-process--attention")).toBeInTheDocument();
-    expect(screen.getByRole("button", { name: /执行已结束，但有操作未收尾/ })).toHaveAttribute("aria-expanded", "false");
+    expect(screen.getByRole("button", { name: /执行结果待确认/ })).toHaveAttribute("aria-expanded", "false");
   });
 
   it("用户手动展开后不被后续答案输出抢夺控制权", async () => {
@@ -363,7 +363,7 @@ describe("assistant execution process", () => {
       </ThemeProvider>,
     );
 
-    await waitFor(() => expect(screen.getByRole("button", { name: /已完成思考/ }))
+    await waitFor(() => expect(screen.getByRole("button", { name: /正在生成回复/ }))
       .toHaveAttribute("aria-expanded", "true"));
   });
 
@@ -415,6 +415,44 @@ describe("assistant execution process", () => {
     );
     fireEvent.click(screen.getByRole("button", { name: /执行未正常完成/ }));
     expect(screen.getByRole("alert")).toHaveTextContent("upstream timeout");
+  });
+
+  it("已恢复的中间失败不显示顶层告警，展开仍可查看原始失败和成功重试", () => {
+    const onOpenTool = vi.fn();
+    const parts: ChatMessage["parts"] = [
+      {kind:"tool_call",toolCall:{toolCallId:"weather-failed",toolName:"weather",kind:"web_fetch",title:"查询天气",rawInput:{city:"北京"},status:"failed",content:[{type:"text",text:"首次连接超时"}],finishedAt:1_000}},
+      {kind:"tool_call",toolCall:{toolCallId:"weather-retry",toolName:"weather",kind:"web_fetch",title:"查询天气",rawInput:{city:"北京"},status:"completed",content:[{type:"text",text:"天气查询结果"}],startedAt:2_000}},
+      {kind:"text",text:"这是天气结果"},
+    ];
+    const { container } = render(<ThemeProvider><MessageItem message={{id:"recovered-weather",role:"assistant",complete:true,stopReason:"end_turn",parts}} streaming={false} onOpenTool={onOpenTool} /></ThemeProvider>);
+    expect(container.querySelector(".execution-process--recovered")).toBeInTheDocument();
+    expect(container.querySelector(".execution-process__outcome-detail")).toBeNull();
+    const header = screen.getByRole("button",{name:/执行过程\s*2 项操作/});
+    expect(header).toHaveAttribute("aria-expanded","false");
+    fireEvent.click(header);
+    expect(screen.getByText(/1 次中间失败已由后续同一操作的重试恢复/)).toBeVisible();
+    fireEvent.click(screen.getByRole("button",{name:/web_fetch .*失败/}));
+    expect(onOpenTool).toHaveBeenLastCalledWith(expect.objectContaining({toolCallId:"weather-failed",status:"failed",content:[{type:"text",text:"首次连接超时"}]}));
+    expect(screen.getByRole("button",{name:/web_fetch .*完成/})).toBeVisible();
+  });
+
+  it("混合未恢复失败显示黄色部分完成并明确数量，成功正文不覆盖它", () => {
+    const { container } = render(<ThemeProvider><MessageItem message={{...message,id:"partial-result",stopReason:"end_turn",parts:[
+      ...message.parts,{kind:"tool_call",toolCall:{toolCallId:"export-failed",kind:"write_file",title:"生成报告",status:"failed",content:[]}},
+      {kind:"text",text:"所有工作都已完成"},
+    ]}} streaming={false} /></ThemeProvider>);
+    expect(container.querySelector(".execution-process--partial")).toBeInTheDocument();
+    expect(container.querySelector(".execution-process--failed")).toBeNull();
+    expect(screen.getByRole("button",{name:/部分操作未完成/})).toHaveAttribute("aria-expanded","false");
+    expect(screen.getByText(/1 项失败操作尚未确认恢复/)).toBeVisible();
+    expect(screen.getByText("所有工作都已完成")).toBeVisible();
+  });
+
+  it("历史回放仅关闭气泡而没有完成事件时，不因正文和成功工具记录显示完成", () => {
+    const { container } = render(<ThemeProvider><MessageItem message={{...message,id:"unconfirmed-replay",replayed:true}} streaming={false} /></ThemeProvider>);
+    expect(container.querySelector(".execution-process--attention")).toBeInTheDocument();
+    expect(screen.getByRole("button",{name:/执行状态待确认/})).toBeVisible();
+    expect(screen.getByText("最终修复结果")).toBeVisible();
   });
 
   it("在对应回复的执行过程中展示个人知识文件、行号和片段", () => {

@@ -3,15 +3,10 @@ import { fireEvent, render, screen, waitFor, within } from "@testing-library/rea
 import { TopbarActions } from "../TopbarActions";
 import { GlobalTooltip } from "../GlobalTooltip";
 import { useModalFocus } from "@/lib/use-modal-focus";
-import {
-  agentSetSessionArchived,
-  agentSetSessionPinned,
-  exportTextFile,
-} from "@/lib/agent-client";
+import { exportTextFile } from "@/lib/agent-client";
+import { useSessionStore } from "@/stores/session-store";
 
 vi.mock("@/lib/agent-client", () => ({
-  agentSetSessionArchived: vi.fn(),
-  agentSetSessionPinned: vi.fn(),
   exportTextFile: vi.fn(),
 }));
 
@@ -39,15 +34,16 @@ function ProgrammaticDialog() {
   return <div ref={ref} role="dialog" aria-modal="true" aria-label="程序弹窗" tabIndex={-1} />;
 }
 
-describe("TopbarActions", () => {
-  beforeEach(() => {
-    vi.clearAllMocks();
-    setViewport(1000, 600);
-    vi.mocked(agentSetSessionArchived).mockResolvedValue(true);
-    vi.mocked(agentSetSessionPinned).mockResolvedValue(true);
-    vi.mocked(exportTextFile).mockResolvedValue(null);
-  });
+beforeEach(() => {
+  vi.clearAllMocks();
+  setViewport(1000, 600);
+  useSessionStore.setState(useSessionStore.getInitialState());
+  useSessionStore.getState().setSession("session-1");
+  useSessionStore.getState().setMessages([{id:"question",role:"user",complete:true,parts:[{kind:"text",text:"用户问题"}]}]);
+  vi.mocked(exportTextFile).mockResolvedValue(null);
+});
 
+describe("TopbarActions", () => {
   it("任务操作 hover 提示通过全局 portal 渲染，不会被下层工具栏遮挡", async () => {
     render(
       <>
@@ -82,7 +78,7 @@ describe("TopbarActions", () => {
     expect(menu.closest(".topbar-actions")).toBeNull();
     expect(menu).toHaveStyle({ position: "fixed", zIndex: "var(--echo-layer-popover)" });
     expect(menu).toHaveAttribute("data-placement", "bottom");
-    expect(within(menu).getByRole("menuitem", { name: "归档会话" })).toBeVisible();
+    expect(within(menu).getByRole("menuitem", { name: "导出整个会话…" })).toBeVisible();
   });
 
   it("程序化弹窗接管焦点时会关闭旧 portal 菜单", async () => {
@@ -113,56 +109,18 @@ describe("TopbarActions", () => {
     expect(Number.parseFloat(menu.style.left)).toBeGreaterThanOrEqual(8);
   });
 
-  it("点击归档会调用后端，更新目录并通知 App 退出当前会话", async () => {
-    const onToast = vi.fn();
-    const onSessionsChanged = vi.fn();
-    const onArchived = vi.fn();
-    render(
-      <TopbarActions
-        sessionId="session-1"
-        title="测试会话"
-        onToast={onToast}
-        onSessionsChanged={onSessionsChanged}
-        onArchived={onArchived}
-      />,
-    );
-
+  it("从顶栏移除已有侧栏和导航入口的操作，只显示当前会话工具", () => {
+    render(<TopbarActions sessionId="session-1" title="测试会话" onFind={vi.fn()} onRewind={vi.fn()} onFork={vi.fn()} />);
     fireEvent.click(screen.getByRole("button", { name: "任务操作" }));
-    fireEvent.click(screen.getByRole("menuitem", { name: "归档会话" }));
-
-    expect(agentSetSessionArchived).toHaveBeenCalledTimes(1);
-    expect(agentSetSessionArchived).toHaveBeenCalledWith("session-1", true);
-    await waitFor(() => {
-      expect(onSessionsChanged).toHaveBeenCalledWith({ archived: true });
-      expect(onArchived).toHaveBeenCalledWith(true);
-    });
-    expect(onToast).toHaveBeenCalledWith("已归档，可在“设置 → 数据管理 → 已归档”中恢复");
-    expect(screen.queryByRole("menu")).toBeNull();
-    await waitFor(() => expect(screen.getByRole("button", { name: "任务操作" })).toHaveFocus());
+    expect(within(screen.getByRole("menu")).getAllByRole("menuitem").map(item => item.getAttribute("aria-label") ?? item.textContent)).toEqual([
+      "查找当前会话", "回溯…", "分叉…", "导出整个会话…",
+    ]);
   });
 
-  it("归档失败时不改前端状态，并给出可读的错误提示", async () => {
-    vi.mocked(agentSetSessionArchived).mockRejectedValueOnce(new Error("磁盘不可写"));
-    const onToast = vi.fn();
-    const onSessionsChanged = vi.fn();
-    const onArchived = vi.fn();
-    render(
-      <TopbarActions
-        sessionId="session-1"
-        title="测试会话"
-        onToast={onToast}
-        onSessionsChanged={onSessionsChanged}
-        onArchived={onArchived}
-      />,
-    );
-
-    fireEvent.click(screen.getByRole("button", { name: "任务操作" }));
-    fireEvent.click(screen.getByRole("menuitem", { name: "归档会话" }));
-
-    await waitFor(() => expect(onToast).toHaveBeenCalledWith("归档失败：磁盘不可写"));
-    expect(onSessionsChanged).not.toHaveBeenCalled();
-    expect(onArchived).not.toHaveBeenCalled();
-    expect(screen.getByRole("button", { name: "任务操作" })).toBeEnabled();
+  it("没有内容和可用操作时不显示空菜单", () => {
+    useSessionStore.getState().setMessages([]);
+    render(<TopbarActions sessionId="session-1" title="空会话" />);
+    expect(screen.queryByRole("button", {name:"任务操作"})).toBeNull();
   });
 
   it("支持方向键、Home/End 和 Escape，关闭后恢复触发按钮焦点", async () => {
@@ -213,14 +171,13 @@ describe("session menu migration", () => {
     await waitFor(() => expect(vi.mocked(exportTextFile).mock.lastCall?.[1]).toContain("内部执行过程"));
   });
 
-  it("重命名和历史操作调用注入的真实回调，运行期间不可回溯或分叉", () => {
-    const onRename = vi.fn(), onRewind = vi.fn(), onFork = vi.fn(), onQuestionHistory = vi.fn();
-    const view = render(<TopbarActions sessionId="scope-a" title="A" onRename={onRename} onRewind={onRewind} onFork={onFork} onQuestionHistory={onQuestionHistory} />);
+  it("查找和历史操作调用当前会话的回调，运行期间不可回溯或分叉", () => {
+    const onFind = vi.fn(), onRewind = vi.fn(), onFork = vi.fn();
+    const view = render(<TopbarActions sessionId="scope-a" title="A" onFind={onFind} onRewind={onRewind} onFork={onFork} />);
     const select = (name: string) => { fireEvent.click(screen.getByRole("button", { name: "任务操作" })); fireEvent.click(screen.getByRole("menuitem", { name })); };
-    select("重命名会话"); expect(onRename).toHaveBeenCalledOnce();
+    select("查找当前会话"); expect(onFind).toHaveBeenCalledOnce();
     select("回溯…"); expect(onRewind).toHaveBeenCalledOnce();
     select("分叉…"); expect(onFork).toHaveBeenCalledOnce();
-    select("对话目录"); expect(onQuestionHistory).toHaveBeenCalledOnce();
     view.rerender(<TopbarActions sessionId="scope-a" title="A" onRewind={onRewind} onFork={onFork} historyDisabled />);
     fireEvent.click(screen.getByRole("button", { name: "任务操作" }));
     expect(screen.getByRole("menuitem", { name: "回溯…" })).toBeDisabled();

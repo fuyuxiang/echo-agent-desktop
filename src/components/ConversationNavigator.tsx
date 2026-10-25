@@ -43,9 +43,9 @@ export function ConversationNavigator({ turns, scrollRef, contentRef, onSelect, 
   }, [turns, scrollRef, contentRef]);
   const activeIndex = Math.max(0, turns.findIndex(turn => turn.id === readingId));
   const start = Math.max(0, Math.min(activeIndex - 5, turns.length - 11));
-  const visible = turns.slice(start, start + 11);
+  const visible = turns.length > 1 ? turns.slice(start, start + 11) : [];
   const preview = turns.find(turn => turn.id === previewId);
-  if (turns.length < 2) return null;
+  if (turns.length === 0) return null;
   return <>
     <button type="button" className="conversation-directory-mobile" onClick={event => onDirectory(event.currentTarget)}><List size={14} />对话目录 <span>{turns.length}</span></button>
     <nav className="conversation-nav" aria-label="当前会话轮次导航" ref={navRef}

@@ -107,6 +107,7 @@ pub struct Listing<E> {
     pub items: Vec<(E, Node)>,
     pub issues: Vec<(String, String)>,
 }
+#[cfg(target_os = "macos")]
 impl<E> Listing<E> {
     fn complete(items: Vec<(E, Node)>) -> Self {
         Self {
@@ -1396,7 +1397,7 @@ impl Controller {
         let alive = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
         let (sender, receiver) = mpsc::sync_channel::<Request>(8);
         if WORKERS
-            .fetch_update(
+            .try_update(
                 std::sync::atomic::Ordering::SeqCst,
                 std::sync::atomic::Ordering::SeqCst,
                 |n| (n < 16).then_some(n + 1),

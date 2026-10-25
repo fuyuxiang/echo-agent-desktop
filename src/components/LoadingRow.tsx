@@ -1,23 +1,44 @@
 import { useEffect, useRef, useState } from "react";
 import { formatProcessDuration } from "@/lib/execution-process";
+import { pickLoadingTip } from "@/lib/loading-tips";
 
 const REQUEST_DURATION_MS = 1_500;
 const BACKGROUND_HINT_DELAY_MS = 8_000;
+const TIP_DELAY_MS = 3_000;
+const TIP_INTERVAL_MS = 12_000;
 
 /**
- * Show elapsed waiting time and the supported background behavior.
+ * Keep factual request status primary; secondary copy accompanies longer waits.
+ * The caller unmounts this row as soon as output or execution begins.
  */
 export function LoadingRow({ startedAt }: { startedAt?: number }) {
-  const origin = useRef(startedAt ?? Date.now());
+  const origin = useRef(Date.now());
   const [now, setNow] = useState(() => Date.now());
+  const [tip, setTip] = useState<string | null>(null);
 
   useEffect(() => {
-    const update = () => setNow(Date.now());
+    let nextTipAt = Date.now() + TIP_DELAY_MS;
+    let previousTip: string | undefined;
+    const update = () => {
+      if (document.visibilityState === "hidden") return;
+      const timestamp = Date.now();
+      setNow(timestamp);
+      if (timestamp >= nextTipAt) {
+        previousTip = pickLoadingTip(Math.random, previousTip);
+        setTip(previousTip);
+        // Resuming a background page changes at most one tip, without catch-up.
+        nextTipAt = timestamp + TIP_INTERVAL_MS;
+      }
+    };
     const timer = window.setInterval(update, 500);
-    return () => window.clearInterval(timer);
+    document.addEventListener("visibilitychange", update);
+    return () => {
+      window.clearInterval(timer);
+      document.removeEventListener("visibilitychange", update);
+    };
   }, []);
 
-  const elapsed = Math.max(0, now - origin.current);
+  const elapsed = Math.max(0, now - (startedAt ?? origin.current));
   const phase = elapsed < REQUEST_DURATION_MS
     ? "正在请求模型"
     : "正在等待模型响应";
@@ -36,6 +57,7 @@ export function LoadingRow({ startedAt }: { startedAt?: number }) {
           </span>
         )}
       </div>
+      {tip && <p className="msg__loading-tip" aria-live="off">{tip}</p>}
     </div>
   );
 }

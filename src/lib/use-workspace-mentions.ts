@@ -10,19 +10,21 @@ import { isTauriAvailable } from "@/lib/tauri-kb-reader";
  * Results are abandoned on cwd changes so a slow repository never leaks its
  * paths into the next workspace.
  */
-export function useWorkspaceMentions(cwd?: string): {
+export function useWorkspaceMentions(cwd?: string, enabled = true): {
   filePaths: string[];
   workspaceSymbols: AtMentionSymbol[];
 } {
+  const [indexedRoot, setIndexedRoot] = useState<string>();
   const [filePaths, setFilePaths] = useState<string[]>([]);
   const [workspaceSymbols, setWorkspaceSymbols] = useState<AtMentionSymbol[]>([]);
 
   useEffect(() => {
     const root = cwd?.trim() ?? "";
     const signal = { aborted: false };
+    setIndexedRoot(root);
     setFilePaths([]);
     setWorkspaceSymbols([]);
-    if (!root || !isTauriAvailable()) return () => { signal.aborted = true; };
+    if (!enabled || !root || !isTauriAvailable()) return () => { signal.aborted = true; };
 
     void buildFileIndex(root, {
       signal,
@@ -50,7 +52,7 @@ export function useWorkspaceMentions(cwd?: string): {
       signal.aborted = true;
       unsubscribe();
     };
-  }, [cwd]);
+  }, [cwd, enabled]);
 
-  return { filePaths, workspaceSymbols };
+  return enabled && indexedRoot === (cwd?.trim() ?? "") ? { filePaths, workspaceSymbols } : { filePaths: [], workspaceSymbols: [] };
 }

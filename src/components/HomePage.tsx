@@ -6,7 +6,6 @@ import type { AgentEntry } from "@/lib/types";
 import { useSessionsStore, HOME_DRAFT_KEY } from "@/stores/sessions-store";
 import { usePendingExpertStore } from "@/stores/pending-expert-store";
 import type { SlashCommandInvocation } from "@/lib/slash-commands";
-import { useWorkspaceMentions } from "@/lib/use-workspace-mentions";
 import type { AutomationMode } from "@/lib/automation-client";
 
 /** EchoAgent 首页：单一任务入口。 */
@@ -26,6 +25,8 @@ export function HomePage({
   cwd,
   workspaces,
   onSelectWorkspace,
+  automaticWorkspace,
+  defaultWorkspaceCwd,
   onSelectExpert,
   onNavigateConnectors,
   onOpenKnowledgeBase,
@@ -51,6 +52,8 @@ export function HomePage({
   cwd?: string;
   workspaces?: WorkspaceInfo[];
   onSelectWorkspace?: (cwd: string) => void;
+  automaticWorkspace?: boolean;
+  defaultWorkspaceCwd?: string;
   onSelectExpert?: (agent: AgentEntry) => void;
   onNavigateConnectors?: () => void;
   onOpenKnowledgeBase?: () => void;
@@ -69,7 +72,6 @@ export function HomePage({
   // 首页草稿(哨兵 key):用户离开首页再回来,未发送的字还在。
   const homeDraft = useSessionsStore((s) => s.drafts[HOME_DRAFT_KEY] ?? "");
   const setDraft = useSessionsStore((s) => s.setDraft);
-  const mentionCandidates = useWorkspaceMentions(cwd);
 
   // Pending expert (set after "召唤" in the detail modal).
   const pendingExpert = usePendingExpertStore((s) => s.expert);
@@ -114,6 +116,7 @@ export function HomePage({
         <section className="home__composer-area">
           <Composer
             streaming={streaming}
+            disabled={creatingSession}
             onSend={onSend}
             onCancel={() => {}}
             apiReady={apiReady}
@@ -135,6 +138,8 @@ export function HomePage({
             cwd={cwd}
             workspaces={workspaces}
             onSelectWorkspace={onSelectWorkspace}
+            automaticWorkspace={automaticWorkspace}
+            defaultWorkspaceCwd={defaultWorkspaceCwd}
             showMeta
             draft={homeDraft}
             draftKey={HOME_DRAFT_KEY}
@@ -150,8 +155,6 @@ export function HomePage({
             onOpenOrganization={onOpenOrganization}
             commandRefreshKey={commandRefreshKey}
             onClientSlashCommand={onClientSlashCommand}
-            filePaths={mentionCandidates.filePaths}
-            workspaceSymbols={mentionCandidates.workspaceSymbols}
             activeExpertName={pendingExpert?.name}
             activeExpertAvatar={pendingExpert?.avatarLocal}
             onDismissExpert={dismissPendingExpert}

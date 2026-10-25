@@ -11,7 +11,9 @@ use std::path::{Path, PathBuf};
 use serde::{Deserialize, Serialize};
 
 const MAX_SUMMARY_BYTES: u64 = 1024 * 1024;
-const MAX_CWD_DIRECTORIES: usize = 2_048;
+// Independent tasks may each own a cwd; keep the discovery budget aligned
+// with the existing session budget so older tasks do not disappear early.
+const MAX_CWD_DIRECTORIES: usize = 20_000;
 const MAX_SESSION_DIRECTORIES: usize = 20_000;
 const MAX_SESSION_RESULTS: usize = 10_000;
 const MAX_WORKSPACE_RESULTS: usize = 512;
@@ -627,6 +629,14 @@ pub fn list_workspaces() -> Vec<WorkspaceInfo> {
 }
 
 fn list_workspaces_from_root(sessions_root: &Path) -> Vec<WorkspaceInfo> {
+    let default_workspace = crate::paths::default_workspace_dir().ok();
+    list_workspaces_from_root_with_default(sessions_root, default_workspace.as_deref())
+}
+
+fn list_workspaces_from_root_with_default(
+    sessions_root: &Path,
+    default_workspace: Option<&Path>,
+) -> Vec<WorkspaceInfo> {
     // cwd -> (count, last_title)
     let mut map: std::collections::HashMap<String, (usize, Option<String>)> =
         std::collections::HashMap::new();
@@ -675,6 +685,11 @@ fn list_workspaces_from_root(sessions_root: &Path) -> Vec<WorkspaceInfo> {
             let Some(entry_cwd) = canonical_workspace(&raw_entry_cwd) else {
                 continue;
             };
+            if default_workspace
+                .is_some_and(|base| crate::session_workspace::is_task_directory(base, &entry_cwd))
+            {
+                continue;
+            }
             if !workspace_dir_matches_request(&cwd_path, &raw_entry_cwd, Some(entry_cwd.as_path()))
             {
                 continue;
@@ -1079,6 +1094,38 @@ mod tests {
         assert!(rows
             .iter()
             .any(|row| row.session_id == "legacy-without-cwd" && row.cwd == legacy_cwd_string));
+    }
+
+    #[test]
+    fn automatic_task_directories_stay_in_catalog_but_not_recent_folders() {
+        let temp = tempfile::tempdir().unwrap();
+        let sessions_root = temp.path().join("sessions");
+        let base = temp.path().canonicalize().unwrap();
+        let automatic = crate::session_workspace::prepare_task_directory(
+            &base,
+            &uuid::Uuid::now_v7().to_string(),
+        )
+        .unwrap();
+        let manual = base.join("repository");
+        std::fs::create_dir(&manual).unwrap();
+        for (id, cwd) in [("automatic-task", automatic), ("manual-task", manual)] {
+            let cwd = cwd.to_string_lossy().into_owned();
+            let encoded = echo_agent_runtime::util::echo_agent_home::encode_cwd_dirname(&cwd);
+            let record = sessions_root.join(encoded).join(id);
+            std::fs::create_dir_all(&record).unwrap();
+            std::fs::write(
+                record.join("summary.json"),
+                serde_json::json!({"session_id":id,"cwd":cwd,"generated_title":id}).to_string(),
+            )
+            .unwrap();
+        }
+        assert_eq!(
+            list_all_sessions_from_root(&sessions_root).unwrap().len(),
+            2
+        );
+        let recent = super::list_workspaces_from_root_with_default(&sessions_root, Some(&base));
+        assert_eq!(recent.len(), 1);
+        assert!(recent[0].cwd.ends_with("repository"));
     }
 
     #[test]

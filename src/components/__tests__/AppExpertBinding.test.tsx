@@ -16,6 +16,7 @@ vi.mock("../HomePage", () => ({ HomePage: (props: ComponentProps<typeof import("
   <span data-testid="new-task-cwd">{props.cwd}</span>
   <button onClick={() => props.onSelectWorkspace?.("/workspace/B")}>新任务选择 B</button>
   <button onClick={() => props.onSelectWorkspace?.("/workspace/C")}>新任务选择 C</button>
+  <button onClick={() => props.onSelectWorkspace?.("")}>恢复默认目录</button>
   <button onClick={() => props.onSelectExpert?.({name:"Review",description:"review",scope:"user",path:"/fixture/agents/review.md",raw:"---\nname: Review\n---\nVerify the task"})}>输入菜单选择专家</button>
   <button onClick={() => void props.onSend("my unsent task")}>发送专家任务</button>
   {props.sendError && <div role="alert">{props.sendError}</div>}
@@ -30,6 +31,7 @@ vi.mock("../ChatView", () => ({ ChatView: (props: ComponentProps<typeof import("
 vi.mock("@/lib/agent-client", async (original) => ({
   ...await original<object>(), agentInit: vi.fn(), agentAuthStatus: vi.fn(), providersList: vi.fn(),
   agentListAllSessions: vi.fn(), agentListWorkspaces: vi.fn(async () => []),
+  agentPrepareTaskWorkspace: vi.fn(async () => "/workspace/Tasks/default-task"),
   agentNewSession: vi.fn(async () => "new-session"), agentDeleteSession: vi.fn(async () => ({memorySummariesDeleted:0})), agentSetSessionExpert: vi.fn(async () => true),
   agentLoadSession: vi.fn(async () => "model-a"), agentSend: vi.fn(async () => {}), projectsSave: vi.fn(async () => {}),
   internalReload: vi.fn(async () => {}), subscribeAgentEvents: vi.fn(async () => () => {}),
@@ -53,6 +55,7 @@ beforeEach(() => {
   vi.mocked(client.providersList).mockResolvedValue({providers:[],models:[{modelId:"model-a",name:"Model A",providerId:"p"}]} as never);
   vi.mocked(client.agentListAllSessions).mockResolvedValue([]);
   vi.mocked(client.agentSetSessionExpert).mockReset().mockResolvedValue(true);
+  vi.mocked(client.agentPrepareTaskWorkspace).mockReset().mockImplementation(async id => `/workspace/Tasks/${id}`);
   vi.mocked(invoke).mockImplementation(async command => command === "notification_take_pending_opens" ? [] : null);
 });
 async function start() { render(<App />); await screen.findByText("首页"); await waitFor(()=>expect(client.providersList).toHaveBeenCalled()); await act(async()=>{}); }
@@ -74,10 +77,44 @@ describe("expert task persistent binding admission", () => {
   it("a binding error preserves pending selection and never sends the user prompt", async () => {
     vi.mocked(client.agentSetSessionExpert).mockRejectedValueOnce(new Error("专家配置已更新，请重新选择"));
     await start(); fireEvent.click(screen.getByRole("button",{name:"输入菜单选择专家"})); fireEvent.click(screen.getByRole("button",{name:"发送专家任务"}));
-    await waitFor(()=>expect(client.agentDeleteSession).toHaveBeenCalledWith("new-session","/workspace"));
+    await waitFor(()=>expect(client.agentDeleteSession).toHaveBeenCalledWith("new-session",expect.stringMatching(/^\/workspace\/Tasks\//)));
     expect(client.agentSend).not.toHaveBeenCalled(); expect(usePendingExpertStore.getState().expert?.name).toBe("Review");
     expect(screen.getAllByRole("alert").some(alert => alert.textContent?.includes("专家配置已更新"))).toBe(true);
   });
+});
+
+it("默认任务使用不同的独立目录，手动选择保留用户指定的位置", async () => {
+  vi.mocked(client.agentNewSession).mockResolvedValueOnce("task-1").mockResolvedValueOnce("task-2").mockResolvedValueOnce("task-3");
+  await start();
+  fireEvent.click(screen.getByRole("button", {name:"发送专家任务"}));
+  await screen.findByText("已进入会话");
+  const firstCwd = useSessionsStore.getState().independent.find(s => s.sessionId === "task-1")?.cwd;
+  expect(firstCwd).toMatch(/^\/workspace\/Tasks\//);
+  fireEvent.click(screen.getByRole("button", {name:"从任务新建"}));
+  fireEvent.click(screen.getByRole("button", {name:"发送专家任务"}));
+  await screen.findByText("已进入会话");
+  const secondCwd = useSessionsStore.getState().independent.find(s => s.sessionId === "task-2")?.cwd;
+  expect(secondCwd).toMatch(/^\/workspace\/Tasks\//);
+  expect(secondCwd).not.toBe(firstCwd);
+  fireEvent.click(screen.getByRole("button", {name:"从任务新建"}));
+  fireEvent.click(screen.getByRole("button", {name:"新任务选择 C"}));
+  fireEvent.click(screen.getByRole("button", {name:"发送专家任务"}));
+  await screen.findByText("已进入会话");
+  expect(client.agentPrepareTaskWorkspace).toHaveBeenCalledTimes(2);
+  expect(useSessionsStore.getState().independent.find(s => s.sessionId === "task-3")?.cwd).toBe("/workspace/C");
+  expect(useSessionsStore.getState().independent.find(s => s.sessionId === "task-1")?.cwd).toBe(firstCwd);
+});
+
+it("目录准备失败时保留首页，重试使用同一请求避免生成多个默认目录", async () => {
+  vi.mocked(client.agentPrepareTaskWorkspace).mockRejectedValueOnce(new Error("目录暂不可用"));
+  await start();
+  fireEvent.click(screen.getByRole("button", {name:"发送专家任务"}));
+  await waitFor(() => expect(screen.getAllByRole("alert").some(a => a.textContent?.includes("目录暂不可用"))).toBe(true));
+  expect(client.agentNewSession).not.toHaveBeenCalled();
+  const firstId = vi.mocked(client.agentPrepareTaskWorkspace).mock.calls[0][0];
+  fireEvent.click(screen.getByRole("button", {name:"发送专家任务"}));
+  await screen.findByText("已进入会话");
+  expect(vi.mocked(client.agentPrepareTaskWorkspace).mock.calls[1][0]).toBe(firstId);
 });
 
 

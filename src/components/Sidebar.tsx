@@ -15,7 +15,6 @@ import type { SessionSummary, SessionStatus } from "@/lib/types";
 import { isWaitingForUser } from "@/lib/turn-status";
 import {
   EchoNewTaskIcon,
-  ArchiveIcon,
   EchoProjectNavIcon,
   EchoExpertNavIcon,
   EchoAutomationNavIcon,
@@ -43,6 +42,7 @@ const logoMarkUrl = "/app-icon.png";
 
 const NAV = [
   { label: "项目", icon: EchoProjectNavIcon },
+  { label: "组织", icon: BuildingIcon },
   { label: "代码开发", icon: Code2Icon },
   { label: "专家·技能·连接器", icon: EchoExpertNavIcon },
 ];
@@ -430,9 +430,6 @@ function MoreDropdown({
     icon: React.ReactNode;
     action: () => void;
   }[] = [
-    { id:"organization", label:"组织", icon:<BuildingIcon size="md" />, action:() => {closeMenu(); onNavigate("组织");} },
-    { id:"archived", label:"已归档", icon:<ArchiveIcon size="md" />, action:() => {closeMenu(); onNavigate("已归档");} },
-
     {
       id: "knowledge_base",
       label: "知识库",
@@ -1024,7 +1021,7 @@ export function Sidebar({
             onClick={() => onNavigate(label)}
           >
             <Icon size="md" />
-            <span>{label === "专家·技能·连接器" ? "专家与技能" : label}</span>
+            <span>{label === "专家·技能·连接器" ? CAPABILITY_SECTION_LABEL : label}</span>
           </button>
         ))}
         <MoreDropdown onNavigate={onNavigate} activeNav={activeNav} />

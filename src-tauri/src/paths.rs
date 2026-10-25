@@ -420,6 +420,8 @@ pub(crate) fn replace_file_atomically(staging: &Path, destination: &Path) -> Res
 }
 
 pub(crate) fn harden_private_file(path: &Path) -> Result<(), String> {
+    #[cfg(not(unix))]
+    let _ = path;
     #[cfg(unix)]
     {
         fs::set_permissions(path, fs::Permissions::from_mode(0o600))
@@ -429,6 +431,8 @@ pub(crate) fn harden_private_file(path: &Path) -> Result<(), String> {
 }
 
 pub(crate) fn harden_private_dir(path: &Path) -> Result<(), String> {
+    #[cfg(not(unix))]
+    let _ = path;
     #[cfg(unix)]
     {
         fs::set_permissions(path, fs::Permissions::from_mode(0o700))

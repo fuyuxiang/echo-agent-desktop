@@ -69,6 +69,10 @@ export type MessagePart =
 /** A tool-call card rendered inline. Mirrors a subset of ToolCallUpdate. */
 export interface ToolCallView {
   completedAt?: number;
+  /** Runtime tool identity and event times used to verify sequential retries. */
+  toolName?: string;
+  startedAt?: number;
+  finishedAt?: number;
   documentProgress?: DocumentProgress;
   toolCallId: string;
   title: string;
@@ -288,6 +292,14 @@ function boundedRawInput(value: unknown): unknown {
   } catch {
     return "(工具参数无法显示)";
   }
+}
+
+function toolNameFromMeta(meta: Record<string, unknown> | undefined): string | undefined {
+  const identity = meta?.["echo.agent/tool"];
+  if (!identity || typeof identity !== "object") return undefined;
+  const value = identity as Record<string, unknown>;
+  return value.version === 1 && typeof value.name === "string" && value.name.trim()
+    ? boundedString(value.name,4_096) : undefined;
 }
 
 // Side-channel update listeners: keyed by session id. The inspiration panel
@@ -803,7 +815,8 @@ function upsertToolCall(msg: ChatMessage, tc: ToolCallView, streamId?: string): 
     const current = parts[idx];
     parts[idx] = {
       kind: "tool_call",
-      toolCall: tc,
+      toolCall: { ...tc, startedAt: current.kind === "tool_call" ? current.toolCall.startedAt ?? tc.startedAt : tc.startedAt,
+        toolName: tc.toolName ?? (current.kind === "tool_call" ? current.toolCall.toolName : undefined) },
       ...(current.streamId || streamId ? { streamId: current.streamId ?? streamId } : {}),
     };
   }
@@ -1363,6 +1376,9 @@ export const useSessionStore = create<SessionState>((set, get) => {
       ]);
       const updateMeta = (u as unknown as { _meta?: Record<string, unknown> })._meta;
       const isReplay = updateMeta?.isReplay === true;
+      const toolTimestamp = typeof updateMeta?.agentTimestampMs === "number" && Number.isFinite(updateMeta.agentTimestampMs)
+        ? updateMeta.agentTimestampMs : isReplay ? undefined : Date.now();
+      const toolName = toolNameFromMeta(updateMeta);
       const streamId = typeof updateMeta?.streamStartMs === "number"
         && Number.isFinite(updateMeta.streamStartMs)
         ? String(updateMeta.streamStartMs)
@@ -1481,6 +1497,9 @@ export const useSessionStore = create<SessionState>((set, get) => {
               status: status === "completed" || status === "failed"
                 ? status
                 : "in_progress",
+              toolName,
+              startedAt: status !== "completed" && status !== "failed" ? toolTimestamp : undefined,
+              finishedAt: status === "completed" || status === "failed" ? toolTimestamp : undefined,
               completedAt: status === "completed"
                 ? typeof updateMeta?.agentTimestampMs === "number" ? updateMeta.agentTimestampMs : isReplay ? undefined : Date.now()
                 : undefined,
@@ -1508,6 +1527,7 @@ export const useSessionStore = create<SessionState>((set, get) => {
             const tcId =
               (raw.toolCallId as string) ?? (raw.tool_call_id as string);
             const deltaFields: Record<string, unknown> = {};
+            if (toolName) deltaFields.toolName = toolName;
             if (raw.kind !== undefined) deltaFields.kind = boundedString(raw.kind, 128) || "other";
             if (raw.title !== undefined) deltaFields.title = boundedString(raw.title, 4_096);
             if (raw.status !== undefined) {
@@ -1516,6 +1536,7 @@ export const useSessionStore = create<SessionState>((set, get) => {
                 : "in_progress";
               if (raw.status === "completed") deltaFields.completedAt = typeof updateMeta?.agentTimestampMs === "number"
                 ? updateMeta.agentTimestampMs : isReplay ? undefined : Date.now();
+              if (raw.status === "completed" || raw.status === "failed") deltaFields.finishedAt = toolTimestamp;
             }
             if (raw.content !== undefined) deltaFields.content = raw.content;
             if (raw.rawInput !== undefined) deltaFields.rawInput = boundedRawInput(raw.rawInput);
@@ -1549,7 +1570,9 @@ export const useSessionStore = create<SessionState>((set, get) => {
                 if (p.toolCall.toolCallId !== tcId) return p;
                 return {
                   ...p,
-                  toolCall: { ...p.toolCall, ...deltaFields } as ToolCallView,
+                  toolCall: { ...p.toolCall, ...deltaFields,
+                    startedAt: p.toolCall.startedAt ?? (deltaFields.status === "in_progress" ? toolTimestamp : undefined),
+                  } as ToolCallView,
                 };
               });
               return { ...m, parts };

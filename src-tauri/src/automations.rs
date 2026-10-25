@@ -2521,7 +2521,7 @@ async fn run_automation_once(
     )
     .await
     .map_err(|e| e.to_string())?;
-    state.record_session_workspace(&session_id, cwd);
+    state.record_session_workspace(&session_id, cwd)?;
     let prompt_id = uuid::Uuid::now_v7().to_string();
     if let Err(error) = record_run_session(record_id, &session_id, &prompt_id) {
         if full_access {

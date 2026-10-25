@@ -65,6 +65,7 @@ vi.mock("@/lib/agent-client", async (original) => ({
   ...await original<object>(),
   agentInit: vi.fn(), agentAuthStatus: vi.fn(), providersList: vi.fn(),
   agentListAllSessions: vi.fn(async () => []), agentListWorkspaces: vi.fn(async () => []),
+  agentPrepareTaskWorkspace: vi.fn(async () => "/workspace/Tasks/project-task"),
   agentLoadSession: vi.fn(), agentNewSession: vi.fn(async () => "project-session"),
   agentSend: vi.fn(async () => {}), agentSetModel: vi.fn(async () => {}),
   projectsSave: vi.fn(async () => {}),

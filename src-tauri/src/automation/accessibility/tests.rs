@@ -1831,12 +1831,14 @@ fn with_file_panel(kind: &'static str) -> Context<Fake> {
 }
 #[test]
 fn file_panel_prepares_open_and_save_with_no_final_submit_or_reopen() {
+    let directory = std::env::temp_dir().join("目录");
+    let file = directory.join("文件.txt");
     for kind in ["save", "open"] {
         let c = with_file_panel(kind);
         let r = file_dialog::prepare(
             &c.backend,
             &2,
-            "/tmp/目录/文件.txt",
+            file.to_str().unwrap(),
             &CancellationToken::new(),
         )
         .unwrap();
@@ -1844,13 +1846,13 @@ fn file_panel_prepares_open_and_save_with_no_final_submit_or_reopen() {
         assert_eq!(r["verified"], false);
         assert_eq!(r["finalActionDispatched"], false);
         let expected = if kind == "save" {
-            "/tmp/目录/"
+            directory.join("")
         } else {
-            "/tmp/目录/文件.txt"
+            file.clone()
         };
         assert_eq!(
             c.backend.nodes.borrow()[&22].value.as_deref(),
-            Some(expected)
+            expected.to_str()
         );
         if kind == "save" {
             assert_eq!(
@@ -1874,24 +1876,38 @@ fn file_panel_prepares_open_and_save_with_no_final_submit_or_reopen() {
 }
 #[test]
 fn file_panel_invalid_path_missing_panel_and_pause_never_continue_input() {
-    for path in ["relative.txt", "/tmp/../other.txt", "/tmp/a\n.txt"] {
+    let directory = std::env::temp_dir();
+    let file = directory.join("test.txt");
+    let path = file.to_str().unwrap();
+    for invalid in [
+        std::path::PathBuf::from("relative.txt"),
+        directory.join("..").join("other.txt"),
+        directory.join("a\n.txt"),
+    ] {
         let c = with_file_panel("save");
-        assert!(file_dialog::prepare(&c.backend, &2, path, &CancellationToken::new()).is_err());
+        assert!(file_dialog::prepare(
+            &c.backend,
+            &2,
+            invalid.to_str().unwrap(),
+            &CancellationToken::new()
+        )
+        .unwrap_err()
+        .starts_with("invalid_argument:"));
         assert!(c.backend.calls.borrow().is_empty());
     }
     let c = context();
     assert!(
-        file_dialog::prepare(&c.backend, &2, "/tmp/test.txt", &CancellationToken::new()).is_err()
+        file_dialog::prepare(&c.backend, &2, path, &CancellationToken::new())
+            .unwrap_err()
+            .starts_with("unsupported_panel:")
     );
     assert!(c.backend.calls.borrow().is_empty());
     let c = with_file_panel("save");
     let token = CancellationToken::new();
     *c.backend.cancel_after_text.borrow_mut() = Some(token.clone());
-    assert!(
-        file_dialog::prepare(&c.backend, &2, "/tmp/test.txt", &token)
-            .unwrap_err()
-            .contains("cancelled")
-    );
+    assert!(file_dialog::prepare(&c.backend, &2, path, &token)
+        .unwrap_err()
+        .contains("cancelled"));
     assert!(!c
         .backend
         .calls

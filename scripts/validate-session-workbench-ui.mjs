@@ -57,11 +57,23 @@ try {
   }
   await page.setViewportSize({width:1280,height:900});
   await page.goto(`${base}&theme=light&platform=mac`);
-  await sessionAction("重命名会话");
+  await page.getByRole("button",{name:"任务操作",exact:true}).click();
+  const taskMenu = page.getByRole("menu",{name:"当前会话操作",exact:true});
+  assert.deepEqual(await taskMenu.getByRole("menuitem").evaluateAll(items => items.map(item => item.getAttribute("aria-label") ?? item.textContent)), ["查找当前会话","回溯…","分叉…","导出整个会话…"]);
+  await page.screenshot({path:join(output,"current-conversation-tools.png")});
+  await page.keyboard.press("Escape");
+  await page.getByRole("button",{name:"编辑标题",exact:true}).click();
   await page.getByRole("textbox", {name:"会话标题"}).fill("验收后的任务标题");
   await page.getByRole("textbox", {name:"会话标题"}).press("Enter");
   await page.getByText("验收后的任务标题",{exact:true}).first().waitFor();
-  await sessionAction("取消置顶");
+  await page.locator('.sidebar__conv[data-session-id="review-conversation"]').hover();
+  await page.getByRole("button",{name:"验收后的任务标题的会话操作",exact:true}).click();
+  const sessionMenu = page.getByRole("menu",{name:"验收后的任务标题 会话操作",exact:true});
+  for (const name of ["重命名","取消置顶","归档","在微信继续"]) {
+    assert.equal(await sessionMenu.getByRole("menuitem",{name,exact:true}).count(),1);
+  }
+  await page.screenshot({path:join(output,"sidebar-session-management.png")});
+  await sessionMenu.getByRole("menuitem",{name:"取消置顶",exact:true}).click();
   await page.waitForFunction(() => window.workbenchCalls.some(c => c.command === "agent_set_session_pinned" && c.args.sessionId === "review-conversation" && c.args.pinned === false));
   await sessionAction("导出整个会话…");
   const share = page.getByRole("dialog",{name:"分享选项"});
@@ -76,7 +88,7 @@ try {
   await openView("文件变更");
   assert.equal(await page.getByRole("complementary",{name:"工作区面板"}).count(),1,"one shared details container");
   await page.getByRole("button",{name:"关闭面板",exact:true}).click();
-  await sessionAction("对话目录");
+  await page.locator(".conversation-nav__directory:visible, .conversation-directory-mobile:visible").click();
   await page.getByRole("searchbox",{name:"筛选历史提问"}).fill("蓝牙");
   await page.locator(".question-history__item").click();
   await page.locator(".msg-wrap--jump-target").waitFor();
@@ -89,7 +101,7 @@ try {
   for (const state of ["empty","files","plan","running","permission","collaboration","paused","failed"]) {
     await page.goto(`${base}&theme=light&platform=mac&state=${state}`);
     await page.locator(".session-header").waitFor();
-    if (state === "empty") { assert.equal(await page.getByRole("button",{name:"查找当前会话"}).count(),0); assert.equal(await page.getByRole("button",{name:"任务操作",exact:true}).count(),1); }
+    if (state === "empty") { assert.equal(await page.getByRole("button",{name:"查找当前会话"}).count(),0); assert.equal(await page.getByRole("button",{name:"任务操作",exact:true}).count(),0); }
     if (state === "files") { await openView("文件变更"); await page.getByRole("region",{name:"文件变更",exact:true}).waitFor(); }
     if (state === "plan") { await openView("执行计划"); await page.getByText("验证工作台交互与交付",{exact:true}).waitFor(); }
     if (state === "collaboration") { await openView("运行与协作"); await page.getByText("核对交付文档",{exact:true}).waitFor(); }
@@ -101,13 +113,70 @@ try {
       await allow.click({trial:true});
       await page.getByRole("button",{name:"拒绝",exact:true}).click({trial:true});
     }
-    if (state === "running") { await page.getByRole("button",{name:"停止生成",exact:true}).waitFor(); await page.getByRole("button",{name:"暂停",exact:true}).waitFor(); }
+    if (state === "running") {
+      await page.getByRole("button",{name:"停止生成",exact:true}).waitFor();
+      assert.equal(await page.getByRole("group",{name:"当前轮次执行控制",exact:true}).count(),0);
+      assert.equal(await page.getByText("正在执行，可继续补充要求",{exact:true}).count(),0);
+      assert.equal(await page.getByRole("button",{name:"暂停",exact:true}).count(),0);
+      assert.equal(await page.getByRole("button",{name:"停止",exact:true}).count(),0);
+    }
     if (state === "paused") await page.getByText("任务已暂停，可继续执行",{exact:true}).waitFor();
     if (state === "failed") await page.getByRole("alert").filter({hasText:"本轮任务失败"}).waitFor();
     await page.screenshot({path:join(output,`state-${state}.png`)});
   }
-  await validateWorkbenchTransitions(page, base, output);
+  for (const [width,font] of [[1440,16],[900,16],[390,16],[320,16],[390,20],[320,20]]) for (const theme of ["light","dark"]) {
+    await page.setViewportSize({width,height:900});
+    await page.goto(`${base}&theme=${theme}&platform=mac&state=running&composerModel=long`);
+    await page.locator(".session-header").waitFor();
+    await page.evaluate(font => { document.documentElement.style.fontSize=`${font}px`; },font);
+    if (width < 720) await page.getByRole("button",{name:"收起侧边栏",exact:true}).click();
+    const stop = page.getByRole("button",{name:"停止生成",exact:true});
+    assert.equal(await stop.count(),1,"only the composer should expose a stop button");
+    await page.getByRole("button",{name:"发送选项",exact:true}).click();
+    await page.getByRole("menuitem",{name:"暂停任务",exact:true}).click({trial:true});
+    await page.keyboard.press("Escape");
+    const input = page.locator(".echo-composer__input");
+    await input.fill("请保留这条补充要求");
+    await page.getByRole("button",{name:"加入待发送队列",exact:true}).click({trial:true});
+    await page.getByRole("button",{name:"发送选项",exact:true}).click();
+    await page.getByRole("menuitem",{name:"中断当前轮次并发送",exact:true}).click({trial:true});
+    await page.keyboard.press("Escape");
+    await stop.click({trial:true});
+    const geometry = await page.locator(".echo-composer__footer").evaluate(element => {
+      const r=element.getBoundingClientRect();
+      return {overflow:document.documentElement.scrollWidth>innerWidth+1,
+        clipped:[...element.querySelectorAll("button")].filter(button=>button.getClientRects().length).some(button=>{
+          const b=button.getBoundingClientRect(); return b.x<r.x-1 || b.right>r.right+1;
+        })};
+    });
+    assert.equal(geometry.overflow,false,`draft overflow at ${width} ${theme}`);
+    assert.equal(geometry.clipped,false,`composer controls clipped at ${width} ${theme}`);
+    await page.screenshot({path:join(output,`running-draft-${width}-${theme}-${font}.png`)});
+    await stop.click();
+    await page.getByText("已停止（发送新消息可继续此任务）",{exact:true}).waitFor();
+    assert.equal(await input.inputValue(),"请保留这条补充要求","stopping must preserve the draft");
+    assert.equal(await page.evaluate(()=>window.workbenchCalls.some(c=>c.command==="review_send" || c.command==="review_send_now")),false);
+    await page.goto(`${base}&theme=${theme}&platform=mac&state=running&composerModel=long`);
+    await page.locator(".session-header").waitFor();
+    await page.evaluate(font => { document.documentElement.style.fontSize=`${font}px`; },font);
+    if (width < 720) await page.getByRole("button",{name:"收起侧边栏",exact:true}).click();
+    await input.fill("暂停后保留的补充要求");
+    await page.getByRole("button",{name:"发送选项",exact:true}).click();
+    await page.getByRole("menuitem",{name:"暂停任务",exact:true}).click();
+    await page.getByText("任务已暂停，可继续执行",{exact:true}).waitFor();
+    assert.equal(await input.inputValue(),"暂停后保留的补充要求","pausing must preserve the draft");
+    assert.ok(await input.evaluate(element => document.activeElement === element), "pausing must return focus to the draft");
+    assert.equal(await page.evaluate(()=>window.workbenchCalls.some(c=>c.command==="review_send" || c.command==="review_send_now")),false);
+    await page.screenshot({path:join(output,`paused-draft-${width}-${theme}-${font}.png`)});
+  }
+  // Narrow-window cases persist panel widths; verify default-layout transitions
+  // in a fresh context so those preferences cannot contaminate the fixture.
+  const transitionPage = await browser.newPage();
+  transitionPage.setDefaultNavigationTimeout(60000);
+  transitionPage.on("pageerror", error => errors.push(error.message));
+  try { await validateWorkbenchTransitions(transitionPage, base, output); }
+  finally { await transitionPage.close(); }
   assert.deepEqual(errors,[]);
   writeFileSync(join(output,"geometry.json"),JSON.stringify(evidence,null,2));
-  console.log(`Passed ${evidence.length} header layouts, navigation, native-export bridge, find/history, rewind cancellation, mutually exclusive workspaces and 8 task states.`);
+  console.log(`Passed ${evidence.length} header layouts, navigation, native-export bridge, find/history, rewind cancellation, mutually exclusive workspaces, 8 task states and 12 running-draft control layouts.`);
 } finally { await browser?.close(); await server.close(); }

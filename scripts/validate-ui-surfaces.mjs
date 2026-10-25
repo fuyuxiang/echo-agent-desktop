@@ -105,8 +105,7 @@ page.setDefaultNavigationTimeout(60000);
         continue;
       }
       if (surface === "conversation") {
-        await page.getByRole("button", { name: "任务操作" }).click();
-        await page.getByRole("menuitem", { name: "对话目录" }).click();
+        await page.locator(".conversation-nav__directory:visible, .conversation-directory-mobile:visible").click();
         const dialog = page.getByRole("dialog", { name: "历史提问" });
         await dialog.getByRole("searchbox", { name: "筛选历史提问" }).waitFor();
         const box = await dialog.boundingBox();

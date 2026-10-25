@@ -65,10 +65,12 @@ pub struct ComputerController {
 // Crate-internal dispatch used only by the native worker after its retained
 // window is approved, activated, and its foreground/protected focus rechecked.
 // This is not an IPC/MCP entry point; legacy frame-based key() is unchanged.
+#[cfg(any(target_os = "macos", target_os = "windows"))]
 pub(super) fn key_after_native_focus(key: &str, modifiers: &[String]) -> Result<(), String> {
     platform::key(key, modifiers)
 }
 
+#[cfg(target_os = "macos")]
 pub(super) fn click_after_native_target(x: f64, y: f64, count: u32) -> Result<(), String> {
     platform::click(x, y, "left", count)
 }
@@ -1032,7 +1034,7 @@ mod platform {
             if lines != height {
                 return Err("读取 Windows 屏幕像素失败".into());
             }
-            for pixel in bgra.chunks_exact_mut(4) {
+            for pixel in bgra.as_chunks_mut::<4>().0 {
                 pixel.swap(0, 2);
                 pixel[3] = 255;
             }

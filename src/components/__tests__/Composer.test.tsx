@@ -1,10 +1,106 @@
 import { describe, it, expect, vi } from "vitest";
-import { render, screen, fireEvent, waitFor } from "@testing-library/react";
+import { act, render, screen, fireEvent, waitFor } from "@testing-library/react";
 import { Composer } from "../Composer";
+import * as agentClient from "@/lib/agent-client";
 
 const base = { streaming: false, onSend: vi.fn(), onCancel: vi.fn() };
 
 describe("Composer", () => {
+  it.each(["", "补充要求"])("通过菜单暂停时保留草稿和附件，并阻止重复操作：%s", async draft => {
+    let finish!: (accepted: boolean) => void;
+    const onPause = vi.fn(() => new Promise<boolean>(resolve => { finish = resolve; }));
+    const onCancel = vi.fn();
+    const onEnqueue = vi.fn();
+    render(<Composer {...base} streaming onPause={onPause} onCancel={onCancel} onEnqueue={onEnqueue}
+      externalText={draft} externalAttachments={["/tmp/方案.docx"]} externalTextNonce={1} />);
+    fireEvent.click(screen.getByRole("button", {name:"发送选项"}));
+    fireEvent.click(screen.getByRole("menuitem", {name:"暂停任务"}));
+    expect(onPause).toHaveBeenCalledOnce();
+    expect(screen.getByRole("textbox")).toHaveValue(draft);
+    expect(screen.getByText("方案.docx")).toBeInTheDocument();
+    expect(screen.getByRole("button", {name:"停止生成"})).toBeDisabled();
+    fireEvent.keyDown(screen.getByRole("textbox"), {key:"Enter"});
+    expect(onEnqueue).not.toHaveBeenCalled();
+    fireEvent.click(screen.getByRole("button", {name:"发送选项"}));
+    expect(screen.getByRole("menuitem", {name:"正在暂停…"})).toBeDisabled();
+    finish(false);
+    await waitFor(() => expect(screen.getByRole("menuitem", {name:"暂停任务"})).toBeEnabled());
+    expect(onCancel).not.toHaveBeenCalled();
+  });
+
+  it("空草稿和目录不可用时仍可从菜单暂停任务", async () => {
+    const onPause = vi.fn(async () => true);
+    render(<Composer {...base} streaming sendDisabled onPause={onPause} />);
+    fireEvent.click(screen.getByRole("button", {name:"发送选项"}));
+    fireEvent.click(screen.getByRole("menuitem", {name:"暂停任务"}));
+    await waitFor(() => expect(onPause).toHaveBeenCalledOnce());
+    expect(screen.getByRole("textbox")).toHaveValue("");
+  });
+
+  it("切换任务后，旧任务的暂停请求不会阻止新任务发送", async () => {
+    let finish!: () => void;
+    const onPause = vi.fn(() => new Promise<void>(resolve => { finish = resolve; }));
+    const onSend = vi.fn(async () => true);
+    const view = render(<Composer {...base} streaming draftKey="old" draft="旧草稿" onPause={onPause} />);
+    fireEvent.click(screen.getByRole("button", { name: "发送选项" }));
+    fireEvent.click(screen.getByRole("menuitem", { name: "暂停任务" }));
+    view.rerender(<Composer {...base} draftKey="new" draft="新任务" onPause={onPause} onSend={onSend} />);
+    fireEvent.keyDown(screen.getByRole("textbox"), { key: "Enter" });
+    await waitFor(() => expect(onSend).toHaveBeenCalledExactlyOnceWith("新任务", []));
+    await act(async () => finish());
+  });
+
+  it("旧任务暂停完成时不会解除新任务正在等待的暂停操作", async () => {
+    const completions: (() => void)[] = [];
+    const onPause = vi.fn(() => new Promise<void>(resolve => { completions.push(resolve); }));
+    const view = render(<Composer {...base} streaming draftKey="old" onPause={onPause} />);
+    const pause = () => {
+      fireEvent.click(screen.getByRole("button", { name: "发送选项" }));
+      fireEvent.click(screen.getByRole("menuitem", { name: "暂停任务" }));
+    };
+    pause();
+    view.rerender(<Composer {...base} streaming draftKey="new" draft="新任务草稿" onPause={onPause} />);
+    pause();
+    expect(onPause).toHaveBeenCalledTimes(2);
+    await act(async () => completions[0]());
+    expect(screen.getByRole("button", { name: "停止生成" })).toBeDisabled();
+    expect(screen.getByRole("textbox")).toHaveValue("新任务草稿");
+    await act(async () => completions[1]());
+    expect(screen.getByRole("button", { name: "停止生成" })).toBeEnabled();
+  });
+
+  it("选择文件夹期间不能发送；取消后保留草稿并恢复提交", async () => {
+    let resolve!: (cwd: string | null) => void;
+    const picker = vi.spyOn(agentClient, "filesystemPickDirectory").mockImplementationOnce(() => new Promise(accept => { resolve = accept; }));
+    const send = vi.fn(async () => true);
+    render(<Composer {...base} onSend={send} showMeta cwd="/original" workspaces={[]} onSelectWorkspace={vi.fn()} />);
+    const input = screen.getByRole("textbox");
+    fireEvent.change(input, {target:{value:"保留需求"}});
+    fireEvent.click(screen.getByRole("button", {name:/工作目录：/}));
+    fireEvent.click(screen.getByRole("menuitem", {name:"选择文件夹…"}));
+    fireEvent.keyDown(input, {key:"Enter"});
+    expect(send).not.toHaveBeenCalled();
+    expect(screen.getByRole("button", {name:"发送"})).toBeDisabled();
+    resolve(null);
+    await waitFor(() => expect(screen.getByRole("button", {name:"发送"})).toBeEnabled());
+    expect(input).toHaveValue("保留需求");
+    fireEvent.keyDown(input, {key:"Enter"});
+    await waitFor(() => expect(send).toHaveBeenCalledExactlyOnceWith("保留需求", []));
+    picker.mockRestore();
+  });
+
+  it("目录不可用时仍可编辑草稿，所有发送入口保持禁用", () => {
+    const send = vi.fn();
+    render(<Composer {...base} onSend={send} sendDisabled />);
+    const input = screen.getByRole("textbox");
+    expect(input).toBeEnabled();
+    fireEvent.change(input, {target:{value:"恢复后继续"}});
+    fireEvent.keyDown(input, {key:"Enter"});
+    expect(send).not.toHaveBeenCalled();
+    expect(input).toHaveValue("恢复后继续");
+    expect(screen.getByRole("button", {name:"发送"})).toBeDisabled();
+  });
+
   it("running Enter queues; interruption is explicit and a rejected replacement keeps the draft", async () => {
     const onEnqueue = vi.fn();
     const onSendNow = vi.fn().mockResolvedValue(false);
@@ -113,6 +209,26 @@ describe("Composer", () => {
     render(<Composer {...base} streaming onCancel={onCancel} />);
     fireEvent.click(screen.getByRole("button", { name: "停止生成" }));
     expect(onCancel).toHaveBeenCalled();
+  });
+
+  it.each([
+    ["补充要求", []],
+    ["", ["/tmp/方案.docx"]],
+    ["补充要求", ["/tmp/方案.docx"]],
+  ])("编辑补充内容时仍可停止，保留正文和附件：%s %j", (draft, attachments) => {
+    const onCancel = vi.fn().mockResolvedValue(false);
+    const onEnqueue = vi.fn();
+    const onSendNow = vi.fn();
+    render(<Composer {...base} streaming onCancel={onCancel} onEnqueue={onEnqueue} onSendNow={onSendNow}
+      externalText={draft} externalAttachments={attachments} externalTextNonce={1} />);
+    expect(screen.getByRole("button", { name: "加入待发送队列" })).toBeEnabled();
+    expect(screen.getAllByRole("button", { name: "停止生成" })).toHaveLength(1);
+    fireEvent.click(screen.getByRole("button", { name: "停止生成" }));
+    expect(onCancel).toHaveBeenCalledExactlyOnceWith();
+    expect(onEnqueue).not.toHaveBeenCalled();
+    expect(onSendNow).not.toHaveBeenCalled();
+    expect(screen.getByRole("textbox")).toHaveValue(draft);
+    if (attachments.length) expect(screen.getByText("方案.docx")).toBeInTheDocument();
   });
 
   it("streaming 时输入“中止”会执行本地停止，不会作为新 prompt 发送", async () => {

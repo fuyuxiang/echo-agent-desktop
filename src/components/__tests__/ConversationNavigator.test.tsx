@@ -30,6 +30,18 @@ describe("conversation turn navigation", () => {
     expect(readingTurnIndex([-2000,-900,-100],120)).toBe(2);
   });
 
+  it("keeps the directory accessible for a single turn and hides it for an empty session", () => {
+    const directory = vi.fn();
+    const props = {scrollRef:createRef<HTMLDivElement>(),contentRef:createRef<HTMLDivElement>(),onSelect:vi.fn(),onDirectory:directory};
+    const view = render(<ConversationNavigator {...props} turns={turns.slice(0,1)} />);
+    const trigger = screen.getByRole("button",{name:"对话目录，共 1 轮"});
+    fireEvent.click(trigger);
+    expect(directory).toHaveBeenCalledWith(trigger);
+    expect(view.container.querySelector(".conversation-nav__mark")).toBeNull();
+    view.rerender(<ConversationNavigator {...props} turns={[]} />);
+    expect(screen.queryByRole("button",{name:/对话目录/})).toBeNull();
+  });
+
   it("windows a long conversation around the reading position; preview does not jump", async () => {
     const scrollRef = createRef<HTMLDivElement>(), contentRef = createRef<HTMLDivElement>();
     const select = vi.fn(), directory = vi.fn();

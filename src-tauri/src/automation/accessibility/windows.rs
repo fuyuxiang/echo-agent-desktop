@@ -65,7 +65,7 @@ fn application_descriptions(path: &str) -> Vec<String> {
             return vec![];
         }
         // Aligned storage for the native version structures.
-        let mut data = vec![0u32; (size as usize + 3) / 4];
+        let mut data = vec![0u32; (size as usize).div_ceil(4)];
         if GetFileVersionInfoExW(
             FILE_VER_GET_LOCALISED,
             PCWSTR(wide.as_ptr()),
@@ -107,7 +107,7 @@ fn application_descriptions(path: &str) -> Vec<String> {
         }
         let translations = std::slice::from_raw_parts(translations, (bytes / 2).min(64));
         let mut names = Vec::new();
-        for pair in translations.chunks_exact(2) {
+        for pair in translations.as_chunks::<2>().0 {
             let key = format!(
                 r"\StringFileInfo\{:04x}{:04x}\FileDescription",
                 pair[0], pair[1]
@@ -150,6 +150,8 @@ pub struct Element {
     process: Rc<Process>,
     pid: i32,
 }
+type WindowEnumeration = (Vec<Element>, Vec<(String, String)>);
+
 pub struct Backend {
     ui: IUIAutomation,
     _apartment: Apartment,
@@ -200,10 +202,7 @@ impl Backend {
             Ok((None, false))
         }
     }
-    fn top_windows(
-        &self,
-        pid: Option<i32>,
-    ) -> Result<(Vec<Element>, Vec<(String, String)>), String> {
+    fn top_windows(&self, pid: Option<i32>) -> Result<WindowEnumeration, String> {
         unsafe {
             let root = self.ui.GetRootElement().map_err(error)?;
             let walker = self.ui.ControlViewWalker().map_err(error)?;

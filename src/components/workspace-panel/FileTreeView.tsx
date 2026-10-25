@@ -145,6 +145,7 @@ interface FileTreeViewProps {
   indexedPaths?: string[];
   /** Invoked when the cwd-empty state "选择其他目录" action is clicked. */
   onSelectDirectory?: () => void;
+  showRootInEmptyState?: boolean;
 }
 
 export function FileTreeView({
@@ -173,6 +174,7 @@ export function FileTreeView({
   filter,
   indexedPaths = [],
   onSelectDirectory,
+  showRootInEmptyState = true,
 }: FileTreeViewProps) {
   const [loaded, setLoaded] = useState<LoadedMap>(new Map());
   const [expanded, setExpanded] = useState<Set<string>>(new Set());
@@ -514,7 +516,7 @@ export function FileTreeView({
 
   if (!root) {
     return (
-      <div className="file-tree__empty">未设置工作区目录（cwd）。</div>
+      <div className="file-tree__empty">尚未设置工作目录。</div>
     );
   }
 
@@ -534,7 +536,7 @@ export function FileTreeView({
   if (rootEntries.length === 0) {
     return (
       <div className="file-tree__empty file-tree__empty--cwd-hint">
-        <span>当前工作区 <code>{root}</code> 没有可见文件。</span>
+        <span>{showRootInEmptyState ? <>当前工作区 <code>{root}</code> 没有可见文件。</> : "当前目录暂无可见文件。"}</span>
         <div className="file-tree__empty-actions">
           {onSelectDirectory && <button type="button" onClick={onSelectDirectory}>
             选择其他目录

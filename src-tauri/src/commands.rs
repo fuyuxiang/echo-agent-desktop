@@ -107,6 +107,7 @@ pub struct AppState {
     /// timed out. The Runtime completes and persists these regardless, so they
     /// are tracked here and reclaimed instead of leaking as ghost sessions.
     pub(crate) orphaned_sessions: Mutex<Vec<OrphanedSession>>,
+    session_creations: crate::session_creation::SessionCreations,
     /// Native-authoritative workspace binding for every session admitted into
     /// the current Runtime generation. Renderer-provided session ids and paths
     /// are never sufficient to authorize attachment reads.
@@ -179,13 +180,20 @@ impl AppState {
 
     pub(crate) fn clear_orphaned_sessions(&self) {
         self.orphaned_sessions.lock().unwrap().clear();
+        self.session_creations.clear();
     }
 
-    pub(crate) fn record_session_workspace(&self, session_id: &str, cwd: &Path) {
+    pub(crate) fn record_session_workspace(
+        &self,
+        session_id: &str,
+        cwd: &Path,
+    ) -> Result<(), String> {
+        crate::meta::bind_session_workspace(session_id, cwd)?;
         self.session_workspaces
             .lock()
             .unwrap()
             .insert(session_id.to_string(), cwd.to_path_buf());
+        Ok(())
     }
 
     pub(crate) fn session_workspace(&self, session_id: &str) -> Result<PathBuf, String> {
@@ -849,12 +857,13 @@ fn authorized_session_cwd(
     filesystem: &crate::shell_fs::FilesystemAccess,
     claimed: &str,
 ) -> Result<String, String> {
-    filesystem
-        .require_workspace(claimed)
-        .map(|path| path.to_string_lossy().into_owned())
+    let path = filesystem.require_workspace(claimed)?;
+    // Opening the directory checks access without reading any entries.
+    std::fs::read_dir(&path).map_err(|error| format!("无法访问工作目录：{error}"))?;
+    Ok(path.to_string_lossy().into_owned())
 }
 
-fn trusted_existing_session_cwd(
+pub(crate) fn trusted_existing_session_cwd(
     state: &AppState,
     filesystem: &crate::shell_fs::FilesystemAccess,
     session_id: &str,
@@ -863,19 +872,29 @@ fn trusted_existing_session_cwd(
     if !valid_session_id(session_id) {
         return Err("会话 ID 无效或过长".into());
     }
-    if let Ok(bound) = state.session_workspace(session_id) {
+    if let Some(bound) = state
+        .session_workspace(session_id)
+        .ok()
+        .or_else(|| crate::meta::session_workspace(session_id))
+    {
         if let Some(claimed) = claimed.filter(|value| !value.trim().is_empty()) {
             let claimed = filesystem.require_workspace(claimed)?;
             if claimed != bound {
                 return Err("会话工作区与后端绑定不一致".into());
             }
         }
+        let canonical = filesystem.require_workspace(&bound.to_string_lossy())?;
+        if canonical != bound {
+            return Err("原工作目录已被链接到其他位置，请恢复原目录或新建任务".into());
+        }
+        std::fs::read_dir(&bound).map_err(|error| format!("无法访问原工作目录：{error}"))?;
         return Ok(bound);
     }
     let claimed = claimed
         .filter(|value| !value.trim().is_empty())
         .ok_or("历史会话操作必须提供工作区")?;
     let canonical = filesystem.require_workspace(claimed)?;
+    std::fs::read_dir(&canonical).map_err(|error| format!("无法访问原工作目录：{error}"))?;
     let canonical_text = canonical.to_string_lossy();
     if !sessions::list_sessions(&canonical_text, true)
         .iter()
@@ -884,6 +903,41 @@ fn trusted_existing_session_cwd(
         return Err("会话不属于声明的工作区".into());
     }
     Ok(canonical)
+}
+
+/// History belongs to the recorded session even when its execution directory
+/// is offline. A renderer-supplied path can narrow this identity, never replace it.
+fn trusted_session_history_cwd(
+    state: &AppState,
+    session_id: &str,
+    claimed: Option<&str>,
+) -> Result<PathBuf, String> {
+    if !valid_session_id(session_id) {
+        return Err("会话 ID 无效或过长".into());
+    }
+    let bound = state
+        .session_workspace(session_id)
+        .ok()
+        .or_else(|| crate::meta::session_workspace(session_id));
+    let original = match bound {
+        Some(path) => path,
+        None => sessions::list_all_sessions(true)?
+            .into_iter()
+            .find(|session| session.session_id == session_id)
+            .map(|session| PathBuf::from(session.cwd))
+            .ok_or("会话不存在或已被删除")?,
+    };
+    if !original.is_absolute() {
+        return Err("会话原工作区路径无效".into());
+    }
+    if let Some(claimed) = claimed.filter(|value| !value.trim().is_empty()) {
+        let claimed = Path::new(claimed);
+        if claimed != original && claimed.canonicalize().ok().as_deref() != Some(original.as_path())
+        {
+            return Err("会话工作区与后端绑定不一致".into());
+        }
+    }
+    Ok(original)
 }
 
 /// Initialize the in-process EchoAgent runtime. Spawns the agent thread, runs
@@ -1175,6 +1229,66 @@ pub fn agent_auth_status(app: tauri::AppHandle, state: State<'_, AppState>) -> A
     auth_status_with_runtime_reload(&app, &state)
 }
 
+/// Only the native default root can allocate automatic task directories.
+#[tauri::command]
+pub fn agent_prepare_task_workspace(
+    app: tauri::AppHandle,
+    request_id: String,
+) -> Result<String, String> {
+    crate::policy::require_feature("sessions")?;
+    let base = default_cwd()?;
+    let filesystem = app.state::<crate::shell_fs::FilesystemAccess>();
+    filesystem.require_workspace(&base.to_string_lossy())?;
+    let directory = crate::session_workspace::prepare_task_directory(&base, &request_id)?;
+    Ok(filesystem
+        .require_workspace(&directory.to_string_lossy())?
+        .to_string_lossy()
+        .into_owned())
+}
+
+#[derive(serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SessionWorkspaceStatus {
+    cwd: String,
+    loaded: bool,
+    status: &'static str,
+    message: Option<String>,
+}
+
+#[tauri::command]
+pub fn agent_session_workspace_status(
+    app: tauri::AppHandle,
+    state: State<'_, AppState>,
+    session_id: String,
+    cwd: String,
+) -> Result<SessionWorkspaceStatus, String> {
+    if !valid_session_id(&session_id) {
+        return Err("会话 ID 无效".into());
+    }
+    let original = state
+        .session_workspace(&session_id)
+        .ok()
+        .or_else(|| crate::meta::session_workspace(&session_id))
+        .unwrap_or_else(|| PathBuf::from(&cwd));
+    let filesystem = app.state::<crate::shell_fs::FilesystemAccess>();
+    let checked = trusted_existing_session_cwd(&state, &filesystem, &session_id, Some(&cwd));
+    let (status, message) = match checked {
+        Ok(_) => ("ready", None),
+        Err(error) => {
+            let missing = std::fs::metadata(&original)
+                .err()
+                .is_some_and(|e| e.kind() == std::io::ErrorKind::NotFound);
+            (if missing { "missing" } else { "unavailable" }, Some(error))
+        }
+    };
+    Ok(SessionWorkspaceStatus {
+        cwd: original.to_string_lossy().into_owned(),
+        loaded: state.session_workspace(&session_id).is_ok(),
+        status,
+        message,
+    })
+}
+
 #[tauri::command]
 pub async fn agent_new_session(
     app: tauri::AppHandle,
@@ -1231,7 +1345,28 @@ pub async fn agent_new_session(
             &session_id,
             &permission_mode,
         );
-        state.record_session_workspace(&session_id, Path::new(&cwd));
+        if let Err(error) = crate::meta::set_agent_mode(&session_id, "default") {
+            state.record_orphaned_session(OrphanedSession {
+                session_id: session_id.clone(),
+                cwd: cwd.clone(),
+                model_id: model_id.clone(),
+                permission_mode: permission_mode.clone(),
+            });
+            return Err(format!(
+                "无法保存当前任务的代理模式：{error}；重试不会重复创建任务"
+            ));
+        }
+        if let Err(error) = state.record_session_workspace(&session_id, Path::new(&cwd)) {
+            state.record_orphaned_session(OrphanedSession {
+                session_id: session_id.clone(),
+                cwd: cwd.clone(),
+                model_id: model_id.clone(),
+                permission_mode: permission_mode.clone(),
+            });
+            return Err(format!(
+                "无法保存任务工作目录：{error}；重试不会重复创建任务"
+            ));
+        }
         crate::team_mcp::persist_registration(&tx, &session_id);
         crate::automation::persist_registration(&tx, &session_id);
         crate::office_mcp::persist_registration(&tx, &session_id);
@@ -1245,89 +1380,102 @@ pub async fn agent_new_session(
         "agent new_session command send"
     );
 
-    // The ACP gateway spawns each request independently, so dropping this future
-    // on timeout would not stop the Runtime from finishing and persisting the
-    // session. Run it detached and hand a late result back to the state instead
-    // of losing it.
-    let (result_tx, result_rx) = tokio::sync::oneshot::channel();
-    let task_app = app.clone();
-    let task_tx = tx.clone();
-    let task_cwd = cwd.clone();
-    let task_model = model_id.clone();
-    let task_permission_mode = permission_mode.clone();
-    tokio::spawn(async move {
-        let result = agent_runtime::new_session_with_options(
-            &task_tx,
-            &PathBuf::from(task_cwd.clone()),
-            task_model.as_deref(),
-            None,
-            Some(&task_permission_mode),
-        )
-        .await
-        .map_err(|error| error.to_string());
-        let Err(unclaimed) = result_tx.send(result) else {
-            return;
-        };
-        match unclaimed {
-            Ok(session_id) => {
-                if !valid_session_id(&session_id) {
-                    tracing::error!("Runtime returned an invalid orphaned session id");
-                    return;
-                }
-                tracing::warn!(
-                    %session_id,
-                    "new_session completed after its caller timed out; reclaiming"
-                );
-                // The caller released its transition guard when it timed out.
-                // Re-enter the same transaction before publishing a late
-                // result, then reject it if policy/restart retired this Runtime.
-                let _permission_transition_guard =
-                    crate::permission_config::permission_transition_lock()
-                        .lock()
-                        .await;
-                let task_state = task_app.state::<AppState>();
-                if !task_state.is_runtime_current(&task_tx) {
-                    tracing::warn!(%session_id, "discarding late session from a retired Runtime");
-                    return;
-                }
-                crate::team_mcp::persist_registration(&task_tx, &session_id);
-                crate::automation::persist_registration(&task_tx, &session_id);
-                crate::office_mcp::persist_registration(&task_tx, &session_id);
-                crate::live_info_mcp::persist_registration(&task_tx, &session_id);
-                crate::org_mcp::reconcile_registration(&task_tx, &session_id);
-                if crate::policy::locked_permission_mode().is_none() {
-                    if let Err(error) =
-                        crate::meta::set_permission_mode(&session_id, &task_permission_mode)
-                    {
-                        tracing::error!(%error, %session_id, "failed to persist orphaned task permission mode");
+    let creation_key = crate::session_creation::SessionCreationKey {
+        cwd: cwd.clone(),
+        model_id: model_id.clone(),
+        permission_mode: permission_mode.clone(),
+    };
+    let (mut creation, result_tx) = state.session_creations.join(&creation_key)?;
+    if let Some(result_tx) = result_tx {
+        let task_app = app.clone();
+        let task_tx = tx.clone();
+        let task_cwd = cwd.clone();
+        let task_model = model_id.clone();
+        let task_permission_mode = permission_mode.clone();
+        let task_creation_key = creation_key.clone();
+        let creation_id = creation.id;
+        tokio::spawn(async move {
+            let result = agent_runtime::new_session_with_options(
+                &task_tx,
+                &PathBuf::from(task_cwd.clone()),
+                task_model.as_deref(),
+                None,
+                Some(&task_permission_mode),
+            )
+            .await
+            .map_err(|error| error.to_string());
+            result_tx.send_replace(Some(result.clone()));
+            // Publish before taking the transition lock: an immediate retry may
+            // hold it while awaiting this same request's result.
+            let _permission_transition_guard =
+                crate::permission_config::permission_transition_lock()
+                    .lock()
+                    .await;
+            let task_state = task_app.state::<AppState>();
+            if !task_state.is_runtime_current(&task_tx)
+                || !task_state
+                    .session_creations
+                    .finish(&task_creation_key, creation_id)
+            {
+                return;
+            }
+            match result {
+                Ok(session_id) => {
+                    if !valid_session_id(&session_id) {
+                        tracing::error!("Runtime returned an invalid orphaned session id");
+                        return;
                     }
+                    tracing::warn!(
+                        %session_id,
+                        "new_session completed after its caller timed out; reclaiming"
+                    );
+                    crate::team_mcp::persist_registration(&task_tx, &session_id);
+                    crate::automation::persist_registration(&task_tx, &session_id);
+                    crate::office_mcp::persist_registration(&task_tx, &session_id);
+                    crate::live_info_mcp::persist_registration(&task_tx, &session_id);
+                    crate::org_mcp::reconcile_registration(&task_tx, &session_id);
+                    if crate::policy::locked_permission_mode().is_none() {
+                        if let Err(error) =
+                            crate::meta::set_permission_mode(&session_id, &task_permission_mode)
+                        {
+                            tracing::error!(%error, %session_id, "failed to persist orphaned task permission mode");
+                        }
+                    }
+                    crate::permission_config::mark_session_permission_mode_synced(
+                        &session_id,
+                        &task_permission_mode,
+                    );
+                    if let Err(error) = crate::meta::set_agent_mode(&session_id, "default") {
+                        tracing::error!(%error, %session_id, "failed to persist orphaned task agent mode");
+                    }
+                    if let Err(error) =
+                        task_state.record_session_workspace(&session_id, Path::new(&task_cwd))
+                    {
+                        tracing::error!(%error, %session_id, "failed to persist orphaned task workspace");
+                    }
+                    task_state.record_orphaned_session(OrphanedSession {
+                        session_id: session_id.clone(),
+                        cwd: task_cwd,
+                        model_id: task_model,
+                        permission_mode: task_permission_mode,
+                    });
+                    let _ = task_app.emit(
+                        "agent://session-reclaimed",
+                        serde_json::json!({ "sessionId": session_id }),
+                    );
                 }
-                crate::permission_config::mark_session_permission_mode_synced(
-                    &session_id,
-                    &task_permission_mode,
-                );
-                if let Err(error) = crate::meta::set_agent_mode(&session_id, "default") {
-                    tracing::error!(%error, %session_id, "failed to persist orphaned task agent mode");
+                Err(error) => {
+                    tracing::warn!(%error, "new_session failed after its caller timed out");
                 }
-                task_state.record_session_workspace(&session_id, Path::new(&task_cwd));
-                task_state.record_orphaned_session(OrphanedSession {
-                    session_id: session_id.clone(),
-                    cwd: task_cwd,
-                    model_id: task_model,
-                    permission_mode: task_permission_mode,
-                });
-                let _ = task_app.emit(
-                    "agent://session-reclaimed",
-                    serde_json::json!({ "sessionId": session_id }),
-                );
             }
-            Err(error) => {
-                tracing::warn!(%error, "new_session failed after its caller timed out");
-            }
-        }
-    });
+        });
+    }
 
-    let session_id = match tokio::time::timeout(NEW_SESSION_TIMEOUT, result_rx).await {
+    let outcome = tokio::time::timeout(NEW_SESSION_TIMEOUT, creation.wait()).await;
+    if outcome.is_ok() {
+        state.session_creations.finish(&creation_key, creation.id);
+    }
+    let session_id = match outcome {
         Err(_) => {
             tracing::error!(
                 model_id = model_id.as_deref(),
@@ -1335,11 +1483,7 @@ pub async fn agent_new_session(
             );
             return Err("创建 Agent 会话超时（45 秒），请重试；若持续失败请重启应用。".to_string());
         }
-        Ok(Err(_)) => {
-            tracing::error!("new_session task ended without producing a result");
-            return Err("创建 Agent 会话失败：Agent Runtime 未返回结果，请重试。".to_string());
-        }
-        Ok(Ok(Err(error))) => {
+        Ok(Err(error)) => {
             tracing::error!(
                 %error,
                 model_id = model_id.as_deref(),
@@ -1347,8 +1491,11 @@ pub async fn agent_new_session(
             );
             return Err(error);
         }
-        Ok(Ok(Ok(session_id))) => session_id,
+        Ok(Ok(session_id)) => session_id,
     };
+    if !state.is_runtime_current(&tx) {
+        return Err("Agent Runtime 已重新启动，请重试创建任务".into());
+    }
     if !valid_session_id(&session_id) {
         return Err("Agent Runtime 返回的会话 ID 无效".into());
     }
@@ -1369,9 +1516,28 @@ pub async fn agent_new_session(
         }
     }
     crate::permission_config::mark_session_permission_mode_synced(&session_id, &permission_mode);
-    crate::meta::set_agent_mode(&session_id, "default")
-        .map_err(|error| format!("无法保存当前任务的代理模式：{error}"))?;
-    state.record_session_workspace(&session_id, Path::new(&cwd));
+    if let Err(error) = crate::meta::set_agent_mode(&session_id, "default") {
+        state.record_orphaned_session(OrphanedSession {
+            session_id: session_id.clone(),
+            cwd: cwd.clone(),
+            model_id: model_id.clone(),
+            permission_mode: permission_mode.clone(),
+        });
+        return Err(format!(
+            "无法保存当前任务的代理模式：{error}；重试不会重复创建任务"
+        ));
+    }
+    if let Err(error) = state.record_session_workspace(&session_id, Path::new(&cwd)) {
+        state.record_orphaned_session(OrphanedSession {
+            session_id: session_id.clone(),
+            cwd: cwd.clone(),
+            model_id: model_id.clone(),
+            permission_mode: permission_mode.clone(),
+        });
+        return Err(format!(
+            "无法保存任务工作目录：{error}；重试不会重复创建任务"
+        ));
+    }
     // Team MCP remains a durable local tool. Knowledge tools are attached only
     // after the user explicitly selects sources for this task.
     crate::team_mcp::persist_registration(&tx, &session_id);
@@ -1395,14 +1561,9 @@ pub async fn agent_load_session(
     crate::org::enforce_skill_lease();
     let cwd = {
         let filesystem = app.state::<crate::shell_fs::FilesystemAccess>();
-        let cwd = authorized_session_cwd(&filesystem, &cwd)?;
-        if !sessions::list_sessions(&cwd, true)
-            .iter()
-            .any(|summary| summary.session_id == session_id)
-        {
-            return Err("会话不属于声明的工作区".into());
-        }
-        cwd
+        let bound = trusted_existing_session_cwd(&state, &filesystem, &session_id, Some(&cwd))?;
+        crate::meta::bind_session_workspace(&session_id, &bound)?;
+        bound.to_string_lossy().into_owned()
     };
     let _permission_transition_guard = crate::permission_config::permission_transition_lock()
         .lock()
@@ -1423,7 +1584,7 @@ pub async fn agent_load_session(
         "agent://permission-mode",
         crate::permission_config::permission_mode_status(true, Some(&session_id)),
     );
-    state.record_session_workspace(&session_id, Path::new(&cwd));
+    state.record_session_workspace(&session_id, Path::new(&cwd))?;
     // Restore durable local MCP tools, then reapply this task's explicit
     // knowledge-source choice against the capabilities currently available.
     crate::team_mcp::persist_registration(&tx, &session_id);
@@ -1551,7 +1712,13 @@ pub async fn agent_send(
         return Err("消息 ID 无效或过长".into());
     }
     require_runtime_ready(Some(&app), &state, None)?;
-    let workspace = state.session_workspace(&session_id)?;
+    state.session_workspace(&session_id)?;
+    let workspace = trusted_existing_session_cwd(
+        &state,
+        &app.state::<crate::shell_fs::FilesystemAccess>(),
+        &session_id,
+        None,
+    )?;
     let attachments = attachments.unwrap_or_default();
     let attachments = if attachments.is_empty() {
         Vec::new()
@@ -2024,7 +2191,6 @@ pub fn agent_list_workspaces(
 /// both arrive at the same store `upsert` and are idempotent.
 #[tauri::command]
 pub async fn agent_rename_session(
-    app: tauri::AppHandle,
     state: State<'_, AppState>,
     session_id: String,
     title: String,
@@ -2039,12 +2205,7 @@ pub async fn agent_rename_session(
     {
         return Err("会话标题为空、过长或包含非法字符".into());
     }
-    let workspace = trusted_existing_session_cwd(
-        &state,
-        &app.state::<crate::shell_fs::FilesystemAccess>(),
-        &session_id,
-        cwd.as_deref(),
-    )?;
+    let workspace = trusted_session_history_cwd(&state, &session_id, cwd.as_deref())?;
     let tx = state
         .tx
         .lock()
@@ -2078,7 +2239,7 @@ pub async fn agent_delete_session(
 }
 
 pub(crate) async fn delete_session_data(
-    app: &tauri::AppHandle,
+    _app: &tauri::AppHandle,
     state: &AppState,
     session_id: &str,
     cwd: Option<&str>,
@@ -2086,12 +2247,7 @@ pub(crate) async fn delete_session_data(
     if !valid_session_id(session_id) {
         return Err("会话 ID 无效或过长".into());
     }
-    let workspace = trusted_existing_session_cwd(
-        state,
-        &app.state::<crate::shell_fs::FilesystemAccess>(),
-        session_id,
-        cwd,
-    )?;
+    let workspace = trusted_session_history_cwd(state, session_id, cwd)?;
     delete_owned_session_data(state, session_id, &workspace).await
 }
 
@@ -2959,6 +3115,144 @@ mod tests {
             authorized_session_cwd(&restored, &workspace.path().to_string_lossy()).unwrap(),
             persisted_canonical.to_string_lossy().into_owned()
         );
+    }
+
+    #[test]
+    fn bound_workspace_cannot_be_retargeted_even_when_both_roots_are_authorized() {
+        let original = tempfile::tempdir().unwrap();
+        let other = tempfile::tempdir().unwrap();
+        let filesystem = crate::shell_fs::FilesystemAccess::default();
+        let bound = filesystem
+            .authorize_workspace(&original.path().to_string_lossy())
+            .unwrap();
+        let other = filesystem
+            .authorize_workspace(&other.path().to_string_lossy())
+            .unwrap();
+        let state = AppState::default();
+        state
+            .session_workspaces
+            .lock()
+            .unwrap()
+            .insert("fixed-session".into(), bound.clone());
+        assert_eq!(
+            trusted_existing_session_cwd(&state, &filesystem, "fixed-session", None).unwrap(),
+            bound
+        );
+        assert!(trusted_existing_session_cwd(
+            &state,
+            &filesystem,
+            "fixed-session",
+            Some(&other.to_string_lossy())
+        )
+        .is_err());
+        std::fs::remove_dir(&bound).unwrap();
+        assert!(trusted_existing_session_cwd(&state, &filesystem, "fixed-session", None).is_err());
+        assert!(
+            !bound.exists(),
+            "validation must not recreate a missing directory"
+        );
+    }
+
+    #[test]
+    fn durable_workspace_is_restored_without_marking_an_unloaded_session_resident() {
+        let original = tempfile::tempdir().unwrap();
+        let other = tempfile::tempdir().unwrap();
+        let filesystem = crate::shell_fs::FilesystemAccess::default();
+        let bound = filesystem
+            .authorize_workspace(&original.path().to_string_lossy())
+            .unwrap();
+        let other = filesystem
+            .authorize_workspace(&other.path().to_string_lossy())
+            .unwrap();
+        let id = uuid::Uuid::now_v7().to_string();
+        let state = AppState::default();
+        state.record_session_workspace(&id, &bound).unwrap();
+        state.clear_session_workspaces();
+        assert!(state.session_workspace(&id).is_err());
+        assert_eq!(
+            trusted_existing_session_cwd(&state, &filesystem, &id, Some(&bound.to_string_lossy()))
+                .unwrap(),
+            bound
+        );
+        assert!(trusted_existing_session_cwd(
+            &state,
+            &filesystem,
+            &id,
+            Some(&other.to_string_lossy())
+        )
+        .is_err());
+        assert!(
+            state.session_workspace(&id).is_err(),
+            "validation must not activate a Runtime session"
+        );
+        crate::meta::clear_session_metadata(&id).unwrap();
+    }
+
+    #[test]
+    fn history_management_keeps_its_identity_when_the_working_directory_disappears() {
+        let original = tempfile::tempdir().unwrap();
+        let other = tempfile::tempdir().unwrap();
+        let filesystem = crate::shell_fs::FilesystemAccess::default();
+        let bound = filesystem
+            .authorize_workspace(&original.path().to_string_lossy())
+            .unwrap();
+        let state = AppState::default();
+        let id = uuid::Uuid::now_v7().to_string();
+        state.record_session_workspace(&id, &bound).unwrap();
+        std::fs::remove_dir(&bound).unwrap();
+        assert!(trusted_existing_session_cwd(&state, &filesystem, &id, None).is_err());
+        for resident in [true, false] {
+            if !resident {
+                state.clear_session_workspaces();
+            }
+            assert_eq!(
+                trusted_session_history_cwd(&state, &id, None).unwrap(),
+                bound
+            );
+            assert_eq!(
+                trusted_session_history_cwd(&state, &id, Some(&bound.to_string_lossy())).unwrap(),
+                bound
+            );
+            assert!(trusted_session_history_cwd(
+                &state,
+                &id,
+                Some(&other.path().to_string_lossy())
+            )
+            .is_err());
+        }
+        assert!(
+            !bound.exists(),
+            "history management must never recreate the directory"
+        );
+        crate::meta::clear_session_metadata(&id).unwrap();
+    }
+
+    #[test]
+    fn legacy_history_uses_native_catalog_identity_without_requiring_a_live_directory() {
+        let original = tempfile::tempdir().unwrap();
+        let bound = original.path().canonicalize().unwrap();
+        let id = uuid::Uuid::now_v7().to_string();
+        let encoded =
+            echo_agent_runtime::util::echo_agent_home::encode_cwd_dirname(&bound.to_string_lossy());
+        let record = crate::paths::echo_agent_home_dir()
+            .join("sessions")
+            .join(encoded)
+            .join(&id);
+        std::fs::create_dir_all(&record).unwrap();
+        std::fs::write(
+            record.join("summary.json"),
+            serde_json::json!({"session_id":id,"cwd":bound}).to_string(),
+        )
+        .unwrap();
+        std::fs::remove_dir(&bound).unwrap();
+        let state = AppState::default();
+        assert_eq!(
+            trusted_session_history_cwd(&state, &id, None).unwrap(),
+            bound
+        );
+        assert!(trusted_session_history_cwd(&state, &id, Some("/forged-workspace")).is_err());
+        std::fs::remove_dir_all(&record).unwrap();
+        assert!(trusted_session_history_cwd(&state, &id, None).is_err());
     }
 
     #[test]

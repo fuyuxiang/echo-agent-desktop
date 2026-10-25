@@ -23,6 +23,7 @@ interface AutomationControlsProps {
   streaming: boolean;
   onToast?: (message: string) => void;
   onContinue?: () => boolean | void | Promise<boolean | void>;
+  continueDisabled?: boolean;
   onPause?: () => boolean | void | Promise<boolean | void>;
   placement: "toolbar" | "approval";
 }
@@ -168,7 +169,7 @@ function selectedAutomationMode(mode: AgentMode): AutomationMode {
 }
 
 function AutomationToolbar({
-  sessionId, streaming, onToast, onContinue, onPause, automation,
+  sessionId, streaming, onToast, onContinue, continueDisabled = false, onPause, automation,
 }: Omit<AutomationControlsProps, "placement"> & { automation: AutomationSessionState }) {
   const agentMode = useSessionStore((state) => state.agentMode);
   const mode = selectedAutomationMode(agentMode);
@@ -200,7 +201,7 @@ function AutomationToolbar({
   return <div className="task-execution-status" role="status">
     {message && <span>{message}</span>}
     {needsPermission && <button type="button" disabled={busy} onClick={() => void run(automationRequestComputerPermissions)}>打开系统权限设置</button>}
-    {status?.paused && canContinue && onContinue && <button type="button" disabled={busy || streaming || Boolean(needsPermission) || unavailable}
+    {status?.paused && canContinue && onContinue && <button type="button" disabled={continueDisabled || busy || streaming || Boolean(needsPermission) || unavailable}
       onClick={() => void run(onContinue)}>继续任务</button>}
     {!status?.paused && !streaming && status?.computerAuthorized && onPause && <button type="button" disabled={busy}
       onClick={() => void run(onPause)}>暂停任务</button>}

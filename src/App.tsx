@@ -37,6 +37,7 @@ import { usePendingExpertStore } from "./stores/pending-expert-store";
 import {
   agentInit,
   agentNewSession,
+  agentPrepareTaskWorkspace,
   agentPrepareSend,
   agentSend,
   agentSendNow,
@@ -287,6 +288,9 @@ function Shell() {
   const [workspaces, setWorkspaces] = useState<WorkspaceInfo[]>([]);
   /** Workspace selected for the next session; independent of the active session cwd. */
   const [newSessionTargetCwd, setNewSessionTargetCwd] = useState("");
+  const [automaticWorkspace, setAutomaticWorkspace] = useState(true);
+  const taskWorkspaceRequestRef = useRef(crypto.randomUUID());
+  const projectSessionRequestsRef = useRef(new Map<string, { context: string; requestId: string; pending: boolean }>());
   /** Repository owned by the dedicated Coding Workspace. */
   const [codingWorkspaceCwd, setCodingWorkspaceCwd] = useState("");
   // Dedicated Coding projects: one active project plus a persisted recent list.
@@ -1345,7 +1349,7 @@ function Shell() {
     if (!ensureQuotaAllowsSend()) return false;
     newSessionPendingRef.current = true;
     const requestedMode = newTaskMode;
-    const cwd = newSessionTargetCwd;
+    let cwd = newSessionTargetCwd;
     const pendingExpert = usePendingExpertStore.getState().expert;
     let createdSessionId: string | null = null;
     setCreatingSession(true);
@@ -1355,7 +1359,9 @@ function Shell() {
       const draftPermissionMode = permissionState.capabilityStatus?.locked
         ? permissionState.capabilityStatus.permissionMode
         : permissionState.homeMode;
+      if (automaticWorkspace) cwd = await agentPrepareTaskWorkspace(taskWorkspaceRequestRef.current);
       const sessionId = await agentNewSession(cwd, modelId, draftPermissionMode);
+      taskWorkspaceRequestRef.current = crypto.randomUUID();
       createdSessionId = sessionId;
       if (requestedMode !== "default") {
         await setCodingMode(sessionId, requestedMode);
@@ -1477,7 +1483,9 @@ function Shell() {
         (message) => message.role === "user",
       );
       if (project && (isFirstUserTurn || projectConversation?.pendingProjectContext)) {
-        await agentsValidateReferences(project.cwd || newSessionTargetCwd, project.experts);
+        const boundCwd = findSessionSummary(sessionId)?.cwd;
+        if (!boundCwd) throw new Error("无法确认本会话的原工作目录，请重新打开任务");
+        await agentsValidateReferences(boundCwd, project.experts);
       }
       const promptBody = promptTextOverride ?? sendText;
       const { promptText: textForAgent, consumedPendingContext } = projectPromptForTurn(
@@ -1555,9 +1563,11 @@ function Shell() {
     }
     if (!ensureQuotaAllowsSend()) return false;
     try {
-      await agentPrepareSend(sessionId);
+      if (!summary?.cwd) throw new Error("无法确认原工作目录，请重新打开任务；原回复已保留");
+      await agentPrepareSend(sessionId, summary.cwd);
       return true;
     } catch (error) {
+      setTaskRefreshSignal(value => value + 1);
       showToast(`暂时无法重试：${friendlyError(error)}`, 6000);
       return false;
     }
@@ -1914,7 +1924,11 @@ function Shell() {
   // No agent re-init is needed: spawn_agent_runtime ignores its cwd and every session
   // carries its own cwd at new_session/load_session time.
   const handleSelectWorkspace = (newCwd: string) => {
-    setNewSessionTargetCwd(newCwd);
+    if (newSessionPendingRef.current) return;
+    setAutomaticWorkspace(!newCwd);
+    taskWorkspaceRequestRef.current = crypto.randomUUID();
+    setHomeSendError(null);
+    setNewSessionTargetCwd(newCwd || init?.cwd || "");
     if (!newCwd) return;
     const current = sessionsStore.getState().workspaces;
     if (current.some((workspace) => workspace.cwd === newCwd)) return;
@@ -2622,6 +2636,29 @@ function Shell() {
     handleGoHome();
   };
 
+  const createProjectSession = async (project: ProjectMeta, modelId: string) => {
+    const requests = projectSessionRequestsRef.current;
+    const previous = requests.get(project.id);
+    if (previous?.pending) {
+      showToast("正在创建项目对话，请稍候");
+      return undefined;
+    }
+    const context = JSON.stringify([project.cwd || null, modelId]);
+    const request = previous?.context === context
+      ? previous : { context, requestId: crypto.randomUUID(), pending: false };
+    request.pending = true;
+    requests.set(project.id, request);
+    try {
+      const cwd = project.cwd || await agentPrepareTaskWorkspace(request.requestId);
+      await agentsValidateReferences(cwd, project.experts);
+      const sessionId = await agentNewSession(cwd, modelId);
+      requests.delete(project.id);
+      return { sessionId, cwd };
+    } finally {
+      request.pending = false;
+    }
+  };
+
   // 进入本地项目：在项目关联目录中新建会话，并注入项目说明作为种子消息。
   const handleStartProject = async (project: ProjectMeta) => {
     const modelId = project.defaultModelId
@@ -2632,9 +2669,9 @@ function Shell() {
     let startedSessionId: string | undefined;
     try {
       setPlaceholderView(null);
-      const cwd = project.cwd || newSessionTargetCwd;
-      await agentsValidateReferences(cwd, project.experts);
-      const sessionId = await agentNewSession(cwd, modelId);
+      const created = await createProjectSession(project, modelId);
+      if (!created) return;
+      const { sessionId, cwd } = created;
       startedSessionId = sessionId;
       useKnowledgeStore.getState().bindSessionSources(sessionId, true);
       if (!project.defaultModelId) {
@@ -2700,9 +2737,9 @@ function Shell() {
     if (message && !ensureQuotaAllowsSend()) return;
     let startedSessionId: string | undefined;
     try {
-      const cwd = project.cwd || newSessionTargetCwd;
-      await agentsValidateReferences(cwd, project.experts);
-      const sessionId = await agentNewSession(cwd, modelId);
+      const created = await createProjectSession(project, modelId);
+      if (!created) return undefined;
+      const { sessionId, cwd } = created;
       startedSessionId = sessionId;
       useKnowledgeStore.getState().bindSessionSources(sessionId, true);
       if (!project.defaultModelId && !requestedModelId) {
@@ -2935,13 +2972,6 @@ function Shell() {
                     onClick={handleReturnToParentSession} aria-label={`返回上级任务：${parentSessionTitle}`} title={`返回上级任务：${parentSessionTitle}`}>
                     <ChevronLeftIcon size="sm" /><span>返回上级任务</span>
                   </button> : undefined}
-                  sessionActions={{ pinned: currentEntry?.pinned,
-                    onSessionsChanged: patch => { if (patch) sessionsStore.getState().upsert({ sessionId: currentSessionId, ...patch }); },
-                    onArchived: archived => {
-                      syncArchivedSessionState(currentSessionId, archived);
-                      if (archived) showArchivedSessionActions(currentSessionId);
-                    },
-                  }}
                   onSend={handleSendCurrent}
                   onSendNow={handleSendNowCurrent}
                   onCancel={handleCancel}
@@ -2957,6 +2987,14 @@ function Shell() {
                   onModelChange={handleModelChange}
                   cwd={activeSessionCwd}
                   onNewTask={handleNewSession}
+                  onReloadWorkspace={async (originalCwd) => {
+                    const previousError = sessionStore.getState().error;
+                    sessionsStore.getState().upsert({sessionId: currentSessionId, cwd: originalCwd});
+                    await handleSelectSession(currentSessionId, originalCwd, true, true);
+                    if (sessionStore.getState().sessionId === currentSessionId && sessionStore.getState().error === previousError) {
+                      sessionStore.getState().setError(null);
+                    }
+                  }}
                   onPrepareRetry={handlePrepareRetry}
                   onRetrySend={handleRetrySend}
                   onRewound={handleRewound}
@@ -2989,7 +3027,9 @@ function Shell() {
                   modelId={currentModelId}
                   models={models}
                   onModelChange={handleModelChange}
-                  cwd={newSessionTargetCwd}
+                  cwd={automaticWorkspace ? undefined : newSessionTargetCwd}
+                  automaticWorkspace={automaticWorkspace}
+                  defaultWorkspaceCwd={init.cwd}
                   workspaces={workspaces}
                   onSelectWorkspace={handleSelectWorkspace}
                   onSelectExpert={handleStartWithExpert}

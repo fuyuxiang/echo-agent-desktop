@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { act, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { act, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { MessageItem } from "../MessageItem";
 import { ThemeProvider } from "../ThemeProvider";
 import type { ChatMessage } from "@/stores/session-store";
@@ -195,8 +195,14 @@ describe("assistant message actions", () => {
 
   it("根据终态区分重新生成和重新执行", () => {
     const onRetry = vi.fn();
-    const { rerender } = renderMessage(completedMessage, { onRetry });
-    expect(openReplyItem("重新生成", false)).toBeEnabled();
+    const { rerender } = renderMessage(completedMessage, { onRetry, sessionId: "retry-actions" });
+    const actions = screen.getByRole("group", { name: "回复操作" });
+    expect(within(actions).getAllByRole("button").map(button => button.getAttribute("aria-label"))).toEqual([
+      "复制纯文本", "朗读回复", "重新生成", "赞", "踩", "更多回复操作",
+    ]);
+    expect(screen.getByRole("button", { name: "重新生成" })).toBeEnabled();
+    fireEvent.click(screen.getByRole("button", { name: "更多回复操作" }));
+    expect(screen.queryByRole("menuitem", { name: "重新生成" })).toBeNull();
 
     rerender(
       <ThemeProvider>
@@ -218,6 +224,7 @@ describe("assistant message actions", () => {
     expect(retry).toBeDisabled();
     expect(retry).toHaveAttribute("aria-busy", "true");
     expect(screen.queryByRole("button", { name: "复制纯文本" })).toBeNull();
+    expect(screen.queryByRole("button", { name: "更多回复操作" })).toBeNull();
   });
 
   it("只要本轮使用过工具，就明确标记为重新执行", () => {
@@ -241,7 +248,7 @@ describe("assistant message actions", () => {
       ],
     }, { onRetry });
 
-    const button = openReplyItem("重新执行", false);
+    const button = screen.getByRole("button", { name: "重新执行" });
     expect(button).toHaveAttribute("title", "重新执行本轮任务（可能再次调用工具）");
     fireEvent.click(button);
     expect(onRetry).toHaveBeenCalledWith("reexecute");

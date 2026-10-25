@@ -70,6 +70,8 @@ interface ToolSidePanelProps {
   previewRequestId?: number;
   navigationRequestId?: number;
   cwd?: string;
+  workspaceInfo?: ReactNode;
+  workspaceAvailable?: boolean;
   /** 会话消息（用于聚合文件变更）。 */
   messages?: ChatMessage[];
   /** 会话 id（用于标签页会话隔离）。 */
@@ -88,6 +90,8 @@ interface ToolSidePanelProps {
 
 export function ToolSidePanel({
   open,
+  workspaceInfo,
+  workspaceAvailable = true,
   mode,
   toolCall,
   artifacts,
@@ -350,13 +354,13 @@ export function ToolSidePanel({
       selectedArtifactId={selectedArtifactId}
       onArtifactSelect={handleArtifactSelect} />}
     {fileTreeVisit.current.visited && <div hidden={view !== "fileTree"} className="task-details__file-tree">
-      <FileTreeView key={`${sessionId}:${cwd}`} rootPath={cwd} selectedPath={selectedFilePath}
+      {workspaceAvailable ? <FileTreeView key={`${sessionId}:${cwd}`} rootPath={cwd} selectedPath={selectedFilePath} showRootInEmptyState={false}
         onFileSelect={handleFileSelect} onToast={onToast}
         initialExpandedPaths={selectionRef.current.value.fileTree?.root === cwd ? selectionRef.current.value.fileTree?.expandedPaths ?? [] : []}
         onExpandedPathsChange={expandedPaths => {
           selectionRef.current.value.fileTree = { root: cwd, expandedPaths };
           if (sessionId) sessionSelections.set(sessionId, selectionRef.current.value);
-        }} />
+        }} /> : <p className="tool-side-panel__empty">工作目录暂不可用，请先恢复连接</p>}
     </div>}
   </>;
   const selectedName = basename((view === "artifacts" ? artifacts.find(a => a.id === selectedArtifactId)?.path : selectedFilePath) ?? previewPath ?? "");
@@ -395,6 +399,7 @@ export function ToolSidePanel({
         </div>
       </header>
       {!showToolDetail && <ViewSelector view={view} views={views} onChange={handleViewChange} secondary />}
+      {view === "fileTree" && !showToolDetail && workspaceInfo}
       {onBack && <div className="task-details__breadcrumb"><button type="button" onClick={onBack}><ArrowLeft size={15} />返回上一视图</button><span>{showToolDetail ? "操作详情" : singleTab?.label ?? selectedName}</span>{closeContentButton}</div>}
       {showToolDetail && !onBack && <div className="task-details__breadcrumb"><strong>操作详情</strong></div>}
       {tabsApi.tabs.length > 0 && !singleCurrentTab && !showToolDetail && !runtimeView && <div className="task-details__tabs"><ArtifactTabsBar tabs={tabsApi.tabs} activeTabId={activeContentTab?.id} onSelect={tabsApi.setActiveTab} onClose={tabsApi.closeTab} onReorder={tabsApi.reorderTabs} /></div>}
@@ -725,6 +730,9 @@ function ArtifactFilePreview({
         <span className="file-preview__path" title={path}>
           {path}
         </span>
+        {(state.type === "ready" || (state.type === "error" && state.canOpen)) && <button
+          type="button" className="file-preview__open" disabled={opening}
+          onClick={() => void openLocalPath(path, { cwd, type: "file", onToast, revealFile: true, revealOnly: true })}>在文件夹中显示</button>}
         {(state.type === "ready" || (state.type === "error" && state.canOpen)) && (
           <button
             type="button"

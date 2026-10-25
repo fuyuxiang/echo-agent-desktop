@@ -54,7 +54,9 @@ mod projects;
 mod providers;
 mod resource_identity;
 mod session_artifacts;
+mod session_creation;
 mod session_title;
+mod session_workspace;
 mod sessions;
 mod shell_fs;
 mod skill_installer;
@@ -853,6 +855,8 @@ pub fn run() {
             commands::agent_init,
             commands::agent_auth_status,
             commands::agent_new_session,
+            commands::agent_prepare_task_workspace,
+            commands::agent_session_workspace_status,
             commands::agent_load_session,
             commands::agent_list_sessions,
             commands::agent_list_all_sessions,

@@ -70,6 +70,8 @@ export async function openLocalPath(
     onToast?: (msg: string) => void;
     /** Files are revealed by default; set false when the UI promises to open them. */
     revealFile?: boolean;
+    /** Keep a reveal action from unexpectedly launching the file on failure. */
+    revealOnly?: boolean;
   },
 ): Promise<boolean> {
   const { cwd, type, onToast: toast, revealFile = true } = opts;
@@ -88,7 +90,8 @@ export async function openLocalPath(
     }
     try {
       await invoke("reveal_in_folder", { path, cwd: cwd ?? null });
-    } catch {
+    } catch (error) {
+      if (opts.revealOnly) throw error;
       await invoke("open_path", { path, cwd: cwd ?? null });
     }
     return true;

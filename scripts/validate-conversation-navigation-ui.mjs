@@ -48,7 +48,7 @@ try {
       await page.locator(".msg-wrap--jump-target").waitFor();
       await page.getByRole("button",{name:"回到最新消息并恢复自动跟随"}).click();
     }
-    await menu("对话目录");
+    await page.locator(".conversation-nav__directory:visible, .conversation-directory-mobile:visible").click();
     const history=page.getByRole("dialog",{name:"历史提问"});
     assert(await history.getByRole("button").count()>1);
     await history.locator(".question-history__item").last().click();

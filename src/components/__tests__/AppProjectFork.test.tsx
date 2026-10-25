@@ -26,12 +26,16 @@ vi.mock("../Sidebar", () => ({ Sidebar: ({ onSelect }: { onSelect: (id: string) 
 // callback. This is a jsdom regression, not a Native or model acceptance.
 vi.mock("../ChatView", () => ({ ChatView: (props: ComponentProps<typeof import("../ChatView").ChatView>) => <div>
   <span data-testid="active-title">{props.title}</span>
+  <span data-testid="task-refresh">{props.taskRefreshSignal}</span>
+  <button onClick={() => {const id=useSessionStore.getState().sessionId; if(id) void props.onPrepareRetry?.(id);}}>预检重试</button>
   <button onClick={() => void props.onForked?.("fork", "source", "/workspace")}>接收真实fork结果</button>
   <button onClick={() => void props.onSend("继续分叉")}>分叉下一轮</button>
 </div> }));
 vi.mock("@/lib/agent-client", async (original) => ({
   ...await original<object>(), agentInit: vi.fn(), agentAuthStatus: vi.fn(), providersList: vi.fn(),
   agentListAllSessions: vi.fn(), agentListWorkspaces: vi.fn(async () => []),
+  agentsValidateReferences: vi.fn(async () => {}),
+  agentPrepareSend: vi.fn(async () => {}),
   agentLoadSession: vi.fn(async () => "model-a"), agentSend: vi.fn(async () => {}), projectsSave: vi.fn(async () => {}),
   internalReload: vi.fn(async () => {}), subscribeAgentEvents: vi.fn(async () => () => {}),
 }));
@@ -78,10 +82,23 @@ beforeEach(() => {
   vi.mocked(client.agentLoadSession).mockReset().mockResolvedValue("model-a");
   vi.mocked(client.projectsSave).mockReset().mockResolvedValue(undefined);
   vi.mocked(client.agentSend).mockReset().mockResolvedValue(undefined);
+  vi.mocked(client.agentPrepareSend).mockReset().mockResolvedValue(undefined);
   vi.mocked(invoke).mockImplementation(async (command) => command === "notification_take_pending_opens" ? [] : null);
 });
 
 describe("project fork continuation", () => {
+  it("回复预检失败后刷新目录状态，并保留已有历史", async () => {
+    await start();
+    await waitFor(() => expect(Number(screen.getByTestId("task-refresh").textContent)).toBeGreaterThan(0));
+    const before = Number(screen.getByTestId("task-refresh").textContent);
+    const messages = useSessionStore.getState().messages;
+    vi.mocked(client.agentPrepareSend).mockRejectedValueOnce(new Error("原目录已丢失"));
+    fireEvent.click(screen.getByRole("button",{name:"预检重试"}));
+    await waitFor(() => expect(client.agentPrepareSend).toHaveBeenCalledWith("source","/workspace"));
+    await waitFor(() => expect(Number(screen.getByTestId("task-refresh").textContent)).toBeGreaterThan(before));
+    expect(useSessionStore.getState().messages).toEqual(messages);
+    expect(await screen.findByText("暂时无法重试：原目录已丢失")).toBeVisible();
+  });
   it.each([true, false])("inherits pending=%s without cloning work items; next turn follows that exact contract", async (pending) => {
     await start(pending); const before = structuredClone(useProjectsStore.getState().projects[0]); completeFork();
     await waitFor(() => expect(useProjectsStore.getState().projects[0].conversations).toEqual(expect.arrayContaining([
@@ -95,6 +112,8 @@ describe("project fork continuation", () => {
     const calls = vi.mocked(client.agentSend).mock.calls;
     const sent = calls[calls.length - 1];
     expect(sent[0]).toBe("fork"); expect(sent[1].includes("保留当前项目契约")).toBe(pending);
+    if (pending) expect(client.agentsValidateReferences).toHaveBeenCalledWith("/workspace", []);
+    expect(useSessionsStore.getState().independent.find(s => s.sessionId === "fork")?.cwd).toBe("/workspace");
     const saved = useProjectsStore.getState().projects[0];
     expect(saved.plans).toEqual(before.plans); expect(saved.tasks).toEqual(before.tasks);
     expect(saved.conversations.find((item) => item.sessionId === "source")).toEqual(before.conversations[0]);

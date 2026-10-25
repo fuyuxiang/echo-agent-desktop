@@ -294,7 +294,7 @@ async fn execute(
     if !state.is_runtime_current(&tx) {
         return Err("Agent Runtime 已重新启动，请恢复协作".into());
     }
-    state.record_session_workspace(&sid, &root);
+    state.record_session_workspace(&sid, &root)?;
     // Creation may finish after Stop and a model/workspace change. Keep the
     // native session owned/hidden without reattaching that obsolete context.
     db()?.bind_owner(&sid, gid, &member.id)?;

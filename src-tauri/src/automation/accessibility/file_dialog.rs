@@ -103,14 +103,12 @@ pub(super) fn prepare<B: Native>(
     let navigation = if original.kind == "save" {
         // A trailing separator asks the system to navigate a directory, rather
         // than ambiguously treating the last component as a file candidate.
-        format!(
-            "{}/",
-            target
-                .parent()
-                .and_then(|p| p.to_str())
-                .unwrap_or("/")
-                .trim_end_matches('/')
-        )
+        target
+            .parent()
+            .unwrap_or_else(|| std::path::Path::new(std::path::MAIN_SEPARATOR_STR))
+            .join("")
+            .display()
+            .to_string()
     } else {
         path.to_owned()
     };

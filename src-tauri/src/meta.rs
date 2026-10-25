@@ -108,6 +108,9 @@ pub struct EchoAgentState {
     /// Browser Use / Computer Use survives app and renderer upgrades.
     #[serde(default)]
     pub session_agent_modes: HashMap<String, String>,
+    /// Immutable canonical directory recorded when a session is first created/loaded.
+    #[serde(default)]
+    pub session_workspaces: HashMap<String, String>,
     /// User task description, never an execution token. Restoring it stays paused.
     #[serde(default)]
     pub session_desktop_tasks: HashMap<String, String>,
@@ -125,6 +128,7 @@ impl Default for EchoAgentState {
             expert_sessions: HashMap::new(),
             session_permission_modes: HashMap::new(),
             session_agent_modes: HashMap::new(),
+            session_workspaces: HashMap::new(),
             session_desktop_tasks: HashMap::new(),
             session_statuses: HashMap::new(),
         }
@@ -220,6 +224,7 @@ fn validate_state(state: &EchoAgentState) -> Result<(), String> {
         || state.expert_sessions.len() > MAX_SESSION_ENTRIES
         || state.session_permission_modes.len() > MAX_SESSION_ENTRIES
         || state.session_agent_modes.len() > MAX_SESSION_ENTRIES
+        || state.session_workspaces.len() > MAX_SESSION_ENTRIES
         || state.session_desktop_tasks.len() > MAX_SESSION_ENTRIES
         || state.session_statuses.len() > MAX_SESSION_ENTRIES
     {
@@ -247,6 +252,11 @@ fn validate_state(state: &EchoAgentState) -> Result<(), String> {
     for (session_id, mode) in &state.session_agent_modes {
         if !valid_session_id(session_id) || !AGENT_MODES.contains(&mode.as_str()) {
             return Err("会话代理模式包含无效数据".into());
+        }
+    }
+    for (id, cwd) in &state.session_workspaces {
+        if !valid_session_id(id) || !valid_field(cwd, 16384, false) {
+            return Err("会话目录绑定无效".into());
         }
     }
     for (id, scope) in &state.session_desktop_tasks {
@@ -636,6 +646,39 @@ pub fn set_agent_mode(session_id: &str, mode: &str) -> Result<String, String> {
     set_agent_mode_at(&state_path(), session_id, mode)
 }
 
+/// Persist a binding once; reopening, project moves and Runtime restarts cannot retarget it.
+fn bind_session_workspace_at(path: &Path, session_id: &str, cwd: &str) -> Result<(), String> {
+    if !valid_session_id(session_id) || !valid_field(cwd, 16384, false) {
+        return Err("会话目录绑定无效".into());
+    }
+    update_state_at(path, |state| {
+        if let Some(original) = state.session_workspaces.get(session_id) {
+            if original != cwd {
+                return Err("本会话的工作目录已固定；如需使用其他目录，请新建任务".into());
+            }
+            return Ok(((), false));
+        }
+        if state.session_workspaces.len() >= MAX_SESSION_ENTRIES {
+            return Err("会话目录绑定数量超过上限".into());
+        }
+        state
+            .session_workspaces
+            .insert(session_id.into(), cwd.into());
+        Ok(((), true))
+    })
+}
+
+pub fn bind_session_workspace(session_id: &str, cwd: &Path) -> Result<(), String> {
+    bind_session_workspace_at(&state_path(), session_id, &cwd.to_string_lossy())
+}
+
+pub fn session_workspace(session_id: &str) -> Option<PathBuf> {
+    read_state()
+        .session_workspaces
+        .get(session_id)
+        .map(PathBuf::from)
+}
+
 pub fn desktop_task_scope(session_id: &str) -> Option<String> {
     read_state().session_desktop_tasks.get(session_id).cloned()
 }
@@ -768,6 +811,7 @@ fn clear_session_metadata_at(path: &Path, session_id: &str) -> Result<bool, Stri
         changed |= state.expert_sessions.remove(session_id).is_some();
         changed |= state.session_permission_modes.remove(session_id).is_some();
         changed |= state.session_agent_modes.remove(session_id).is_some();
+        changed |= state.session_workspaces.remove(session_id).is_some();
         changed |= state.session_desktop_tasks.remove(session_id).is_some();
         changed |= state.session_statuses.remove(session_id).is_some();
         Ok((changed, changed))
@@ -784,6 +828,26 @@ pub fn clear_session_metadata(session_id: &str) -> Result<bool, String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn workspace_binding_survives_reload_and_rejects_retargeting() {
+        let dir = tempfile::tempdir().unwrap();
+        let state_path = dir.path().join("state.json");
+        bind_session_workspace_at(&state_path, "session-a", "/original").unwrap();
+        bind_session_workspace_at(&state_path, "session-a", "/original").unwrap();
+        assert!(bind_session_workspace_at(&state_path, "session-a", "/other").is_err());
+        assert_eq!(
+            read_state_from(&state_path, true)
+                .unwrap()
+                .session_workspaces["session-a"],
+            "/original"
+        );
+        clear_session_metadata_at(&state_path, "session-a").unwrap();
+        assert!(read_state_from(&state_path, true)
+            .unwrap()
+            .session_workspaces
+            .is_empty());
+    }
 
     // --- EchoAgentState::default ---
 
@@ -809,6 +873,7 @@ mod tests {
             expert_sessions: HashMap::new(),
             session_permission_modes: HashMap::new(),
             session_agent_modes: HashMap::new(),
+            session_workspaces: HashMap::new(),
             session_desktop_tasks: HashMap::new(),
             session_statuses: HashMap::new(),
         };
@@ -827,6 +892,7 @@ mod tests {
             expert_sessions: HashMap::new(),
             session_permission_modes: HashMap::new(),
             session_agent_modes: HashMap::new(),
+            session_workspaces: HashMap::new(),
             session_desktop_tasks: HashMap::new(),
             session_statuses: HashMap::new(),
         };
@@ -854,6 +920,7 @@ mod tests {
             expert_sessions: HashMap::new(),
             session_permission_modes: HashMap::from([("s1".into(), "auto".into())]),
             session_agent_modes: HashMap::from([("s1".into(), "browser_use".into())]),
+            session_workspaces: HashMap::new(),
             session_desktop_tasks: HashMap::new(),
             session_statuses: HashMap::from([(
                 "s1".into(),
