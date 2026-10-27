@@ -28,6 +28,7 @@ impl AsyncChild {
 
 pub struct SyncChild {
     inner: Box<dyn process_wrap::std::ChildWrapper>,
+    _protection: Option<echo_agent_tools::util::process_safety::ProcessLease>,
     #[cfg(unix)]
     _node_owner: Option<std::os::unix::net::UnixStream>,
     #[cfg(windows)]
@@ -328,6 +329,53 @@ mod windows_job {
         };
         Ok(install())
     }
+
+    pub(super) fn contains_host_job(child: &std::process::Child) -> io::Result<bool> {
+        use std::os::windows::io::AsRawHandle;
+        use windows_sys::Win32::System::JobObjects::IsProcessInJob;
+        let Some(job) = host() else { return Ok(false) };
+        let mut member = 0;
+        if unsafe { IsProcessInJob(child.as_raw_handle() as _, job.0, &mut member) } == 0 {
+            return Err(io::Error::last_os_error());
+        }
+        Ok(member != 0)
+    }
+}
+
+/// The watcher must survive host death. Nested launcher Jobs may reject an
+/// explicit breakaway; a scoped silent breakaway can still leave it in the
+/// launcher's outer Job without inheriting our host's kill-on-close Job.
+pub(crate) fn spawn_crash_watcher(
+    command: &mut std::process::Command,
+) -> io::Result<std::process::Child> {
+    #[cfg(windows)]
+    {
+        use std::os::windows::process::CommandExt;
+        let mut child = match command
+            .creation_flags(CREATE_NO_WINDOW | CREATE_BREAKAWAY_FROM_JOB)
+            .spawn()
+        {
+            Ok(child) => child,
+            Err(error) if error.raw_os_error() == Some(5) => {
+                windows_job::with_installer_launch(|| {
+                    command.creation_flags(CREATE_NO_WINDOW).spawn()
+                })??
+            }
+            Err(error) => return Err(error),
+        };
+        match windows_job::contains_host_job(&child) {
+            Ok(false) => return Ok(child),
+            result => {
+                let _ = child.kill();
+                let _ = child.wait();
+                return Err(result.err().unwrap_or_else(|| {
+                    io::Error::other("crash watcher remained in the host Job")
+                }));
+            }
+        }
+    }
+    #[cfg(not(windows))]
+    command.spawn()
 }
 
 #[cfg(windows)]
@@ -397,6 +445,8 @@ pub fn spawn_sync(command: std::process::Command) -> io::Result<SyncChild> {
             return Err(error);
         }
         return Ok(SyncChild {
+            _protection: echo_agent_tools::util::process_safety::protect_tree(child.id())
+                .map_err(io::Error::other)?,
             inner: Box::new(child),
             job,
         });
@@ -406,9 +456,18 @@ pub fn spawn_sync(command: std::process::Command) -> io::Result<SyncChild> {
         use process_wrap::std::*;
         let mut wrapped = CommandWrap::from(command);
         wrapped.wrap(ProcessGroup::leader());
-        let inner = wrapped.spawn()?;
+        let mut inner = wrapped.spawn()?;
+        let protection = match echo_agent_tools::util::process_safety::protect_tree(inner.id()) {
+            Ok(protection) => protection,
+            Err(error) => {
+                let _ = inner.start_kill();
+                let _ = inner.wait();
+                return Err(io::Error::other(error));
+            }
+        };
         Ok(SyncChild {
             inner,
+            _protection: protection,
             _node_owner: None,
         })
     }

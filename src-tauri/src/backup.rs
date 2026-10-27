@@ -42,6 +42,7 @@ const DIRS: &[&str] = &[
 pub const UI_KEYS: &[&str] = &[
     "echoagent.projects",
     "echoagent.drafts.v1",
+    "echoagent.recovery-session.v1",
     "echoagent.group-drafts.v1",
     "echoagent.group-read.v1",
     "echoagent.group-outbox.v1",

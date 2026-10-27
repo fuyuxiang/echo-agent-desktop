@@ -73,6 +73,7 @@ vi.mock("@/lib/agent-client", async (original) => ({
 }));
 
 import App from "@/App";
+import { saveRecoverySessionId, readRecoverySessionId } from "@/lib/recovery-context";
 import * as client from "@/lib/agent-client";
 import { useSessionsStore } from "@/stores/sessions-store";
 import { useSessionStore } from "@/stores/session-store";
@@ -256,6 +257,130 @@ describe("自动化会话模型同步", () => {
     await screen.findByText("首页");
     expect(client.agentInit).toHaveBeenCalledTimes(2);
     expect(useSessionsStore.getState().independent.some((entry) => entry.sessionId === "auto-1")).toBe(true);
+  });
+
+  it("新文档恢复原任务，核验目录并加载历史后才允许继续发送", async () => {
+    saveRecoverySessionId("auto-1");
+    useSessionsStore.getState().setDraft("auto-1", "尚未发送的草稿");
+    vi.mocked(invoke).mockImplementation(async command => command === "desktop_recovery_status"
+      ? { phase: "restored" } : command === "notification_take_pending_opens" ? [] : null);
+    vi.mocked(client.agentListAllSessions).mockResolvedValue([
+      { sessionId: "auto-1", cwd: "/actual-workspace", title: "原任务", currentModelId: "model-a" },
+    ]);
+    let finish!: (model: string) => void;
+    vi.mocked(client.agentLoadSession).mockImplementationOnce(() => new Promise(resolve => { finish = resolve; }));
+    render(<App />);
+    await waitFor(() => expect(client.agentLoadSession).toHaveBeenCalledWith("auto-1", "/actual-workspace"));
+    expect(screen.queryByText("追问")).toBeNull();
+    await act(async () => finish("model-a"));
+    await waitFor(() => expect(screen.getByText("追问")).toBeEnabled());
+    expect(useSessionsStore.getState().currentSessionId).toBe("auto-1");
+    expect(useSessionsStore.getState().drafts["auto-1"]).toBe("尚未发送的草稿");
+    expect(client.agentSend).not.toHaveBeenCalled();
+    expect(client.agentInit).toHaveBeenCalledTimes(1);
+  });
+
+  it.each(["stopped", "working"] as const)("恢复 %s 任务时只结束已中断的历史轮次，保留仍在执行的任务", async status => {
+    saveRecoverySessionId("auto-1");
+    vi.mocked(invoke).mockImplementation(async command => command === "desktop_recovery_status"
+      ? { phase: "restored" } : command === "notification_take_pending_opens" ? [] : null);
+    vi.mocked(client.agentListAllSessions).mockResolvedValue([
+      { sessionId: "auto-1", cwd: "/workspace", title: "原任务", status, currentModelId: "model-a" },
+    ]);
+    vi.mocked(client.agentLoadSession).mockImplementationOnce(async () => {
+      handlers.onUpdate?.({ __sessionId: "auto-1", sessionUpdate: "agent_message_chunk",
+        content: { type: "text", text: "恢复的回复" }, _meta: { isReplay: true } } as never);
+      return "model-a";
+    });
+    render(<App />);
+    await waitFor(() => expect(screen.getByText("追问")).toBeEnabled());
+    expect(useSessionStore.getState().streaming).toBe(status === "working");
+    expect(client.agentSend).not.toHaveBeenCalled();
+  });
+
+  it("恢复首次回放中途失败后，重试重新加载完整历史而不保留半份缓存", async () => {
+    saveRecoverySessionId("auto-1");
+    vi.mocked(invoke).mockImplementation(async command => command === "desktop_recovery_status"
+      ? { phase: "restored" } : command === "notification_take_pending_opens" ? [] : null);
+    vi.mocked(client.agentListAllSessions).mockResolvedValue([
+      { sessionId: "auto-1", cwd: "/workspace", title: "原任务", status: "stopped", currentModelId: "model-a" },
+    ]);
+    const replay = (text: string) => handlers.onUpdate?.({ __sessionId: "auto-1", sessionUpdate: "agent_message_chunk",
+      content: { type: "text", text }, _meta: { isReplay: true, promptIndex: 3 } } as never);
+    vi.mocked(client.agentLoadSession).mockImplementationOnce(async () => {
+      replay("不完整历史"); throw new Error("历史读取中断");
+    }).mockImplementationOnce(async () => { replay("完整历史"); return "model-a"; });
+    render(<App />);
+    await screen.findByText(/历史读取中断/);
+    fireEvent.click(screen.getByRole("button", { name: "重试初始化" }));
+    await waitFor(() => expect(screen.getByText("追问")).toBeEnabled());
+    const texts = useSessionStore.getState().messages.flatMap(message => message.parts.flatMap(part => part.kind === "text" ? [part.text] : []));
+    expect(texts).toEqual(["完整历史"]);
+    expect(client.agentSend).not.toHaveBeenCalled();
+  });
+
+  it("普通启动保留首页，不因上次任务记录自动加载会话", async () => {
+    saveRecoverySessionId("auto-1");
+    vi.mocked(invoke).mockImplementation(async command => command === "desktop_recovery_status"
+      ? { phase: "ready" } : command === "notification_take_pending_opens" ? [] : null);
+    await start();
+    expect(client.agentLoadSession).not.toHaveBeenCalled();
+    expect(useSessionsStore.getState().currentSessionId).toBeNull();
+  });
+
+  it("原任务已归档时回到首页并说明原因，不恢复已归档任务", async () => {
+    saveRecoverySessionId("auto-1");
+    vi.mocked(invoke).mockImplementation(async command => command === "desktop_recovery_status"
+      ? { phase: "restored" } : command === "notification_take_pending_opens" ? [] : null);
+    vi.mocked(client.agentListAllSessions).mockResolvedValue([
+      { sessionId: "auto-1", cwd: "/workspace", title: "已归档任务", archived: true },
+    ]);
+    await start();
+    expect(client.agentLoadSession).not.toHaveBeenCalled();
+    expect(readRecoverySessionId()).toBeNull();
+    expect(screen.getByText(/原任务已删除、归档或无法访问/)).toBeVisible();
+  });
+
+  it("恢复期间用户主动导航不会被迟到的恢复结果拉回旧任务", async () => {
+    saveRecoverySessionId("auto-1");
+    vi.mocked(invoke).mockImplementation(async command => command === "desktop_recovery_status"
+      ? { phase: "restored" } : command === "notification_take_pending_opens" ? [] : null);
+    let complete!: (entries: Awaited<ReturnType<typeof client.agentListAllSessions>>) => void;
+    vi.mocked(client.agentListAllSessions).mockImplementationOnce(() => new Promise(resolve => { complete = resolve; }));
+    render(<App />);
+    await waitFor(() => expect(client.agentListAllSessions).toHaveBeenCalled());
+    fireEvent.click(screen.getByText("打开项目页"));
+    await act(async () => complete([{ sessionId: "auto-1", cwd: "/workspace", title: "原任务" }]));
+    await screen.findByText("执行项目任务");
+    expect(client.agentLoadSession).not.toHaveBeenCalled();
+    expect(useSessionsStore.getState().currentSessionId).toBeNull();
+  });
+
+  it("引擎异常退出后自动重建并加载原会话，不重新发送任务", async () => {
+    await start(); created("model-a");
+    act(() => {
+      useSessionsStore.getState().setCurrent("auto-1");
+      useSessionStore.getState().setSession("auto-1");
+    });
+    vi.mocked(client.agentListAllSessions).mockResolvedValue([...useSessionsStore.getState().independent]);
+    act(() => handlers.onAgentDied?.({ reason: "isolated automatic recovery" }));
+    await screen.findByRole("button", { name: "停止自动恢复" });
+    await waitFor(() => expect(client.agentInit).toHaveBeenCalledTimes(2), { timeout: 5000 });
+    await waitFor(() => expect(client.agentLoadSession).toHaveBeenCalledWith("auto-1", "/workspace"));
+    expect(client.agentSend).not.toHaveBeenCalled();
+    expect(useSessionsStore.getState().currentSessionId).toBe("auto-1");
+  });
+
+  it("用户可以停止自动恢复，停止后不会在后台再次初始化", async () => {
+    await start();
+    vi.useFakeTimers();
+    try {
+      await act(async () => handlers.onAgentDied?.({ reason: "stopped recovery" }));
+      fireEvent.click(screen.getByRole("button", { name: "停止自动恢复" }));
+      await act(async () => { await vi.advanceTimersByTimeAsync(10_000); });
+      expect(client.agentInit).toHaveBeenCalledTimes(1);
+      expect(screen.getByRole("button", { name: "重试初始化" })).toBeVisible();
+    } finally { vi.useRealTimers(); }
   });
 
   it("崩溃恢复先加载当前会话，加载完成后才允许继续发送", async () => {

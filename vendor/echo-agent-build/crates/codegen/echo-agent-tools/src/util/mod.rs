@@ -10,6 +10,7 @@ pub mod image_compress;
 pub mod image_validate;
 pub mod mcp_truncate;
 pub mod path_suggestions;
+pub mod process_safety;
 pub(crate) mod query_tools;
 pub mod remap;
 pub mod serde_base64;

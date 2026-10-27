@@ -1,7 +1,7 @@
 import { invoke } from "@tauri-apps/api/core";
 
 export const BACKUP_UI_KEYS = [
-  "echoagent.projects", "echoagent.drafts.v1", "echoagent.group-drafts.v1", "echoagent.group-read.v1", "echoagent.group-outbox.v1", "echoagent.outbox.v1",
+  "echoagent.projects", "echoagent.drafts.v1", "echoagent.recovery-session.v1", "echoagent.group-drafts.v1", "echoagent.group-read.v1", "echoagent.group-outbox.v1", "echoagent.outbox.v1",
   "echoagent.draft-attachments.v1", "echoagent.task-artifacts.v1", "echo.meeting-drafts.v1", "echo.meeting-drafts.v1.recovery",
   "echoagent.usage", "echoagent.quota", "echoagent.usage-snapshots.v1",
   "echoagent.theme", "echoagent.fontSize",

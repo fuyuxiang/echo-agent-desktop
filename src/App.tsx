@@ -12,6 +12,9 @@ import { CapabilitySection } from "./components/CapabilitySection";
 import { isCapabilityView } from "./lib/capability-navigation";
 import { Toast, type ToastAction } from "./components/Toast";
 import { useToastQueue } from "./lib/use-toast-queue";
+import { useRendererRecoveryStatus, type RendererRecoveryStatus } from "./lib/renderer-recovery";
+import { readRecoverySessionId, saveRecoverySessionId } from "./lib/recovery-context";
+import { planRecoveryAttempt, MAX_RECOVERY_ATTEMPTS } from "./lib/recovery-policy";
 import { toastMessage, type ToastMessageKind } from "./lib/toast-message";
 import { memoryDreamMessage, memoryFlushMessage } from "./lib/memory-feedback";
 // PermissionDialog is now inline in ChatView (PermissionInlineCard), not a global modal.
@@ -252,6 +255,13 @@ function Shell() {
   const [initAttempt, setInitAttempt] = useState(0);
   const [exitPreparing, setExitPreparing] = useState(false);
   const runtimeRecoveryRequested = useRef(false);
+  const [recoverySessionId] = useState(readRecoverySessionId);
+  const rendererRestoreChecked = useRef(false);
+  const rendererHistoryPending = useRef(false);
+  const runtimeRecoveryAttempts = useRef<number[]>([]);
+  const runtimeRecoverySuppressed = useRef(false);
+  const [runtimeAutoRetry, setRuntimeAutoRetry] = useState<number | null>(null);
+  const rendererRecovery = useRendererRecoveryStatus();
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [settingsSection, setSettingsSection] = useState<SettingsSectionId>("model");
   const [searchOpen, setSearchOpen] = useState(false);
@@ -270,6 +280,29 @@ function Shell() {
   const sidebarLayout = useAppSidebarLayout();
   const { collapsed: sidebarCollapsed, setCollapsed: setSidebarCollapsed } = sidebarLayout;
   const { toasts, enqueueToast, dismissToast, pauseToast } = useToastQueue();
+  useEffect(() => {
+    if (rendererRecovery?.phase === "restored") {
+      enqueueToast(rendererRecovery.message, [], 8000);
+    }
+  }, [rendererRecovery?.phase, rendererRecovery?.windowGeneration, rendererRecovery?.attempt, enqueueToast]);
+
+  useEffect(() => {
+    if (!initError || !runtimeRecoveryRequested.current || exitPreparing || runtimeRecoverySuppressed.current) {
+      setRuntimeAutoRetry(null);
+      return;
+    }
+    const plan = planRecoveryAttempt(runtimeRecoveryAttempts.current, Date.now());
+    if (!plan) { setRuntimeAutoRetry(null); return; }
+    setRuntimeAutoRetry(plan.attempt);
+    const timer = setTimeout(() => {
+      runtimeRecoveryAttempts.current = [...plan.attempts, Date.now()];
+      setInit(null);
+      setInitError(null);
+      setInitAttempt((value) => value + 1);
+    }, plan.delay);
+    return () => clearTimeout(timer);
+  }, [initError, exitPreparing]);
+
   const [currentModelId, setCurrentModelId] = useState<string | undefined>(undefined);
   const newSessionModelOverrideRef = useRef<string | undefined>(undefined);
   const recommendedModelIdRef = useRef<string | undefined>(undefined);
@@ -598,8 +631,37 @@ function Shell() {
     reportEvent("app_started", "info");
 
     (async () => {
+      const selectionAtStart = selectionGenerationRef.current;
       try {
         const result = await agentInit();
+        if (disposed) return;
+        // A new document has no React/Zustand selection. Restore identity from
+        // its checkpoint only after native recovery, never on an ordinary boot
+        // and never over a newer user navigation. Do not replay the prompt.
+        if (recoverySessionId && !rendererRestoreChecked.current && !runtimeRecoveryRequested.current) {
+          const recovery = await invoke<RendererRecoveryStatus | null>("desktop_recovery_status").catch(() => null);
+          if (disposed) return;
+          if ((recovery?.phase === "restored" || recovery?.phase === "recovering")
+              && selectionGenerationRef.current === selectionAtStart
+              && !sessionsStore.getState().currentSessionId) {
+            const catalog = await agentListAllSessions(true);
+            if (disposed) return;
+            if (selectionGenerationRef.current === selectionAtStart && !sessionsStore.getState().currentSessionId) {
+              const entry = catalog.find((session) => session.sessionId === recoverySessionId && !session.archived
+                && !sessionsStore.getState().deletedSessionIds.includes(session.sessionId));
+              if (entry) {
+                sessionsStore.getState().mergeSessions(catalog);
+                sessionsStore.getState().setCurrent(entry.sessionId);
+                rendererHistoryPending.current = true;
+                runtimeRecoveryRequested.current = true;
+              } else {
+                saveRecoverySessionId(null);
+                enqueueToast("界面已恢复，原任务已删除、归档或无法访问，请从任务列表选择其他任务。", [], 8000);
+              }
+            }
+          }
+          rendererRestoreChecked.current = true;
+        }
         // EchoAgent rejects an empty cwd, so every session needs an absolute
         // execution directory. It does not determine sidebar ownership: all
         // sessions enter the catalog and explicit project references determine
@@ -952,7 +1014,7 @@ function Shell() {
             // A replacement Runtime has no loaded sessions, even though the
             // renderer retains their transcripts and catalog entries.
             runtimeRecoveryRequested.current = true;
-            const message = `AI 引擎异常退出：${reason}。可以重试初始化，已有会话会保留。`;
+            const message = `AI 引擎异常退出：${reason}。已有会话会保留；未完成操作不会自动重放。`;
             setInitError(message);
             enqueueToast(`⚠️ ${message}`, [], 8000);
             setInit((previous) => previous
@@ -1029,11 +1091,24 @@ function Shell() {
           const sessionId = sessionsStore.getState().currentSessionId;
           const entry = sessionId ? findSessionSummary(sessionId) : undefined;
           if (entry && !sessionsStore.getState().deletedSessionIds.includes(entry.sessionId)) {
+            // A failed first replay may have populated only part of history.
+            // Refetch that projection on retry instead of suppressing it as a
+            // complete cached transcript. All input remains in durable drafts.
+            if (rendererHistoryPending.current) sessionStore.getState().dropSessionCache(entry.sessionId);
             sessionStore.getState().setSession(entry.sessionId);
             let loadedModel: string | null;
+            let historyLoaded = false;
             try {
               loadedModel = await agentLoadSession(entry.sessionId, entry.cwd);
+              historyLoaded = true;
+              rendererHistoryPending.current = false;
             } finally {
+              const status = findSessionSummary(entry.sessionId)?.status;
+              // A host crash can leave history without a terminal event. A
+              // healthy Runtime may still own a live turn during UI recovery.
+              if (!isAgentOwnedActiveStatus(status)) {
+                sessionStore.getState().finalizeIncompleteReplay(entry.sessionId, historyLoaded && status === "completed");
+              }
               sessionStore.getState().clearReplaySuppression(entry.sessionId);
             }
             if (disposed) return;
@@ -1063,6 +1138,8 @@ function Shell() {
     };
   }, [
     initAttempt,
+    recoverySessionId,
+    enqueueToast,
     sessionStore,
     sessionsStore,
     permissionStore,
@@ -2938,12 +3015,14 @@ function Shell() {
           )}
           {initError ? (
             <div className="app__notice app__notice--err">
-              初始化失败:{initError}
+              {runtimeAutoRetry !== null ? `AI 引擎将在稍后自动恢复（${runtimeAutoRetry}/${MAX_RECOVERY_ATTEMPTS}）：` : runtimeRecoveryRequested.current && runtimeRecoveryAttempts.current.length >= MAX_RECOVERY_ATTEMPTS ? "自动恢复已暂停，请手动重试：" : "初始化未完成："}{initError}
               <br />
               <button
                 type="button"
                 className="btn btn--primary"
                 onClick={() => {
+                  runtimeRecoveryAttempts.current = [];
+                  runtimeRecoverySuppressed.current = false;
                   setInit(null);
                   setInitError(null);
                   setInitAttempt((attempt) => attempt + 1);
@@ -2951,6 +3030,11 @@ function Shell() {
               >
                 重试初始化
               </button>
+              {runtimeAutoRetry !== null && <button type="button" className="btn" onClick={() => {
+                runtimeRecoverySuppressed.current = true;
+                setRuntimeAutoRetry(null);
+                setInitError((error) => `${error ?? "AI 引擎暂不可用"} 自动恢复已停止，可手动重试。`);
+              }}>停止自动恢复</button>}
             </div>
           ) : !init ? (
             <div className="app__notice">正在准备任务执行环境…</div>

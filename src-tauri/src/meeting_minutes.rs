@@ -383,6 +383,75 @@ pub fn meeting_finish_recording(meeting_id: String) -> Result<MeetingRecord, Str
     Ok(record)
 }
 
+/// Only called after a confirmed renderer/host failure. Native loopback capture
+/// keeps running independently and must not be stopped by UI reconstruction.
+pub(crate) fn recover_renderer_recordings() -> Result<usize, String> {
+    recover_interrupted_recordings(false)
+}
+
+/// Run once at startup, before any native capture is created. An earlier host
+/// may have died with system/mixed audio as well as microphone capture active.
+pub(crate) fn recover_host_recordings() -> Result<usize, String> {
+    recover_interrupted_recordings(true)
+}
+
+fn needs_recording_recovery(record: &MeetingRecord, host_failed: bool) -> bool {
+    matches!(record.status.as_str(), "recording" | "paused")
+        && (host_failed || matches!(record.capture_source.as_deref(), Some("microphone") | None))
+}
+
+fn finalize_interrupted_recording(
+    record: &mut MeetingRecord,
+    host_failed: bool,
+) -> Result<(), String> {
+    record.recorded_samples = crate::recording_recovery::recover_pcm_wav(
+        Path::new(&record.audio_path), MAX_RECORDING_SAMPLES,
+    )?;
+    record.duration_seconds = record.recorded_samples as f64 / SAMPLE_RATE as f64;
+    if record.recorded_samples > 0 {
+        record.status = "recorded".into();
+    } else {
+        record.status = "interrupted".into();
+    }
+    record.error = Some(if host_failed {
+        "录音因应用异常退出中断，已写入本机的音频仍保留；尚未写入的尾段无法恢复，请核对录音内容。"
+    } else {
+        "麦克风录音因界面异常中断，已写入本机的音频仍保留；尚未写入的尾段无法恢复，请核对录音内容。"
+    }.into());
+    record.updated_at = now_millis();
+    Ok(())
+}
+
+fn recover_interrupted_recordings(host_failed: bool) -> Result<usize, String> {
+    let mut recovered = 0;
+    let mut errors = Vec::new();
+    for record in meeting_list()? {
+        if !needs_recording_recovery(&record, host_failed) {
+            continue;
+        }
+        let result = (|| -> Result<bool, String> {
+            let _job = MeetingJobGuard::acquire(&record.id)?;
+            let mut record = read_meeting(&record.id)?;
+            if !needs_recording_recovery(&record, host_failed) {
+                return Ok(false);
+            }
+            finalize_interrupted_recording(&mut record, host_failed)?;
+            save_meeting(&record)?;
+            Ok(true)
+        })();
+        match result {
+            Ok(true) => recovered += 1,
+            Ok(false) => {}
+            Err(error) => errors.push(format!("{}：{error}", record.id)),
+        }
+    }
+    if errors.is_empty() {
+        Ok(recovered)
+    } else {
+        Err(errors.join("；"))
+    }
+}
+
 fn decode_audio_to_wav(source: &Path, destination: &Path) -> Result<u64, String> {
     use symphonia::core::audio::SampleBuffer;
     use symphonia::core::codecs::DecoderOptions;
@@ -1398,6 +1467,57 @@ mod tests {
         let bytes = fs::read(audio_path).unwrap();
         assert_eq!(&bytes[44..], &[1, 0, 2, 0, 3, 0]);
         assert_eq!(record.recorded_samples, 3);
+    }
+
+    #[test]
+    fn interrupted_recordings_keep_saved_audio_and_explain_empty_capture() {
+        let directory = tempfile::tempdir().unwrap();
+        let audio_path = directory.path().join("中断录音.wav");
+        write_wav_header(&mut File::create(&audio_path).unwrap(), 0).unwrap();
+        let mut record = test_record(audio_path.clone());
+        append_recording_samples(&mut record, &[1, -2, 3], |_| Ok(())).unwrap();
+        finalize_interrupted_recording(&mut record, false).unwrap();
+        let bytes = fs::read(audio_path).unwrap();
+        assert_eq!(record.status, "recorded");
+        assert_eq!(&bytes[40..44], &6u32.to_le_bytes());
+        assert_eq!(&bytes[44..], &[1, 0, 254, 255, 3, 0]);
+        assert!(record.error.unwrap().contains("尾段无法恢复"));
+        let empty_path = directory.path().join("空录音.wav");
+        write_wav_header(&mut File::create(&empty_path).unwrap(), 0).unwrap();
+        let mut empty = test_record(empty_path);
+        finalize_interrupted_recording(&mut empty, true).unwrap();
+        assert_eq!(empty.status, "interrupted");
+        assert!(empty.error.unwrap().contains("应用异常退出"));
+    }
+
+    #[test]
+    fn recovery_reconciles_audio_written_before_manifest_commit() {
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("stale-manifest.wav");
+        for saved_samples in [0, 1, 9] {
+            write_wav_header(&mut File::create(&path).unwrap(), 0).unwrap();
+            append_samples(&path, &[1, -2, 3]).unwrap();
+            let mut record = test_record(path.clone());
+            record.recorded_samples = saved_samples;
+            finalize_interrupted_recording(&mut record, true).unwrap();
+            assert_eq!(record.status, "recorded");
+            assert_eq!(record.recorded_samples, 3);
+            assert_eq!(record.duration_seconds, 3.0 / SAMPLE_RATE as f64);
+            assert_eq!(&fs::read(&path).unwrap()[40..44], &6u32.to_le_bytes());
+        }
+    }
+
+    #[test]
+    fn renderer_recovery_preserves_native_capture_but_host_recovery_finalizes_it() {
+        let mut record = test_record(PathBuf::new());
+        assert!(needs_recording_recovery(&record, false));
+        for source in ["system", "both"] {
+            record.capture_source = Some(source.into());
+            assert!(!needs_recording_recovery(&record, false));
+            assert!(needs_recording_recovery(&record, true));
+        }
+        record.status = "recorded".into();
+        assert!(!needs_recording_recovery(&record, true));
     }
 
     #[test]

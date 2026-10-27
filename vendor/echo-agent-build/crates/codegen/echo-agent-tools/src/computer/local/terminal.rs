@@ -615,6 +615,9 @@ impl LocalTerminalActor {
         cwd: &std::path::Path,
         env: &HashMap<String, String>,
     ) -> Result<SpawnResult, ComputerError> {
+        crate::util::process_safety::check_command_in(command, cwd).map_err(|error| {
+            ComputerError::io_with_kind(error, std::io::ErrorKind::PermissionDenied)
+        })?;
         #[cfg(unix)]
         if self.persistent_shell {
             return self.spawn_persistent_command(command, cwd, env).await;

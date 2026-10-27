@@ -27,6 +27,7 @@ mod document_export;
 mod expert_avatar;
 mod ext;
 mod groups;
+mod host_watchdog;
 mod knowledge_traces;
 mod live_info_mcp;
 mod logging;
@@ -49,10 +50,13 @@ mod paths;
 mod permission_config;
 mod personal_knowledge;
 mod policy;
+mod process_identity;
 mod process_supervisor;
 mod projects;
 mod provider_response;
 mod providers;
+mod recovery_policy;
+mod recording_recovery;
 mod resource_identity;
 mod session_artifacts;
 mod session_creation;
@@ -66,6 +70,7 @@ mod storage;
 mod team_mcp;
 mod team_orchestration;
 mod theia;
+mod webview_recovery;
 mod weixin;
 
 use bridge::{FolderTrusts, Permissions, PlanApprovals, Questions};
@@ -175,6 +180,20 @@ fn renderer_save_confirmation_required(
 }
 
 async fn prepare_recording_for_exit(app: &tauri::AppHandle) -> Result<(), String> {
+    if webview_recovery::unavailable(app) {
+        use tauri_plugin_dialog::{DialogExt, MessageDialogButtons, MessageDialogKind};
+        let (sender, answer) = tokio::sync::oneshot::channel();
+        app.dialog().message("界面尚未恢复，无法确认界面内的未保存修改。已写入本机的会话和录音会保留；可以取消退出并重试恢复，或保存现有录音后退出。")
+            .title("退出 EchoAgent")
+            .kind(MessageDialogKind::Warning)
+            .buttons(MessageDialogButtons::OkCancelCustom("保存现有录音并退出".into(), "取消退出".into()))
+            .show(move |accepted| { let _ = sender.send(accepted); });
+        if !answer.await.unwrap_or(false) {
+            return Err("已取消退出，可从系统托盘重试恢复界面".into());
+        }
+        meeting_capture::finish_before_exit().await?;
+        return meeting_minutes::recover_renderer_recordings().map(|_| ());
+    }
     let listener_ready = EXIT_LISTENER_READY.load(Ordering::Acquire);
     // Before the renderer has ever installed its recording guard, a failed or
     // still-loading startup with no recording must remain able to quit.
@@ -282,6 +301,7 @@ fn desktop_exit_listener_ready(
 }
 
 pub(crate) fn abort_prepared_exit(app: &tauri::AppHandle, error: String, runtime_stopped: bool) {
+    host_watchdog::cancel_exit();
     let request_id = ACTIVE_EXIT_REQUEST
         .lock()
         .ok()
@@ -306,6 +326,8 @@ pub(crate) async fn prepare_application_exit(app: &tauri::AppHandle) -> Result<(
     if !try_begin_exit(&EXIT_IN_PROGRESS) {
         return Err("应用正在退出、恢复或更新，请稍候".into());
     }
+    host_watchdog::prepare_exit();
+    webview_recovery::pause_for_exit(app);
     if let Err(error) = prepare_recording_for_exit(app).await {
         abort_prepared_exit(app, error.clone(), false);
         return Err(error);
@@ -318,6 +340,7 @@ pub(crate) async fn shutdown_application_for_exit(app: &tauri::AppHandle) -> Res
 }
 
 pub(crate) fn complete_prepared_exit(app: tauri::AppHandle, restart: bool) {
+    host_watchdog::finish_exit();
     EXIT_READY.store(true, Ordering::Release);
     if restart {
         app.restart();
@@ -393,8 +416,16 @@ const DESKTOP_MIN_HEIGHT: f64 = 680.0;
 fn show_main_window(app: &tauri::AppHandle) {
     use tauri::Manager;
 
+    if app
+        .try_state::<webview_recovery::RendererRecovery>()
+        .is_some_and(|state| webview_recovery::desktop_recovery_status(state).phase_is_failed())
+        || app.get_webview_window("main").is_none()
+    {
+        webview_recovery::retry(app);
+    }
     if let Some(window) = app.get_webview_window("main") {
         let _ = window.show();
+        host_watchdog::visibility(true);
         let _ = window.unminimize();
         let _ = window.set_focus();
     }
@@ -497,6 +528,8 @@ struct DesktopWindowState {
     width: f64,
     height: f64,
     maximized: bool,
+    #[serde(default)]
+    position: Option<(i32, i32)>,
 }
 
 #[cfg(any(target_os = "macos", target_os = "windows", target_os = "linux"))]
@@ -531,6 +564,7 @@ fn save_desktop_window_state(app: &tauri::AppHandle, window: &tauri::WebviewWind
         width: logical.width,
         height: logical.height,
         maximized,
+        position: window.outer_position().ok().map(|p| (p.x, p.y)),
     };
     if let Ok(payload) = serde_json::to_vec(&state) {
         let _ = crate::paths::write_private_file(&path, &payload);
@@ -565,9 +599,94 @@ fn restore_desktop_window_state(app: &tauri::AppHandle, window: &tauri::WebviewW
     let height = state.height.clamp(DESKTOP_MIN_HEIGHT, max_height);
     let _ = window.set_size(Size::Logical(LogicalSize::new(width, height)));
     let _ = window.center();
+    if let Some((x, y)) = state.position {
+        let visible = window
+            .available_monitors()
+            .unwrap_or_default()
+            .iter()
+            .any(|monitor| {
+                let origin = monitor.position();
+                let size = monitor.size();
+                i64::from(x) + 64 >= i64::from(origin.x)
+                    && i64::from(y) + 64 >= i64::from(origin.y)
+                    && i64::from(x) < i64::from(origin.x) + i64::from(size.width) - 64
+                    && i64::from(y) < i64::from(origin.y) + i64::from(size.height) - 64
+            });
+        if visible {
+            let _ = window.set_position(tauri::PhysicalPosition::new(x, y));
+        }
+    }
     if state.maximized {
         let _ = window.maximize();
     }
+}
+
+#[cfg(any(target_os = "macos", target_os = "windows", target_os = "linux"))]
+fn bind_main_window_lifecycle(app: &tauri::AppHandle, window: &tauri::WebviewWindow) {
+    use tauri::{DragDropEvent, Manager, WindowEvent};
+    use tauri_plugin_notification::NotificationExt;
+    restore_desktop_window_state(app, window);
+    let app_handle = app.clone();
+    let close_window = window.clone();
+    window.on_window_event(move |event| match event {
+        WindowEvent::DragDrop(DragDropEvent::Drop { paths, .. }) => {
+            let access = app_handle.state::<shell_fs::FilesystemAccess>();
+            // Mirror the stats command's hard batch cap so one oversized
+            // native drop cannot consume the process-wide exact-file grant
+            // budget for paths the Composer will never inspect.
+            for path in paths.iter().take(shell_fs::MAX_PICKED_FILES) {
+                if !attachment_blob::is_supported_attachment_path(path) {
+                    continue;
+                }
+                if let Err(error) = access.authorize_file(path) {
+                    tracing::warn!(path = %path.display(), %error, "failed to authorize dropped file");
+                }
+            }
+        }
+        WindowEvent::Moved(_) | WindowEvent::Resized(_) => {
+            save_desktop_window_state(&app_handle, &close_window);
+        }
+        WindowEvent::CloseRequested { api, .. } => {
+            save_desktop_window_state(&app_handle, &close_window);
+            api.prevent_close();
+            let close_to_tray = desktop_preferences::load(&app_handle)
+                .map(|preferences| preferences.close_to_tray)
+                .unwrap_or_else(|error| {
+                    tracing::warn!(%error, "failed to read desktop preferences; keeping app alive");
+                    true
+                });
+            if close_to_tray {
+                match close_window.hide() {
+                    Ok(()) => {
+                        host_watchdog::visibility(false);
+                        if desktop_preferences::take_background_notice(&app_handle)
+                            .unwrap_or_else(|error| {
+                                tracing::warn!(%error, "failed to persist background notice state");
+                                false
+                            })
+                        {
+                            if let Err(error) = app_handle
+                                .notification()
+                                .builder()
+                                .title("EchoAgent 已在后台运行")
+                                .body("从系统托盘选择“打开 EchoAgent”可恢复窗口；选择“退出 EchoAgent”可完全退出。")
+                                .show()
+                            {
+                                tracing::warn!(%error, "failed to show background residency notification");
+                            }
+                        }
+                    }
+                    Err(error) => {
+                        tracing::error!(%error, "failed to hide main window");
+                        show_main_window(&app_handle);
+                    }
+                }
+            } else {
+                request_graceful_exit(app_handle.clone());
+            }
+        }
+        _ => {}
+    });
 }
 
 #[cfg(any(target_os = "macos", target_os = "windows", target_os = "linux"))]
@@ -575,12 +694,10 @@ fn setup_desktop_lifecycle(app: &mut tauri::App) -> Result<(), Box<dyn std::erro
     use tauri::{
         menu::{Menu, MenuItem},
         tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent},
-        DragDropEvent, Manager, WindowEvent,
+        Manager,
     };
     #[cfg(target_os = "macos")]
     use tauri_plugin_autostart::MacosLauncher;
-    use tauri_plugin_notification::NotificationExt;
-
     let custom_home = paths::redirected_data_home();
     let launch = autostart_launch_spec(&app.package_info().name, custom_home.as_deref())?;
     let autostart = tauri_plugin_autostart::Builder::new()
@@ -594,7 +711,7 @@ fn setup_desktop_lifecycle(app: &mut tauri::App) -> Result<(), Box<dyn std::erro
     let show = MenuItem::with_id(app, "show", "打开 EchoAgent", true, None::<&str>)?;
     let quit = MenuItem::with_id(app, "quit", "退出 EchoAgent", true, None::<&str>)?;
     let menu = Menu::with_items(app, &[&show, &quit])?;
-    let mut tray = TrayIconBuilder::new()
+    let mut tray = TrayIconBuilder::with_id("main-tray")
         .menu(&menu)
         .tooltip("EchoAgent - 后台运行中")
         // macOS conventionally opens the status-item menu on left click.
@@ -633,76 +750,22 @@ fn setup_desktop_lifecycle(app: &mut tauri::App) -> Result<(), Box<dyn std::erro
     tray.build(app)?;
 
     if let Some(window) = app.get_webview_window("main") {
-        restore_desktop_window_state(app.handle(), &window);
-        let app_handle = app.handle().clone();
-        let close_window = window.clone();
-        window.on_window_event(move |event| match event {
-            WindowEvent::DragDrop(DragDropEvent::Drop { paths, .. }) => {
-                let access = app_handle.state::<shell_fs::FilesystemAccess>();
-                // Mirror the stats command's hard batch cap so one oversized
-                // native drop cannot consume the process-wide exact-file grant
-                // budget for paths the Composer will never inspect.
-                for path in paths.iter().take(shell_fs::MAX_PICKED_FILES) {
-                    if !attachment_blob::is_supported_attachment_path(path) {
-                        continue;
-                    }
-                    if let Err(error) = access.authorize_file(path) {
-                        tracing::warn!(path = %path.display(), %error, "failed to authorize dropped file");
-                    }
-                }
-            }
-            WindowEvent::Resized(_) => {
-                save_desktop_window_state(&app_handle, &close_window);
-            }
-            WindowEvent::CloseRequested { api, .. } => {
-                save_desktop_window_state(&app_handle, &close_window);
-                api.prevent_close();
-                let close_to_tray = desktop_preferences::load(&app_handle)
-                    .map(|preferences| preferences.close_to_tray)
-                    .unwrap_or_else(|error| {
-                        tracing::warn!(%error, "failed to read desktop preferences; keeping app alive");
-                        true
-                    });
-                if close_to_tray {
-                    match close_window.hide() {
-                        Ok(()) => {
-                            if desktop_preferences::take_background_notice(&app_handle)
-                                .unwrap_or_else(|error| {
-                                    tracing::warn!(%error, "failed to persist background notice state");
-                                    false
-                                })
-                            {
-                                if let Err(error) = app_handle
-                                    .notification()
-                                    .builder()
-                                    .title("EchoAgent 已在后台运行")
-                                    .body("从系统托盘选择“打开 EchoAgent”可恢复窗口；选择“退出 EchoAgent”可完全退出。")
-                                    .show()
-                                {
-                                    tracing::warn!(%error, "failed to show background residency notification");
-                                }
-                            }
-                        }
-                        Err(error) => {
-                            tracing::error!(%error, "failed to hide main window");
-                            show_main_window(&app_handle);
-                        }
-                    }
-                } else {
-                    request_graceful_exit(app_handle.clone());
-                }
-            }
-            _ => {}
-        });
+        bind_main_window_lifecycle(app.handle(), &window);
+        webview_recovery::install(app.handle(), &window).map_err(std::io::Error::other)?;
         if std::env::args_os().any(|arg| arg == "--background") {
             let _ = window.hide();
         }
     }
+    webview_recovery::start_monitor(app.handle().clone());
     Ok(())
 }
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
+    if host_watchdog::run_helper_if_requested() {
+        return;
+    }
+    host_watchdog::consume_restore_marker();
     if let Err(error) = paths::apply_startup_data_home() {
         eprintln!("EchoAgent 启动参数无效：{error}");
         std::process::exit(2);
@@ -736,6 +799,7 @@ pub fn run() {
         tracing::error!(%error, "failed to initialize EchoAgent runtime home");
     }
     process_supervisor::install_host_job();
+    echo_agent_tools::util::process_safety::install(process_identity::snapshot);
     let mut context = tauri::generate_context!();
     let mut profile_windows = Vec::new();
     if let Some(home) = paths::redirected_data_home() {
@@ -777,14 +841,27 @@ pub fn run() {
     }));
 
     #[cfg(target_os = "macos")]
-    let builder = builder.menu(application_menu).on_menu_event(|app, event| {
-        if event.id.as_ref() == "echoagent.app.quit" {
-            request_graceful_exit(app.clone());
-        }
-    });
+    let builder = builder
+        .on_web_content_process_terminate(|webview| {
+            if webview.label() == "main" {
+                let app = webview.app_handle();
+                let epoch =
+                    webview_recovery::desktop_recovery_status(app.state()).window_generation();
+                webview_recovery::request(app.clone(), epoch, webview_recovery::Failure::Renderer);
+            }
+        })
+        .menu(application_menu)
+        .on_menu_event(|app, event| {
+            if event.id.as_ref() == "echoagent.app.quit" {
+                request_graceful_exit(app.clone());
+            }
+        });
 
     let app = builder
         .setup(move |app| {
+            if let Err(error) = host_watchdog::start() {
+                tracing::warn!(%error, "host crash recovery could not start; renderer recovery remains available");
+            }
             // Match the ordinary auto-created window order, including focus
             // requests received while a large pending backup is being restored.
             for (config, directory, store_id) in profile_windows {
@@ -794,6 +871,9 @@ pub fn run() {
                     .build()?;
             }
             backup::apply_pending(app.handle()).map_err(std::io::Error::other)?;
+            if let Err(error) = meeting_minutes::recover_host_recordings() {
+                tracing::error!(%error, "startup could not finalize interrupted recordings");
+            }
             // 离线租约过期时在 Agent Runtime 启动前移除受管 Skill 注入，
             // 避免已撤权的长期离线客户继续加载企业能力。
             org::enforce_skill_lease();
@@ -851,6 +931,7 @@ pub fn run() {
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_notification::init())
         .plugin(tauri_plugin_updater::Builder::new().build())
+        .manage(webview_recovery::RendererRecovery::default())
         .manage(AppState::default())
         .manage(backup::BackupState::default())
         .manage(Permissions::new())
@@ -871,6 +952,8 @@ pub fn run() {
             weixin::weixin_revoke_session,
             weixin::weixin_handoff,
             weixin::weixin_disconnect,
+            webview_recovery::desktop_recovery_status,
+            webview_recovery::desktop_renderer_heartbeat,
             desktop_validation::desktop_validation_ready,
             desktop_validation::desktop_review_complete,
             desktop_validation::desktop_review_context,
@@ -1266,7 +1349,9 @@ pub fn run() {
         if let tauri::RunEvent::ExitRequested { api, .. } = &event {
             if !EXIT_READY.load(Ordering::Acquire) {
                 api.prevent_exit();
-                request_graceful_exit(app_handle.clone());
+                if !webview_recovery::is_recovering(app_handle) {
+                    request_graceful_exit(app_handle.clone());
+                }
             }
         }
 

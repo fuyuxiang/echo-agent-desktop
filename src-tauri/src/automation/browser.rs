@@ -66,6 +66,7 @@ pub struct BrowserDownload {
 /// same task.
 pub struct BrowserController {
     child: Child,
+    _protection: Option<echo_agent_tools::util::process_safety::ProcessLease>,
     port: u16,
     browser_name: String,
     profile_dir: PathBuf,
@@ -144,8 +145,12 @@ impl BrowserController {
             .map_err(|error| format!("启动 {browser_name} 失败：{error}"))?;
 
         let port = wait_for_debug_port(&active_port_file, START_TIMEOUT).await?;
+        let protection = echo_agent_tools::util::process_safety::protect_tree(
+            child.id().ok_or("浏览器在身份核验前已退出")?,
+        )?;
         let mut controller = Self {
             child,
+            _protection: protection,
             port,
             browser_name,
             profile_dir,

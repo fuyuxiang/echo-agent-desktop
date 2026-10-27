@@ -1,4 +1,5 @@
 import { create } from "zustand";
+import { saveRecoverySessionId } from "@/lib/recovery-context";
 import { readDurable, writeDurable, isStringMap } from "@/lib/durable-ui-state";
 import type { SessionSummary, SessionStatus } from "@/lib/types";
 import type { WorkspaceInfo } from "@/lib/agent-client";
@@ -310,6 +311,7 @@ export const useSessionsStore = create<SessionsState>((set, get) => ({
 }));
 
 useSessionsStore.subscribe((state, previous) => {
+  if (state.currentSessionId !== previous.currentSessionId) saveRecoverySessionId(state.currentSessionId);
   if (state.drafts !== previous.drafts) {
     writeDurable("echoagent.drafts.v1", state.drafts);
     for (const id of new Set([...Object.keys(state.drafts), ...Object.keys(previous.drafts)])) {

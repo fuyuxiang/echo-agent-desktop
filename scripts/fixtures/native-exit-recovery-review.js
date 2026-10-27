@@ -48,7 +48,7 @@ window.__echoNativeExitRecoveryReview = async function () {
     };
     if (scope.phase === 'init-failure') {
       const error = await wait(() => [...document.querySelectorAll('.app__notice')]
-        .find((element) => /初始化失败/.test(element.textContent || ''))?.textContent, 'actual initialization failure UI');
+        .find((element) => /初始化(?:失败|未完成)/.test(element.textContent || ''))?.textContent, 'actual initialization failure UI');
       context = await freshContext();
       require(!context.hasRuntimeSender && !context.hasInitOutcome, 'Failed initialization left a ready Runtime');
       require((await invoke('meeting_list')).length === 0, 'Init failure fixture has recordings');

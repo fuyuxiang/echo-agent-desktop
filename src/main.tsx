@@ -4,6 +4,7 @@ import { AppErrorBoundary } from "./components/AppErrorBoundary";
 import { GlobalTooltip } from "./components/GlobalTooltip";
 import { initializeTheme } from "./components/ThemeProvider";
 import { applyFontSize, readFontSize } from "./lib/font-size";
+import { startRendererHealth } from "./lib/renderer-recovery";
 
 import "./styles/index.css";
 
@@ -18,6 +19,8 @@ async function bootstrap() {
       <GlobalTooltip />
     </AppErrorBoundary>
   );
+  const stopHealth = startRendererHealth();
+  if (import.meta.hot) import.meta.hot.dispose(stopHealth);
 }
 void bootstrap().catch((error) => {
   const root = document.getElementById("root")!;

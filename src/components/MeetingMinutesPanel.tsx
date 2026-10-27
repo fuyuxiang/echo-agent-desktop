@@ -56,6 +56,7 @@ type DetailTab = "minutes" | "transcript" | "audio";
 const STATUS_LABELS: Record<string, string> = {
   recording: "录音中",
   paused: "已暂停",
+  interrupted: "录音已中断",
   importing: "正在导入",
   recorded: "等待转写",
   transcribing: "正在转写",

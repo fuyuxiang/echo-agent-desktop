@@ -13,6 +13,37 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
+  desktop-stability:
+    name: Desktop recovery / ${{ matrix.os }}
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 35
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [macos-latest, windows-latest]
+    steps:
+      - uses: actions/checkout@v7
+      - uses: pnpm/action-setup@v4
+      - uses: actions/setup-node@v7
+        with:
+          node-version: '22'
+          cache: 'pnpm'
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: scripts/stability-check -> target
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm test:stability
+      - run: pnpm test:stability:native
+        env:
+          STABILITY_EVIDENCE_DIR: ${{ runner.temp }}/desktop-stability
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: desktop-stability-${{ matrix.os }}
+          path: ${{ runner.temp }}/desktop-stability
+          if-no-files-found: ignore
+
   dependency-security:
     name: Dependency security / frontend, IDE and Rust
     runs-on: ubuntu-latest

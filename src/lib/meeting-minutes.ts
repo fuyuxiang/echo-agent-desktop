@@ -3,6 +3,7 @@ import { invoke } from "@tauri-apps/api/core";
 export type MeetingStatus =
   | "recording"
   | "paused"
+  | "interrupted"
   | "importing"
   | "recorded"
   | "transcribing"
