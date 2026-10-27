@@ -111,7 +111,7 @@ export function TasksPanel({ sessionId, refreshSignal, onToast, presentation = "
         setTasks((current) => current.filter(
           (entry) => entry.id !== task.id || entry.source !== task.source,
         ));
-        onToast?.("已终止任务");
+
         void reload();
       } catch (e) {
         if (isCurrentSession()) onToast?.(`终止失败：${String(e).replace(/^Error:\s*/, "")}`);

@@ -113,7 +113,7 @@ window.__echoNativeBrowserReview = async ({ home, nonce } = {}) => {
           argumentKeys: raw?.tool_input && typeof raw.tool_input === 'object' ? Object.keys(raw.tool_input) : [],
           sameSession: request.sessionId === sessionId, exactOwnedUrl: raw?.tool_input?.url === scope.url,
         } }); throw new Error('Unexpected tool, URL or input safely denied'); }
-      const card = document.getElementById(`permission-${request.requestId}`), allow = button(card, '允许本次');
+      const card = document.getElementById(`permission-${request.requestId}`), allow = button(card, '允许一次');
       if (!visible(card) || !allow) continue;
       allow.click(); handled.add(request.requestId); report.permissions.push({ requestId: request.requestId, operation, via: 'production UI' });
     }

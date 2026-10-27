@@ -163,7 +163,7 @@ window.__echoNativePlanReview = async ({ invoke, home, cwd, phase, expected, ret
       assert(request.options.some((option) => option.kind === 'allow'), 'Safe operation lacks an allow-once option');
       const card = document.getElementById(`permission-${request.requestId}`);
       if (!visible(card)) continue;
-      const allow = button(card, '允许本次');
+      const allow = button(card, '允许一次');
       if (!allow) continue;
       allow.click();
       handled.add(request.requestId);

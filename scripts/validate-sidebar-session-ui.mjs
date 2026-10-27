@@ -9,7 +9,7 @@ const server = await createUiReviewServer(0, { freezeMotion: false });
 let browser;
 try {
   browser = await (await reviewChromium()).launch({ headless: true, executablePath: process.env.CHROME_BIN || "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome" });
-  for (const theme of ["light", "dark"]) for (const width of [220, 240, 264, 360, 400]) for (const fontSize of [11, 13, 18]) {
+  for (const theme of ["light", "dark"]) for (const width of [220, 240, 248, 264, 360, 400]) for (const fontSize of [11, 13, 18]) {
     const page = await browser.newPage({ viewport: { width: 1024, height: 1000 } });
     const errors = [];
     page.on("pageerror", error => errors.push(error.message));
@@ -33,7 +33,7 @@ try {
         const r = element.getBoundingClientRect();
         return { left: r.left, right: r.right, top: r.top, bottom: r.bottom, width: r.width, height: r.height };
       };
-      const time = row.querySelector("time"), title = row.querySelector(".sidebar__conv-title"), heading = row.querySelector(".sidebar__conv-heading"), action = row.querySelector(".sidebar__conv-action"), status = row.querySelector(".sidebar__conv-status"), pin = row.querySelector(".sidebar__conv-pin");
+      const time = row.querySelector("time"), title = row.querySelector(".sidebar__conv-title"), heading = row.querySelector(".sidebar__conv-heading"), action = row.querySelector(".sidebar__conv-action"), status = row.querySelector(".sidebar__conv-status, .sidebar__approval-status"), pin = row.querySelector(".sidebar__conv-pin");
       return {
         id: row.dataset.sessionId, row: box(row), time: box(time), title: box(title), heading: box(heading), action: box(action), status: box(status), pin: box(pin),
         timeVisible: time && getComputedStyle(time).visibility, timeWeight: time && getComputedStyle(time).fontWeight,
@@ -56,7 +56,7 @@ try {
       for (const part of parts) {
         assert.ok(part.left >= item.row.left && part.right <= item.row.right && part.top >= item.row.top && part.bottom <= item.row.bottom, "content must stay inside the row");
       }
-      const headingParts = [item.title, item.pin, item.status].filter(Boolean);
+      const headingParts = [item.title, item.pin, item.statusName === "等待审批" ? null : item.status].filter(Boolean);
       for (let index = 0; index < headingParts.length; index++) {
         assert.ok(Math.abs(center(headingParts[index]) - center(item.heading)) < 0.75, `${item.id}: title, pin and status must stay on the same line`);
         if (index) assert.ok(headingParts[index].left >= headingParts[index - 1].right + 1, "title, pin and status must not overlap");
@@ -67,21 +67,30 @@ try {
         assert.equal(item.timeWeight, "400");
         assert.ok(item.time.right <= item.action.left - 1, "timestamps must not overlap the menu");
         if (item.time.top >= item.heading.bottom) {
-          assert.ok(Math.abs(item.time.left - item.title.left) < 1, "the second line must align with the title");
+          if (item.statusName === "等待审批" && item.status.top >= item.heading.bottom && Math.abs(center(item.status) - center(item.time)) < 1) {
+            assert.ok(Math.abs(item.status.left - item.title.left) < 1 && item.time.left >= item.status.right + 1,
+              "approval and timestamp metadata must share a second line aligned with the title");
+          } else {
+            assert.ok(Math.abs(item.time.left - item.title.left) < 1, `${item.id} at ${width}px/${fontSize}px: second-line time must align with the title`);
+          }
           assert.ok(item.time.top - item.heading.bottom <= 4, "the second line must stay close to the title");
         } else {
           assert.ok(Math.abs(center(item.time) - center(item.heading)) < 0.75 && item.time.left >= item.heading.right + 1, "single-line timestamps must sit beside the title metadata");
         }
       }
       if (item.status) {
-        assert.equal(item.status.width, 6, "status must consume only the dot width");
-        assert.equal(item.statusText, "", "status labels must not be rendered as text");
+        if (item.statusName === "等待审批") {
+          assert.equal(item.statusText, "等待审批", "pending approvals must be discoverable without hover");
+        } else {
+          assert.equal(item.status.width, 6, "other statuses must consume only the dot width");
+          assert.equal(item.statusText, "", "other statuses remain quiet");
+        }
         assert.ok(item.statusName, "status must have an accessible name");
         assert.equal(item.statusVisible, "visible");
       }
     }
     assert.ok(before.some(item => item.truncated), "fixture must exercise truncated titles");
-    assert.equal(new Set(before.filter(item => item.status).map(item => item.statusColor)).size, 4, "running, waiting, failed and paused must remain distinguishable in both themes");
+    assert.equal(new Set(before.filter(item => item.status && item.statusName !== "等待审批").map(item => item.statusColor)).size, 4, "running, waiting, failed and paused dots must remain distinguishable in both themes");
     assert.equal(before.find(item => item.id === "sidebar-task-0").status, null, "completed history must stay quiet");
     assert.equal(before.find(item => item.id === "sidebar-task-4").time, null, "missing dates must not create a placeholder");
     const active = page.locator('[data-session-id="sidebar-task-0"]');
@@ -141,7 +150,7 @@ try {
     assert.deepEqual(errors, []);
     await page.close();
   }
-  console.log(`Sidebar session UI passed: readable adaptive rows, dot-only statuses, accessible tooltips, live updates, timestamps, long titles, pinned project sessions, resizing, keyboard menus and reduced motion at 220/240/264/360/400px, 11/13/18px fonts in light/dark themes. Screenshots: ${output}`);
+  console.log(`Sidebar session UI passed: readable adaptive rows, approval badges, quiet status dots, accessible tooltips, live updates, timestamps, long titles, pinned project sessions, resizing, keyboard menus and reduced motion at 220/240/248/264/360/400px, 11/13/18px fonts in light/dark themes. Screenshots: ${output}`);
 } finally {
   // Close HTTP connections while Chromium exits; pending development requests
   // must not leave either side waiting for the other during teardown.

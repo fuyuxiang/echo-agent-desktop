@@ -167,7 +167,7 @@ describe("NotifyChannelsPanel", () => {
       target: { value: "https://hooks.example.test/new" },
     });
     fireEvent.click(screen.getByRole("button", { name: "+ 添加" }));
-    await waitFor(() => expect(onToast).toHaveBeenCalledWith(expect.stringContaining("已保存，但列表刷新失败")));
+    await waitFor(() => expect(onToast).toHaveBeenCalledWith(expect.stringContaining("已保存，列表暂未更新")));
     expect(screen.getByRole("alert")).toHaveTextContent("配置暂时不可读");
     fireEvent.click(screen.getByRole("button", { name: "重试" }));
     await waitFor(() => expect(screen.getByText("1 个已配置")).toBeInTheDocument());

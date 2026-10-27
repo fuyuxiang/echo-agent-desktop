@@ -213,13 +213,8 @@ export function AssistantsPanel({ onUseAssistant, onToast, embedded = false, cre
       }
       const generated = await agentsTemplate(draft.name, draft.description, draft.systemPrompt, draft.avatar, draft.modelTags.length > 0 ? draft.modelTags : undefined);
       const raw = draft.isNew ? generated : await mergeExpertDefinition(draft.originalRaw ?? "", generated);
-      const saved = draft.isNew ? await agentsSave(draft.name, raw)
-        : await agentsUpdate(draft.path, draft.originalRaw ?? "", raw);
-      onToast?.(
-        draft.isNew
-            ? `已创建专家「${saved.name}」`
-            : "已保存",
-      );
+      if (draft.isNew) await agentsSave(draft.name, raw);
+      else await agentsUpdate(draft.path, draft.originalRaw ?? "", raw);
       setEditing(null);
       await reload();
     } catch (e) {
@@ -237,10 +232,9 @@ export function AssistantsPanel({ onUseAssistant, onToast, embedded = false, cre
         await agentsDelete(agent.path);
         setUserAssistants((current) => current.filter((entry) => entry.path !== agent.path));
         setProfileAgent((current) => current?.path === agent.path ? null : current);
-        onToast?.("已删除");
+
         await reload();
       },
-      onError: (error) => onToast?.(`删除失败：${String(error).replace(/^Error:\s*/, "")}`),
     });
   }, [onToast, reload, requestConfirmation]);
 

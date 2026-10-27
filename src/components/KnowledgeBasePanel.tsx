@@ -124,7 +124,7 @@ export function KnowledgeBasePanel({ onOpen, onToast }: KnowledgeBasePanelProps)
       const { added } = await addLocalKnowledgeSource(dir);
       setSourceChangeKey((key) => key + 1);
       setRefreshKey((k) => k + 1);
-      onToast?.(added ? "已添加本地知识源" : "该知识源已存在");
+      if (!added) onToast?.("这个文件夹已经添加过了");
     } catch (e) {
       onToast?.(`添加失败：${String(e).replace(/^Error:\s*/, "")}`);
     }
@@ -139,7 +139,6 @@ export function KnowledgeBasePanel({ onOpen, onToast }: KnowledgeBasePanelProps)
         setResults([]);
         setSourceChangeKey((key) => key + 1);
         setRefreshKey((k) => k + 1);
-        onToast?.("已移除知识源");
       }
     } catch (error) {
       onToast?.(`移除失败：${String(error).replace(/^Error:\s*/, "")}`);
@@ -157,16 +156,13 @@ export function KnowledgeBasePanel({ onOpen, onToast }: KnowledgeBasePanelProps)
       if (semantic) setSemanticStatus(semantic);
       setRefreshKey((k) => k + 1);
       setSourceChangeKey((key) => key + 1);
-      const total = res.reduce((s, r) => s + (r.count ?? 0), 0);
       if (failures.length > 0) {
         const message = `部分知识源索引刷新失败：${failures.map((failure) => `${failure.label}：${failure.message}`).join("；")}。请重试。`;
         setRebuildError(message);
         onToast?.(message);
         return;
       }
-      onToast?.(semantic
-        ? `语义索引已更新：${semantic.fileCount} 个文件、${semantic.chunkCount} 个片段`
-        : res.length > 0 ? `已重建索引(${total} 项)` : "无可重建的知识源");
+      onToast?.(semantic || res.length > 0 ? "知识库已更新，可以搜索最新内容" : "暂无可更新的知识源");
     } catch (e) {
       const message = `重建失败：${String(e).replace(/^Error:\s*/, "")}`;
       setRebuildError(message);

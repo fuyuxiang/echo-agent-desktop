@@ -46,6 +46,8 @@ export const CLIENT_SLASH_COMMANDS: readonly ClientSlashCommand[] = [
   { name: "automation", description: "打开自动化", source: "client" },
   { name: "usage", description: "打开 Token 用量统计", source: "client" },
   { name: "remember", description: "保存一条长期记忆", argumentHint: "[global|workspace] <内容>", source: "client" },
+  { name: "flush", description: "立即提取当前任务的记忆并查看处理结果", source: "client", requiresSession: true },
+  { name: "dream", description: "整理长期记忆并查看处理结果", source: "client", requiresSession: true },
   { name: "plan", description: "切换当前会话的计划模式", argumentHint: "on|off", source: "client", requiresSession: true },
   { name: "fork", description: "分叉当前会话", source: "client", requiresSession: true },
   { name: "rename", description: "重命名当前会话", argumentHint: "新标题", source: "client", requiresSession: true },

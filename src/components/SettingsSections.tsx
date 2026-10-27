@@ -1144,9 +1144,9 @@ export function NotificationCenterSettingsPanel({
         const closed = permissionState.closedRequestIds.includes(requestId);
         const pending = permissionState.promote(requestId, sessionId);
         if (closed) {
-          onToast?.("这项授权请求已处理，已打开关联任务");
+          onToast?.("这项请求已处理");
         } else if (!pending) {
-          onToast?.("已打开关联任务，正在等待授权请求显示");
+          onToast?.("正在加载待确认的操作");
         }
       }
       if (notificationId != null) void notificationMarkRead(notificationId).catch(() => {});

@@ -151,7 +151,11 @@ describe("自动化编辑流程与通知导航", () => {
     const dialog = await screen.findByRole("dialog");
     expect(dialog).toHaveTextContent("任务草稿也会被舍弃");
     fireEvent.click(within(dialog).getByRole("button", { name: "删除" }));
-    await waitFor(() => expect(toast).toHaveBeenCalledWith(fails ? "删除自动化任务失败" : "自动化任务已删除"));
+    if (fails) await waitFor(() => expect(toast).toHaveBeenCalledWith("已删除 0 个任务，1 个未能删除，请重试"));
+    else {
+      await waitFor(() => expect(useAutomationEditorStore.getState().draft).toBeNull());
+      expect(toast).not.toHaveBeenCalled();
+    }
     expect(useAutomationEditorStore.getState().operation).toBeNull();
     if (fails) {
       fireEvent.click(screen.getByRole("button", { name: "继续编辑" }));

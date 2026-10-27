@@ -1012,7 +1012,7 @@ export function Composer({
     // Desktop-owned slash commands never enter the model transcript. Runtime
     // commands and Skills deliberately fall through to onSend/ACP unchanged.
     const invocation = parseSlashInvocation(t);
-    if (invocation && isClientSlashCommand(invocation.name)) {
+    if (slashCommandsEnabled && invocation && isClientSlashCommand(invocation.name)) {
       if (!onClientSlashCommand) {
         onToast?.(`当前页面无法执行 /${invocation.name}`);
         return;
@@ -1084,7 +1084,7 @@ export function Composer({
     ) return;
 
     const invocation = parseSlashInvocation(t);
-    if (invocation && isClientSlashCommand(invocation.name)) {
+    if (slashCommandsEnabled && invocation && isClientSlashCommand(invocation.name)) {
       onToast?.(`当前任务执行中，无法使用 /${invocation.name}`);
       return;
     }

@@ -145,7 +145,6 @@ export function CloudStoragePanel({ onToast, onUnsavedChange }: {
         }
         setDraft({ id: "", label: "", kind: "webdav", baseUrl: "", username: "", password: "", enabled: true });
         setShowConfig(false);
-        onToast?.("WebDAV 存储源已保存");
       } catch (error) {
         onToast?.(`保存失败：${String(error).replace(/^Error:\s*/, "")}`);
       } finally {
@@ -191,9 +190,7 @@ export function CloudStoragePanel({ onToast, onUnsavedChange }: {
         setLoading(false);
         setReadingPath(null);
         setBrowseError(null);
-        onToast?.("已移除存储源");
       },
-      onError: (error) => onToast?.(`移除失败：${String(error).replace(/^Error:\s*/, "")}`),
     });
   };
 
@@ -283,9 +280,7 @@ export function CloudStoragePanel({ onToast, onUnsavedChange }: {
         const ok = await provider.delete(entry.path);
         if (!ok) throw new Error("服务端拒绝删除");
         await browse(providerId, path);
-        onToast?.(`已删除 ${entry.name}`);
       },
-      onError: (error) => onToast?.(`删除失败：${String(error).replace(/^Error:\s*/, "")}`),
     });
   };
 
@@ -304,7 +299,7 @@ export function CloudStoragePanel({ onToast, onUnsavedChange }: {
           if (content != null) {
             setPreview({ providerId, name: entry.name, path: entry.path, content, savedContent: content });
           } else {
-            onToast?.("(空文件或二进制)");
+            onToast?.("这个文件暂不支持文本预览，请下载后打开");
           }
         } catch (error) {
           if (generation === previewReadGeneration.current) onToast?.(`读取失败：${String(error).replace(/^Error:\s*/, "")}`);
@@ -358,7 +353,6 @@ export function CloudStoragePanel({ onToast, onUnsavedChange }: {
           confirmLabel: "覆盖并上传",
           danger: true,
           action: performUpload,
-          onError: (error) => onToast?.(`上传失败：${String(error).replace(/^Error:\s*/, "")}`),
         });
         return;
       }
@@ -377,7 +371,7 @@ export function CloudStoragePanel({ onToast, onUnsavedChange }: {
       if (!destination) return;
       setBusyAction("下载中…");
       const bytes = await provider.downloadFile(entry.path, destination);
-      onToast?.(`已下载 ${formatSize(bytes)}`);
+      onToast?.(`已下载“${entry.name}”（${formatSize(bytes)}）`);
     } catch (error) {
       onToast?.(`下载失败：${String(error).replace(/^Error:\s*/, "")}`);
     } finally {
@@ -396,7 +390,6 @@ export function CloudStoragePanel({ onToast, onUnsavedChange }: {
         ? { ...current, savedContent: snapshot.content }
         : current);
       if (selectedProvider === snapshot.providerId) await browse(snapshot.providerId, currentPath);
-      onToast?.("文本已保存");
     } catch (error) {
       onToast?.(`保存失败：${String(error).replace(/^Error:\s*/, "")}`);
     } finally {
@@ -419,9 +412,7 @@ export function CloudStoragePanel({ onToast, onUnsavedChange }: {
         const ok = await getStorageProvider(providerId)?.makeDir(joinStoragePath(path, name));
         if (!ok) throw new Error("服务端未创建文件夹");
         await browse(providerId, path);
-        onToast?.("文件夹已创建");
       },
-      onError: (error) => onToast?.(`创建失败：${String(error).replace(/^Error:\s*/, "")}`),
     });
   };
 
@@ -443,9 +434,7 @@ export function CloudStoragePanel({ onToast, onUnsavedChange }: {
         const ok = await getStorageProvider(providerId)?.writeText(joinStoragePath(path, name), values.content);
         if (!ok) throw new Error("服务端未写入文件");
         await browse(providerId, path);
-        onToast?.("文件已写入");
       },
-      onError: (error) => onToast?.(`写入失败：${String(error).replace(/^Error:\s*/, "")}`),
     });
   };
 
@@ -573,7 +562,7 @@ export function CloudStoragePanel({ onToast, onUnsavedChange }: {
           <div>
             <strong>{preview.name}</strong>
             <span>
-              <button type="button" className="form-button form-button--primary" onClick={() => void savePreview()} disabled={!!busyAction}>{busyAction === "保存中…" ? busyAction : "保存"}</button>
+              <button type="button" className="form-button form-button--primary" onClick={() => void savePreview()} disabled={!!busyAction || !previewDirty}>{busyAction === "保存中…" ? busyAction : previewDirty ? "保存" : "已保存"}</button>
               <button type="button" className="form-button" onClick={() => leavePreview(() => {})}>关闭</button>
             </span>
           </div>

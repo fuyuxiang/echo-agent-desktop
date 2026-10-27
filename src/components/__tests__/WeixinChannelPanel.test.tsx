@@ -169,7 +169,7 @@ describe("WeixinChannelPanel", () => {
     fireEvent.click(screen.getByRole("button", { name: "保存访问范围" }));
 
     await waitFor(() => expect(backend.setWorkspaces).toHaveBeenCalledWith(["/repo/A", "/repo/B"], "/repo/A"));
-    expect(onToast).toHaveBeenCalledWith("微信可访问的工作区已保存");
+    expect(onToast).not.toHaveBeenCalled();
     expect(screen.getByRole("button", { name: "保存访问范围" })).toBeDisabled();
   });
 

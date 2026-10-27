@@ -238,6 +238,9 @@
   color: var(--echo-text-strong);
   cursor: pointer;
   text-align: left;
+  min-width: 0;
+  white-space: normal;
+  overflow-wrap: anywhere;
 }
 .topbar-actions__item:hover {
   background: var(--echo-bg-hover);
@@ -4003,168 +4006,6 @@ button.diff__path {
 .diff__line--del .diff__line-prefix { color: #cf222e; }
 .diff__line-text { flex: 1; white-space: pre-wrap; word-break: break-all; overflow-wrap: anywhere; }
 
-/* ---------- inline permission card (session-scoped, non-blocking) ---------- */
-.perm-inline {
-  margin: 0 auto 8px;
-  width: min(640px, 100%);
-  min-width: 0;
-  box-sizing: border-box;
-  background: var(--echo-bg-primary);
-  border-radius: 12px;
-  border: 1px solid var(--echo-brand, #10b981);
-  box-shadow: var(--echo-shadow-md);
-  overflow: hidden;
-}
-.perm-inline__head {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  padding: 10px 16px;
-  border-bottom: 1px solid var(--echo-border-default);
-}
-.perm-inline__kind {
-  flex: none;
-  font-family: var(--echo-font-code-family);
-  background: var(--echo-bg-tertiary);
-  padding: 2px 8px;
-  border-radius: 4px;
-  font-size: 0.75rem;
-  color: var(--echo-brand);
-}
-.perm-inline__title {
-  min-width: 0;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-  font-weight: 600;
-  font-size: 0.8125rem;
-}
-.perm-inline__body {
-  padding: 10px 16px;
-  font-size: 0.8125rem;
-  color: var(--echo-text-medium);
-}
-.perm-inline__body p { margin: 0; }
-.perm-inline__details {
-  margin-top: 8px;
-}
-.perm-inline__details summary {
-  width: fit-content;
-  color: var(--echo-text-weak);
-  font-size: 0.75rem;
-  cursor: pointer;
-  user-select: none;
-}
-.perm-inline__details summary:hover {
-  color: var(--echo-text-strong);
-}
-.perm-inline__raw {
-  margin: 7px 0 0;
-  padding: 8px;
-  background: var(--echo-bg-tertiary);
-  border-radius: 6px;
-  font-family: var(--echo-font-code-family);
-  font-size: 0.6875rem;
-  max-height: 160px;
-  overflow: auto;
-  white-space: pre-wrap;
-  overflow-wrap: anywhere;
-}
-.perm-inline__error {
-  margin-top: 8px !important;
-  color: var(--echo-status-error, #e5484d);
-}
-.perm-inline__footer {
-  display: flex;
-  flex-direction: column;
-  gap: 10px;
-  padding: 10px 16px 12px;
-  border-top: 1px solid var(--echo-border-default);
-}
-.perm-inline__actions {
-  display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(min(132px, 100%), 1fr));
-  gap: 8px;
-  min-width: 0;
-}
-.perm-inline__actions--primary {
-  grid-template-columns: repeat(auto-fit, minmax(min(112px, 100%), 1fr));
-}
-.perm-inline__action {
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  flex-direction: column;
-  gap: 2px;
-  width: 100%;
-  min-width: 0;
-  min-height: 38px;
-  padding: 7px 10px;
-  line-height: 1.35;
-  text-align: center;
-}
-.perm-inline__action-label {
-  max-width: 100%;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-.perm-inline__action-hint {
-  max-width: 100%;
-  overflow: hidden;
-  color: var(--echo-text-weak);
-  font-size: 0.625rem;
-  font-weight: 400;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-.perm-inline__action--elevated {
-  border-color: color-mix(in srgb, var(--echo-status-warning, #a15c00) 48%, var(--echo-border-default));
-  color: var(--echo-status-warning, #a15c00);
-}
-.perm-inline__confirm {
-  display: flex;
-  flex-direction: column;
-  gap: 6px;
-  padding: 10px;
-  border: 1px solid color-mix(in srgb, var(--echo-status-warning, #a15c00) 42%, var(--echo-border-default));
-  border-radius: 8px;
-  background: color-mix(in srgb, var(--echo-status-warning, #a15c00) 7%, var(--echo-bg-primary));
-  color: var(--echo-text-medium);
-  font-size: 0.6875rem;
-  line-height: 1.5;
-}
-.perm-inline__confirm strong {
-  color: var(--echo-text-strong);
-  font-size: 0.75rem;
-}
-.perm-inline__confirm-actions {
-  display: flex;
-  flex-wrap: wrap;
-  justify-content: flex-end;
-  gap: 6px;
-  margin-top: 2px;
-}
-.perm-inline__more {
-  color: var(--echo-text-weak);
-  font-size: 0.6875rem;
-}
-.perm-inline__more > summary {
-  width: fit-content;
-  cursor: pointer;
-  user-select: none;
-}
-.perm-inline__more > summary:hover {
-  color: var(--echo-text-strong);
-}
-.perm-inline__more[open] > summary {
-  margin-bottom: 7px;
-}
-.perm-inline__action:disabled {
-  cursor: default;
-  opacity: 0.58;
-}
-
 /* ---------- inline question card (session-scoped, non-blocking) ---------- */
 .question-inline {
   display: flex;
@@ -5406,22 +5247,6 @@ button.diff__path {
 .app--macos .app__body--collapsed .main-topbar {
   /* 三个红绿灯总宽约 70px,左侧留 84px */
   padding-left: 84px;
-}
-
-/* ===== Toast ===== */
-.toast {
-  position: fixed;
-  bottom: 48px;
-  left: 50%;
-  transform: translateX(-50%);
-  z-index: var(--echo-layer-toast);
-  padding: 8px 16px;
-  background: var(--echo-bg-pill-active);
-  color: var(--echo-text-white);
-  font-size: 0.8125rem;
-  border-radius: var(--echo-radius-lg);
-  box-shadow: var(--echo-shadow-lg);
-  pointer-events: none;
 }
 
 /* ===== PlaceholderPage ===== */
@@ -7330,9 +7155,9 @@ button.diff__path {
 }
 .echo-composer__scene-tag-remove:hover { background: rgba(255, 255, 255, 0.15); color: #fff; }
 
-/* ===== Sidebar (EchoAgent conversation-list,实测:264px,#F2F2F2) ===== */
+/* ===== Sidebar ===== */
 .sidebar {
-  width: var(--app-sidebar-width, 264px);
+  width: var(--app-sidebar-width, 248px);
   flex: none;
   /* EchoAgent: sidebar bg = --echo-sidebar-bg (= #F2F2F2 light) */
   background: var(--echo-sidebar-bg, var(--echo-home-bg-primary));
@@ -8026,20 +7851,31 @@ button.diff__path {
 .workspace-picker__item--active {
   background: var(--echo-bg-active);
 }
+.model-selector__item {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  column-gap: 8px;
+  row-gap: 2px;
+}
 .model-selector__item-label {
+  grid-column: 1;
+  grid-row: 1;
   font-size: 0.8125rem;
   color: var(--echo-text-strong);
-  flex-shrink: 0;
+  min-width: 0;
+  overflow-wrap: anywhere;
 }
 .model-selector__item-id {
+  grid-column: 1;
+  grid-row: 2;
+  min-width: 0;
   font-size: 0.6875rem;
   color: var(--echo-text-medium);
   font-family: var(--echo-font-code-family, ui-monospace, monospace);
-  margin-left: auto;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
+  overflow-wrap: anywhere;
+  white-space: normal;
 }
+.model-selector__check { grid-column: 2; grid-row: 1 / span 2; }
 .model-selector__check,
 .workspace-picker__check {
   color: var(--echo-color-text-brand-default);
@@ -9983,149 +9819,6 @@ button.diff__path {
 .update-dialog__progress-wrap small { display: block; margin-top: 8px; color: var(--echo-text-weak); }
 .update-dialog__actions { display: flex; justify-content: flex-end; gap: 9px; margin-top: 22px; }
 .update-dialog__actions .settings-btn { display: inline-flex; align-items: center; gap: 6px; }
-
-/* ========================================================================
- * PermissionPicker — Composer meta 行的任务权限下拉
- * ===================================================================== */
-.permission-picker {
-  position: relative;
-}
-.permission-picker__popover {
-  /* Portalled to body and positioned from the trigger's viewport rect. */
-  position: fixed;
-  right: auto;
-  bottom: auto;
-  width: 440px;
-  max-width: calc(100vw - 48px);
-  box-sizing: border-box;
-  background: var(--echo-bg-primary);
-  border: 1px solid var(--echo-border-default);
-  border-radius: 12px;
-  box-shadow: var(--echo-shadow-lg, 0 10px 40px rgba(0, 0, 0, 0.2));
-  z-index: var(--echo-layer-popover);
-  display: flex;
-  flex-direction: column;
-  gap: 8px;
-  padding: 12px;
-}
-.permission-picker__header {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  font-size: 0.8125rem;
-  font-weight: 600;
-  color: var(--echo-text-strong);
-}
-.permission-picker__scope {
-  margin-top: -4px;
-  font-size: 0.6875rem;
-  line-height: 1.45;
-  color: var(--echo-text-weak);
-}
-.permission-picker__status {
-  padding: 7px 9px;
-  border-radius: 7px;
-  background: var(--echo-warning-soft, rgba(245, 158, 11, 0.12));
-  color: var(--echo-warning, #b45309);
-  font-size: 0.6875rem;
-  line-height: 1.45;
-}
-/* 模式选择弹层(窄) */
-.permission-picker__popover--modes {
-  width: 320px;
-  overflow-x: hidden;
-}
-.permission-picker__modes {
-  display: flex;
-  flex-direction: column;
-  flex: 0 0 auto;
-  gap: 4px;
-  min-width: 0;
-}
-.permission-picker__mode {
-  position: relative;
-  display: flex;
-  flex: 0 0 auto;
-  flex-direction: column;
-  align-items: flex-start;
-  gap: 3px;
-  width: 100%;
-  min-width: 0;
-  padding: 9px 30px 9px 10px;
-  border: none;
-  background: transparent;
-  border-radius: var(--echo-radius-lg, 8px);
-  cursor: pointer;
-  text-align: left;
-  font-family: inherit;
-}
-.permission-picker__mode:hover {
-  background: var(--echo-bg-hover);
-}
-.permission-picker__mode:disabled {
-  opacity: 0.6;
-  cursor: default;
-}
-.permission-picker__mode-label {
-  display: block;
-  font-size: 0.8125rem;
-  line-height: 1.4;
-  color: var(--echo-text-strong);
-}
-.permission-picker__mode-desc {
-  display: block;
-  max-width: 100%;
-  font-size: 0.6875rem;
-  line-height: 1.45;
-  overflow-wrap: anywhere;
-  color: var(--echo-text-medium);
-}
-.permission-picker__mode-check {
-  position: absolute;
-  top: 10px;
-  right: 10px;
-  width: 14px;
-  height: 14px;
-  color: var(--echo-color-text-brand-default);
-}
-/* 始终允许档视觉降级：避免被误以为"一键梭哈"。 */
-.permission-picker__mode[data-mode-id="always-approve"] {
-  border-left: 2px solid var(--echo-warning, #d97706);
-  border-radius: var(--echo-radius-lg, 8px);
-}
-.permission-picker__mode[data-mode-id="always-approve"] .permission-picker__mode-label {
-  color: var(--echo-color-text-warning-default, #b45309);
-}
-.permission-picker__mode[data-mode-id="always-approve"] .permission-picker__mode-desc {
-  color: var(--echo-color-text-warning-default, #b45309);
-}
-.permission-picker__confirm {
-  display: flex;
-  flex-direction: column;
-  gap: 7px;
-  margin-top: 4px;
-  padding: 10px;
-  border: 1px solid var(--echo-warning, #b45309);
-  border-radius: var(--echo-radius-lg, 8px);
-  background: var(--echo-warning-soft, rgba(245, 158, 11, 0.1));
-  color: var(--echo-text-strong);
-  font-size: 0.75rem;
-  line-height: 1.5;
-}
-.permission-picker__confirm strong {
-  font-size: 0.8125rem;
-}
-.permission-picker__confirm-actions {
-  display: flex;
-  justify-content: flex-end;
-  gap: 6px;
-  margin-top: 2px;
-}
-.permission-picker__confirm-actions .btn {
-  min-height: 30px;
-  padding: 5px 9px;
-  font-size: 0.75rem;
-}
 
 /* ========================================================================
  * PlanPanel — 执行计划浮层

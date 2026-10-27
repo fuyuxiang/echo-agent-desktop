@@ -72,7 +72,7 @@ page.setDefaultNavigationTimeout(60000);
         continue;
       }
       if (surface === "permission-picker") {
-        await page.getByRole("button", { name: /审批模式/ }).click();
+        await page.getByRole("button", { name: /请求批准/ }).click();
         const menu = page.getByRole("menu", { name: "本任务权限" });
         const assertPermissionLayout = async (label) => {
           const geometry = await menu.evaluate(element => {
@@ -96,8 +96,8 @@ page.setDefaultNavigationTimeout(60000);
         await assertPermissionLayout(`permission large font ${width} ${theme}`);
         await page.screenshot({ path: join(output, `permission-picker-large-font-${width}-${theme}.png`) });
         layouts += 1;
-        await menu.getByRole("menuitemradio", { name: /本任务始终允许/ }).click();
-        const confirmation = menu.getByRole("alertdialog", { name: "确认本任务始终允许" });
+        await menu.getByRole("menuitemradio", { name: /本任务免审批/ }).click();
+        const confirmation = menu.getByRole("alertdialog", { name: "确认本任务免审批" });
         await confirmation.waitFor();
         assert.ok(await menu.evaluate(element => element.scrollWidth <= element.clientWidth + 1), "permission confirmation scrolls horizontally");
         await confirmation.getByRole("button", { name: "取消" }).click();

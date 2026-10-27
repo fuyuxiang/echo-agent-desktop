@@ -1,28 +1,54 @@
+import { useEffect, useMemo, useState } from "react";
+import { X } from "lucide-react";
+import { toastMessage, type ToastMessageKind } from "@/lib/toast-message";
+
 export interface ToastAction {
   label: string;
   onClick: () => void | Promise<void>;
 }
 
-/** 底部居中的轻量提示。可逆操作可附带就地撤销和后续管理入口。 */
+/** Compact feedback with optional undo; diagnostics are disclosed on demand. */
 export function Toast({
   message,
   actions = [],
   onDismiss,
-  offset = 0,
+  stacked = false,
+  onPause,
+  onActionError,
+  kind = "auto",
 }: {
   message: string | null;
   actions?: ToastAction[];
   onDismiss?: () => void;
-  offset?: number;
+  stacked?: boolean;
+  onPause?: (paused: boolean) => void;
+  onActionError?: (error: unknown) => void;
+  kind?: ToastMessageKind;
 }) {
+  const presentation = useMemo(() => toastMessage(message ?? "", kind), [message, kind]);
+  const [expanded, setExpanded] = useState(false);
+  const [hovered, setHovered] = useState(false);
+  const [focused, setFocused] = useState(false);
+  useEffect(() => { onPause?.(expanded || hovered || focused); }, [expanded, hovered, focused, onPause]);
+  useEffect(() => { setExpanded(false); }, [message]);
   if (!message) return null;
   return (
     <div
-      className={`toast${actions.length > 0 ? " toast--actionable" : ""}`}
+      className={`toast${stacked ? " toast--stacked" : ""}${actions.length > 0 ? " toast--actionable" : ""}`}
       role="status"
-      style={{ bottom: 48 + offset * 54 }}
+      aria-atomic="true"
+      onMouseEnter={() => setHovered(true)}
+      onMouseLeave={() => setHovered(false)}
+      onFocusCapture={() => setFocused(true)}
+      onBlurCapture={event => { if (!event.currentTarget.contains(event.relatedTarget)) setFocused(false); }}
     >
-      <span className="toast__message">{message}</span>
+      <div className="toast__content">
+        <span className="toast__message">{presentation.summary}</span>
+        {presentation.details && <details className="toast__details" onToggle={event => setExpanded(event.currentTarget.open)}>
+          <summary>查看详情</summary>
+          <pre>{presentation.details}</pre>
+        </details>}
+      </div>
       {actions.length > 0 && (
         <span className="toast__actions">
           {actions.map((action) => (
@@ -32,7 +58,10 @@ export function Toast({
               key={action.label}
               onClick={() => {
                 onDismiss?.();
-                void action.onClick();
+                try {
+                  const result = action.onClick();
+                  if (result) void result.catch(error => onActionError?.(error));
+                } catch (error) { onActionError?.(error); }
               }}
             >
               {action.label}
@@ -40,6 +69,7 @@ export function Toast({
           ))}
         </span>
       )}
+      {onDismiss && <button type="button" className="toast__close" aria-label="关闭提示" onClick={onDismiss}><X size={14} /></button>}
     </div>
   );
 }

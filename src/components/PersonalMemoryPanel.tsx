@@ -6,6 +6,7 @@ import { MemorySettingsPanel } from "./SettingsSections";
 import { useAppDialog } from "./AppDialog";
 import { useUnsavedClose } from "@/lib/use-unsaved-close";
 import { parseMemoryImport } from "@/lib/memory-import";
+import { memoryFlushMessage } from "@/lib/memory-feedback";
 import { memoryRecordsGet, memoryRecordSave, memoryRecordRetire, memoryFlush, type PersonalMemoryInput, type PersonalMemoryRecord, type PersonalMemorySnapshot } from "@/lib/agent-client";
 import "@/styles/personal-memory.css";
 
@@ -65,7 +66,7 @@ export function PersonalMemoryPanel({ cwd, sessionId, onToast, onOpenSession, on
   const save = async () => {
     if (!draft) return;
     setBusy(true);
-    try { await memoryRecordSave({ ...draft.input, key: draft.input.key.trim() || draft.input.content.trim().slice(0, 60) }, draft.cwd); setDraft(null); onToast?.("记忆已保存，将用于后续对话"); await reload(true); }
+    try { await memoryRecordSave({ ...draft.input, key: draft.input.key.trim() || draft.input.content.trim().slice(0, 60) }, draft.cwd); setDraft(null); await reload(true); }
     catch (e) { setError(message(e)); } finally { setBusy(false); }
   };
   const retire = (record: PersonalMemoryRecord, completed = false) => {
@@ -73,7 +74,7 @@ export function PersonalMemoryPanel({ cwd, sessionId, onToast, onOpenSession, on
     requestConfirmation({ title: completed ? "将这件事标记为已完成？" : `忘记“${record.key}”？`,
       description: completed ? "停止把它作为待办提醒，原聊天记录保留。" : "停止自动引用这条记忆，并排除已知来源会话的自动提取和助手历史检索，防止重新记住。原聊天仍可在历史记录中查看。",
       confirmLabel: completed ? "标记完成" : "忘记", danger: !completed,
-      action: async () => { setBusy(true); try { await memoryRecordRetire(record, sourceCwd, completed); await reload(true); onToast?.(completed ? "已标记完成" : "已忘记，并保存了防止重新提取的规则"); } finally { setBusy(false); } },
+      action: async () => { setBusy(true); try { await memoryRecordRetire(record, sourceCwd, completed); await reload(true);  } finally { setBusy(false); } },
       onError: (e) => setError(message(e)),
     });
   };
@@ -81,10 +82,16 @@ export function PersonalMemoryPanel({ cwd, sessionId, onToast, onOpenSession, on
   const filtered = records.filter((record) => (tab === "inactive" ? !active(record) : active(record) && (tab !== "tasks" || record.kind === "task"))
     && (!query.trim() || `${record.key} ${record.content} ${kinds[record.kind]}`.toLowerCase().includes(query.toLowerCase().trim())));
   const extraction = snapshot?.extraction;
+  const extractionSummary = extraction?.outcome === "running" ? "正在提取记忆…"
+    : extraction?.outcome === "failed" ? "最近一次提取未完成"
+    : extraction?.outcome === "unchanged" ? "最近一次提取没有新增内容，现有记忆保持不变"
+    : extraction?.outcome === "saved" ? "最近一次提取已保存记忆"
+    : extraction?.succeededAt ? "最近一次记忆提取已完成"
+    : "开始使用后，会自动提取有价值的信息";
   const retry = async () => {
     if (!sessionId) return;
     setBusy(true);
-    try { const done = await memoryFlush(sessionId); onToast?.(done ? "已提取当前会话中的可复用信息" : "提取未完成，已保留待处理内容，请稍后重试"); await reload(true); }
+    try { const done = await memoryFlush(sessionId); onToast?.(memoryFlushMessage(done)); await reload(true); }
     catch (e) { setError(message(e)); } finally { setBusy(false); }
   };
   return <section className="personal-memory" aria-label="个人记忆管理">
@@ -97,7 +104,7 @@ export function PersonalMemoryPanel({ cwd, sessionId, onToast, onOpenSession, on
     <div className="personal-memory__toolbar"><div role="tablist" aria-label="记忆分类">{([["active", "有效记忆"], ["tasks", "近期跟进"], ["inactive", "已停用"]] as const).map(([value, label]) => <button key={value} role="tab" aria-selected={tab === value} onClick={() => setTab(value)}>{label}</button>)}</div>
       <Button size="compact" disabled={busy || !!draft || importing} onClick={() => setDraft({ cwd, input: { scope: "global", kind: "user", key: "", content: "", pinned: true, validUntil: null } })}><Plus size={15} /> 添加记忆</Button>
       <Button size="compact" disabled={busy || !!draft || importing} onClick={() => { setImporting(true); setImportCwd(cwd); setPreviews([]); }}>导入记忆</Button>
-      <Button size="compact" disabled={!records.some(active)} onClick={async () => { const text = JSON.stringify(records.filter(active), null, 2); try { await navigator.clipboard.writeText(text); onToast?.("有效记忆已复制，可粘贴保存或导入其他设备"); } catch { setExportText(text); } }}><Copy size={14} /> 复制导出</Button>
+      <Button size="compact" disabled={!records.some(active)} onClick={async () => { const text = JSON.stringify(records.filter(active), null, 2); try { await navigator.clipboard.writeText(text); onToast?.("记忆已复制"); } catch { setExportText(text); } }}><Copy size={14} /> 复制导出</Button>
     </div>
     <label className="personal-memory__search"><Search size={16} /><input className="form-control" aria-label="查找个人记忆" placeholder="查找偏好、项目或事项" value={query} onChange={(e) => setQuery(e.target.value)} /></label>
     {loading && <p role="status">正在加载记忆…</p>}
@@ -133,7 +140,8 @@ export function PersonalMemoryPanel({ cwd, sessionId, onToast, onOpenSession, on
       <div className="personal-memory__actions">{previews.length > 0 && <Button variant="primary" loading={busy} onClick={async () => { setBusy(true); let saved = 0; try { for (const input of previews) { await memoryRecordSave(input, importCwd); saved += 1; } setImporting(false); setImportText(""); setPreviews([]); onToast?.(`已导入 ${saved} 条记忆`); await reload(true); } catch (e) { setPreviews((values) => values.slice(saved)); setError(`已导入 ${saved} 条，剩余内容未保存：${message(e)}`); } finally { setBusy(false); } }}><Download size={14} /> 添加 {previews.length} 条记忆</Button>}<Button disabled={busy} onClick={() => { if (!importText.trim()) { setImporting(false); return; } requestConfirmation({ title: "舍弃未导入的记忆？", description: "已保存的条目会保留，剩余草稿将被丢弃。", confirmLabel: "舍弃草稿", danger: true, action: () => { setImporting(false); setImportText(""); setPreviews([]); } }); }}>关闭导入</Button></div>
     </section>}
     {exportText && <label>导出内容（可复制保存）<textarea className="form-control" rows={8} readOnly value={exportText} onFocus={(e) => e.target.select()} /><Button onClick={() => setExportText("")}>关闭导出</Button></label>}
-    <details className="personal-memory__health"><summary>记忆状态与排查</summary><div aria-live="polite"><span>{extraction?.outcome === "running" ? "正在提取记忆…" : extraction?.outcome === "failed" ? "最近一次提取未完成" : extraction?.succeededAt ? `最近整理 ${date(extraction.succeededAt)}` : "开始使用后，会自动提取有价值的信息"}</span>
+    <details className="personal-memory__health"><summary>记忆状态与排查</summary><div aria-live="polite"><span>{extractionSummary}</span>
+      {!!extraction?.succeededAt && <span>上次完成时间：{date(extraction.succeededAt)}</span>}
       {!!snapshot?.pendingCount && <span>{snapshot.pendingCount} 个会话待处理，打开工作区后自动重试</span>}
       {sessionId && <Button size="compact" disabled={busy || !snapshot?.enabled} onClick={() => void retry()}>立即提取</Button>}
       {extraction?.outcome === "failed" && <details><summary>查看原因</summary><p>{extraction.detail}</p></details>}

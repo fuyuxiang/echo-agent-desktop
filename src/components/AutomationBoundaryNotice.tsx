@@ -20,7 +20,7 @@ export function AutomationBoundaryNotice({
     <div className="automation-boundary-notice" role="note">
       <ShieldAlertIcon size="sm" />
       <span>
-        “始终允许”仅适用于常规工具；{boundary}。
+        “本任务免审批”仅适用于常规工具；{boundary}。
       </span>
     </div>
   );

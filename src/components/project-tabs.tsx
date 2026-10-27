@@ -359,16 +359,8 @@ export function ActivityTab({
       ...(currentProject?.plans.filter((item) => item.sessionId === sessionId).map((item) => item.title) ?? []),
       ...(currentProject?.tasks.filter((item) => item.sessionId === sessionId).map((item) => item.title) ?? []),
     ];
-    const archived = effectiveSessionArchived(
-      sessionId,
-      currentProject?.conversations.find((item) => item.sessionId === sessionId)?.archived,
-      summaryById,
-    );
     const perform = async () => {
       await useProjectsStore.getState().detachSessionFromProject(projectId, sessionId);
-      onToast?.(archived
-        ? "已移出项目，该会话仍在归档管理中"
-        : "已移出项目，对话历史仍可在“任务”中查看");
     };
     if (linkedItems.length > 0) {
       skipMenuFocusRestoreRef.current = true;
@@ -402,7 +394,6 @@ export function ActivityTab({
         sessionId,
         summaryById.get(sessionId)?.cwd || project?.cwd,
       ),
-      onError: (error) => onToast?.(`删除失败：${String(error).replace(/^Error:\s*/, "")}`),
     });
   };
 
@@ -841,9 +832,7 @@ export function AssetsTab({ projectId, onToast, onUseAsset, selectedAssetIds = [
       action: async ({ name }) => {
         const asset = await projectAssetMakeDir(projectId, name.trim());
         addAsset(projectId, asset);
-        onToast?.("文件夹已创建");
       },
-      onError: (error) => onToast?.(`创建失败：${String(error).replace(/^Error:\s*/, "")}`),
     });
   };
   const upload = async () => {
@@ -873,9 +862,7 @@ export function AssetsTab({ projectId, onToast, onUseAsset, selectedAssetIds = [
       action: async () => {
         if (asset.path) await projectAssetRemove(projectId, asset.path);
         removeAsset(projectId, asset.id);
-        onToast?.(asset.path ? "资产副本已删除" : "旧版资产元数据已删除");
       },
-      onError: (error) => onToast?.(`删除失败：${String(error).replace(/^Error:\s*/, "")}`),
     });
   };
 

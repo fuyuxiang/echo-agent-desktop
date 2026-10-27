@@ -562,7 +562,7 @@ export function OrganizationMemoryPanel({
       batchError = failures.length > 0 ? failures.slice(0, 3).join("\n") : null;
       setError(batchError);
       if (done > 0 || skipped > 0) {
-        onToast?.(`新增 ${done} 个文档，跳过重复 ${skipped} 个${failures.length ? `，失败 ${failures.length} 个` : ""}${done ? "；正在建立索引" : ""}`);
+        onToast?.(`新增 ${done} 个文档，跳过重复 ${skipped} 个${failures.length ? `，失败 ${failures.length} 个` : ""}${done ? "；正在处理文档" : ""}`);
       } else {
         onToast?.(`上传失败：${failures[0] ?? "未知原因"}`);
       }
@@ -695,7 +695,7 @@ export function OrganizationMemoryPanel({
     setError(null);
     try {
       const saved = await orgDownloadDocument(id, submission, name);
-      if (saved) onToast?.(`已保存到 ${saved}`);
+      if (saved) onToast?.(`已下载“${saved.split(/[\\/]/).pop()}”`);
     } catch (reason) { setError(`下载失败：${String(reason).replace(/^Error:\s*/, "")}`); }
   };
 
@@ -708,7 +708,7 @@ export function OrganizationMemoryPanel({
       else await orgArchiveDocument(removeTarget.id);
       setRemoveTarget(null);
       setPreview(null);
-      onToast?.("文档已移出共享与检索；已上传原件仍保留在组织服务器");
+      onToast?.("已停止共享此文档，服务器上的原件仍保留");
       await loadWorkspace();
     } catch (reason) { setError(String(reason)); } finally { setBusy(false); }
   };
@@ -736,7 +736,7 @@ export function OrganizationMemoryPanel({
       setMemoryWorkspace("");
       setMemoryValidUntil("");
       setShowMemoryForm(false);
-      onToast?.("经验已提交，审核通过后可供任务检索和参考");
+      onToast?.("经验已提交，审核通过后可供团队使用");
       await loadWorkspace();
     } catch (reason) {
       setError(String(reason));
@@ -795,7 +795,7 @@ export function OrganizationMemoryPanel({
             : "Skill 已提交，等待组织审核",
         );
       } else {
-        onToast?.(`Skill 上传失败：${failures[0] ?? "未知原因"}`);
+        onToast?.(`技能上传失败：${failures[0] ?? "未知原因"}`);
       }
       setUploadProgress({ label: "正在刷新列表", completed: paths.length, total: paths.length });
       await loadWorkspace();
@@ -826,7 +826,7 @@ export function OrganizationMemoryPanel({
     setBusy(true);
     try {
       await orgNewDocumentVersion(document.id, path);
-      onToast?.("新版本已上传；索引完成前旧版本继续生效");
+      onToast?.("新版本已上传，处理完成后会自动替换旧版本");
       await loadWorkspace();
     } catch (reason) { setError(String(reason)); } finally { setBusy(false); }
   };
@@ -846,9 +846,6 @@ export function OrganizationMemoryPanel({
     setBusy(true);
     try {
       await orgSetSkillPreference(skill.skillId, !skill.enabled);
-      onToast?.(skill.enabled
-        ? "Skill 已从用户全局技能目录卸载"
-        : "Skill 已安装到用户全局技能目录");
       await loadWorkspace();
     } catch (reason) { setError(String(reason)); } finally { setBusy(false); }
   };
@@ -858,7 +855,7 @@ export function OrganizationMemoryPanel({
     setBusy(true);
     try {
       const result = await orgPublishSkill(skill.skillId, publishScope);
-      onToast?.(result.state === "pending" ? "Skill 副本已提交目标范围审核" : "Skill 副本已发布");
+      onToast?.(result.state === "pending" ? "技能副本已提交审核" : "技能副本已发布");
       await loadWorkspace();
     } catch (reason) { setError(String(reason)); } finally { setBusy(false); }
   };
@@ -868,7 +865,7 @@ export function OrganizationMemoryPanel({
     setError(null);
     try {
       const result = await orgSyncSkills();
-      onToast?.(`已同步 ${result.installed.length} 个已安装 Skills`);
+      onToast?.(`已更新 ${result.installed.length} 个技能`);
       await loadWorkspace();
     } catch (reason) {
       setError(String(reason));

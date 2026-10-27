@@ -114,7 +114,7 @@ export function McpModal({
           ? "请先完成此服务的配置，再重新授权"
           : "授权未完成或已取消，请重试"));
       }
-      onToast?.(`已授权「${server.displayName || server.name}」`);
+
       // Read the current store session, including one lazily created above.
       const generation = ++reloadGeneration.current;
       try {
@@ -157,8 +157,7 @@ export function McpModal({
         server.name,
         enabled,
       );
-      const action = enabled ? "已启用" : "已停用";
-      onToast?.(result.warnings[0] ? `${action}；${result.warnings[0]}` : action);
+      if (result.warnings[0]) onToast?.(result.warnings[0]);
       await reload();
     } catch (e) {
       onToast?.(`切换失败：${String(e).replace(/^Error:\s*/, "")}`);
@@ -186,12 +185,11 @@ export function McpModal({
           );
           if (expanded === server.name) setExpanded(null);
           await reload();
-          onToast?.(result.warnings[0] ? `已删除；${result.warnings[0]}` : "已删除");
+          if (result.warnings[0]) onToast?.(`连接器已移除，但仍需注意：${result.warnings[0]}`);
         } finally {
           setMutating(null);
         }
       },
-      onError: (error) => onToast?.(`删除失败：${String(error).replace(/^Error:\s*/, "")}`),
     });
   };
 
@@ -211,7 +209,7 @@ export function McpModal({
     try {
       const sessionId = activeSessionId ?? await ensureSession();
       await mcpSetup(sessionId, server.name, values);
-      onToast?.(`已完成「${server.displayName || server.name}」配置并启动`);
+
       await reload(true);
     } catch (e) {
       onToast?.(`配置失败：${String(e).replace(/^Error:\s*/, "")}`);
@@ -227,7 +225,7 @@ export function McpModal({
       const sessionId = activeSessionId;
       if (!sessionId) throw new Error("工具尚未加载到活动会话");
       await mcpToggleTool(sessionId, server.name, toolName, enabled);
-      onToast?.(enabled ? "已在当前会话启用工具" : "已在当前会话停用工具");
+
       await reload();
     } catch (e) {
       onToast?.(`工具切换失败：${String(e).replace(/^Error:\s*/, "")}`);

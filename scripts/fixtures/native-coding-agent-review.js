@@ -144,7 +144,7 @@
         throw new Error(`Unexpected tool or scope denied: ${request.title}`);
       }
       const card = document.getElementById(`permission-${request.requestId}`);
-      const allow = button(card, '允许本次');
+      const allow = button(card, '允许一次');
       if (!visible(card) || !allow) continue;
       assert(request.options.some((option) => option.kind === 'allow'), 'Operation has no allow-once option');
       allow.click();

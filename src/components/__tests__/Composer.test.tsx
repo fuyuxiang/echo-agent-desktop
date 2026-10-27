@@ -176,9 +176,9 @@ describe("Composer", () => {
   });
 
   it("showMeta 时渲染权限模式选择器（PermissionPicker）", () => {
-    // 未创建的当前任务默认 ask → 触发器显示"审批模式"。
+    // 未创建的当前任务默认 ask → 触发器显示"请求批准"。
     render(<Composer {...base} showMeta onPlaceholder={vi.fn()} />);
-    expect(screen.getByText(/审批模式/)).toBeInTheDocument();
+    expect(screen.getByText(/请求批准/)).toBeInTheDocument();
   });
 
   it("未传入工作空间数据时不展示无效入口", () => {
@@ -459,6 +459,28 @@ describe("Composer", () => {
     await waitFor(() => expect(onClientSlashCommand).toHaveBeenCalled());
     expect((screen.getByRole("textbox") as HTMLTextAreaElement).value).toBe("/plan maybe");
     expect(onSend).not.toHaveBeenCalled();
+  });
+
+  it.each(["flush", "dream"])("记忆命令 /%s 由维护接口处理，不会误发给模型", async name => {
+    const onSend = vi.fn();
+    const onClientSlashCommand = vi.fn().mockResolvedValue(true);
+    render(<Composer {...base} draft={`/${name}`} draftKey="s1" onSend={onSend} onClientSlashCommand={onClientSlashCommand} />);
+    fireEvent.click(screen.getByRole("button", { name: "发送" }));
+    await waitFor(() => expect(onClientSlashCommand).toHaveBeenCalledWith({ name, args: "" }));
+    expect(onSend).not.toHaveBeenCalled();
+    expect(screen.getByRole("textbox")).toHaveValue("");
+  });
+
+  it.each(["flush", "dream", "plan"])("多会话容器关闭 Slash 控制后，/%s 保留为消息内容", async name => {
+    const onSend = vi.fn();
+    const onClientSlashCommand = vi.fn();
+    const onToast = vi.fn();
+    render(<Composer {...base} slashCommandsEnabled={false} draft={`/${name}`} draftKey="group:one"
+      onSend={onSend} onClientSlashCommand={onClientSlashCommand} onToast={onToast} />);
+    fireEvent.click(screen.getByRole("button", { name: "发送" }));
+    await waitFor(() => expect(onSend).toHaveBeenCalledWith(`/${name}`, []));
+    expect(onClientSlashCommand).not.toHaveBeenCalled();
+    expect(onToast).not.toHaveBeenCalledWith(expect.stringContaining(`/${name}`));
   });
 
   it("运行时 Slash 命令仍按原始文本交给 Agent", () => {

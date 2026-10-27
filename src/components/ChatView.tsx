@@ -286,11 +286,6 @@ export function ChatView({
       // CurrentModeUpdate remains authoritative; this immediate local update
       // avoids a visible delay on runtimes that acknowledge asynchronously.
       useSessionStore.getState().setAgentMode(nextMode, sessionId);
-      onToast?.(nextMode === "default"
-        ? "已关闭网页和电脑操作"
-        : nextMode === "browser_use"
-          ? "已启用操作网页"
-          : "已启用操作电脑");
     } catch (error) {
       onToast?.(`切换工具失败：${friendlyError(error)}`);
     } finally {
@@ -462,7 +457,6 @@ export function ChatView({
         true,
       );
       await onRewound?.(targetSessionId);
-      const continuedInBackground = useSessionStore.getState().sessionId !== targetSessionId;
       const displayText = userText || "请分析附件。";
       const restoredTransport = execution.promptText
         ? stripAttachmentTransportContext(execution.promptText)
@@ -484,7 +478,7 @@ export function ChatView({
       if (accepted === false) {
         throw new Error("回复已准备重试，但当前模型未能启动。请重试本轮请求。");
       }
-      if (continuedInBackground) onToast?.("已在原会话中继续执行");
+      if (useSessionStore.getState().sessionId !== targetSessionId) onToast?.("已在原任务中继续执行");
     } finally {
       retryingSessionsRef.current.delete(targetSessionId);
       setRetryingSessions(new Set(retryingSessionsRef.current));
@@ -521,7 +515,6 @@ export function ChatView({
         cancelLabel: "取消",
         danger: true,
         action: () => performRetry(kind),
-        onError: (error) => onToast?.(`重新执行失败：${friendlyError(error)}`),
       });
       return;
     }
@@ -1011,7 +1004,6 @@ export function ChatView({
               sessionId
                 ? (text, attachments) => {
                     useMessageQueueStore.getState().enqueue(sessionId, text, attachments);
-                    onToast?.("已加入待发送队列");
                   }
                 : undefined
             }
@@ -1092,7 +1084,6 @@ export function ChatView({
                     setResendText(next);
                     setResendAttachments(undefined);
                     setResendNonce((nonce) => nonce + 1);
-                    onToast?.("已填入团队指令，请补充任务后发送");
                   }}
                   onViewTasks={() => {
                     transitionWorkspace("subagents");

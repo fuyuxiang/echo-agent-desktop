@@ -30,7 +30,7 @@
 .session-header button:focus-visible, .session-header__workspace:focus-visible, .topbar-actions__item:focus-visible, .share-menu__trigger:focus-visible {
   outline: 2px solid var(--echo-brand); outline-offset: 2px;
 }
-.topbar-actions__menu { width: 224px; }
+.topbar-actions__menu { width: max-content; min-width: min(168px, calc(100vw - 16px)); max-width: min(320px, calc(100vw - 16px)); }
 .action-menu__heading { padding: 7px 10px 4px; font-size: 0.6875rem; color: var(--echo-text-weak); }
 .action-menu__separator { height: 1px; margin: 5px 4px; background: var(--echo-border-default); }
 .action-menu__meta { margin-left: auto; color: var(--echo-text-weak); font-size: 0.6875rem; }
@@ -45,7 +45,7 @@
 .chatview__runtime-view { padding: 0; }
 .chatview__runtime-heading { display: flex; align-items: center; justify-content: space-between; color: var(--echo-text-strong); margin-bottom: 8px; }
 .msg__more-trigger { min-width: 32px; }
-.msg__more-menu { min-width: 224px; }
+.msg__more-menu { min-width: min(184px, calc(100vw - 16px)); }
 .msg__export-menu { width: 280px; }
 .msg__action-status { color: var(--echo-text-medium); font-size: .75rem; }
 .context-usage__pill--attention { color: var(--echo-color-text-warning-default); }

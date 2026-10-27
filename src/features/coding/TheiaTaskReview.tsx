@@ -112,7 +112,6 @@ export function TheiaTaskReview({ root, taskId, path, onClose, onOpenFile, onRev
       if (!isCurrent()) return;
       await onReviewed();
       if (!isCurrent()) return;
-      onToast?.(`已审阅 ${path}`);
     } catch (reason) {
       if (!isCurrent()) return;
       const message = String(reason).replace(/^Error:\s*/, "");

@@ -853,16 +853,17 @@ button,
 }
 
 .sidebar {
-  width: var(--app-sidebar-width, 264px);
+  --sidebar-content-inset: 12px;
+  width: var(--app-sidebar-width, 248px);
   background: var(--ui-sidebar);
-  padding: 0 8px 10px;
+  padding: 0 0 10px;
 }
 
 .sidebar__logo-row {
   height: 64px;
   gap: 8px;
-  padding-left: 20px;
-  padding-right: 10px;
+  padding-left: 28px;
+  padding-right: var(--sidebar-content-inset);
 }
 
 .sidebar__logo-col {
@@ -898,7 +899,7 @@ button,
 
 .sidebar__nav {
   gap: 4px;
-  padding: 4px 10px 18px;
+  padding: 4px var(--sidebar-content-inset) 18px 18px;
 }
 
 .sidebar__nav-item {
@@ -926,13 +927,14 @@ button,
 }
 
 .sidebar__content {
-  padding: 6px 10px 14px;
+  padding: 6px var(--sidebar-content-inset) 14px 18px;
 }
 
 @media (max-height: 760px) {
   .sidebar__nav {
     gap: 2px;
-    padding: 2px 10px 10px;
+    padding-top: 2px;
+    padding-bottom: 10px;
   }
   .sidebar__nav-item {
     height: 30px;
@@ -1035,7 +1037,9 @@ button,
 }
 
 .sidebar__footer {
-  margin: 0 10px;
+  margin: 0;
+  padding-left: 20px;
+  padding-right: var(--sidebar-content-inset);
   border-top-color: var(--ui-line);
 }
 
@@ -2743,19 +2747,17 @@ button,
   }
 
   .sidebar {
-    width: var(--app-sidebar-width, 232px);
-    padding-left: 6px;
-    padding-right: 6px;
+    width: var(--app-sidebar-width, 248px);
   }
 
   .sidebar__logo-row {
-    padding-left: 16px;
+    padding-left: 22px;
   }
 
   .sidebar__nav,
   .sidebar__content {
-    padding-left: 8px;
-    padding-right: 8px;
+    padding-left: 14px;
+    padding-right: var(--sidebar-content-inset);
   }
 
   .project-grid,
@@ -2808,7 +2810,7 @@ button,
 
 @media (max-width: 760px) {
   .sidebar {
-    width: var(--app-sidebar-width, 220px);
+    width: var(--app-sidebar-width, 248px);
   }
 
   .home {
@@ -3735,44 +3737,6 @@ button,
   to { transform: rotate(360deg); }
 }
 
-/* Actionable lifecycle feedback stays compact but supports immediate undo. */
-.toast--actionable {
-  display: flex;
-  align-items: center;
-  gap: 14px;
-  max-width: min(560px, calc(100vw - 32px));
-  pointer-events: auto;
-}
-
-.toast__message {
-  min-width: 0;
-}
-
-.toast__actions {
-  display: inline-flex;
-  align-items: center;
-  flex: 0 0 auto;
-  gap: 4px;
-}
-
-.toast__action {
-  padding: 3px 7px;
-  border: 0;
-  border-radius: 6px;
-  background: transparent;
-  color: #72ead1;
-  cursor: pointer;
-  font: inherit;
-  font-weight: 650;
-}
-
-.toast__action:hover,
-.toast__action:focus-visible {
-  background: rgba(255, 255, 255, 0.12);
-  color: #fff;
-  outline: none;
-}
-
 .settings-reset:focus-visible,
 .settings-input:focus-visible,
 .theme-toggle__btn:focus-visible,
@@ -4643,15 +4607,6 @@ a.help-card:hover {
     flex: 1 1 auto;
   }
 
-  .toast--actionable {
-    align-items: stretch;
-    flex-direction: column;
-    gap: 6px;
-  }
-
-  .toast__actions {
-    justify-content: flex-end;
-  }
 }
 
 /* Notifications use the same settings rows as the rest of the preferences. */

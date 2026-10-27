@@ -277,7 +277,7 @@ export const MessageItem = memo(function MessageItem({
       const receipt = await exportOfficeDocument(title, markdownText, format, sessionId ?? undefined);
       if (receipt) {
         if (sessionId) setExportedArtifact(registerDocumentArtifact(receipt, sessionId, title, cwd ?? ""));
-        onToast?.(`已导出到 ${receipt.path}${sessionId ? "，可在本任务的成果中查看" : ""}`);
+        onToast?.(`已导出“${receipt.path.split(/[\\/]/).pop()}”${sessionId ? "，可在成果中查看" : ""}`);
       }
     } catch (error) {
       onToast?.(`导出失败：${String(error).replace(/^Error:\s*/, "")}`);

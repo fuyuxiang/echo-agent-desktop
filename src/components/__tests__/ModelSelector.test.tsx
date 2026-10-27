@@ -3,6 +3,15 @@ import { describe, expect, it, vi } from "vitest";
 import { ModelSelector } from "../ModelSelector";
 
 describe("ModelSelector", () => {
+  it("菜单将显示名与实际标识分层呈现，没有别名时不重复同一名称", () => {
+    render(<ModelSelector modelId="plain-model" models={[
+      { id: "plain-model", label: "plain-model" },
+      { id: "provider/model-id", label: "常用模型" },
+    ]} onModelChange={vi.fn()} />);
+    fireEvent.click(screen.getByRole("button", { name: "plain-model" }));
+    expect(screen.getByRole("option", { name: "plain-model" }).querySelector(".model-selector__item-id")).toBeNull();
+    expect(screen.getByRole("option", { name: /常用模型/ }).querySelector(".model-selector__item-id")).toHaveTextContent("provider/model-id");
+  });
   it("长名称省略显示时仍能通过提示和菜单确认完整模型，切换保留真实 id", () => {
     const models = [
       { id: "connection/MiniMax-M3.1-Flash-20261019", label: "MiniMax-M3.1-Flash-超长模型名称" },

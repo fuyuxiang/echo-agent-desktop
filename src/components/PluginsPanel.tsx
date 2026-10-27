@@ -101,7 +101,7 @@ export function PluginsPanel({ sessionId, onToast }: PluginsPanelProps) {
           pluginId,
         });
         if (!active()) return;
-        onToast?.(plugin.enabled ? `已禁用「${plugin.name}」` : `已启用「${plugin.name}」`);
+
         await loadSnapshot(targetSession);
       } catch (e) {
         if (mounted.current && (scope.current.epoch === start.epoch || (!start.id && scope.current.epoch === start.epoch + 1))) onToast?.(`操作失败：${String(e).replace(/^Error:\s*/, "")}`);
@@ -138,7 +138,6 @@ export function PluginsPanel({ sessionId, onToast }: PluginsPanelProps) {
           if (response.some(entry => entry.id === plugin.id && entry.root === plugin.root)) {
             throw new Error("操作已提交，但插件仍在加载列表中，请刷新后检查来源配置。");
           }
-          onToast?.(uninstall ? "插件已卸载" : "已移除插件配置，原文件保留");
         } finally { actionInFlight.current = false; setBusy(null); }
       },
     });

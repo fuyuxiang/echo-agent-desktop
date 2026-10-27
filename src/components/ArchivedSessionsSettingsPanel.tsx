@@ -181,8 +181,6 @@ export function ArchivedSessionsSettingsPanel({
       if (openAfterRestore && onOpenSession) {
         onClose();
         await onOpenSession(entry.sessionId, entry.cwd);
-      } else {
-        onToast?.(`已恢复“${entry.title}”`);
       }
     } catch (cause) {
       const message = `恢复失败：${String(cause).replace(/^Error:\s*/, "")}`;

@@ -11,6 +11,9 @@ import { PlaceholderPage } from "./components/PlaceholderPage";
 import { CapabilitySection } from "./components/CapabilitySection";
 import { isCapabilityView } from "./lib/capability-navigation";
 import { Toast, type ToastAction } from "./components/Toast";
+import { useToastQueue } from "./lib/use-toast-queue";
+import { toastMessage, type ToastMessageKind } from "./lib/toast-message";
+import { memoryDreamMessage, memoryFlushMessage } from "./lib/memory-feedback";
 // PermissionDialog is now inline in ChatView (PermissionInlineCard), not a global modal.
 import { ThemeProvider } from "./components/ThemeProvider";
 import type { SettingsSectionId } from "./components/SettingsPanel";
@@ -61,6 +64,8 @@ import {
   notificationAppend,
   notificationMarkRead,
   memoryRecordSave,
+  memoryFlush,
+  memoryDream,
   internalReload,
   invalidateAgentKnowledgeSourceSync,
   KNOWLEDGE_MCP_SERVER_NAME,
@@ -163,12 +168,6 @@ const UpdateDialog = lazy(() => import("./components/UpdateDialog").then((module
 const FolderTrustDialog = lazy(() => import("./components/FolderTrustDialog").then((module) => ({ default: module.FolderTrustDialog })));
 const MeetingRecordingIndicator = lazy(() => import("./components/MeetingRecordingIndicator").then((module) => ({ default: module.MeetingRecordingIndicator })));
 
-type ToastEntry = {
-  id: number;
-  message: string;
-  actions: ToastAction[];
-};
-
 type SessionSelectionIntent =
   | { kind: "subagent"; source: SubagentOpenContext }
   | { kind: "return"; point: SubagentReturnPoint };
@@ -270,7 +269,7 @@ function Shell() {
   const [meetingLaunchModelId, setMeetingLaunchModelId] = useState<string | undefined>();
   const sidebarLayout = useAppSidebarLayout();
   const { collapsed: sidebarCollapsed, setCollapsed: setSidebarCollapsed } = sidebarLayout;
-  const [toasts, setToasts] = useState<ToastEntry[]>([]);
+  const { toasts, enqueueToast, dismissToast, pauseToast } = useToastQueue();
   const [currentModelId, setCurrentModelId] = useState<string | undefined>(undefined);
   const newSessionModelOverrideRef = useRef<string | undefined>(undefined);
   const recommendedModelIdRef = useRef<string | undefined>(undefined);
@@ -341,8 +340,6 @@ function Shell() {
     }
   }, [activeCodingWorkspaceCwd]);
   const [cancellingSessionId, setCancellingSessionId] = useState<string | null>(null);
-  const toastTimers = useRef<Map<number, ReturnType<typeof setTimeout>>>(new Map());
-  const toastIdRef = useRef(0);
   const modelsRef = useRef<ModelOption[]>([]);
   const authReadyRef = useRef(false);
   const promptedUpdateVersionRef = useRef<string | null>(null);
@@ -350,29 +347,11 @@ function Shell() {
   const selectionGenerationRef = useRef(0);
   const sessionCatalogGenerationRef = useRef(0);
   const modelCatalogGenerationRef = useRef(0);
+  const memoryCommandsInFlightRef = useRef(new Set<string>());
 
-  const dismissToast = useCallback((id: number) => {
-    const timer = toastTimers.current.get(id);
-    if (timer) clearTimeout(timer);
-    toastTimers.current.delete(id);
-    setToasts((current) => current.filter((toast) => toast.id !== id));
-  }, []);
-
-  const enqueueToast = useCallback((message: string, actions: ToastAction[] = [], durationMs = 4000) => {
-    const id = ++toastIdRef.current;
-    setToasts((current) => [...current, { id, message, actions }].slice(-4));
-    const timer = setTimeout(() => dismissToast(id), durationMs);
-    toastTimers.current.set(id, timer);
-  }, [dismissToast]);
-
-  const showToast = useCallback((message: string, durationMs = 4000) => {
-    enqueueToast(message, [], durationMs);
+  const showToast = useCallback((message: string, durationMs?: number, kind: ToastMessageKind = "auto") => {
+    enqueueToast(message, [], durationMs, kind);
   }, [enqueueToast]);
-
-  useEffect(() => () => {
-    for (const timer of toastTimers.current.values()) clearTimeout(timer);
-    toastTimers.current.clear();
-  }, []);
 
   const sessionStore = useSessionStore;
   const sessionsStore = useSessionsStore;
@@ -406,7 +385,7 @@ function Shell() {
     void useOrgSessionStore.getState().hydrate();
     void hydrateKnowledgeSources().catch((error) => {
       console.error("[EchoAgent] Failed to hydrate knowledge sources:", error);
-      enqueueToast("知识源后端数据读取失败");
+      enqueueToast("暂时无法加载知识库，请稍后重试");
     });
     void hydrateProjectsFromBackend()
       .then(() => {
@@ -416,7 +395,7 @@ function Shell() {
       })
       .catch((error) => {
         console.error("[EchoAgent] Failed to hydrate projects:", error);
-        enqueueToast("项目后端数据读取失败，已使用本地缓存");
+        enqueueToast("项目暂时无法同步，当前显示上次保存的内容");
       });
   }, []);
 
@@ -666,23 +645,8 @@ function Shell() {
             if (updateType === "available_commands_update") {
               setCommandRefreshKey((value) => value + 1);
             }
-            if (updateType === "memory_flush_completed") {
-              const result = (u as { result?: string }).result;
-              showToast(result?.startsWith("written")
-                ? "会话摘要已保存"
-                : result === "nothing to store" || result === "semantic duplicate"
-                  ? "提取完成，暂无新内容"
-                  : `记忆提取未完成${result ? `：${result}` : ""}`);
-            } else if (updateType === "memory_dream_completed") {
-              const result = (u as { result?: string }).result;
-              showToast(result?.startsWith("written")
-                ? "长期记忆已更新"
-                : result === "nothing to consolidate"
-                  ? "整理完成，暂无新内容"
-                  : `记忆整理未完成${result ? `：${result}` : ""}`);
-            } else if (updateType === "memory_session_saved") {
-              showToast("已保存会话记忆");
-            }
+            // Background memory processing is visible in Memory's health view.
+            // Buttons and desktop /flush /dream commands await their own result.
             sessionStore.getState().applyUpdate(u);
           },
           onPermission: (p) => {
@@ -770,7 +734,6 @@ function Shell() {
               if (transcript) {
                 indexTaskArtifacts(p.sessionId, summary.title, summary.cwd, transcript.messages);
               }
-
             }
 
             // Unknown side-channel sessions and failed turns must never start a
@@ -1145,8 +1108,8 @@ function Shell() {
           : "未能获取此会话的模型信息，请重新打开任务，或在右下角选择模型"
         : runtimeSetupHint;
 
-  const showActionToast = useCallback((message: string, actions: ToastAction[], durationMs = 8000) => {
-    enqueueToast(message, actions, durationMs);
+  const showActionToast = useCallback((message: string, actions: ToastAction[], durationMs = 8000, kind: ToastMessageKind = "auto") => {
+    enqueueToast(message, actions, durationMs, kind);
   }, [enqueueToast]);
 
   useEffect(() => {
@@ -1335,7 +1298,7 @@ function Shell() {
     const config = loadQuotaConfig();
     if (!isQuotaBlocking(loadUsage(), config)) return true;
     const quota = checkQuota(loadUsage(), config!);
-    showToast(`已达 ${quota.limit.toLocaleString()} Token 配额，请先在「用量统计」调整上限或策略`);
+    showToast(`用量已达到 ${quota.limit.toLocaleString()} 的上限，请到「用量统计」调整`);
     return false;
   };
 
@@ -2055,14 +2018,14 @@ function Shell() {
   };
 
   const showArchivedSessionActions = (sessionId: string) => {
-    showActionToast("已归档，会话已从侧边栏收起", [
+    const title = findSessionSummary(sessionId)?.title || "未命名对话";
+    showActionToast(`已归档“${title}”`, [
       {
         label: "撤销",
         onClick: async () => {
           try {
             const restored = await agentSetSessionArchived(sessionId, false);
             syncArchivedSessionState(sessionId, restored);
-            showToast("已恢复会话");
           } catch (cause) {
             showToast(`恢复失败：${String(cause).replace(/^Error:\s*/, "")}`, 5000);
           }
@@ -2084,14 +2047,12 @@ function Shell() {
         projectStore.updateConversationTitle(project.id, sessionId, title);
       }
     }
-    showToast("已重命名对话");
   };
 
   const handleArchiveSession = async (sessionId: string, archived: boolean, _explicitCwd?: string) => {
     const next = await agentSetSessionArchived(sessionId, archived);
     syncArchivedSessionState(sessionId, next);
     if (next) showArchivedSessionActions(sessionId);
-    else showToast("已恢复会话");
   };
 
   const handleDeleteSession = async (sessionId: string, explicitCwd?: string) => {
@@ -2103,10 +2064,8 @@ function Shell() {
     clearDeletedSessionState(sessionId);
     sessionsStore.getState().remove(sessionId, cwd);
     if (result?.memoryCleanupWarning) {
-      showToast(`会话已删除，部分关联数据清理未完成：${result.memoryCleanupWarning}`);
-    } else {
-      showActionToast("对话与自动摘要已删除，关联的记忆已停用。旧版手动文档可在记忆页检查。", [
-        { label: "检查长期记忆", onClick: () => openSettings("personal-memory") },
+      showActionToast(`对话已删除，部分记忆未能清理，请到记忆页面检查。\n${result.memoryCleanupWarning}`, [
+        { label: "查看记忆", onClick: () => openSettings("personal-memory") },
       ]);
     }
   };
@@ -2352,8 +2311,8 @@ function Shell() {
                 const permissionState = usePermissionStore.getState();
                 const closed = permissionState.closedRequestIds.includes(open.requestId);
                 const pending = permissionState.promote(open.requestId, open.sessionId);
-                if (closed) showToast("这项授权请求已处理，已打开关联任务", 5000);
-                else if (!pending) showToast("已打开关联任务，正在等待授权请求显示", 5000);
+                if (closed) showToast("这项请求已处理", 5000);
+                else if (!pending) showToast("正在加载待确认的操作", 5000);
               }
               const notificationId = Number(open.id);
               if (/^\d+$/.test(open.id) && Number.isSafeInteger(notificationId)) {
@@ -2533,6 +2492,65 @@ function Shell() {
       case "usage":
         handleNavigate("用量统计");
         return true;
+      case "flush":
+      case "dream": {
+        if (args) {
+          showToast(`用法：/${name}`);
+          return false;
+        }
+        const sessionId = sessionsStore.getState().currentSessionId;
+        if (placeholderView || !sessionId || sessionStore.getState().sessionId !== sessionId) {
+          showToast(`/${name} 需要先打开任务会话`);
+          return false;
+        }
+        if (memoryCommandsInFlightRef.current.has(sessionId)) {
+          showToast("当前任务正在处理记忆，请稍候");
+          return false;
+        }
+        const session = findSessionSummary(sessionId);
+        const actions: ToastAction[] = [{
+          label: "查看记忆",
+          onClick: async () => {
+            if (sessionsStore.getState().deletedSessionIds.includes(sessionId)) {
+              throw new Error("原任务已删除，请在设置中查看保留的记忆");
+            }
+            if (sessionsStore.getState().currentSessionId !== sessionId) {
+              await handleSelectSession(sessionId, session?.cwd, false, true);
+            }
+            if (sessionsStore.getState().currentSessionId !== sessionId) {
+              throw new Error("任务打开已被新的导航操作取代，请重新打开记忆");
+            }
+            openSettings("personal-memory");
+          },
+        }];
+        const notify = (message: string, kind: ToastMessageKind = "info") => {
+          const background = sessionsStore.getState().currentSessionId !== sessionId;
+          const title = session?.title || "未命名对话";
+          const shortTitle = title.length > 24 ? `${title.slice(0, 24)}…` : title;
+          // Classify diagnostics before adding a user-owned task title. Keep
+          // the originating task visible even while technical details collapse.
+          const presentation = toastMessage(message, kind);
+          const context = background ? `（任务：${shortTitle}）` : "";
+          const details = [presentation.details, background && title !== shortTitle ? `任务：${title}` : ""].filter(Boolean).join("\n");
+          showActionToast(`${presentation.summary}${context}${details ? `\n${details}` : ""}`, actions, 8000, "info");
+        };
+        memoryCommandsInFlightRef.current.add(sessionId);
+        const progressId = enqueueToast(name === "flush" ? "正在提取记忆，完成后会提示结果" : "正在整理长期记忆，完成后会提示结果", [], 4000, "info", `memory:${sessionId}`);
+        try {
+          // Invoke the same Runtime maintenance path as the memory page. This
+          // returns errors and completion even when no notification is emitted
+          // (empty input, a busy processor, or a failed model request).
+          const completed = name === "flush" ? await memoryFlush(sessionId) : await memoryDream(sessionId);
+          notify(name === "flush" ? memoryFlushMessage(completed) : memoryDreamMessage(completed));
+          return name === "dream" || completed;
+        } catch (error) {
+          notify(`${name === "flush" ? "记忆提取" : "记忆整理"}失败：${friendlyError(error)}`, "error");
+          return false;
+        } finally {
+          if (progressId !== undefined) dismissToast(progressId);
+          memoryCommandsInFlightRef.current.delete(sessionId);
+        }
+      }
       case "remember": {
         const remember = parseRememberArguments(args);
         if (!remember) {
@@ -2586,7 +2604,7 @@ function Shell() {
         }
         const newId = await sessionFork(sessionId, cwd);
         handleForked(newId, sessionId, cwd);
-        showToast(`已分叉到新会话 ${newId.slice(0, 8)}`);
+
         return true;
       }
       case "rename": {
@@ -2602,7 +2620,7 @@ function Shell() {
         }
         await agentRenameSession(sessionId, args.trim(), entry.cwd);
         sessionsStore.getState().upsert({ sessionId, title: args.trim() });
-        showToast("会话已重命名");
+
         return true;
       }
       default:
@@ -3051,15 +3069,20 @@ function Shell() {
         </main>
       </div>
       </SidebarLayoutContext.Provider>
-      {toasts.map((toast, index) => (
-        <Toast
-          key={toast.id}
-          message={toast.message}
-          actions={toast.actions}
-          offset={toasts.length - 1 - index}
-          onDismiss={() => dismissToast(toast.id)}
-        />
-      ))}
+      <div className="toast-stack" aria-label="操作提示">
+        {toasts.map((toast) => (
+          <Toast
+            key={toast.id}
+            message={toast.message}
+            actions={toast.actions}
+            kind={toast.kind}
+            stacked
+            onDismiss={() => dismissToast(toast.id)}
+            onPause={(paused) => pauseToast(toast.id, paused)}
+            onActionError={(error) => showToast(`操作未完成：${String(error)}`, undefined, "error")}
+          />
+        ))}
+      </div>
       <Suspense fallback={null}>
         <MeetingRecordingIndicator
           onOpen={(modelId) => {

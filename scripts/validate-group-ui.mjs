@@ -67,7 +67,7 @@ try {
       return messages && messages.scrollHeight - messages.scrollTop - messages.clientHeight < 3;
     });
 
-    await page.getByRole("button", { name: "允许本次", exact: true }).click();
+    await page.getByRole("button", { name: "允许一次", exact: true }).click();
     await page.evaluate(() => window.groupReview.failExecution());
     await page.getByRole("alert").filter({ hasText: "模型暂时不可用" }).waitFor();
     await page.getByRole("button", { name: "检查后重试", exact: true }).click();

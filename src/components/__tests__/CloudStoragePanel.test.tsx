@@ -145,14 +145,32 @@ describe("CloudStoragePanel", () => {
     provider.writeText.mockImplementationOnce(() => new Promise<boolean>((resolve) => { release = resolve; }));
     await selectProvider();
     fireEvent.click(screen.getByRole("button", { name: "读取 report.pdf" }));
-    await screen.findByRole("textbox", { name: "编辑 report.pdf" });
+    const editor = await screen.findByRole("textbox", { name: "编辑 report.pdf" });
+    fireEvent.change(editor, { target: { value: "修改后的内容" } });
     fireEvent.click(screen.getByRole("button", { name: "保存" }));
     fireEvent.change(screen.getByRole("combobox"), { target: { value: "other" } });
+    fireEvent.click(within(await screen.findByRole("alertdialog", { name: "舍弃未保存的文件修改？" })).getByRole("button", { name: "舍弃修改" }));
     release(true);
     await waitFor(() => expect(screen.getByRole("combobox")).toHaveValue("other"));
     expect(screen.queryByRole("textbox", { name: "编辑 report.pdf" })).toBeNull();
-    expect(provider.writeText).toHaveBeenCalledWith("/report.pdf", "原始内容");
+    expect(provider.writeText).toHaveBeenCalledWith("/report.pdf", "修改后的内容");
     expect(otherProvider.writeText).not.toHaveBeenCalled();
+  });
+
+  it("文件保存成功就地显示已保存，不弹重复成功提示", async () => {
+    provider.readText.mockResolvedValueOnce("原始内容");
+    provider.writeText.mockResolvedValueOnce(true);
+    const onToast = vi.fn();
+    render(<CloudStoragePanel onToast={onToast} />);
+    fireEvent.change(await screen.findByRole("combobox"), { target: { value: "dav" } });
+    fireEvent.click(await screen.findByRole("button", { name: "读取 report.pdf" }));
+    const editor = await screen.findByRole("textbox", { name: "编辑 report.pdf" });
+    expect(screen.getByRole("button", { name: "已保存" })).toBeDisabled();
+    fireEvent.change(editor, { target: { value: "新内容" } });
+    fireEvent.click(screen.getByRole("button", { name: "保存" }));
+    await waitFor(() => expect(screen.getByRole("button", { name: "已保存" })).toBeDisabled());
+    expect(provider.writeText).toHaveBeenCalledWith("/report.pdf", "新内容");
+    expect(onToast).not.toHaveBeenCalled();
   });
 
   it("APP-CLOUD02 已禁用配置仍可选择编辑，保存启用后恢复浏览", async () => {

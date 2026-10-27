@@ -256,7 +256,7 @@ export function PlanPanel({
           ? await resolveApproval("approved")
           : await resolveApproval("cancelled", planRevisionPrompt(plan, false));
         if (accepted) {
-          notify(approvingOriginal ? "计划已批准，开始执行" : "修订已送回 Agent，等待更新计划并重新审批；尚未批准执行");
+          notify(approvingOriginal ? "计划已批准，开始执行" : "修改已提交，等待更新计划并重新审批；尚未批准执行");
         }
         return;
       }
@@ -267,7 +267,7 @@ export function PlanPanel({
         return;
       }
       markPlanRevisionSynced(plan, sessionId);
-      notify(execute ? "修订计划已同步，开始执行" : "修订计划已同步到 Agent");
+      notify(execute ? "修订计划已同步，开始执行" : "修改已提交，等待继续执行");
     } catch (error) {
       notify(`同步失败：${String(error).replace(/^Error:\s*/, "")}`);
     }
@@ -284,7 +284,7 @@ export function PlanPanel({
     void resolveApproval("approved").then((accepted) => {
       if (accepted && dirty && sessionEpochRef.current === epoch && currentSessionRef.current === targetSession
         && (currentApprovalRef.current === requestId || currentApprovalRef.current === undefined)) {
-        onToast?.("修订已送回 Agent，等待更新计划并重新审批；尚未批准执行");
+        onToast?.("修改已提交，等待更新计划并重新审批；尚未批准执行");
       }
     });
   }, [dirty, onToast, planApproval?.requestId, resolveApproval, sessionId]);
@@ -307,7 +307,6 @@ export function PlanPanel({
         i === idx ? { ...e, status: "completed" as PlanEntryStatus } : e
       );
       updateLocalPlan({ ...plan, entries });
-      onToast?.(`已跳过 #${idx + 1}`);
     },
     [plan, updateLocalPlan, onToast],
   );
@@ -322,7 +321,6 @@ export function PlanPanel({
       lastDeletedPlanRef.current = plan;
       const entries = plan.entries.filter((_, i) => i !== idx);
       updateLocalPlan({ ...plan, entries });
-      onToast?.(`已删除 #${idx + 1}`);
     },
     [editingIdx, plan, updateLocalPlan, onToast],
   );
@@ -350,7 +348,6 @@ export function PlanPanel({
     if (!plan || !newStep.trim()) return;
     updateLocalPlan(addPlanEntry(plan, newStep));
     setNewStep("");
-    onToast?.("已新增步骤");
   }, [plan, newStep, updateLocalPlan, onToast]);
 
   const handleCyclePriority = useCallback(

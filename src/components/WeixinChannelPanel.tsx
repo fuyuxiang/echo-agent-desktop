@@ -17,7 +17,7 @@ const STATUS: Record<string, string> = {
   scaned_but_redirect: "正在连接微信服务…",
 };
 
-export function WeixinChannelPanel({ onToast }: { onToast?: (message: string) => void }) {
+export function WeixinChannelPanel(_props: { onToast?: (message: string) => void }) {
   const [status, setStatus] = useState<WeixinStatus | null>(null);
   const [workspaces, setWorkspaces] = useState<Workspace[]>([]);
   const [selected, setSelected] = useState<string[]>([]);
@@ -143,7 +143,7 @@ export function WeixinChannelPanel({ onToast }: { onToast?: (message: string) =>
             setSelected(next.allowedWorkspaces);
             setDefaultWorkspace(next.defaultWorkspace ?? next.allowedWorkspaces[0] ?? "");
             setQrUrl("");
-            onToast?.("微信已绑定，可以交接已有任务");
+
             return;
           }
           if (["expired", "verify_code_blocked", "binded_redirect"].includes(result.status)) return;
@@ -179,7 +179,6 @@ export function WeixinChannelPanel({ onToast }: { onToast?: (message: string) =>
       setStatus(next);
       setSelected(next.allowedWorkspaces);
       setDefaultWorkspace(next.defaultWorkspace ?? next.allowedWorkspaces[0] ?? "");
-      onToast?.("微信可访问的工作区已保存");
     } catch (cause) { if (current === generation.current) setError(String(cause)); }
     finally {
       if (current === generation.current) { generation.current += 1; setBusy(false); }
@@ -193,7 +192,6 @@ export function WeixinChannelPanel({ onToast }: { onToast?: (message: string) =>
       const next = await weixinRevokeSession(sessionId);
       if (current !== generation.current) return;
       setStatus(next);
-      onToast?.("已撤销该任务的单独交接授权");
     } catch (cause) { if (current === generation.current) setError(String(cause)); }
     finally {
       if (current === generation.current) { generation.current += 1; setBusy(false); }
@@ -214,7 +212,6 @@ export function WeixinChannelPanel({ onToast }: { onToast?: (message: string) =>
         setStatus({ connected: false, allowedWorkspaces: [], sharedSessions: [], pendingReplies: 0, online: false });
         setSelected([]); setQrUrl("");
         setDefaultWorkspace(""); setStatusError("");
-        onToast?.("微信已解除绑定");
       } finally {
         if (current === generation.current) generation.current += 1;
       }

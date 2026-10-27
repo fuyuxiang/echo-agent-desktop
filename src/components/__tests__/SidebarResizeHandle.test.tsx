@@ -3,7 +3,7 @@ import { useContext, useLayoutEffect, useRef, useState } from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { SidebarResizeHandle } from "../SidebarResizeHandle";
 import { GlobalTooltip } from "../GlobalTooltip";
-import { SidebarLayoutContext, SIDEBAR_WIDTH_KEY, useAppSidebarLayout } from "@/lib/sidebar-layout";
+import { SidebarLayoutContext, SIDEBAR_WIDTH_KEY, SIDEBAR_WIDTH_VERSION_KEY, useAppSidebarLayout } from "@/lib/sidebar-layout";
 
 function Panel({ open, close }: { open: boolean; close: () => void }) {
   const context = useContext(SidebarLayoutContext)!;
@@ -57,6 +57,19 @@ afterEach(() => {
 });
 
 describe("全局侧栏宽度交互", () => {
+  it("migrates the previously auto-saved default once and remembers later manual choices", async () => {
+    localStorage.setItem(SIDEBAR_WIDTH_KEY, "264");
+    const first = render(<Harness />);
+    expect(width()).toBe("248px");
+    expect(localStorage.getItem(SIDEBAR_WIDTH_KEY)).toBe("248");
+    expect(localStorage.getItem(SIDEBAR_WIDTH_VERSION_KEY)).toBe("2");
+    await drag(248, 264);
+    first.unmount();
+    render(<Harness />);
+    expect(width()).toBe("264px");
+    expect(localStorage.getItem(SIDEBAR_WIDTH_KEY)).toBe("264");
+  });
+
   it("shows one delayed body-portalled hover hint and preserves the keyboard help description", () => {
     vi.useFakeTimers();
     render(<><Harness /><GlobalTooltip /></>);
@@ -196,7 +209,7 @@ describe("全局侧栏宽度交互", () => {
     fireEvent.pointerOver(handle(), { pointerType: "mouse" });
     expect(screen.getByRole("tooltip")).toHaveTextContent("收起侧边栏");
 
-    pointer(handle(), "pointerdown", 264);
+    pointer(handle(), "pointerdown", 248);
     expect(screen.queryByRole("tooltip")).not.toBeInTheDocument();
     expect(screen.getAllByRole("status")).toHaveLength(1);
     pointer(window, "pointermove", 350);
@@ -209,7 +222,7 @@ describe("全局侧栏宽度交互", () => {
     act(() => vi.advanceTimersByTime(500));
     expect(screen.queryByRole("status")).not.toBeInTheDocument();
     expect(screen.queryByRole("tooltip")).not.toBeInTheDocument();
-    expect(width()).toBe(finish === "pointerup" ? "350px" : "264px");
+    expect(width()).toBe(finish === "pointerup" ? "350px" : "248px");
   });
 
   it("replaces hover guidance with drag status and leaves no stale hint after release", () => {
@@ -219,9 +232,9 @@ describe("全局侧栏宽度交互", () => {
     act(() => vi.advanceTimersByTime(350));
     expect(screen.getByRole("tooltip")).toBeInTheDocument();
 
-    pointer(handle(), "pointerdown", 264);
+    pointer(handle(), "pointerdown", 248);
     expect(screen.queryByRole("tooltip")).not.toBeInTheDocument();
-    expect(screen.getByRole("status")).toHaveTextContent("宽度 264 像素");
+    expect(screen.getByRole("status")).toHaveTextContent("宽度 248 像素");
     expect(screen.getByRole("status").parentElement).toBe(document.body);
     pointer(window, "pointermove", 350);
     act(() => vi.advanceTimersByTime(25));
@@ -237,10 +250,10 @@ describe("全局侧栏宽度交互", () => {
   it("previews bounded widths and persists only the completed drag", async () => {
     const stored = vi.spyOn(Storage.prototype, "setItem");
     render(<Harness />);
-    await drag(264, 336, false);
+    await drag(248, 336, false);
     expect(width()).toBe("336px");
-    expect(localStorage.getItem(SIDEBAR_WIDTH_KEY)).toBe("264");
-    expect(stored).toHaveBeenCalledTimes(1);
+    expect(localStorage.getItem(SIDEBAR_WIDTH_KEY)).toBe("248");
+    expect(stored.mock.calls.filter(([key]) => key === SIDEBAR_WIDTH_KEY)).toHaveLength(1);
     pointer(window, "pointerup", 336);
     expect(localStorage.getItem(SIDEBAR_WIDTH_KEY)).toBe("336");
     await drag(336, 1100);
@@ -269,39 +282,39 @@ describe("全局侧栏宽度交互", () => {
 
   it.each(["Escape", "pointercancel", "blur", "lostpointercapture"])("rolls back a drag cancelled by %s", async (reason) => {
     render(<Harness />);
-    await drag(264, 350, false);
+    await drag(248, 350, false);
     expect(width()).toBe("350px");
     expect(screen.getByRole("status")).toHaveTextContent("宽度 350 像素");
     if (reason === "Escape") fireEvent.keyDown(window, { key: reason });
     else if (reason === "blur") fireEvent.blur(window);
     else pointer(reason === "lostpointercapture" ? handle() : window, reason, 350);
-    expect(width()).toBe("264px");
+    expect(width()).toBe("248px");
     expect(screen.getByTestId("body")).not.toHaveClass("resizing");
-    expect(localStorage.getItem(SIDEBAR_WIDTH_KEY)).toBe("264");
+    expect(localStorage.getItem(SIDEBAR_WIDTH_KEY)).toBe("248");
     expect(screen.queryByRole("status")).not.toBeInTheDocument();
     expect(screen.queryByRole("tooltip")).not.toBeInTheDocument();
     pointer(window, "pointermove", 390);
-    expect(width()).toBe("264px");
+    expect(width()).toBe("248px");
   });
 
   it("ignores right-click and unrelated pointers", async () => {
     render(<Harness />);
-    pointer(handle(), "pointerdown", 264, 1, 2);
+    pointer(handle(), "pointerdown", 248, 1, 2);
     pointer(window, "pointermove", 350);
     expect(screen.getByTestId("body")).not.toHaveClass("resizing");
-    pointer(handle(), "pointerdown", 264);
+    pointer(handle(), "pointerdown", 248);
     pointer(window, "pointermove", 350, 2);
     pointer(window, "pointerup", 350, 2);
-    expect(width()).toBe("264px");
-    pointer(window, "pointercancel", 264);
+    expect(width()).toBe("248px");
+    pointer(window, "pointercancel", 248);
   });
 
   it("supports keyboard resizing, collapse/restore and double-click reset", () => {
     render(<Harness />);
     fireEvent.keyDown(handle(), { key: "ArrowRight" });
-    expect(width()).toBe("280px");
+    expect(width()).toBe("264px");
     fireEvent.keyDown(handle(), { key: "ArrowRight", shiftKey: true });
-    expect(width()).toBe("320px");
+    expect(width()).toBe("304px");
     fireEvent.keyDown(handle(), { key: "End" });
     expect(width()).toBe("400px");
     fireEvent.keyDown(handle(), { key: "Enter" });
@@ -309,14 +322,13 @@ describe("全局侧栏宽度交互", () => {
     fireEvent.keyDown(handle(), { key: "ArrowRight" });
     expect(width()).toBe("400px");
     fireEvent.doubleClick(handle());
-    expect(width()).toBe("264px");
-    fireEvent.keyDown(handle(), { key: "ArrowLeft" });
+    expect(width()).toBe("248px");
     fireEvent.keyDown(handle(), { key: "ArrowLeft" });
     expect(width()).toBe("240px");
     fireEvent.keyDown(handle(), { key: "ArrowLeft" });
     expect(handle()).toHaveAttribute("aria-valuenow", "0");
     fireEvent.keyDown(handle(), { key: "Home" });
-    expect(width()).toBe("264px");
+    expect(width()).toBe("248px");
   });
 
   it("toggles default/maximum widths, persists the choice across remounts and keeps Home a reset", () => {
@@ -330,14 +342,14 @@ describe("全局侧栏宽度交互", () => {
     render(<Harness />);
     expect(width()).toBe("400px");
     fireEvent.doubleClick(handle());
-    expect(width()).toBe("264px");
-    expect(localStorage.getItem(SIDEBAR_WIDTH_KEY)).toBe("264");
+    expect(width()).toBe("248px");
+    expect(localStorage.getItem(SIDEBAR_WIDTH_KEY)).toBe("248");
     fireEvent.keyDown(handle(), { key: "Home" });
-    expect(width()).toBe("264px");
+    expect(width()).toBe("248px");
     fireEvent.doubleClick(handle());
     expect(width()).toBe("400px");
     fireEvent.keyDown(handle(), { key: "Home" });
-    expect(width()).toBe("264px");
+    expect(width()).toBe("248px");
   });
 
   it.each([240, 280, 320, 399, 400])("restores a manually selected %spx width before offering maximum width", (selected) => {
@@ -345,19 +357,19 @@ describe("全局侧栏宽度交互", () => {
     render(<Harness />);
     expect(handle()).toHaveAttribute("data-tip", "拖动调整宽度，双击恢复默认宽度");
     fireEvent.doubleClick(handle());
-    expect(width()).toBe("264px");
-    expect(localStorage.getItem(SIDEBAR_WIDTH_KEY)).toBe("264");
+    expect(width()).toBe("248px");
+    expect(localStorage.getItem(SIDEBAR_WIDTH_KEY)).toBe("248");
     fireEvent.doubleClick(handle());
     expect(width()).toBe("400px");
   });
 
-  it.each([263, 265])("treats a one-pixel adjustment around the default (%spx) as the default preset", (selected) => {
+  it.each([247, 249])("treats a one-pixel adjustment around the default (%spx) as the default preset", (selected) => {
     localStorage.setItem(SIDEBAR_WIDTH_KEY, String(selected));
     render(<Harness />);
     fireEvent.doubleClick(handle());
     expect(width()).toBe("400px");
     fireEvent.doubleClick(handle());
-    expect(width()).toBe("264px");
+    expect(width()).toBe("248px");
   });
 
   it("restores a collapsed sidebar to the default rather than its last custom width", () => {
@@ -367,17 +379,17 @@ describe("全局侧栏宽度交互", () => {
     expect(handle()).toHaveAttribute("aria-valuenow", "0");
     expect(handle()).toHaveAttribute("data-tip", "向右拖动展开，双击恢复默认宽度");
     fireEvent.doubleClick(handle());
-    expect(handle()).toHaveAttribute("aria-valuenow", "264");
+    expect(handle()).toHaveAttribute("aria-valuenow", "248");
     expect(screen.getByRole("button", { name: "收起侧边栏" })).toBeVisible();
-    expect(localStorage.getItem(SIDEBAR_WIDTH_KEY)).toBe("264");
+    expect(localStorage.getItem(SIDEBAR_WIDTH_KEY)).toBe("248");
   });
 
-  it.each([264, 320])("cancels a drag from %spx before double-clicking and ignores late pointer events", async (selected) => {
+  it.each([248, 320])("cancels a drag from %spx before double-clicking and ignores late pointer events", async (selected) => {
     localStorage.setItem(SIDEBAR_WIDTH_KEY, String(selected));
     render(<Harness />);
     await drag(selected, 350, false);
     fireEvent.doubleClick(handle());
-    const expected = selected === 264 ? 400 : 264;
+    const expected = selected === 248 ? 400 : 248;
     expect(width()).toBe(`${expected}px`);
     expect(screen.queryByRole("status")).not.toBeInTheDocument();
     expect(screen.getByTestId("body")).not.toHaveClass("resizing");
@@ -398,37 +410,37 @@ describe("全局侧栏宽度交互", () => {
     expect(localStorage.getItem(SIDEBAR_WIDTH_KEY)).toBe("320");
     expect(screen.getByTestId("panel")).toBeVisible();
     fireEvent.doubleClick(handle());
-    expect(width()).toBe("264px");
+    expect(width()).toBe("248px");
     expect(screen.getByTestId("panel")).toBeVisible();
   });
 
   it("resets a custom preference temporarily constrained to the default width", () => {
-    Object.defineProperty(window, "innerWidth", { value: 1024 });
+    Object.defineProperty(window, "innerWidth", { value: 1008 });
     localStorage.setItem(SIDEBAR_WIDTH_KEY, "400");
     render(<Harness />);
     fireEvent.click(screen.getByText("打开面板"));
-    expect(width()).toBe("264px");
+    expect(width()).toBe("248px");
     expect(handle()).toHaveAttribute("data-tip", "拖动调整宽度，双击恢复默认宽度");
     fireEvent.doubleClick(handle());
-    expect(localStorage.getItem(SIDEBAR_WIDTH_KEY)).toBe("264");
+    expect(localStorage.getItem(SIDEBAR_WIDTH_KEY)).toBe("248");
     expect(screen.getByTestId("panel")).toBeVisible();
     Object.defineProperty(window, "innerWidth", { value: 1440 });
     fireEvent(window, new Event("resize"));
-    expect(width()).toBe("264px");
+    expect(width()).toBe("248px");
     expect(handle()).toHaveAttribute("data-tip", "拖动调整宽度，双击展开到最大宽度");
   });
 
-  it.each([720, 744, 745])("keeps the default preference when a %spx window has no room to expand", (viewport) => {
+  it.each([720, 728, 729])("keeps the default preference when a %spx window has no room to expand", (viewport) => {
     Object.defineProperty(window, "innerWidth", { value: viewport });
     render(<Harness />);
     const before = width();
     expect(handle()).toHaveAttribute("data-tip", "拖动调整宽度，双击恢复默认宽度");
     fireEvent.doubleClick(handle());
     expect(width()).toBe(before);
-    expect(localStorage.getItem(SIDEBAR_WIDTH_KEY)).toBe("264");
+    expect(localStorage.getItem(SIDEBAR_WIDTH_KEY)).toBe("248");
     Object.defineProperty(window, "innerWidth", { value: 1440 });
     fireEvent(window, new Event("resize"));
-    expect(width()).toBe("264px");
+    expect(width()).toBe("248px");
   });
 
   it("restores an automatically collapsed sidebar at the default width", () => {
@@ -439,8 +451,8 @@ describe("全局侧栏宽度交互", () => {
     expect(handle()).toHaveAttribute("aria-valuenow", "0");
     fireEvent.doubleClick(handle());
     expect(screen.queryByTestId("panel")).not.toBeInTheDocument();
-    expect(handle()).toHaveAttribute("aria-valuenow", "264");
-    expect(localStorage.getItem(SIDEBAR_WIDTH_KEY)).toBe("264");
+    expect(handle()).toHaveAttribute("aria-valuenow", "248");
+    expect(localStorage.getItem(SIDEBAR_WIDTH_KEY)).toBe("248");
   });
 
   it("restores from the collapsed edge and keeps cancellation harmless", async () => {
@@ -479,15 +491,15 @@ describe("全局侧栏宽度交互", () => {
   it.each(["NaN", "Infinity", "-10", ""])("repairs invalid stored width %s", (value) => {
     localStorage.setItem(SIDEBAR_WIDTH_KEY, value);
     render(<Harness />);
-    expect(width()).toBe("264px");
-    expect(localStorage.getItem(SIDEBAR_WIDTH_KEY)).toBe("264");
+    expect(width()).toBe("248px");
+    expect(localStorage.getItem(SIDEBAR_WIDTH_KEY)).toBe("248");
   });
 
   it("works when local storage is unavailable", async () => {
     vi.spyOn(Storage.prototype, "getItem").mockImplementation(() => { throw new Error("blocked"); });
     vi.spyOn(Storage.prototype, "setItem").mockImplementation(() => { throw new Error("blocked"); });
     render(<Harness />);
-    await drag(264, 340);
+    await drag(248, 340);
     expect(width()).toBe("340px");
   });
 });

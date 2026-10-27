@@ -23,6 +23,7 @@ import type { MemoryEntry } from "@/lib/types";
 import { useModalFocus } from "@/lib/use-modal-focus";
 import { useUnsavedClose } from "@/lib/use-unsaved-close";
 import { useAppDialog } from "./AppDialog";
+import { memoryDreamMessage, memoryFlushMessage } from "@/lib/memory-feedback";
 
 interface ResourcesPanelProps {
   cwd?: string;
@@ -124,14 +125,13 @@ export function ResourcesPanel({ cwd, sessionId, onToast }: ResourcesPanelProps)
       return;
     }
     if (draft.scope === "session") {
-      onToast?.("会话摘要由 Agent 自动生成，只能查看或删除");
+      onToast?.("自动摘要只能查看或删除");
       return;
     }
     setBusy(true);
     try {
       if (draft.isNew) {
         await memoryAppend(draft.scope, draft.content, draft.cwd);
-        onToast?.("已追加记忆");
       } else {
         await memorySave(
           draft.scope,
@@ -140,7 +140,6 @@ export function ResourcesPanel({ cwd, sessionId, onToast }: ResourcesPanelProps)
           draft.cwd,
           draft.revision,
         );
-        onToast?.("已保存记忆");
       }
       setEditing(null);
       await latestReload.current();
@@ -176,13 +175,12 @@ export function ResourcesPanel({ cwd, sessionId, onToast }: ResourcesPanelProps)
               candidate.scope === entry.scope && candidate.path === entry.path
             )));
           }
-          onToast?.(isSummary ? "已删除会话摘要及检索索引" : "已删除记忆文件");
+
           await latestReload.current();
         } finally {
           setBusy(false);
         }
       },
-      onError: (error) => onToast?.(`删除失败：${errorText(error)}`),
     });
   }, [cwd, onToast, reload, requestConfirmation]);
 
@@ -201,13 +199,12 @@ export function ResourcesPanel({ cwd, sessionId, onToast }: ResourcesPanelProps)
         try {
           const removed = await memoryClearSessionSummaries(cwd);
           if (currentCwd.current === cwd) setEntries((current) => current.filter((entry) => entry.scope !== "session"));
-          onToast?.(removed > 0 ? `已清除 ${removed} 个会话摘要文件` : "没有需要清除的会话摘要");
+          onToast?.(removed > 0 ? `已清除 ${removed} 个会话摘要` : "没有需要清除的会话摘要");
           await latestReload.current();
         } finally {
           setBusy(false);
         }
       },
-      onError: (error) => onToast?.(`清空失败：${errorText(error)}`),
     });
   }, [cwd, onToast, reload, requestConfirmation]);
 
@@ -219,7 +216,7 @@ export function ResourcesPanel({ cwd, sessionId, onToast }: ResourcesPanelProps)
     setBusy(true);
     try {
       const completed = await memoryFlush(sessionId);
-      onToast?.(completed ? "提取已执行；若有可复用内容，可在会话摘要中查看" : "本次提取未完成，请稍后重试");
+      onToast?.(memoryFlushMessage(completed));
       await latestReload.current();
     } catch (error) {
       onToast?.(`提取摘要失败：${errorText(error)}`);
@@ -241,13 +238,12 @@ export function ResourcesPanel({ cwd, sessionId, onToast }: ResourcesPanelProps)
         setBusy(true);
         try {
           const changed = await memoryDream(sessionId);
-          onToast?.(changed ? "长期记忆已更新" : "本次没有更新长期记忆；可能没有待整理的摘要");
+          onToast?.(memoryDreamMessage(changed));
         } finally {
           await latestReload.current();
           setBusy(false);
         }
       },
-      onError: (error) => onToast?.(`整理失败：${errorText(error)}`),
     });
   }, [onToast, reload, requestConfirmation, sessionId]);
 
@@ -264,7 +260,6 @@ export function ResourcesPanel({ cwd, sessionId, onToast }: ResourcesPanelProps)
         `${scopeLabel(draft.scope)}记忆 ${draft.path}`,
       );
       setEditing((current) => current ? { ...current, content: rewritten } : current);
-      onToast?.("已生成整理结果，请检查后保存");
     } catch (error) {
       onToast?.(`AI 整理失败：${errorText(error)}`);
     } finally {

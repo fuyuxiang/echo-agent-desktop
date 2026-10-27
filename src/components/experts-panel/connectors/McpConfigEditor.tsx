@@ -90,10 +90,7 @@ export function McpConfigEditor({
       // without one the file is still saved for the next sync.
       const result = await mcpConfigSave(content, useSessionStore.getState().sessionId ?? undefined);
       setOriginal(content);
-      const summary = result.appliedLive
-        ? `已保存并热加载 ${result.serverCount} 个 MCP 服务`
-        : `已保存 ${result.serverCount} 个 MCP 服务`;
-      onToast?.(result.warnings.length > 0 ? `${summary}；${result.warnings[0]}` : summary);
+      if (result.warnings.length > 0) onToast?.(`连接器配置已保存，仍需注意：${result.warnings[0]}`);
       onSaved?.();
     } catch (e) {
       setError(String(e).replace(/^Error:\s*/, ""));

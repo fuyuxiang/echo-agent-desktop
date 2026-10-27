@@ -56,6 +56,7 @@ export function WorkspacePicker({
       preferredPlacement: menuPlacement,
       align: menuAlign,
       width: "content",
+      maxWidth: 320,
       estimatedHeight: Math.min(320, 52 + workspaces.length * 40),
       offset: 6,
     },

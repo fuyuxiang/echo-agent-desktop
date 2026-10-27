@@ -45,9 +45,9 @@ try {
     assert(bounds && bounds.x >= 0 && bounds.y >= 0 && bounds.x + bounds.width <= 1281 && bounds.y + bounds.height <= 801, "Model menu clipped");
     await page.getByRole("option", { name: /另一个模型/ }).click();
     await page.getByRole("button", { name: "开发任务模型：另一个模型" }).waitFor();
-    await page.getByRole("button", { name: /本任务始终允许/ }).click();
-    await page.getByRole("menuitemradio", { name: /自动模式/ }).click();
-    await page.getByRole("button", { name: /自动模式/ }).waitFor();
+    await page.getByRole("button", { name: /本任务免审批/ }).click();
+    await page.getByRole("menuitemradio", { name: /自动判断/ }).click();
+    await page.getByRole("button", { name: /自动判断/ }).waitFor();
     const shortHeight = await input.evaluate((element) => element.clientHeight);
     await input.fill("长草稿检查\n".repeat(30));
     const tall = await input.evaluate((element) => ({ height: element.clientHeight, scrollHeight: element.scrollHeight }));

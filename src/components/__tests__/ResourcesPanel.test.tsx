@@ -108,7 +108,19 @@ describe("ResourcesPanel", () => {
     await screen.findByText("MEMORY.md");
     fireEvent.click(screen.getByRole("tab", { name: /会话摘要/ }));
     fireEvent.click(screen.getByRole("button", { name: "立即提取" }));
-    await waitFor(() => expect(onToast).toHaveBeenCalledWith("本次提取未完成，请稍后重试"));
+    await waitFor(() => expect(onToast).toHaveBeenCalledWith("本次提取未完成，请查看记忆处理状态后重试"));
+  });
+
+  it("提取完成但没有新增内容时不会承诺生成了摘要", async () => {
+    const onToast = vi.fn();
+    api.memoryList.mockResolvedValue([GLOBAL_ENTRY]);
+    render(<ResourcesPanel cwd="/repo" sessionId="session-1" onToast={onToast} />);
+    await screen.findByText("MEMORY.md");
+    fireEvent.click(screen.getByRole("tab", { name: /会话摘要/ }));
+    fireEvent.click(screen.getByRole("button", { name: "立即提取" }));
+    await waitFor(() => expect(onToast).toHaveBeenCalledWith("记忆提取已完成，可在记忆页面查看结果；没有新增内容时不会重复保存"));
+    expect(screen.queryByText("2026-08-31-session.md")).toBeNull();
+    expect(onToast).not.toHaveBeenCalledWith(expect.stringMatching(/已提取对话摘要|已保存/));
   });
 
   it("没有可整理内容时不显示长期记忆已更新", async () => {
@@ -120,7 +132,7 @@ describe("ResourcesPanel", () => {
     await user.click(screen.getByRole("tab", { name: /会话摘要/ }));
     await user.click(screen.getByRole("button", { name: /整理到长期记忆/ }));
     await user.click(within(screen.getByRole("dialog", { name: "整理历史会话摘要？" })).getByRole("button", { name: "开始整理" }));
-    await waitFor(() => expect(onToast).toHaveBeenCalledWith("本次没有更新长期记忆；可能没有待整理的摘要"));
+    await waitFor(() => expect(onToast).toHaveBeenCalledWith("本次未更新长期记忆，可在记忆页面查看处理状态"));
   });
 
   it("没有活动会话时明确说明维护能力受限", async () => {

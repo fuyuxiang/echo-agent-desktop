@@ -311,7 +311,7 @@ describe("ToolSidePanel navigation collapse", () => {
 
     expect(await screen.findByText("preview ready")).toBeInTheDocument();
     expect(textReads).toBe(2);
-    expect(onToast).toHaveBeenCalledWith("已授权该文件，可以在面板中预览");
+    expect(onToast).not.toHaveBeenCalled();
     expect(screen.getByRole("button", { name: "用系统应用打开" })).toBeInTheDocument();
   });
 

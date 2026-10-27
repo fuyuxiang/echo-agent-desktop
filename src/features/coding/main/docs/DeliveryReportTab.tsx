@@ -168,7 +168,6 @@ export function DeliveryReportTab({
       setError(null);
       setConfirmingId(null);
       onReviewChanged?.();
-      onToast?.("验收标准已确认并写入交付证据");
     } catch (cause) {
       if (!isCurrent()) return;
       const message = String(cause).replace(/^Error:\s*/, "");
@@ -189,7 +188,6 @@ export function DeliveryReportTab({
       setReport(next);
       setConfirmingReview(null);
       onReviewChanged?.();
-      onToast?.("审查确认已绑定当前代码版本");
     } catch (cause) {
       if (!isCurrent()) return;
       onToast?.(`审查确认失败：${String(cause).replace(/^Error:\s*/, "")}`);
@@ -210,7 +208,6 @@ export function DeliveryReportTab({
       setReport(next);
       setWaiverReason("");
       onReviewChanged?.();
-      onToast?.("测试先行豁免原因已记录");
     } catch (cause) {
       if (!isCurrent()) return;
       onToast?.(`记录豁免失败：${String(cause).replace(/^Error:\s*/, "")}`);

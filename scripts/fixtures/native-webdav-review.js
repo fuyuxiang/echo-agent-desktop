@@ -147,9 +147,7 @@ window.__echoNativeWebDavReview = async ({ invoke, context, scope }) => {
       if (enabled.checked !== changes.enabled) enabled.click();
       await waitFor(() => enabled.checked === changes.enabled, 'Actual enabled toggle');
     }
-    const toasts = toastSnapshot();
     await clickButton(config, '保存');
-    await newToast(toasts, 'WebDAV 存储源已保存');
     await waitFor(() => !visible(config), 'Provider editor completes');
   };
   const createConfig = async (label, baseUrl) => {
@@ -162,9 +160,7 @@ window.__echoNativeWebDavReview = async ({ invoke, context, scope }) => {
       ['WebDAV 用户名', scope.username], ['WebDAV 密码或应用令牌', scope.password]]) {
       inputValue(config.querySelector(`[aria-label="${aria}"]`), value);
     }
-    const toasts = toastSnapshot();
     await clickButton(config, '保存');
-    await newToast(toasts, 'WebDAV 存储源已保存');
     await waitFor(() => !visible(config), 'Actual new provider saved');
     const providers = await call('storage_providers_list');
     const matches = providers.filter((provider) => provider.label === label && provider.baseUrl === baseUrl);
@@ -260,9 +256,8 @@ window.__echoNativeWebDavReview = async ({ invoke, context, scope }) => {
       await createText(fileName, initial);
       const text = await openFile(fileName, initial);
       inputValue(text, edited);
-      const savedToasts = toastSnapshot();
       await clickButton(() => panel()?.querySelector('.storage-panel__preview'), '保存');
-      await newToast(savedToasts, '文本已保存');
+      await waitFor(() => [...(panel()?.querySelectorAll('.storage-panel__preview button') || [])].some(element => element.textContent?.trim() === '已保存' && element.disabled), 'Text saved inline');
       assert(await call('storage_read_text', { id: report.expected.rwId, path: `/${directory}/${fileName}` }) === edited, 'UI text save did not persist actual bytes');
       await createText(recoveryName, initial);
       record(activeCheck, { directory, fileName, content: edited, actualUiCreationAndSave: true, exactNativeGet: true });
@@ -284,7 +279,7 @@ window.__echoNativeWebDavReview = async ({ invoke, context, scope }) => {
       const deniedToasts = toastSnapshot();
       await clickButton(() => panel()?.querySelector('.storage-panel__preview'), '保存');
       const deniedToast = await newToast(deniedToasts, '保存失败：');
-      assert(deniedToast.textContent.includes('403') && previewInput(recoveryName)?.value === recovery,
+      assert((deniedToast.closest('.toast')?.textContent.includes('403') || deniedToast.textContent.includes('没有访问权限')) && previewInput(recoveryName)?.value === recovery,
         'Readonly save did not report real 403 and retain draft');
       assert(await call('storage_read_text', { id: report.expected.rwId, path: `/${directory}/${recoveryName}` }) === initial, 'Readonly failure modified physical source');
       record(activeCheck, { status: 403, draftRetained: true, remoteInitialContentPreserved: true });
@@ -297,9 +292,8 @@ window.__echoNativeWebDavReview = async ({ invoke, context, scope }) => {
       activeCheck = required[8];
       await editConfig({ baseUrl: scope.readWriteUrl });
       assert(previewInput(recoveryName)?.value === recovery, 'Endpoint recovery dropped local draft');
-      const retryToasts = toastSnapshot();
       await clickButton(() => panel()?.querySelector('.storage-panel__preview'), '保存');
-      await newToast(retryToasts, '文本已保存');
+      await waitFor(() => [...(panel()?.querySelectorAll('.storage-panel__preview button') || [])].some(element => element.textContent?.trim() === '已保存' && element.disabled), 'Retried save shown inline');
       assert(await call('storage_read_text', { id: report.expected.recoveryId, path: `/${directory}/${recoveryName}` }) === recovery, 'Retry did not persist exact retained draft');
       record(activeCheck, { recoveredThroughConfigUi: true, retryThroughUi: true, exactContent: recovery });
       activeCheck = required[9];

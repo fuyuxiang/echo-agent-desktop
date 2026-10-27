@@ -270,7 +270,7 @@ describe("KnowledgeBasePanel", () => {
     expect(unregisterKbProvider("local")).toBe(false); // 已移除 → 再移除返回 false
   });
 
-  it("「刷新索引」按钮调用 provider.rebuild 并 toast 条目数", async () => {
+  it("刷新知识库后用简短提示说明内容可搜索", async () => {
     const rebuild = vi.fn(async () => 5);
     registerKbProvider({
       id: "local",
@@ -284,7 +284,7 @@ describe("KnowledgeBasePanel", () => {
     const refreshBtn = await screen.findByRole("button", { name: /刷新索引/ });
     fireEvent.click(refreshBtn);
     await waitFor(() => expect(rebuild).toHaveBeenCalledTimes(1));
-    expect(onToast).toHaveBeenCalledWith(expect.stringContaining("5 项"));
+    expect(onToast).toHaveBeenCalledWith("知识库已更新，可以搜索最新内容");
   });
 
   it("重建索引后刷新当前查询，移除知识源后不再显示旧命中", async () => {

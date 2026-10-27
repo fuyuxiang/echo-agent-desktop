@@ -106,10 +106,10 @@ try {
     if (state === "plan") { await openView("执行计划"); await page.getByText("验证工作台交互与交付",{exact:true}).waitFor(); }
     if (state === "collaboration") { await openView("运行与协作"); await page.getByText("核对交付文档",{exact:true}).waitFor(); }
     if (state === "permission") {
-      await page.getByRole("button",{name:"允许本次",exact:true}).waitFor();
+      await page.getByRole("button",{name:"允许一次",exact:true}).waitFor();
       assert.equal(await page.locator(".tasks-panel").count(), 0, "background details must not cover decisions");
       await page.getByRole("button", {name:/后台任务/}).waitFor();
-      const allow = page.getByRole("button",{name:"允许本次",exact:true});
+      const allow = page.getByRole("button",{name:"允许一次",exact:true});
       await allow.click({trial:true});
       await page.getByRole("button",{name:"拒绝",exact:true}).click({trial:true});
     }

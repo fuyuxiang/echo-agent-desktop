@@ -1,10 +1,11 @@
 import { createContext, useCallback, useLayoutEffect, useMemo, useRef, useState, type CSSProperties, type SetStateAction } from "react";
 
-export const SIDEBAR_DEFAULT_WIDTH = 264;
+export const SIDEBAR_DEFAULT_WIDTH = 248;
 export const SIDEBAR_MIN_WIDTH = 240;
 export const SIDEBAR_MAX_WIDTH = 400;
 export const SIDEBAR_COLLAPSE_THRESHOLD = 160;
 export const SIDEBAR_WIDTH_KEY = "app-sidebar-width";
+export const SIDEBAR_WIDTH_VERSION_KEY = "app-sidebar-width-version";
 export const MAIN_CONTENT_MIN_WIDTH = 480;
 
 type PanelRegistration = { minimumWidth: number; close: () => void } | null;
@@ -25,6 +26,12 @@ function readWidth() {
   try {
     const stored = localStorage.getItem(SIDEBAR_WIDTH_KEY);
     const width = stored?.trim() ? Number(stored) : NaN;
+    // Earlier versions saved 264px on first render, even without a resize.
+    // Migrate that preset once; subsequent manual choices (including 264px)
+    // and all other previously saved widths remain user preferences.
+    if (width === 264 && localStorage.getItem(SIDEBAR_WIDTH_VERSION_KEY) !== "2") {
+      return SIDEBAR_DEFAULT_WIDTH;
+    }
     return Number.isFinite(width) && width > 0 ? clampWidth(width) : SIDEBAR_DEFAULT_WIDTH;
   } catch {
     return SIDEBAR_DEFAULT_WIDTH;
@@ -98,7 +105,10 @@ export function useAppSidebarLayout() {
     if (!Number.isFinite(value)) return;
     const next = Math.round(clampWidth(value));
     setPreferredWidth(next);
-    try { localStorage.setItem(SIDEBAR_WIDTH_KEY, String(next)); } catch { /* Storage is optional. */ }
+    try {
+      localStorage.setItem(SIDEBAR_WIDTH_KEY, String(next));
+      localStorage.setItem(SIDEBAR_WIDTH_VERSION_KEY, "2");
+    } catch { /* Storage is optional. */ }
   }, []);
 
   // Repair invalid stored dimensions once, and never persist drag previews or

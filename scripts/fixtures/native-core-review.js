@@ -166,7 +166,7 @@ window.__echoNativeCoreReview = async function ({ home, nonce } = {}) {
             exactOwnedCwd: args?.cwd == null || args.cwd === scope.cwd, sameSession: request.sessionId === activeSessionId } });
         throw new Error('Unapproved tool/path denied; no shell or other action is authorized');
       }
-      const card = document.getElementById(`permission-${request.requestId}`), allow = button(card, '允许本次');
+      const card = document.getElementById(`permission-${request.requestId}`), allow = button(card, '允许一次');
       if (!visible(card) || !allow) continue;
       assert(request.options.some((option) => option.kind === 'allow'), 'Tool has no actual allow-once option');
       allow.click(); handled.add(request.requestId);

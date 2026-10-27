@@ -111,14 +111,9 @@ export function createMarkdownHostConfig(
   const toast = (msg: string) => onToast?.(msg);
 
   const pathClickHandler: MarkdownConfig["pathClickHandler"] = {
-    onPathClick: (path, type, range) => {
+    onPathClick: (path, type) => {
       void (async () => {
         await openLocalPath(path, { cwd, type, onToast: toast });
-        if (range?.start) {
-          toast(
-            `已打开 ${path}（L${range.start}${range.end ? `–${range.end}` : ""}）`,
-          );
-        }
       })();
     },
   };
@@ -202,7 +197,7 @@ export function createMarkdownHostConfig(
           return;
         }
         if (!ok) {
-          toast("已取消写入");
+
           return;
         }
         try {
@@ -211,7 +206,7 @@ export function createMarkdownHostConfig(
             content: code,
             workspaceRoot: cwd,
           });
-          toast(`已写入 ${written}`);
+          toast(`已更新“${written.split(/[\\/]/).pop()}”`);
         } catch (e) {
           toast(String(e).replace(/^Error:\s*/, ""));
         }
@@ -230,7 +225,7 @@ export function createMarkdownHostConfig(
           ],
         });
         if (!picked) {
-          toast("已取消应用");
+
           return;
         }
         target = picked;
@@ -256,7 +251,7 @@ export function createMarkdownHostConfig(
         return;
       }
       if (!ok) {
-        toast("已取消写入");
+
         return;
       }
 
@@ -266,7 +261,7 @@ export function createMarkdownHostConfig(
           content: code,
           workspaceRoot: cwd,
         });
-        toast(`已写入 ${written}`);
+        toast(`已更新“${written.split(/[\\/]/).pop()}”`);
       } catch (e) {
         toast(String(e).replace(/^Error:\s*/, ""));
       }

@@ -173,7 +173,7 @@ function renderChat() {
 const baseProps = {
   onSend: vi.fn(),
   onPrepareRetry: vi.fn(async () => true),
-  onRetrySend: vi.fn((_request: import("@/lib/message-retry").MessageRetrySendRequest) => true),
+  onRetrySend: vi.fn((_request: import("@/lib/message-retry").MessageRetrySendRequest): boolean | Promise<boolean> => true),
   onCancel: vi.fn(),
   modelId: "m1",
   onToast: vi.fn(),
@@ -467,7 +467,7 @@ describe("ChatView pause/yield/resume 闭环", () => {
     fireEvent.click(screen.getByRole("menuitemradio", { name: /操作网页/ }));
 
     await waitFor(() => expect(setCodingMode).toHaveBeenCalledWith("s1", "browser_use"));
-    expect(baseProps.onToast).toHaveBeenCalledWith("已启用操作网页");
+    expect(baseProps.onToast).not.toHaveBeenCalledWith("已启用操作网页");
   });
 
   it("查询变化后首个真实命中立即定位，后续导航平滑滚动", async () => {
@@ -734,6 +734,33 @@ describe("ChatView pause/yield/resume 闭环", () => {
     expect(screen.getByRole("button",{name:"发送"})).toBeEnabled();
     fireEvent.keyDown(input,{key:"Enter",code:"Enter"});
     await waitFor(() => expect(baseProps.onSend).toHaveBeenCalledExactlyOnceWith("新任务请求", []));
+  });
+
+  it.each(["rewind", "send"])("在 %s 期间切换任务后，重试结果提醒原任务继续且不抢回当前任务", async phase => {
+    let finish: (() => void) | undefined;
+    vi.mocked(rewindPoints).mockResolvedValue([{ promptIndex: 0 }]);
+    if (phase === "rewind") {
+      vi.mocked(rewindExecute).mockImplementationOnce(() => new Promise(resolve => {
+        finish = () => resolve({ targetPromptIndex: 0 });
+      }));
+    } else {
+      baseProps.onRetrySend.mockImplementationOnce(() => new Promise(resolve => {
+        finish = () => resolve(true);
+      }));
+    }
+    setStore({ messages: [
+      { id: "user", role: "user", complete: true, promptIndex: 0, parts: [{ kind: "text", text: "原任务" }] },
+      { id: "answer", role: "assistant", complete: true, stopReason: "cancelled", parts: [] },
+    ] });
+    const view = renderChat();
+    fireEvent.click(screen.getByRole("button", { name: "重试" }));
+    await waitFor(() => expect(finish).toBeDefined());
+    setStore({ sessionId: "s2", messages: [] });
+    view.rerender(<ThemeProvider><ChatView {...baseProps} /></ThemeProvider>);
+    await act(async () => finish!());
+    expect(baseProps.onToast).toHaveBeenCalledWith("已在原任务中继续执行");
+    expect(baseProps.onRetrySend).toHaveBeenCalledWith(expect.objectContaining({ sessionId: "s1" }));
+    expect(storeState.sessionId).toBe("s2");
   });
 
   it("跨任务重试分别保留发送屏障，另一任务完成不会解锁原任务", async () => {

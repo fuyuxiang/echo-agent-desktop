@@ -1,83 +1,91 @@
 import { useEffect, useRef, useState } from "react";
+import { createPortal } from "react-dom";
+import { ChevronDown, FileText, Globe, Terminal, Wrench } from "lucide-react";
 import { usePermissionStore, selectPermissionForSession } from "@/stores/permission-store";
 import { agentResolvePermission, permissionModeSet } from "@/lib/agent-client";
-import {
-  permissionModeStatusFromEvent,
-  usePermissionModeStore,
-} from "@/stores/permission-mode-store";
+import { permissionModeStatusFromEvent, usePermissionModeStore } from "@/stores/permission-mode-store";
 import { useSessionsStore } from "@/stores/sessions-store";
-import type { PermissionOption, ToolKind } from "@/lib/types";
+import { useAnchoredFloating } from "@/lib/use-anchored-floating";
+import type { PermissionOption, PermissionRequest } from "@/lib/types";
 
-/** Runtime-defined ACP option whose side effect must be completed by the client. */
 const ENABLE_ALWAYS_APPROVE_OPTION_ID = "enable-always-approve";
 
-const TOOL_KIND_LABELS: Record<string, string> = {
-  execute: "执行命令",
-  run_terminal_command: "执行命令",
-  edit: "修改文件",
-  edit_file: "修改文件",
-  read_file: "读取文件",
-  web_fetch: "访问网页",
-  web_search: "联网搜索",
-};
-
-function toolKindLabel(kind: ToolKind): string {
-  return TOOL_KIND_LABELS[kind] ?? kind;
+function presentation(request: PermissionRequest) {
+  const kind = request.toolKind;
+  const input = request.rawInput && typeof request.rawInput === "object"
+    ? request.rawInput as Record<string, unknown> : {};
+  const command = input.command ?? input.cmd;
+  const path = input.path ?? input.file_path ?? input.filePath;
+  const url = input.url;
+  const terminal = ["execute", "run_terminal_command"].includes(kind);
+  const file = ["read", "edit", "delete", "read_file", "edit_file"].includes(kind);
+  const web = ["fetch", "search", "web_fetch", "web_search"].includes(kind);
+  return {
+    label: terminal ? "终端" : file ? "文件" : web ? "网络" : "工具",
+    Icon: terminal ? Terminal : file ? FileText : web ? Globe : Wrench,
+    title: request.title === "conversation_history" ? "是否允许读取会话记录？" : request.title,
+    preview: [command, path, url].find(value => typeof value === "string" && value.trim()) as string | undefined,
+  };
 }
 
-function persistentOptionLabel(option: PermissionOption): string {
+function optionPresentation(option: PermissionOption): { label: string; description?: string } {
+  if (option.optionId === ENABLE_ALWAYS_APPROVE_OPTION_ID) return { label: "本任务免审批", description: "仅限当前任务，需再次确认" };
+  if (option.kind === "allow") return { label: "允许一次" };
+  if (option.kind === "deny") return { label: "拒绝" };
   const title = option.title.trim();
-  const scoped = title.match(/^always\s+(?:allow|reject):\s*(.+)$/i)?.[1]?.trim();
-
-  if (option.kind === "allow_always") {
-    if (/anything|always[ -]?approve/i.test(title)) return "本任务全部始终允许";
-    if (scoped) return `始终允许 ${scoped}`;
-    return "始终允许此类操作";
+  const scoped = title.match(/^(?:always\s+(?:allow|reject)|始终允许|始终拒绝)\s*[:：]\s*([\s\S]+)$/i)?.[1]?.trim();
+  if (option.kind === "allow_always" || option.kind === "deny_always") {
+    const allow = option.kind === "allow_always";
+    return {
+      label: !scoped && /[\u3400-\u9fff]/u.test(title) ? title : allow ? "始终允许此类操作" : "始终拒绝此类操作",
+      description: scoped ? `范围：${scoped}` : allow ? "后续同类请求自动允许" : "后续同类请求自动拒绝",
+    };
   }
-
-  if (option.kind === "deny_always") {
-    if (scoped) return `始终拒绝 ${scoped}`;
-    return "始终拒绝此类操作";
-  }
-
-  return title || "其他选项";
+  // Preserve custom choices from newer runtimes without guessing their scope.
+  return { label: title || "其他选项" };
 }
 
-function actionLabel(option: PermissionOption): string {
-  if (option.optionId === ENABLE_ALWAYS_APPROVE_OPTION_ID) return "本任务始终允许";
-  if (option.kind === "allow") return "允许本次";
-  if (option.kind === "deny") return "拒绝";
-  return persistentOptionLabel(option);
-}
-
-function preferredOption(options: PermissionOption[], optionId: string): PermissionOption | undefined {
-  return options.find((option) => option.optionId === optionId) ?? options[0];
-}
-
-/**
- * Inline permission card rendered inside the ChatView message stream.
- * Only shows requests for the given session — never blocks sidebar or
- * conversation switching.
- */
+/** A task-owned decision at the composer edge; persistent grants stay secondary. */
 export function PermissionInlineCard({ sessionId }: { sessionId: string | null }) {
   const head = usePermissionStore(selectPermissionForSession(sessionId));
-  const dismiss = usePermissionStore((s) => s.dismiss);
-  const priorityRequestId = usePermissionStore((s) => sessionId ? s.priorityRequestBySession[sessionId] : undefined);
-  const consumePriority = usePermissionStore((s) => s.consumePriority);
+  const count = usePermissionStore(s => sessionId ? s.queues[sessionId]?.length ?? 0 : 0);
+  const dismiss = usePermissionStore(s => s.dismiss);
+  const priorityRequestId = usePermissionStore(s => sessionId ? s.priorityRequestBySession[sessionId] : undefined);
+  const consumePriority = usePermissionStore(s => s.consumePriority);
   const [resolvingId, setResolvingId] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
-  const [confirmingAlwaysId, setConfirmingAlwaysId] = useState<string | null>(null);
+  const [confirmingAlways, setConfirmingAlways] = useState(false);
+  const [menuOpen, setMenuOpen] = useState(false);
   const confirmCancelRef = useRef<HTMLButtonElement>(null);
+  const menuTriggerRef = useRef<HTMLButtonElement>(null);
+  const menuRef = useRef<HTMLDivElement>(null);
+  const activeRequestRef = useRef(head?.requestId);
+  activeRequestRef.current = head?.requestId;
+  const pendingRef = useRef(new Set<string>());
+  const { style: menuStyle } = useAnchoredFloating(menuTriggerRef, menuRef, menuOpen, {
+    preferredPlacement: "top", align: "end", width: "content", maxWidth: 360, estimatedHeight: 180, maxHeight: 260,
+  });
 
   useEffect(() => {
     setResolvingId(null);
     setError(null);
-    setConfirmingAlwaysId(null);
+    setConfirmingAlways(false);
+    setMenuOpen(false);
   }, [head?.requestId]);
 
   useEffect(() => {
-    if (confirmingAlwaysId) confirmCancelRef.current?.focus();
-  }, [confirmingAlwaysId]);
+    if (confirmingAlways) confirmCancelRef.current?.focus();
+  }, [confirmingAlways]);
+
+  useEffect(() => {
+    if (!menuOpen) return;
+    const frame = requestAnimationFrame(() => menuRef.current?.querySelector<HTMLButtonElement>("button:not(:disabled)")?.focus());
+    const close = (event: MouseEvent) => {
+      if (!menuRef.current?.contains(event.target as Node) && !menuTriggerRef.current?.contains(event.target as Node)) setMenuOpen(false);
+    };
+    document.addEventListener("mousedown", close);
+    return () => { cancelAnimationFrame(frame); document.removeEventListener("mousedown", close); };
+  }, [menuOpen]);
 
   useEffect(() => {
     if (!sessionId || !head || priorityRequestId !== head.requestId) return;
@@ -89,221 +97,120 @@ export function PermissionInlineCard({ sessionId }: { sessionId: string | null }
   }, [sessionId, head?.requestId, priorityRequestId, consumePriority]);
 
   if (!head) return null;
+  const { label, Icon, title, preview } = presentation(head);
+  const allowOnce = head.options.find(o => o.optionId === "allow-once" && o.kind === "allow")
+    ?? head.options.find(o => o.kind === "allow" && o.optionId !== ENABLE_ALWAYS_APPROVE_OPTION_ID);
+  const denyOnce = head.options.find(o => o.optionId === "reject-once" && o.kind === "deny")
+    ?? head.options.find(o => o.kind === "deny");
+  const enableAlways = head.options.find(o => o.optionId === ENABLE_ALWAYS_APPROVE_OPTION_ID);
+  const moreOptions = head.options.filter(o => o !== allowOnce && o !== denyOnce);
 
-  const resolve = async (optionId?: string, cancelled = false, actionId = optionId) => {
-    if (resolvingId) return;
-    const id = head.requestId;
-    setResolvingId(actionId ?? "cancel");
-    setError(null);
-    try {
-      const acknowledged = await agentResolvePermission(id, { optionId, cancelled });
-      if (!acknowledged) {
-        throw new Error("后端未找到该权限请求，请重试");
-      }
-      dismiss(id, head.sessionId);
-    } catch (e) {
-      console.error("resolve permission failed", e);
-      setError(String(e).replace(/^Error:\s*/, ""));
-    } finally {
-      setResolvingId(null);
-    }
-  };
-
-  const enableAlwaysOption = head.options.find(
-    (option) => option.optionId === ENABLE_ALWAYS_APPROVE_OPTION_ID,
-  );
-  const allowOnceOptions = head.options.filter(
-    (option) => option.kind === "allow" && option.optionId !== ENABLE_ALWAYS_APPROVE_OPTION_ID,
-  );
-  const denyOnceOptions = head.options.filter((option) => option.kind === "deny");
-  const allowAlwaysOptions = head.options.filter((option) => option.kind === "allow_always");
-  const denyAlwaysOptions = head.options.filter((option) => option.kind === "deny_always");
-  const otherOptions = head.options.filter(
-    (option) => option.kind === "other",
-  );
-
-  // ACP describes outcome kinds, not product-level intent. Collapse equivalent
-  // one-shot choices and keep the task-wide Runtime toggle distinct even though
-  // it deliberately arrives as AllowOnce on the wire.
-  const allowOnceOption = preferredOption(allowOnceOptions, "allow-once");
-  const denyOnceOption = preferredOption(denyOnceOptions, "reject-once");
-  const scopedAlwaysOption = allowAlwaysOptions[0];
-  const primaryAlwaysOption = scopedAlwaysOption ?? enableAlwaysOption;
-  const primaryOptions = [allowOnceOption, primaryAlwaysOption, denyOnceOption]
-    .filter((option): option is PermissionOption => Boolean(option));
-  const primaryOptionIds = new Set(primaryOptions.map((option) => option.optionId));
-  const advancedOptions = [
-    ...allowAlwaysOptions.filter((option) => !primaryOptionIds.has(option.optionId)),
-    ...(enableAlwaysOption && !primaryOptionIds.has(enableAlwaysOption.optionId)
-      ? [enableAlwaysOption]
-      : []),
-    ...denyAlwaysOptions,
-    ...otherOptions,
-  ];
-
-  const enableTaskAlways = async (option: PermissionOption) => {
-    if (resolvingId) return;
-    const requestId = head.requestId;
-    const requestSessionId = head.sessionId;
-    setConfirmingAlwaysId(null);
-    setResolvingId(option.optionId);
+  const resolve = async (option?: PermissionOption, cancelled = false) => {
+    const request = head;
+    if (pendingRef.current.has(request.requestId)) return;
+    pendingRef.current.add(request.requestId);
+    const isCurrent = () => activeRequestRef.current === request.requestId;
+    setResolvingId(option?.optionId ?? "deny");
+    setMenuOpen(false);
+    setConfirmingAlways(false);
     setError(null);
     let modeChanged = false;
     try {
-      const result = await permissionModeSet(requestSessionId, "always-approve");
-      modeChanged = true;
-      const status = permissionModeStatusFromEvent(result);
-      if (status) usePermissionModeStore.getState().setStatus(status);
-      useSessionsStore.getState().upsert({
-        sessionId: requestSessionId,
-        permissionMode: result.permissionMode ?? "always-approve",
-      });
-
-      // Mode changes intentionally leave already-visible requests pending. The
-      // special Runtime option also grants this in-flight operation once.
-      const acknowledged = await agentResolvePermission(requestId, {
-        optionId: option.optionId,
-        cancelled: false,
-      });
-      if (!acknowledged) throw new Error("后端未找到该权限请求，请重试");
-      dismiss(requestId, requestSessionId);
+      if (option?.optionId === ENABLE_ALWAYS_APPROVE_OPTION_ID) {
+        const result = await permissionModeSet(request.sessionId, "always-approve");
+        modeChanged = true;
+        const status = permissionModeStatusFromEvent(result);
+        if (status) usePermissionModeStore.getState().setStatus(status);
+        useSessionsStore.getState().upsert({ sessionId: request.sessionId, permissionMode: result.permissionMode ?? "always-approve" });
+      }
+      const acknowledged = await agentResolvePermission(request.requestId, { optionId: option?.optionId, cancelled });
+      if (!acknowledged) throw new Error("该请求已失效，请刷新任务后重试");
+      dismiss(request.requestId, request.sessionId);
     } catch (e) {
       const message = String(e).replace(/^Error:\s*/, "");
-      console.error("enable always-approve permission failed", e);
-      setError(modeChanged
-        ? `本任务已切换为“始终允许”，但当前操作确认失败：${message}`
-        : `无法切换为“本任务始终允许”：${message}`);
+      if (isCurrent()) setError(modeChanged ? `已开启本任务免审批，但当前操作尚未批准：${message}` : message);
     } finally {
-      setResolvingId(null);
+      pendingRef.current.delete(request.requestId);
+      if (isCurrent()) setResolvingId(null);
     }
   };
 
-  const optionButton = (option: PermissionOption, persistent = false) => {
-    const label = actionLabel(option);
-    const isDanger = option.kind === "deny" || option.kind === "deny_always";
-    const isTaskAlways = option.optionId === ENABLE_ALWAYS_APPROVE_OPTION_ID;
-    const isPrimary = option.kind === "allow" && !isTaskAlways;
-
-    return (
-      <button
-        key={option.optionId}
-        type="button"
-        className={`btn perm-inline__action${
-          isDanger ? " btn--danger" : isPrimary ? " btn--primary" : " btn--ghost"
-        }${isTaskAlways ? " perm-inline__action--elevated" : ""}`}
-        title={isTaskAlways
-          ? `${option.title} · 仅影响本任务的常规工具调用；操作电脑仍需明确任务请求`
-          : option.title}
-        onClick={() => {
-          if (isTaskAlways) {
-            setError(null);
-            setConfirmingAlwaysId(option.optionId);
-          } else {
-            void resolve(option.optionId);
-          }
-        }}
-        disabled={resolvingId != null}
-      >
-        <span className="perm-inline__action-label">
-          {resolvingId === option.optionId ? "处理中…" : label}
-        </span>
-        {persistent && resolvingId !== option.optionId && (
-          <span className="perm-inline__action-hint">
-            {option.kind === "deny_always"
-              ? "后续匹配操作自动拒绝"
-              : isTaskAlways
-                ? "常规工具自动批准，自动化副作用仍确认"
-                : "后续匹配操作不再询问"}
-          </span>
-        )}
-      </button>
-    );
+  const cancelConfirmation = () => {
+    setConfirmingAlways(false);
+    requestAnimationFrame(() => menuTriggerRef.current?.focus());
   };
 
   return (
-    <section id={`permission-${head.requestId}`} className="perm-inline" aria-label="操作授权" tabIndex={-1}>
+    <section id={`permission-${head.requestId}`} className="perm-inline" aria-label="操作授权" aria-busy={resolvingId != null} tabIndex={-1}>
       <div className="perm-inline__head">
-        <span className="perm-inline__kind">{toolKindLabel(head.toolKind)}</span>
-        <span className="perm-inline__title" title={head.title}>{head.title}</span>
+        <Icon size={15} aria-hidden="true" />
+        <span className="perm-inline__kind">{label}</span>
+        {count > 1 && <span className="perm-inline__count">还有 {count - 1} 项待审批</span>}
       </div>
       <div className="perm-inline__body">
-        <p>EchoAgent 请求执行此操作，请确认授权范围。</p>
-        {head.rawInput != null && (
-          <details className="perm-inline__details">
-            <summary>查看完整操作参数</summary>
-            <pre className="perm-inline__raw">
-              {JSON.stringify(head.rawInput, null, 2)}
-            </pre>
-          </details>
-        )}
+        <p className="perm-inline__title">{title}</p>
+        {preview && <pre className="perm-inline__preview" tabIndex={0} aria-label="操作内容">{preview}</pre>}
+        {head.rawInput != null && <details className="perm-inline__details">
+          <summary>操作详情</summary>
+          <pre className="perm-inline__raw">{JSON.stringify(head.rawInput, null, 2)}</pre>
+        </details>}
         {error && <p className="perm-inline__error" role="alert">{error}</p>}
       </div>
-      <footer className="perm-inline__footer">
-        <div className="perm-inline__actions perm-inline__actions--primary" role="group" aria-label="授权选择">
-          {primaryOptions.map((option) => optionButton(
-            option,
-            option.kind === "allow_always" || option.optionId === ENABLE_ALWAYS_APPROVE_OPTION_ID,
-          ))}
-          {!denyOnceOption && (
-            <button
-              type="button"
-              className="btn btn--danger perm-inline__action"
-              onClick={() => resolve(undefined, true, "deny")}
-              disabled={resolvingId != null}
-            >
-              {resolvingId === "deny" ? "处理中…" : "拒绝"}
-            </button>
-          )}
+      {confirmingAlways && enableAlways ? <div className="perm-inline__confirm" role="alertdialog" aria-label="确认本任务免审批"
+        onKeyDown={event => { if (event.key === "Escape") { event.preventDefault(); event.stopPropagation(); cancelConfirmation(); } }}>
+        <strong>允许本任务后续免审批？</strong>
+        <span>将允许当前操作，并自动批准本任务后续的命令和文件修改。网页与电脑操作仍遵守各自的授权规则。</span>
+        <div className="perm-inline__confirm-actions">
+          <button ref={confirmCancelRef} type="button" className="perm-inline__action" onClick={cancelConfirmation}>取消</button>
+          <button type="button" className="perm-inline__action perm-inline__action--allow" onClick={() => void resolve(enableAlways)}>确认并允许</button>
         </div>
-
-        {confirmingAlwaysId && enableAlwaysOption && (
-          <div
-            className="perm-inline__confirm"
-            role="alertdialog"
-            aria-label="确认本任务始终允许"
-            onKeyDown={(event) => {
-              if (event.key === "Escape") {
-                event.preventDefault();
-                setConfirmingAlwaysId(null);
-              }
-            }}
-          >
-            <strong>确认提高当前任务的权限？</strong>
-            <span>将允许当前操作，且本任务后续的命令、文件修改等常规工具不再询问。网页操作保留独立确认；电脑操作由明确任务请求启动，任务内连续执行，暂停、停止或重启会撤销执行授权。</span>
-            <div className="perm-inline__confirm-actions">
-              <button
-                ref={confirmCancelRef}
-                type="button"
-                className="btn btn--ghost"
-                onClick={() => setConfirmingAlwaysId(null)}
-              >
-                取消
-              </button>
-              <button
-                type="button"
-                className="btn btn--danger"
-                onClick={() => void enableTaskAlways(enableAlwaysOption)}
-              >
-                确认并允许当前操作
-              </button>
-            </div>
-          </div>
-        )}
-
-        {advancedOptions.length > 0 && (
-          <details className="perm-inline__more">
-            <summary>更多授权选项</summary>
-            <div className="perm-inline__actions" role="group" aria-label="更多授权选项">
-              {advancedOptions.map((option) => optionButton(
-                option,
-                option.kind === "allow_always" ||
-                  option.kind === "deny_always" ||
-                  option.optionId === ENABLE_ALWAYS_APPROVE_OPTION_ID,
-              ))}
-            </div>
-          </details>
-        )}
-      </footer>
+      </div> : <footer className="perm-inline__footer" role="group" aria-label="授权选择">
+        <button type="button" className="perm-inline__action" onClick={() => void resolve(denyOnce, !denyOnce)} disabled={resolvingId != null}>
+          {resolvingId === (denyOnce?.optionId ?? "deny") ? "处理中…" : "拒绝"}
+        </button>
+        <div className="perm-inline__allow-group">
+          {allowOnce && <button type="button" className="perm-inline__action perm-inline__action--allow"
+            onClick={() => void resolve(allowOnce)} disabled={resolvingId != null}>
+            {resolvingId === allowOnce.optionId ? "处理中…" : "允许一次"}
+          </button>}
+          {moreOptions.length > 0 && <button ref={menuTriggerRef} type="button"
+            className={`perm-inline__action perm-inline__menu-trigger${allowOnce ? " perm-inline__action--allow" : ""}`}
+            aria-label="更多授权选项" aria-haspopup="menu" aria-expanded={menuOpen}
+            aria-controls={menuOpen ? `permission-options-${head.requestId}` : undefined}
+            disabled={resolvingId != null} onClick={() => setMenuOpen(!menuOpen)}
+            onKeyDown={event => { if (["ArrowDown", "ArrowUp"].includes(event.key)) { event.preventDefault(); setMenuOpen(true); } }}>
+            {!allowOnce && <span>授权选项</span>}<ChevronDown size={14} aria-hidden="true" />
+          </button>}
+        </div>
+      </footer>}
+      {menuOpen && createPortal(<div ref={menuRef} id={`permission-options-${head.requestId}`}
+        className="permission-options" role="menu" aria-label="更多授权选项" style={menuStyle}
+        onKeyDown={event => {
+          if (event.key === "Escape") { event.preventDefault(); event.stopPropagation(); setMenuOpen(false); menuTriggerRef.current?.focus(); }
+          if (["ArrowDown", "ArrowUp", "Home", "End"].includes(event.key)) {
+            event.preventDefault();
+            const items = Array.from(event.currentTarget.querySelectorAll<HTMLButtonElement>("button:not(:disabled)"));
+            const index = items.indexOf(document.activeElement as HTMLButtonElement);
+            const next = event.key === "Home" ? 0 : event.key === "End" ? items.length - 1
+              : (index + (event.key === "ArrowUp" ? -1 : 1) + items.length) % items.length;
+            items[next]?.focus();
+          }
+        }}>
+        {moreOptions.map(option => {
+          const copy = optionPresentation(option);
+          return (
+            <button key={option.optionId} type="button" role="menuitem"
+              className={option.optionId === ENABLE_ALWAYS_APPROVE_OPTION_ID ? "permission-options__elevated" : undefined}
+              onClick={() => {
+                if (option.optionId === ENABLE_ALWAYS_APPROVE_OPTION_ID) { setMenuOpen(false); setConfirmingAlways(true); }
+                else void resolve(option);
+              }}>
+              <span>{copy.label}</span>
+              {copy.description && <small>{copy.description}</small>}
+            </button>
+          );
+        })}
+      </div>, document.body)}
     </section>
   );
 }

@@ -9,6 +9,7 @@ import {
 } from "react";
 import { createPortal } from "react-dom";
 import { useModalFocus } from "@/lib/use-modal-focus";
+import { toastMessage } from "@/lib/toast-message";
 
 type DialogAction = () => void | Promise<void>;
 
@@ -307,7 +308,10 @@ function AppActionDialog({
           </div>
         )}
 
-        {error && <div id={errorId} className="app-dialog__error" role="alert">{error}</div>}
+        {error && <div id={errorId} className="app-dialog__error" role="alert">
+          {toastMessage(error, "error").summary}
+          {toastMessage(error, "error").details && <details><summary>查看详情</summary><pre style={{ whiteSpace: "pre-wrap", overflowWrap: "anywhere", maxHeight: 160, overflow: "auto" }}>{error}</pre></details>}
+        </div>}
         </div>
 
         <div className="app-dialog__actions">

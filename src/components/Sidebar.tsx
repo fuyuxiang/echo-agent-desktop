@@ -85,7 +85,7 @@ const ACTIVE_STATUS_META: Partial<Record<SessionStatus, { label: string; classNa
   working: { label: "运行中", className: "working" },
   planning: { label: "规划中", className: "planning" },
   pending: { label: "未开始", className: "pending" },
-  awaiting_permission: { label: "授权待确认", className: "awaiting" },
+  awaiting_permission: { label: "等待审批", className: "awaiting" },
   awaiting_answer: { label: "等待回答", className: "awaiting" },
   awaiting_approval: { label: "方案待批准", className: "awaiting" },
   pausing: { label: "正在暂停", className: "pausing" },
@@ -719,20 +719,15 @@ export function Sidebar({
   // directory. Only drop the sidebar entry once the backend confirms.
   const handleDelete = useCallback(async (sessionId: string) => {
     const cwd = resolveSessionCwd(sessionId);
-    try {
-      if (onDeleteSession) await onDeleteSession(sessionId, cwd);
-      else {
-        const result = await agentDeleteSession(sessionId, cwd);
-        onSessionDeleted?.(sessionId);
-        removeSession(sessionId, cwd);
-        useProjectsStore.getState().removeSessionReferences(sessionId);
-        if (result?.memoryCleanupWarning) {
-          onToast?.(`会话已删除，部分关联数据清理未完成：${result.memoryCleanupWarning}`);
-        }
+    if (onDeleteSession) await onDeleteSession(sessionId, cwd);
+    else {
+      const result = await agentDeleteSession(sessionId, cwd);
+      onSessionDeleted?.(sessionId);
+      removeSession(sessionId, cwd);
+      useProjectsStore.getState().removeSessionReferences(sessionId);
+      if (result?.memoryCleanupWarning) {
+        onToast?.(`对话已删除，部分记忆未能清理，请到记忆页面检查。\n${result.memoryCleanupWarning}`);
       }
-    } catch (e) {
-      onToast?.(`删除失败：${String(e).replace(/^Error:\s*/, "")}`);
-      throw e;
     }
   }, [onDeleteSession, onSessionDeleted, onToast, removeSession, resolveSessionCwd]);
 
@@ -760,7 +755,7 @@ export function Sidebar({
         if (session) upsertSession({ ...session, archived: next });
         useProjectsStore.getState().setSessionArchived(sessionId, next);
         onSessionArchived?.(sessionId, next);
-        onToast?.(next ? "已归档，可在“设置 → 数据管理 → 已归档”中恢复" : "已恢复会话");
+        if (next) onToast?.("已归档，可在设置中恢复");
       }
     } catch (e) {
       onToast?.(`${archived ? "归档" : "恢复"}失败：${String(e).replace(/^Error:\s*/, "")}`);
@@ -797,9 +792,6 @@ export function Sidebar({
     ];
     const perform = async () => {
       await useProjectsStore.getState().detachSessionFromProject(projectId, sessionId);
-      onToast?.(session?.archived
-        ? "已移出项目，该会话仍在归档管理中"
-        : "已移出项目，对话历史仍可在“任务”中查看");
     };
     if (linkedItems.length > 0) {
       skipMenuFocusRestoreRef.current = true;
@@ -830,8 +822,6 @@ export function Sidebar({
     setProjectsOpen(true);
     setExpandedProjects((current) => ({ ...current, [projectId]: true }));
     setFocusMovedSessionId(session.sessionId);
-    const projectName = useProjectsStore.getState().projects.find((item) => item.id === projectId)?.name;
-    onToast?.(`已移入项目“${projectName || "项目"}”，原会话工作目录保持不变`);
   }, [moveDialog, onToast, setProjectsOpen]);
 
   useEffect(() => {
@@ -898,9 +888,12 @@ export function Sidebar({
             <span className="sidebar__conv-heading">
               <span className="sidebar__conv-title">{sessionTitle}</span>
               {s.pinned && <PinFilledIcon size="sm" className="sidebar__conv-pin" />}
-              <SessionStatusIndicator status={s.status} />
+              {s.status !== "awaiting_permission" && <SessionStatusIndicator status={s.status} />}
             </span>
-            {updated && s.updatedAt && (
+            {s.status === "awaiting_permission" && <span className="sidebar__approval-status" role="img" aria-label="等待审批" title={updated ? `等待审批 · ${updated}` : "等待审批"}>等待审批</span>}
+            {/* The actionable state takes precedence over relative time. The
+                timestamp stays in the accessible row label and hover hint. */}
+            {updated && s.updatedAt && s.status !== "awaiting_permission" && (
               <time
                 className="sidebar__conv-time"
                 dateTime={s.updatedAt}

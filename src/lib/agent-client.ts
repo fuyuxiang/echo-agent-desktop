@@ -1133,7 +1133,7 @@ export async function permissionSave(rules: PermissionRule[]): Promise<void> {
 
 // ---------- task-scoped permission mode ----------
 
-/** EchoAgent 的权限模式:审批(ask)/自动(auto)/始终允许(always-approve)。 */
+/** Task approval strategy: 请求批准 / 自动判断 / 本任务免审批. Wire values stay canonical. */
 export type PermissionMode = "ask" | "auto" | "always-approve";
 
 export interface PermissionModeStatus {
@@ -1298,12 +1298,14 @@ export async function memoryRewrite(
   return invoke<string>("memory_rewrite", { sessionId, rawText, contextSummary });
 }
 
-/** Flush in-flight memory writes to disk (`echo.agent/memory/flush`). */
+/** Complete extraction (`echo.agent/memory/flush`). True includes empty and
+ * duplicate results; it is not a receipt that a new memory was saved. */
 export async function memoryFlush(sessionId: string): Promise<boolean> {
   return invoke<boolean>("memory_flush", { sessionId });
 }
 
-/** Consolidate generated session summaries into long-term memory. */
+/** Consolidate generated session summaries into long-term memory. False also
+ * includes a skipped operation; callers must not infer that input was empty. */
 export async function memoryDream(sessionId: string): Promise<boolean> {
   return invoke<boolean>("memory_dream", { sessionId });
 }

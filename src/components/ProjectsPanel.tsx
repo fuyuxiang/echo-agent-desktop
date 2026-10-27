@@ -182,7 +182,7 @@ export function ProjectsPanel({
       await projectAssetsRemoveAll(target.id);
       remove(target.id);
       setDeleteTarget(null);
-      onToast?.("已删除项目");
+
       // The original menu trigger disappears with the deleted card. Move
       // focus to the primary project action instead of leaving it on <body>.
       window.requestAnimationFrame(() => createButtonRef.current?.focus());

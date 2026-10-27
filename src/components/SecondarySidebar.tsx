@@ -165,7 +165,7 @@ export function SecondarySidebar({ onSelectExpert, onCreateExpert, onToast }: Se
   const handlePick = useCallback(
     (agent: AgentEntry) => {
       onSelectExpert?.(agent);
-      onToast?.(`已选择专家：${agent.name}`);
+
       closePeek();
     },
     [onSelectExpert, onToast, closePeek],

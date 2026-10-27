@@ -703,7 +703,7 @@ function ArtifactFilePreview({
     try {
       const result = await authorizeArtifactFile(path, cwd);
       if (result === "authorized") {
-        onToast?.("已授权该文件，可以在面板中预览");
+
         setRetry((value) => value + 1);
       } else if (result === "mismatch") {
         onToast?.("所选文件与当前成果不一致，请选择列表中显示的原文件");
@@ -718,7 +718,7 @@ function ArtifactFilePreview({
   const openWithSystem = async () => {
     setOpening(true);
     try {
-      if (await onOpenOs()) onToast?.("已用系统应用打开文件");
+      if (await onOpenOs()) {}
     } finally {
       setOpening(false);
     }

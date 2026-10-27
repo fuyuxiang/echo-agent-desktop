@@ -76,6 +76,11 @@ describe("slash command helpers", () => {
     expect(isClientSlashCommand("HELP")).toBe(true);
     expect(isClientSlashCommand("remember")).toBe(true);
     expect(availableClientSlashCommands(false).some((c) => c.name === "remember")).toBe(true);
+    for (const name of ["flush", "dream"]) {
+      expect(isClientSlashCommand(name)).toBe(true);
+      expect(availableClientSlashCommands(false).some(c => c.name === name)).toBe(false);
+      expect(availableClientSlashCommands(true).some(c => c.name === name)).toBe(true);
+    }
     expect(slashCommandSourceLabel("plugin:acme")).toBe("插件 · acme");
   });
 });

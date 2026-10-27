@@ -202,7 +202,8 @@ describe("PlanPanel 编辑器(对齐 EchoAgent plan-editor)", () => {
     fireEvent.click(screen.getByRole("button", { name: "同步修改并重新审批" }));
     fireEvent.change(screen.getByRole("textbox", { name: "新增步骤" }), { target: { value: "提交期间才增加的步骤" } });
     fireEvent.click(screen.getByRole("button", { name: "添加" }));
-    expect(onToast).toHaveBeenCalledWith("已新增步骤");
+    expect(screen.getByText("提交期间才增加的步骤")).toBeInTheDocument();
+    expect(onToast).not.toHaveBeenCalled();
     onToast.mockClear();
     act(() => {
       focusSession("s2");
@@ -325,7 +326,7 @@ describe("PlanPanel 编辑器(对齐 EchoAgent plan-editor)", () => {
     await waitFor(() => expect(screen.queryByRole("button", { name: "同步修订" })).not.toBeInTheDocument());
     expect(onSend).toHaveBeenCalledWith(expect.stringContaining("已保存的本地修订"));
     expect(useSessionStore.getState().transcripts.s1.planRevisionDirty).toBe(false);
-    expect(onToast).toHaveBeenCalledWith("修订计划已同步到 Agent");
+    expect(onToast).toHaveBeenCalledWith("修改已提交，等待继续执行");
   });
 
   it("收起后的未同步修订不会出现在另一会话，返回原会话仍可提交", () => {

@@ -21,6 +21,27 @@ beforeEach(() => {
 });
 
 describe("个人记忆管理", () => {
+  it("处理状态明确说明没有新增内容，不把完成时间当成保存凭据", async () => {
+    api.memoryRecordsGet.mockResolvedValueOnce({ records: [], enabled: true, pendingCount: 0,
+      extraction: { outcome: "unchanged", detail: "", succeededAt: 2 }, retrieval: { at: 0, sources: [] } });
+    render(<PersonalMemoryPanel cwd="/project-a" />);
+    expect(await screen.findByText("最近一次提取没有新增内容，现有记忆保持不变")).toBeInTheDocument();
+    expect(screen.queryByText("最近一次提取已保存记忆")).toBeNull();
+  });
+  it.each([true, false])("提取结果 completed=%s 不会假定新增记忆或保留了待处理内容", async completed => {
+    api.memoryFlush.mockResolvedValueOnce(completed);
+    const onToast = vi.fn();
+    render(<PersonalMemoryPanel cwd="/project-a" sessionId="session-a" onToast={onToast} />);
+    await screen.findByText("报告使用中文");
+    fireEvent.click(screen.getByText("记忆状态与排查"));
+    fireEvent.click(screen.getByRole("button", { name: "立即提取" }));
+    await waitFor(() => expect(api.memoryFlush).toHaveBeenCalledWith("session-a"));
+    await waitFor(() => expect(onToast).toHaveBeenCalledWith(completed
+      ? "记忆提取已完成，可在记忆页面查看结果；没有新增内容时不会重复保存"
+      : "本次提取未完成，请查看记忆处理状态后重试"));
+    expect(onToast).not.toHaveBeenCalledWith(expect.stringMatching(/已提取本次对话|已保留待处理/));
+    expect(screen.getAllByText("报告使用中文")).toHaveLength(1);
+  });
   it("默认只呈现记忆内容，排查和旧文档按需展开", async () => {
     render(<PersonalMemoryPanel cwd="/project-a" />);
     expect(await screen.findByText("报告使用中文")).toBeInTheDocument();

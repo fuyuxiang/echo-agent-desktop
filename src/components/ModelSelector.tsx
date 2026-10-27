@@ -69,6 +69,7 @@ export function ModelSelector({
       preferredPlacement: menuPlacement,
       align: menuAlign,
       width: menuWidth,
+      maxWidth: menuWidth === "content" ? 320 : undefined,
       estimatedHeight: Math.min(320, Math.max(52, models.length * 48 + 8)),
       offset: 6,
       zIndex: menuZIndex,
@@ -206,7 +207,7 @@ export function ModelSelector({
                 }}
               >
                 <span className="model-selector__item-label">{m.label || m.id}</span>
-                <span className="model-selector__item-id">{m.id}</span>
+                {m.label && m.label !== m.id && <span className="model-selector__item-id">{m.id}</span>}
                 {m.id === modelId && <Check size={14} className="model-selector__check" />}
               </button>
             </li>

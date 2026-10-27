@@ -158,7 +158,6 @@ export function ProjectDetailView({
       updateConfig(live.id, { experts: [...live.experts, item] });
     }
     setComposerExpert(agent);
-    onToast?.(`已将专家「${agent.name}」加入项目上下文`);
   };
 
   const setPicked = (k: typeof pickerFor, items: RefItem[]) => {
@@ -178,7 +177,7 @@ export function ProjectDetailView({
       action: ({ name }) => {
         const trimmed = name.trim();
         addMember(live.id, trimmed);
-        onToast?.(`已添加参与者备注：${trimmed}`);
+
         setMembersOpen(false);
       },
     });
@@ -304,7 +303,7 @@ export function ProjectDetailView({
                 onToast={onToast}
               />
             )}
-            {tab === "asset" && <AssetsTab projectId={live.id} onToast={onToast} onUseAsset={asset => { selectAsset(asset.id); onToast?.(`已将「${asset.name}」选入本次任务上下文`); }} selectedAssetIds={selectedAssetIds} />}
+            {tab === "asset" && <AssetsTab projectId={live.id} onToast={onToast} onUseAsset={asset => { selectAsset(asset.id); }} selectedAssetIds={selectedAssetIds} />}
           </div>
 
           <div className="pd-composer-shell">

@@ -178,7 +178,6 @@ export function useVerificationRunner({
       confirmLabel: "确认并运行",
       danger: true,
       action: () => executeVerifications(batch),
-      onError: (error) => onToast?.(`验证失败：${String(error).replace(/^Error:\s*/, "")}`),
     });
   }, [executeVerifications, onToast, requestConfirmation]);
 

@@ -22,6 +22,8 @@ interface AnchoredFloatingOptions {
   preferredPlacement?: FloatingPlacement;
   align?: FloatingAlignment;
   width?: FloatingWidth;
+  /** Cap content-sized menus without turning the cap into a fixed width. */
+  maxWidth?: number;
   estimatedHeight?: number;
   maxHeight?: number;
   offset?: number;
@@ -52,6 +54,7 @@ export function useAnchoredFloating(
     preferredPlacement = "top",
     align = "start",
     width = "content",
+    maxWidth = Infinity,
     estimatedHeight = 240,
     maxHeight = Infinity,
     offset = 8,
@@ -82,7 +85,7 @@ export function useAnchoredFloating(
       return;
     }
 
-    const maxViewportWidth = Math.max(0, viewportWidth - viewportMargin * 2);
+    const maxViewportWidth = Math.max(0, Math.min(maxWidth, viewportWidth - viewportMargin * 2));
     // `offsetWidth` is integer-rounded. Writing that rounded value back as a
     // border-box width can make intrinsically-sized text a fraction of a pixel
     // too narrow. CJK text then wraps its final glyph onto a second line. Keep
@@ -143,6 +146,7 @@ export function useAnchoredFloating(
     estimatedHeight,
     floatingRef,
     maxHeight,
+    maxWidth,
     offset,
     preferredPlacement,
     viewportMargin,
@@ -186,7 +190,9 @@ export function useAnchoredFloating(
           // from avoiding fractional-pixel wrapping, this lets menus and
           // tooltips respond when their text or font metrics change.
           width: width === "content" ? undefined : layout.width,
-          maxWidth: `calc(100vw - ${viewportMargin * 2}px)`,
+          maxWidth: Number.isFinite(maxWidth)
+            ? `min(${maxWidth}px, calc(100vw - ${viewportMargin * 2}px))`
+            : `calc(100vw - ${viewportMargin * 2}px)`,
           maxHeight: Math.min(layout.maxHeight, maxHeight),
           overflowY: "auto",
           overscrollBehavior: "contain",

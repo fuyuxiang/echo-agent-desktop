@@ -4,6 +4,7 @@ import { create } from "zustand";
 import { Archive, ArchiveRestore, CopyPlus, MoreHorizontal, Pencil, Pin, Trash2 } from "lucide-react";
 import { useAppDialog } from "@/components/AppDialog";
 import { Toast, type ToastAction } from "@/components/Toast";
+import { useToastQueue } from "@/lib/use-toast-queue";
 import { groupControl, groupMetadata, groupSaveTeam, groupSnapshot, terminalWork, type Group } from "./group-client";
 import { useGroupStore } from "./group-store";
 
@@ -43,7 +44,7 @@ export function GroupActionsHost({ onFeedback }: { onFeedback?: (message: string
   const [cleaning, setCleaning] = useState(false);
   const group = menu ? (current?.id === menu.id ? current : groups.find(group => group.id === menu.id)) : undefined;
   const dialog = useAppDialog();
-  const [feedback, setFeedback] = useState<{ message: string; actions: ToastAction[] } | null>(null);
+  const { toasts, enqueueToast, dismissToast, pauseToast } = useToastQueue();
   const [position, setPosition] = useState({ left: 0, top: 0 });
   const menuRef = useRef<HTMLDivElement>(null);
   const close = (restore = true) => {
@@ -51,12 +52,7 @@ export function GroupActionsHost({ onFeedback }: { onFeedback?: (message: string
     useActions.setState({ menu: null });
     if (restore && anchor?.isConnected) anchor.focus();
   };
-  const notify = (message: string, actions: ToastAction[] = []) => { if (onFeedback) onFeedback(message, actions); else setFeedback({ message, actions }); };
-  useEffect(() => {
-    if (!feedback) return;
-    const timeout = setTimeout(() => setFeedback(null), feedback.actions.length ? 10_000 : 6000);
-    return () => clearTimeout(timeout);
-  }, [feedback]);
+  const notify = (message: string, actions: ToastAction[] = []) => { if (onFeedback) onFeedback(message, actions); else enqueueToast(message, actions); };
   useEffect(() => { if (menu && !group) useActions.setState({ menu: null }); }, [menu, group]);
   useLayoutEffect(() => {
     if (!menu || !menuRef.current) return;
@@ -89,7 +85,8 @@ export function GroupActionsHost({ onFeedback }: { onFeedback?: (message: string
       const save = kind === "save";
       dialog.requestInput({ title: save ? "保存为专家团模板" : "重命名专家团", description: save ? "保存成员、分工和模型，不包含聊天记录。同名模板会更新。" : undefined, fields: [{ name: "name", label: save ? "模板名称" : "专家团名称", defaultValue: target.name, required: true, maxLength: 80 }], confirmLabel: save ? "保存模板" : "保存名称", returnFocus, action: values => run(target.id, async () => {
         if (save) await groupSaveTeam(target.id, values.name.trim()); else await groupMetadata(target.id, { name: values.name.trim() });
-        await refreshGroup(target.id); notify(save ? "已保存专家团模板" : "专家团名称已更新");
+        await refreshGroup(target.id);
+        if (save) notify("专家团模板已保存");
       }) });
     } else if (kind === "delete") {
       dialog.requestConfirmation({ title: `删除专家团“${target.name}”？`, description: <><p>将永久删除这个专家团的聊天、工作、决定记录及该专家团的记忆，无法恢复。个人专家、已保存模板和工作区文件会保留。</p>{target.sourceSessionId && <p>来源任务与团队会保留，可用于创建新的独立专家团。</p>}<p>{active ? "当前还有未结束的工作，将先停止工作，确认停止后再删除。" : "如果确认前有新的工作开始，将先停止工作后删除。"}</p></>, danger: true, confirmLabel: active ? "停止工作并删除" : "永久删除", returnFocus, action: () => run(target.id, async () => {
@@ -99,15 +96,13 @@ export function GroupActionsHost({ onFeedback }: { onFeedback?: (message: string
             ?? document.querySelector<HTMLButtonElement>(".sidebar__nav-item--active");
           next?.focus();
         });
-        const localError = useGroupStore.getState().cleanupError;
-        if (!localError) notify("专家团及关联记录已删除，工作区文件已保留");
       }) });
     } else {
       const archive = async () => run(target.id, async () => {
         if (active) await stopBeforeArchive(target.id);
         await groupMetadata(target.id, { archived: true });
         await refreshGroup(target.id);
-        notify("已归档专家团，可在“已归档”中恢复", [{ label: "撤销", onClick: () => perform(async () => { await groupMetadata(target.id, { archived: false }); await refreshGroup(target.id); notify("已恢复专家团"); }) }]);
+        notify(`专家团“${target.name}”已归档`, [{ label: "撤销", onClick: () => perform(async () => { await groupMetadata(target.id, { archived: false }); await refreshGroup(target.id); }) }]);
       });
       if (active) dialog.requestConfirmation({ title: "停止工作并归档？", description: `“${target.name}”还有未结束的工作。停止后归档，已有聊天与工作结果会保留。`, confirmLabel: "停止工作并归档", returnFocus, action: archive });
       else perform(archive);
@@ -122,14 +117,18 @@ export function GroupActionsHost({ onFeedback }: { onFeedback?: (message: string
       else if (["ArrowDown", "ArrowUp", "Home", "End"].includes(event.key)) { event.preventDefault(); event.stopPropagation(); items[event.key === "Home" ? 0 : event.key === "End" ? items.length - 1 : (index + (event.key === "ArrowDown" ? 1 : -1) + items.length) % items.length]?.focus(); }
     }}>
       <button role="menuitem" className="context-menu__item" onClick={() => request("rename")}><Pencil size={14} />重命名</button>
-      <button role="menuitem" className="context-menu__item" onClick={() => { const target = group; close(); perform(() => run(target.id, async () => { await groupMetadata(target.id, { pinned: !target.pinned }); await refreshGroup(target.id); notify(target.pinned ? "已取消置顶" : "已置顶专家团"); })); }}><Pin size={14} />{group.pinned ? "取消置顶" : "置顶"}</button>
+      <button role="menuitem" className="context-menu__item" onClick={() => { const target = group; close(); perform(() => run(target.id, async () => { await groupMetadata(target.id, { pinned: !target.pinned }); await refreshGroup(target.id); })); }}><Pin size={14} />{group.pinned ? "取消置顶" : "置顶"}</button>
       <button role="menuitem" className="context-menu__item" onClick={() => request("save")}><CopyPlus size={14} />保存为模板</button>
       <div className="context-menu__divider" role="separator" />
-      <button role="menuitem" className="context-menu__item" onClick={() => { if (!group.archived) request("archive"); else { const target = group; close(); perform(() => run(target.id, async () => { await groupMetadata(target.id, { archived: false }); await refreshGroup(target.id); notify("已恢复专家团，已停止的工作保持停止"); })); } }}>{group.archived ? <ArchiveRestore size={14} /> : <Archive size={14} />}{group.archived ? "恢复专家团" : "归档专家团"}</button>
+      <button role="menuitem" className="context-menu__item" onClick={() => { if (!group.archived) request("archive"); else { const target = group; close(); perform(() => run(target.id, async () => { await groupMetadata(target.id, { archived: false }); await refreshGroup(target.id); })); } }}>{group.archived ? <ArchiveRestore size={14} /> : <Archive size={14} />}{group.archived ? "恢复专家团" : "归档专家团"}</button>
       <button role="menuitem" className="context-menu__item context-menu__item--danger" onClick={() => request("delete")}><Trash2 size={14} />删除专家团…</button>
     </div>, document.body)}
     {dialog.dialog}
     {cleanupError && <div className="group-cleanup-notice" role="alert"><span>{cleanupError}</span><button type="button" className="btn btn--ghost" disabled={cleaning} onClick={() => { setCleaning(true); void useGroupStore.getState().retryCleanup().finally(() => setCleaning(false)); }}>{cleaning ? "正在清理…" : "重试清理"}</button></div>}
-    <Toast message={cleanupError ? null : feedback?.message ?? null} actions={feedback?.actions} onDismiss={() => setFeedback(null)} />
+    {!cleanupError && toasts.length > 0 && <div className="toast-stack" aria-label="操作提示">
+      {toasts.map(toast => <Toast key={toast.id} message={toast.message} actions={toast.actions} kind={toast.kind} stacked
+        onDismiss={() => dismissToast(toast.id)} onPause={paused => pauseToast(toast.id, paused)}
+        onActionError={error => notify(`操作未完成：${errorText(error)}`)} />)}
+    </div>}
   </>;
 }

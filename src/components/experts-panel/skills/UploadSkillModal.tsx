@@ -69,8 +69,8 @@ export function UploadSkillModal({
     try {
       const result = await orgSubmitSkill(skill.path, scopeId);
       onToast?.(result.state === "pending"
-        ? `Skill「${name}」已提交，等待组织审核`
-        : `Skill「${name}」已上传到${selectedScope?.name ?? "组织"}`);
+        ? `技能“${name}”已提交，等待组织审核`
+        : `技能“${name}”已上传到${selectedScope?.name ?? "组织"}`);
       onClose();
     } catch (reason) {
       setError(String(reason).replace(/^Error:\s*/, ""));

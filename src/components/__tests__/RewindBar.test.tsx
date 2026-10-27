@@ -23,7 +23,7 @@ describe("RewindBar wiring", () => {
     ]);
   });
 
-  it("分叉成功后调用 onForked(新id) 与 onToast", async () => {
+  it("分叉成功后进入新对话，不重复弹成功提示", async () => {
     const onForked = vi.fn();
     const onToast = vi.fn();
     render(
@@ -36,7 +36,7 @@ describe("RewindBar wiring", () => {
       "s1",
       undefined,
     ));
-    expect(onToast).toHaveBeenCalled();
+    expect(onToast).not.toHaveBeenCalled();
   });
 
   it.each([

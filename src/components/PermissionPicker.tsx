@@ -2,16 +2,16 @@
  * 任务级权限模式选择器 - Composer meta 行的下拉
  *
  * EchoAgent 任务级权限的三档选择:
- *  - ask            审批模式:每次工具调用都弹确认
- *  - auto           自动模式:EchoAgent 的分类器自动批准安全操作
- *  - always-approve 始终允许:常规工具自动批准；电脑执行仍需明确任务请求
+ *  - ask            请求批准:需要授权的操作交给用户确认
+ *  - auto           自动判断:分类器评估风险并批准安全操作
+ *  - always-approve 本任务免审批:常规工具自动批准；电脑执行仍需明确任务请求
  *
  * 首页选择只属于即将创建的任务；已有会话通过 sessionId
  * 定向同步，绝不影响其他任务。
  */
 import { useCallback, useEffect, useId, useRef, useState } from "react";
 import { createPortal } from "react-dom";
-import { COMPUTER_EXECUTION_NOTICE } from "@/lib/automation-policy";
+import { Hand, ShieldCheck, ShieldAlert } from "lucide-react";
 import {
   ChevronDownIcon,
   CheckIcon,
@@ -25,25 +25,27 @@ import {
   usePermissionModeStore,
 } from "@/stores/permission-mode-store";
 import { useSessionsStore } from "@/stores/sessions-store";
-import { useSessionStore } from "@/stores/session-store";
 
-const MODES: { id: PermissionMode; label: string; desc: string }[] = [
+const MODES = [
   {
     id: "ask",
-    label: "审批模式",
-    desc: "当前任务的敏感操作需要你确认",
+    label: "请求批准",
+    desc: "需要授权的操作由你确认",
+    icon: Hand,
   },
   {
     id: "auto",
-    label: "自动模式",
-    desc: "当前任务的常规操作自动执行，高风险操作仍会询问",
+    label: "自动判断",
+    desc: "低风险自动批准，必要时询问",
+    icon: ShieldCheck,
   },
   {
     id: "always-approve",
-    label: "本任务始终允许",
-    desc: `仅当前任务的常规工具调用自动批准；${COMPUTER_EXECUTION_NOTICE}`,
+    label: "本任务免审批",
+    desc: "常规工具操作不再逐次询问",
+    icon: ShieldAlert,
   },
-];
+] as const;
 
 export function PermissionPicker({
   onToast,
@@ -76,6 +78,8 @@ export function PermissionPicker({
   const alwaysOptionRef = useRef<HTMLButtonElement>(null);
   const confirmCancelRef = useRef<HTMLButtonElement>(null);
   const requestRef = useRef(0);
+  const activeSessionRef = useRef(sessionId);
+  activeSessionRef.current = sessionId;
   const { style: popoverStyle, placement } = useAnchoredFloating(
     triggerRef,
     popoverRef,
@@ -83,9 +87,10 @@ export function PermissionPicker({
     {
       preferredPlacement: "top",
       align: "start",
-      width: 320,
-      estimatedHeight: confirmingAlways ? 460 : 300,
-      maxHeight: confirmingAlways ? 480 : 400,
+      width: "content",
+      maxWidth: 320,
+      estimatedHeight: confirmingAlways ? 350 : 220,
+      maxHeight: confirmingAlways ? 440 : 320,
     },
   );
 
@@ -142,6 +147,11 @@ export function PermissionPicker({
     requestAnimationFrame(() => alwaysOptionRef.current?.focus());
   }, []);
 
+  useEffect(() => {
+    closePicker(false);
+    setBusy(false);
+  }, [sessionId, closePicker]);
+
   // A portalled popover is not a DOM child of the trigger, so both trees
   // participate in outside-click and Escape handling.
   useEffect(() => {
@@ -170,6 +180,16 @@ export function PermissionPicker({
     if (confirmingAlways) confirmCancelRef.current?.focus();
   }, [confirmingAlways]);
 
+  useEffect(() => {
+    if (!open) return;
+    const frame = requestAnimationFrame(() => {
+      const menu = popoverRef.current;
+      (menu?.querySelector<HTMLButtonElement>('[aria-checked="true"]:not(:disabled)')
+        ?? menu?.querySelector<HTMLButtonElement>('[role="menuitemradio"]:not(:disabled)'))?.focus();
+    });
+    return () => cancelAnimationFrame(frame);
+  }, [open]);
+
   const applySelection = useCallback(
     async (next: PermissionMode) => {
       const desiredMode = sessionId
@@ -191,9 +211,6 @@ export function PermissionPicker({
         if (!sessionId) {
           setHomeMode(next);
           closePicker(true);
-          const selected = MODES.find((item) => item.id === next) ?? MODES[0];
-          const label = selected.id === "always-approve" ? "始终允许" : selected.label;
-          onToast?.(`本任务将使用“${label}”`);
           return;
         }
         const result = await permissionModeSet(sessionId, next);
@@ -203,19 +220,16 @@ export function PermissionPicker({
           sessionId,
           permissionMode: result.permissionMode ?? next,
         });
+        if (activeSessionRef.current !== sessionId) return;
         closePicker(true);
-        const selected = MODES.find((item) => item.id === next) ?? MODES[0];
-        const label = selected.id === "always-approve" ? "始终允许" : selected.label;
         const remaining = result?.remainingPending ?? 0;
-        const parts = [`当前任务已切换为“${label}”`];
-        if (remaining > 0) parts.push(`当前 ${remaining} 个待审批操作仍需你确认`);
-        const agentMode = useSessionStore.getState().transcripts[sessionId]?.agentMode;
-        if (agentMode === "computer_use") parts.push(COMPUTER_EXECUTION_NOTICE);
-        onToast?.(parts.join("，"));
+        if (remaining > 0) onToast?.(`仍有 ${remaining} 项操作等待你确认`);
       } catch (e) {
-        onToast?.(`权限模式切换失败：${String(e).replace(/^Error:\s*/, "")}`);
+        if (activeSessionRef.current === sessionId) {
+          onToast?.(`权限模式切换失败：${String(e).replace(/^Error:\s*/, "")}`);
+        }
       } finally {
-        setBusy(false);
+        if (activeSessionRef.current === sessionId) setBusy(false);
       }
     },
     [closePicker, mode, onToast, sessionId, setHomeMode, setStatus, status],
@@ -241,10 +255,10 @@ export function PermissionPicker({
         : null);
   const modeDescription = (item: (typeof MODES)[number]) => {
     if (item.id === "auto" && autoUnavailable) {
-      return status?.autoModeUnavailableReason ?? "自动模式当前不可用";
+      return status?.autoModeUnavailableReason ?? "自动判断当前不可用";
     }
     if (item.id === "always-approve" && alwaysUnavailable) {
-      return status?.alwaysApproveUnavailableReason ?? "始终允许当前不可用";
+      return status?.alwaysApproveUnavailableReason ?? "本任务免审批当前不可用";
     }
     return item.desc;
   };
@@ -264,6 +278,9 @@ export function PermissionPicker({
         onClick={() => {
           if (open) closePicker(false);
           else setOpen(true);
+        }}
+        onKeyDown={(event) => {
+          if (["ArrowDown", "ArrowUp"].includes(event.key)) { event.preventDefault(); setOpen(true); }
         }}
         aria-label={triggerLabel ?? current.label}
         title={`权限模式 · ${modeDescription(current)}${syncWarning ? ` · ${syncWarning}` : ""}`}
@@ -285,9 +302,16 @@ export function PermissionPicker({
           style={popoverStyle}
           data-placement={placement ?? undefined}
           onClick={(event) => event.stopPropagation()}
+          onKeyDown={(event) => {
+            if (confirmingAlways || !["ArrowDown", "ArrowUp", "Home", "End"].includes(event.key)) return;
+            event.preventDefault();
+            const items = Array.from(event.currentTarget.querySelectorAll<HTMLButtonElement>('[role="menuitemradio"]:not(:disabled)'));
+            const index = items.indexOf(document.activeElement as HTMLButtonElement);
+            const next = event.key === "Home" ? 0 : event.key === "End" ? items.length - 1
+              : (index + (event.key === "ArrowUp" ? -1 : 1) + items.length) % items.length;
+            items[next]?.focus();
+          }}
         >
-          <div className="permission-picker__header">本任务权限</div>
-          <div className="permission-picker__scope">仅影响当前任务，其他任务保持不变</div>
           {(syncWarning || status?.lockedReason) && (
             <div className="permission-picker__status" role="status">
               {syncWarning ?? status?.lockedReason}
@@ -310,21 +334,25 @@ export function PermissionPicker({
                 role="menuitemradio"
                 aria-checked={m.id === mode}
               >
+                <m.icon className="permission-picker__mode-icon" size={19} aria-hidden="true" />
+                <span className="permission-picker__mode-copy">
                 <span className="permission-picker__mode-label">
                   {m.label}
                   {((m.id === "auto" && autoUnavailable) ||
                     (m.id === "always-approve" && alwaysUnavailable)) ? "（不可用）" : ""}
                 </span>
                 <span className="permission-picker__mode-desc">{modeDescription(m)}</span>
+                </span>
                 {m.id === mode && <CheckIcon size="sm" className="permission-picker__mode-check" />}
               </button>
             ))}
           </div>
+          <div className="permission-picker__scope">仅限当前任务</div>
           {confirmingAlways && (
             <div
               className="permission-picker__confirm"
               role="alertdialog"
-              aria-label="确认本任务始终允许"
+              aria-label="确认本任务免审批"
               onKeyDown={(event) => {
                 if (event.key === "Escape") {
                   event.preventDefault();
@@ -333,12 +361,12 @@ export function PermissionPicker({
                 }
               }}
             >
-              <strong>确认提高当前任务的权限？</strong>
-              <span>后续工具调用可能修改文件或执行命令。已经弹出的待审批操作不会被自动批准；操作电脑不会被自动批准。</span>
+              <strong>允许本任务免审批？</strong>
+              <span>后续命令和文件修改将自动批准。网页与电脑操作仍遵守各自的授权规则，现有请求仍需单独确认。</span>
               <div className="permission-picker__confirm-actions">
                 <button ref={confirmCancelRef} type="button" className="btn btn--ghost" disabled={busy} onClick={cancelAlwaysConfirmation}>取消</button>
                 <button type="button" className="btn btn--danger" disabled={busy} onClick={() => void applySelection("always-approve")}>
-                  {busy ? "正在切换…" : "仅当前任务始终允许"}
+                  {busy ? "正在切换…" : "确认开启"}
                 </button>
               </div>
             </div>

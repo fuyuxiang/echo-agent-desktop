@@ -1,0 +1,65 @@
+/* Notices follow their actual content height instead of overlapping offsets. */
+.toast-stack {
+  position: fixed;
+  z-index: var(--echo-layer-toast);
+  inset: auto 16px 24px;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 8px;
+  max-height: calc(100dvh - 48px);
+  overflow-y: auto;
+  pointer-events: none;
+}
+
+.toast {
+  position: fixed;
+  bottom: 24px;
+  left: 50%;
+  transform: translateX(-50%);
+  z-index: var(--echo-layer-toast);
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 24px;
+  align-items: start;
+  gap: 10px;
+  width: max-content;
+  max-width: min(520px, calc(100vw - 32px));
+  padding: 10px 12px;
+  border-radius: 12px;
+  background: #303633;
+  color: #fff;
+  box-shadow: var(--echo-shadow-lg);
+  font-size: .8125rem;
+  line-height: 1.6;
+  pointer-events: auto;
+}
+
+.toast--stacked { position: relative; inset: auto; transform: none; flex: 0 0 auto; }
+.toast--actionable { grid-template-columns: minmax(0, 1fr) auto 24px; }
+.toast__content { min-width: 0; flex: 1 1 auto; overflow-wrap: anywhere; }
+.toast__message { white-space: pre-line; }
+.toast__actions { display: flex; flex-wrap: wrap; justify-content: flex-end; align-items: center; grid-column: 2; grid-row: 1; gap: 4px; }
+.toast__action, .toast__close {
+  border: 0;
+  background: transparent;
+  color: #8cf0d8;
+  border-radius: 6px;
+  padding: 2px 5px;
+  cursor: pointer;
+  font: inherit;
+  white-space: nowrap;
+}
+.toast__close { display: inline-flex; align-items: center; justify-content: center; grid-column: 2; grid-row: 1; width: 24px; min-height: 24px; padding: 0; color: #d4dbd7; }
+.toast--actionable .toast__close { grid-column: 3; }
+.toast__action:hover, .toast__close:hover, .toast__details summary:hover { background: #ffffff1f; color: #fff; }
+.toast button:focus-visible, .toast summary:focus-visible { outline: 2px solid #8cf0d8; outline-offset: 2px; }
+.toast__details { margin-top: 3px; font-size: .75rem; color: #d4dbd7; }
+.toast__details summary { width: fit-content; border-radius: 4px; cursor: pointer; }
+.toast__details pre { max-height: min(220px, 35dvh); margin: 6px 0 0; overflow: auto; white-space: pre-wrap; overflow-wrap: anywhere; user-select: text; font: inherit; }
+
+@media (max-width: 480px) {
+  .toast { gap: 6px; }
+  .toast--actionable { grid-template-columns: minmax(0, 1fr) 24px; }
+  .toast__actions { grid-column: 1 / -1; grid-row: 2; }
+  .toast--actionable .toast__close { grid-column: 2; }
+}

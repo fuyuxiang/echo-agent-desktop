@@ -161,7 +161,7 @@ Object.assign(window, { __TAURI_EVENT_PLUGIN_INTERNALS__: { unregisterListener: 
     }
     changed(group);
   },
-  permission: () => usePermissionStore.getState().request({ requestId: "group-permission", sessionId: "native-1", toolCallId: "tool-write", toolCall: { toolCallId: "tool-write", title: "写入需求文档", kind: "edit", content: [] }, options: [{ optionId: "allow-once", kind: "allow", title: "Allow once" }, { optionId: "reject-once", kind: "deny", title: "Reject" }] } as any),
+  permission: () => usePermissionStore.getState().request({ requestId: "group-permission", sessionId: "native-1", toolCallId: "tool-write", toolKind: "edit", title: "是否允许写入需求文档？", rawInput: { path: "/review/EchoAgent/需求文档.md" }, options: [{ optionId: "allow-once", kind: "allow", title: "Allow once" }, { optionId: "reject-once", kind: "deny", title: "Reject" }] } as any),
 } });
 function Review() {
   const [label, setLabel] = useState("专家团");

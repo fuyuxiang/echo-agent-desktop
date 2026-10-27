@@ -72,7 +72,7 @@ export function ActionMenu({ label, menuLabel, trigger, resetKey, busy = false,
       return;
     }
 
-    const measuredWidth = menuRef.current?.offsetWidth || MENU_ESTIMATED_WIDTH;
+    const measuredWidth = menuRef.current?.getBoundingClientRect().width || menuRef.current?.offsetWidth || MENU_ESTIMATED_WIDTH;
     // scrollHeight keeps the full height even when a small window applies maxHeight.
     const measuredHeight = menuRef.current?.scrollHeight
       || menuRef.current?.offsetHeight
@@ -96,7 +96,9 @@ export function ActionMenu({ label, menuLabel, trigger, resetKey, busy = false,
     const maxTop = Math.max(MENU_MARGIN, viewportHeight - renderedHeight - MENU_MARGIN);
     const top = Math.min(Math.max(MENU_MARGIN, desiredTop), maxTop);
 
-    setMenuPosition({ left, top, width: menuWidth, maxHeight: availableHeight, placement });
+    setMenuPosition(current => current?.left === left && current.top === top
+      && current.width === menuWidth && current.maxHeight === availableHeight && current.placement === placement
+      ? current : { left, top, width: menuWidth, maxHeight: availableHeight, placement });
   }, [closeMenu]);
 
   // Measure before paint, then keep the portal aligned while the desktop window moves/resizes.
@@ -107,10 +109,13 @@ export function ActionMenu({ label, menuLabel, trigger, resetKey, busy = false,
     const frame = window.requestAnimationFrame(updateMenuPosition);
     window.addEventListener("resize", updateMenuPosition);
     window.addEventListener("scroll", updateMenuPosition, true);
+    const observer = typeof ResizeObserver === "undefined" ? null : new ResizeObserver(updateMenuPosition);
+    if (menuRef.current) observer?.observe(menuRef.current);
     return () => {
       window.cancelAnimationFrame(frame);
       window.removeEventListener("resize", updateMenuPosition);
       window.removeEventListener("scroll", updateMenuPosition, true);
+      observer?.disconnect();
     };
   }, [open, updateMenuPosition, contentKey]);
 
@@ -190,8 +195,8 @@ export function ActionMenu({ label, menuLabel, trigger, resetKey, busy = false,
         position: "fixed",
         left: menuPosition.left,
         top: menuPosition.top,
-        width: menuPosition.width,
-        minWidth: menuPosition.width,
+        // CSS owns intrinsic width. Freezing the measurement here would also
+        // prevent a submenu from shrinking back after its content changes.
         maxHeight: menuPosition.maxHeight,
         overflowY: "auto",
         zIndex: MENU_Z_INDEX,

@@ -4,6 +4,8 @@ import { FeedbackDialog } from "../../src/components/FeedbackDialog";
 import { UpdateDialog } from "../../src/components/UpdateDialog";
 import { useUpdateStore } from "../../src/stores/update-store";
 import { DesignSystemReview } from "./design-system-review";
+import { ToastReview } from "./toast-review";
+import { ContentMenusReview } from "./content-menus-review";
 import { SearchOverlay } from "../../src/components/SearchOverlay";
 import "../../src/styles/index.css";
 // Development-only visual fixture. Native calls use isolated in-memory data;
@@ -233,9 +235,24 @@ if (query.get("surface") === "workbench") {
     { content: "验证工作台交互与交付", status: "in_progress", priority: "high" },
   ] });
   if (["running", "permission", "paused", "browser-paused", "computer-paused"].includes(state)) chat.startStreaming("review-conversation", "workbench-run");
-  if (state === "permission") usePermissionStore.getState().request({ requestId: "workbench-permission", sessionId: "review-conversation", toolCallId: "review-write", toolKind: "edit", title: "确认写入工作目录中的交付记录", options: [
-    { optionId: "allow", kind: "allow", title: "允许本次" }, { optionId: "deny", kind: "deny", title: "拒绝" },
-  ] });
+  if (state === "permission") {
+    const kind = query.get("permissionCase");
+    useSessionsStore.getState().upsert({ sessionId: "review-conversation", status: "awaiting_permission" });
+    usePermissionStore.getState().request({ requestId: "workbench-permission", sessionId: "review-conversation", toolCallId: "review-write",
+      toolKind: kind === "history" ? "other" : kind === "command" ? "execute" : "edit",
+      title: kind === "history" ? "conversation_history" : kind === "command" ? "是否允许运行以下命令？" : "是否允许写入工作目录中的交付记录？",
+      rawInput: kind === "history" ? { sessionId: "review-conversation", limit: 10 }
+        : kind === "command" ? { command: `python3 scripts/check-delivery.py --workspace /review/EchoAgent/${"很长的目录/".repeat(12)}`, cwd: "/review/EchoAgent" }
+        : { path: "/review/EchoAgent/交付记录.md", content: "本轮交付记录" },
+      options: [
+        { optionId: "allow", kind: "allow", title: "允许一次" }, { optionId: "deny", kind: "deny", title: "拒绝" },
+        query.get("permissionOptions") === "short"
+          ? { optionId: "reject-always", kind: "deny_always", title: "Always reject" }
+          : { optionId: "allow-path", kind: "allow_always", title: `Always allow: /review/EchoAgent/${query.get("permissionOptions") === "long" ? "需要逐段检查的目录/".repeat(12) : ""}交付记录.md` },
+        { optionId: "enable-always-approve", kind: "allow", title: "Yes, and don't ask again for anything (always-approve mode)" },
+      ],
+    });
+  }
   if (["paused", "browser-paused", "computer-paused"].includes(state)) { chat.requestControl("review-conversation", "pause"); chat.confirmControl("review-conversation", "pause"); }
   if (state === "browser-paused" || state === "computer-paused") chat.setAgentMode(state === "browser-paused" ? "browser_use" : "computer_use", "review-conversation");
   if (state === "failed") chat.setError("隔离验收：本轮任务失败，可以重试。");
@@ -340,7 +357,13 @@ Object.assign(window, {
           { scope: "session", path: "2026-09-06-interval-01a074eb.md", content: "<think>The user is asking me to write a memory summary. Looking at this session, I was tasked with researching today's AI news focused on AI coding and embodied intelligence.", size: 180, revision: "r1", modifiedAt: "2026-09-06T10:00:00Z", readOnly: true },
           { scope: "session", path: "2026-09-06-interval-01a074e6.md", content: "<think>The user is asking me to write a memory summary as described in the system prompt. Let me re-read the system prompt instructions.", size: 146, revision: "r2", modifiedAt: "2026-09-06T11:00:00Z", readOnly: true },
         ];
-        case "permission_mode_get": return { permissionMode: "ask", configuredPermissionMode: "ask", autoModeAvailable: true, alwaysApproveAvailable: true, locked: false, runtimeSyncState: "offline" };
+        case "agent_resolve_permission":
+          if (query.get("permissionFailure") === "1") throw new Error("连接暂不可用，请重试");
+          return true;
+        case "permission_mode_set": return { sessionId: args.sessionId, permissionMode: args.mode, configuredPermissionMode: args.mode,
+          autoModeAvailable: true, alwaysApproveAvailable: true, locked: false, runtimeSyncState: "synced", runtimeAppliedMode: args.mode,
+          agentRunning: true, runtimeSynced: true, remainingPending: 1 };
+        case "permission_mode_get": return { sessionId: args.sessionId, permissionMode: "ask", configuredPermissionMode: "ask", autoModeAvailable: true, alwaysApproveAvailable: true, locked: false, runtimeSyncState: args.sessionId ? "synced" : "offline", runtimeAppliedMode: args.sessionId ? "ask" : undefined };
         case "memory_config_save": memory = { ...memory, ...args.memory }; return memory;
         case "permission_list": return rules;
         case "permission_save": rules = args.rules; return;
@@ -471,6 +494,7 @@ function ConversationLayoutFixture() {
         />
       </main>
     </div></SidebarLayoutContext.Provider>
+    <GlobalTooltip />
   </div>;
 }
 
@@ -591,6 +615,8 @@ function Fixture() {
   if (surface === "trust") return <TrustReview variant={(query.get("state") ?? "long") as "short" | "long" | "loading" | "error"} />;
   if (surface === "execution" || surface === "runtime") return <ExecutionReviewFixture />;
   if (surface === "home") return <HomeReviewFixture />;
+  if (surface === "toast") return <ToastReview />;
+  if (surface === "content-menus") return <ContentMenusReview />;
   if (surface === "page") return <PlaceholderPage label={label} onNavigate={setLabel} cwd="/review/EchoAgent" />;
   if (surface === "capabilities") {
     const content = <PlaceholderPage label={label} onNavigate={setLabel} sessionId={extensionCount ? "review-extension-session" : undefined} />;

@@ -7,6 +7,7 @@ import { useProjectsStore } from "@/stores/projects-store";
 import { resetOrgSessionMirror, useOrgSessionStore } from "@/stores/org-session-store";
 import { SidebarLayoutContext } from "@/lib/sidebar-layout";
 import type { SessionStatus } from "@/lib/types";
+import { agentDeleteSession } from "@/lib/agent-client";
 
 vi.mock("@/lib/agent-client", () => ({
   agentRenameSession: vi.fn().mockResolvedValue(undefined),
@@ -146,10 +147,10 @@ describe("Sidebar", () => {
     expect(screen.getByText("刚刚")).toBeInTheDocument();
   });
 
-  it("所有活动状态只显示圆点，悬停提示和可访问名称保留精确状态", () => {
+  it("等待审批显示文字标记，其他活动状态保持简洁圆点", () => {
     const statuses: [SessionStatus, string][] = [
       ["working", "运行中"], ["planning", "规划中"], ["pending", "未开始"],
-      ["awaiting_permission", "授权待确认"], ["awaiting_answer", "等待回答"],
+      ["awaiting_permission", "等待审批"], ["awaiting_answer", "等待回答"],
       ["awaiting_approval", "方案待批准"], ["pausing", "正在暂停"],
       ["paused", "已暂停"], ["stopping", "正在停止"], ["stopped", "已停止"], ["failed", "失败"],
     ];
@@ -165,9 +166,9 @@ describe("Sidebar", () => {
       const button = screen.getByRole("button", { name: `会话 ${status} · ${label}` });
       const indicator = within(button).getByRole("img", { name: label });
       expect(indicator).toHaveAttribute("title", label);
-      expect(indicator.textContent).toBe("");
+      expect(indicator.textContent).toBe(status === "awaiting_permission" ? "等待审批" : "");
       expect(button).toHaveTextContent(`会话 ${status}`);
-      expect(button).not.toHaveTextContent(label);
+      if (status !== "awaiting_permission") expect(button).not.toHaveTextContent(label);
       expect(button).toHaveAttribute("title", `会话 ${status} · ${label}`);
     }
     for (const title of ["普通历史", "状态未知"]) {
@@ -175,7 +176,7 @@ describe("Sidebar", () => {
     }
   });
 
-  it("状态实时切换时同步圆点和提示，保留时间、选中状态与点击行为", () => {
+  it("审批标记优先于时间显示，处理后恢复时间并保留选中与点击行为", () => {
     const onSelect = vi.fn();
     const session = { sessionId: "live", title: "后台分析", cwd: "/workspace", updatedAt: "2026-10-18T10:00:00Z" };
     useSessionsStore.getState().setIndependent([{ ...session, status: "working" }]);
@@ -185,10 +186,15 @@ describe("Sidebar", () => {
     fireEvent.click(within(button).getByRole("img", { name: "运行中" }));
     expect(onSelect).toHaveBeenCalledWith("live", "/workspace");
 
-    for (const [status, label] of [["awaiting_permission", "授权待确认"], ["failed", "失败"], ["completed", ""]] as const) {
+    for (const [status, label] of [["awaiting_permission", "等待审批"], ["failed", "失败"], ["completed", ""]] as const) {
       act(() => useSessionsStore.getState().upsert({ ...session, status }));
       expect(button).toHaveAttribute("aria-current", "page");
-      expect(button.querySelector("time")).toHaveAttribute("datetime", useSessionsStore.getState().independent[0].updatedAt);
+      if (status === "awaiting_permission") {
+        expect(button.querySelector("time")).toBeNull();
+        expect(within(button).getByRole("img", { name: "等待审批" })).toHaveAttribute("title", expect.stringContaining("等待审批 ·"));
+      } else {
+        expect(button.querySelector("time")).toHaveAttribute("datetime", useSessionsStore.getState().independent[0].updatedAt);
+      }
       expect(button).toHaveAttribute("title", [session.title, label].filter(Boolean).join(" · "));
       if (label) expect(within(button).getByRole("img", { name: label })).toBeInTheDocument();
       else expect(within(button).queryByRole("img")).toBeNull();
@@ -387,6 +393,38 @@ describe("Sidebar", () => {
     expect(onDeleteSession).not.toHaveBeenCalled();
     fireEvent.click(screen.getByRole("button", { name: "永久删除" }));
     await waitFor(() => expect(onDeleteSession).toHaveBeenCalledWith("project-session", "/workspace"));
+  });
+
+  it.each([false, true])("删除成功后由列表变化反馈，部分清理失败=%s 时才提醒", async (partial) => {
+    vi.mocked(agentDeleteSession).mockResolvedValueOnce({ memorySummariesDeleted: 1, memoryCleanupWarning: partial ? "memory store busy" : undefined });
+    useSessionsStore.getState().setIndependent([{ sessionId: "delete-feedback", title: "待删除任务", cwd: "/workspace" }]);
+    const onToast = vi.fn();
+    render(<Sidebar {...base} onToast={onToast} />);
+    fireEvent.click(screen.getByRole("button", { name: "待删除任务的会话操作" }));
+    fireEvent.click(screen.getByRole("menuitem", { name: "永久删除" }));
+    expect(agentDeleteSession).not.toHaveBeenCalledWith("delete-feedback", "/workspace");
+    fireEvent.click(screen.getByRole("button", { name: "永久删除" }));
+    await waitFor(() => expect(screen.queryByText("待删除任务")).not.toBeInTheDocument());
+    expect(useSessionsStore.getState().independent.some(s => s.sessionId === "delete-feedback")).toBe(false);
+    if (partial) expect(onToast).toHaveBeenCalledWith(expect.stringContaining("对话已删除，部分记忆未能清理"));
+    else expect(onToast).not.toHaveBeenCalled();
+    vi.mocked(agentDeleteSession).mockClear();
+  });
+
+  it("删除失败保留任务并在确认框内说明，支持原位重试而不重复 Toast", async () => {
+    vi.mocked(agentDeleteSession).mockRejectedValueOnce(new Error("EACCES: permission denied"));
+    useSessionsStore.getState().setIndependent([{ sessionId: "delete-retry", title: "删除重试任务", cwd: "/workspace" }]);
+    const onToast = vi.fn();
+    render(<Sidebar {...base} onToast={onToast} />);
+    fireEvent.click(screen.getByRole("button", { name: "删除重试任务的会话操作" }));
+    fireEvent.click(screen.getByRole("menuitem", { name: "永久删除" }));
+    fireEvent.click(screen.getByRole("button", { name: "永久删除" }));
+    expect(await screen.findByRole("alert")).toHaveTextContent("没有访问权限，请检查授权");
+    expect(screen.getByText("删除重试任务")).toBeInTheDocument();
+    expect(onToast).not.toHaveBeenCalled();
+    expect(screen.getByRole("button", { name: "永久删除" })).toBeEnabled();
+    fireEvent.click(screen.getByRole("button", { name: "永久删除" }));
+    await waitFor(() => expect(screen.queryByText("删除重试任务")).not.toBeInTheDocument());
   });
 
   it("悬停「更多」自动展开，展示次级功能且不抢走焦点", async () => {

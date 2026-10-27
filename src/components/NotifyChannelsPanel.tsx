@@ -161,9 +161,7 @@ export function NotifyChannelsPanel({ onToast, sessionId }: { onToast?: (msg: st
     setNewKind("slack-webhook");
     setEditingId(null);
     setEditorOpen(false);
-    onToast?.(refreshed
-      ? `渠道 ${label} 已${editingId ? "更新" : "添加"}`
-      : `渠道 ${label} 已保存，但列表刷新失败，请重试`);
+    if (!refreshed) onToast?.(`通知渠道“${label}”已保存，列表暂未更新，请刷新重试`);
   };
 
   const edit = (channel: NotifyChannel) => {
@@ -192,9 +190,7 @@ export function NotifyChannelsPanel({ onToast, sessionId }: { onToast?: (msg: st
         await removeNotifyChannel(channel.id);
         setChannels((items) => items.filter((item) => item.id !== channel.id));
         if (editingId === channel.id) cancelEdit();
-        onToast?.("已移除渠道");
       },
-      onError: (error) => onToast?.(`移除失败：${String(error).replace(/^Error:\s*/, "")}`),
     });
   };
 

@@ -164,7 +164,7 @@ export function RewindBar({
     setBusy(true);
     try {
       const newId = await sessionFork(targetSessionId, targetCwd);
-      onToast?.(`已分叉到新会话 ${newId.slice(0, 8)}`);
+
       onForked?.(newId, targetSessionId, targetCwd);
     } catch (error) { onToast?.(`分叉失败：${friendlyError(error)}`); }
     finally {

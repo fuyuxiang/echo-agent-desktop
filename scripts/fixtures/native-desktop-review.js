@@ -282,7 +282,7 @@ void (async () => {
                 reject?.click();
                 throw new Error('Native Agent requested an unexpected operation during the document task');
               }
-              const allow = [...permission.querySelectorAll('button')].find((button) => button.textContent?.trim() === '允许本次' && !button.disabled);
+              const allow = [...permission.querySelectorAll('button')].find((button) => button.textContent?.trim() === '允许一次' && !button.disabled);
               if (allow) { allow.click(); approved = true; }
             }
             const current = (await invoke('agent_list_all_sessions', { includeArchived: true })).find((item) => item.sessionId === session.sessionId);

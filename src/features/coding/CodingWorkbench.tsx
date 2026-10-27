@@ -758,7 +758,7 @@ export function CodingWorkbench({
         || activeSessionId !== task.sessionId
         || hostSessionId !== task.sessionId
       ) {
-        onToast?.("当前任务没有可用的 Agent 会话，请重新选择该任务或新建任务");
+        onToast?.("当前任务暂时无法连接，请重新选择或新建任务");
         return false;
       }
       const releaseAdmission = claimCodingAdmission(cwd, task.id);
@@ -887,7 +887,6 @@ export function CodingWorkbench({
       }
       return next;
     });
-    onToast?.(`已添加 ${paths.length} 个到${task ? "当前任务" : "新任务"}上下文`);
   }, [cwd, onToast, persistTaskContext, task]);
 
   const removeFromContext = useCallback((path: string) => {
@@ -921,9 +920,7 @@ export function CodingWorkbench({
         : null,
       action: async (values) => {
         await useTaskStore.getState().renameTask(summary.id, values.name.trim());
-        onToast?.("任务已重命名");
       },
-      onError: (error) => onToast?.(`重命名失败：${String(error).replace(/^Error:\s*/, "")}`),
     });
   }, [onToast, requestTaskInput, summaries]);
 
@@ -962,9 +959,7 @@ export function CodingWorkbench({
           setBlocker(undefined);
           if (fallback) await activateCodingTask(fallback.id);
         }
-        onToast?.("已删除开发任务，工作区文件和 Agent 会话均已保留");
       },
-      onError: (error) => onToast?.(`删除任务失败：${String(error).replace(/^Error:\s*/, "")}`),
     });
   }, [activateCodingTask, onToast, requestTaskConfirmation, summaries, task?.id]);
 
@@ -983,7 +978,7 @@ export function CodingWorkbench({
       || activeSessionId !== task.sessionId
       || hostSessionId !== task.sessionId
     ) {
-      onToast?.("当前任务的 Agent 会话尚未完成恢复，请重新选择该任务后再试");
+      onToast?.("当前任务尚未恢复连接，请重新选择后再试");
       return;
     }
     const interruptedAs = task.phase;
@@ -1241,7 +1236,7 @@ export function CodingWorkbench({
     try {
       const updated = await codingApi.integrateIsolatedTask(cwd, task.id);
       setIsolatedWorkspace(updated);
-      onToast?.(`已应用到原项目：${updated.integratedHash?.slice(0, 8)}`);
+      onToast?.("修改已应用到原项目");
     } catch (error) {
       onToast?.(`应用失败：${String(error).replace(/^Error:\s*/, "")}`);
     } finally {

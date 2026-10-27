@@ -259,7 +259,6 @@ export function MeetingMinutesPanel({
       const record = await meetingRecorder.start(title, provider.modelId, provider.providerId, recordingSource);
       await refreshList(record.id);
       setTab("audio");
-      onToast?.("录音已开始；离开此页面也会继续保存");
     } catch (error) {
       await refreshList(null);
       setCaptureError(errorText(error));
@@ -285,7 +284,6 @@ export function MeetingMinutesPanel({
       await refreshList(record.id);
       setTitle(defaultMeetingTitle());
       setTab("audio");
-      onToast?.("录音已导入，可以开始转写");
     } catch (error) {
       await refreshList(null);
       onToast?.(`导入录音失败：${errorText(error)}`);
@@ -300,7 +298,6 @@ export function MeetingMinutesPanel({
       const record = await meetingRecorder.stop();
       await refreshList(record.id);
       setTitle(defaultMeetingTitle());
-      onToast?.("录音已保存，可以开始转写");
     } catch (error) {
       if (!meetingRecorder.current().meeting) await refreshList(null);
       onToast?.(`结束录音失败：${errorText(error)}`);
@@ -331,7 +328,6 @@ export function MeetingMinutesPanel({
       const completed = await meetingProcess(record.id, provider);
       await refreshList(completed.id, record.id);
       if (selectedIdRef.current === record.id) setTab("minutes");
-      onToast?.("转写和会议纪要已生成");
     } catch (error) {
       await refreshList(record.id, record.id);
       onToast?.(`处理失败：${errorText(error)}`);
@@ -355,7 +351,6 @@ export function MeetingMinutesPanel({
       const record = await meetingRegenerateMinutes(selected.id, provider);
       await refreshList(record.id, record.id);
       if (selectedIdRef.current === record.id) setTab("minutes");
-      onToast?.("会议纪要已重新生成");
     } catch (error) {
       onToast?.(`重新生成失败：${errorText(error)}`);
     } finally {
@@ -372,7 +367,7 @@ export function MeetingMinutesPanel({
         expectedContent: { transcript: selected.transcript, minutes: selected.minutes ?? null } });
       meetingDrafts.savedTranscript(record, submitted);
       await refreshList(record.id, record.id);
-      onToast?.("转写校对已保存，请重新生成会议纪要");
+      onToast?.("校对已保存，请重新生成会议纪要");
     } catch (error) {
       await refreshList(selected.id, selected.id);
       onToast?.(`保存转写失败：${errorText(error)}`);
@@ -399,7 +394,6 @@ export function MeetingMinutesPanel({
       meetingDrafts.savedMinutes(record, submitted);
       if (selectedIdRef.current === record.id) setEditingMinutes(false);
       await refreshList(record.id, record.id);
-      onToast?.("会议纪要已保存，导出将使用最新内容");
     } catch (error) {
       await refreshList(selected.id, selected.id);
       onToast?.(`保存纪要失败：${errorText(error)}`);
@@ -424,7 +418,7 @@ export function MeetingMinutesPanel({
     if (!selected) return;
     try {
       const path = await meetingExport(selected.id, kind);
-      if (path) onToast?.(`已导出到 ${path}`);
+      if (path) onToast?.(`已导出“${path.split(/[\\/]/).pop()}”`);
     } catch (error) {
       onToast?.(`导出失败：${errorText(error)}`);
     }
@@ -442,7 +436,6 @@ export function MeetingMinutesPanel({
       setSelectedId(null);
       setSelected(null);
       await refreshList(null);
-      onToast?.("会议记录已移入回收站");
     } catch (error) {
       onToast?.(`删除失败：${errorText(error)}`);
     }
@@ -576,7 +569,7 @@ export function MeetingMinutesPanel({
           {meetingDrafts.persistenceError() && <div className="meeting-error" role="alert">
             {meetingDrafts.persistenceError()}
             <button type="button" onClick={() => {
-              try { meetingDrafts.ensureDurable(); onToast?.("会议草稿已保存在此设备"); }
+              try { meetingDrafts.ensureDurable();  }
               catch (error) { onToast?.(String(error).replace(/^Error:\s*/, "")); }
               if (selected) applyRecord(selected);
               setDraftRevision(value => value + 1);

@@ -186,7 +186,7 @@ export function SkillsTab({ pills, onToast, cwd }: Props) {
     try {
       await internalReload("skills");
       await reloadSkills();
-      if (currentCwd.current === cwd) onToast?.("技能已刷新，现有会话将在后续轮次使用最新配置");
+      if (currentCwd.current === cwd) onToast?.("技能已更新");
     } catch (error) {
       if (currentCwd.current === cwd) {
         setError(String(error).replace(/^Error:\s*/, ""));
@@ -200,7 +200,6 @@ export function SkillsTab({ pills, onToast, cwd }: Props) {
     try {
       if ((skill.orgManaged || skill.scope === "server") && skill.orgSkillId) {
         await orgSetSkillPreference(skill.orgSkillId, enabled);
-        onToast?.(enabled ? "组织 Skill 已安装" : "组织 Skill 已卸载");
       } else {
         await skillsToggle(skill.name, enabled, cwd);
       }
@@ -235,9 +234,7 @@ export function SkillsTab({ pills, onToast, cwd }: Props) {
         if (skill.managed) await skillsUninstallPackage(removablePath);
         else await skillsRemove(removablePath, cwd);
         await reloadSkills();
-        onToast?.(skill.managed ? "已安全卸载" : "已从技能路径中移除");
       },
-      onError: (error) => onToast?.(`移除失败：${String(error).replace(/^Error:\s*/, "")}`),
     });
   }, [skills, onToast, reloadSkills, requestConfirmation, cwd]);
 

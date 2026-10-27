@@ -79,7 +79,7 @@ try {
       }
     }
     if (state === "permission") {
-      await page.getByRole("button",{name:"允许本次",exact:true}).click({trial:true});
+      await page.getByRole("button",{name:"允许一次",exact:true}).click({trial:true});
       assert(await page.locator(".echo-composer__input").isDisabled(),"ordinary Enter cannot bypass a decision");
       assert.equal(await page.locator(".tasks-panel").count(),0);
     }

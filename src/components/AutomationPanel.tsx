@@ -481,13 +481,12 @@ export function AutomationPanel({
       if (runTest) {
         try {
           await automationsRun(saved.id);
-          onToast?.("修改已保存，已加入测试运行队列。测试运行不会影响正式调度时间。");
+          onToast?.("修改已保存，已安排试运行");
         } catch (error) {
           onToast?.(`修改已保存，但触发测试运行失败：${String(error).replace(/^Error:\s*/, "")}`);
         }
       } else {
         latest.close(generation);
-        onToast?.("自动化任务已保存");
       }
       await refresh(true);
     } catch (e) {
@@ -538,7 +537,6 @@ export function AutomationPanel({
           await automationsDelete(id);
           useAutomationEditorStore.getState().close(generation);
           await refresh(true);
-          onToast?.("自动化任务已删除");
         } catch (e) {
           onToast?.(`删除自动化任务失败：${String(e).replace(/^Error:\s*/, "")}`);
         } finally {
@@ -560,7 +558,6 @@ export function AutomationPanel({
           try {
             await automationsDelete(automationId);
             await refresh(true);
-            onToast?.("自动化任务已删除");
           } catch (e) {
             onToast?.(`删除自动化任务失败：${String(e).replace(/^Error:\s*/, "")}`);
           }
@@ -596,7 +593,7 @@ export function AutomationPanel({
       setRunStartingIds((current) => new Set(current).add(automationId));
       try {
         await automationsRun(automationId);
-        onToast?.("已加入运行队列。测试运行不会影响正式调度时间。");
+        onToast?.("已安排试运行");
         await refresh(true);
       } catch (e) {
         onToast?.(`触发测试运行失败：${String(e).replace(/^Error:\s*/, "")}`);
@@ -624,7 +621,6 @@ export function AutomationPanel({
       try {
         await automationRecordsArchive(itemId, true);
         await refresh(true);
-        onToast?.("已归档");
       } catch (e) {
         onToast?.(`保存自动化任务失败：${String(e).replace(/^Error:\s*/, "")}`);
       }
@@ -681,8 +677,7 @@ export function AutomationPanel({
         if (owner) useAutomationEditorStore.getState().finishOperation(owner.generation);
         setSelectedIds(new Set());
         setIsBatchMode(false);
-        if (failed === 0) onToast?.("自动化任务已删除");
-        else onToast?.("删除自动化任务失败");
+        if (failed > 0) onToast?.(`已删除 ${ids.size - failed} 个任务，${failed} 个未能删除，请重试`);
         await refresh(true);
       },
     });
