@@ -318,6 +318,26 @@ impl Group {
         let supplements = self.followup_context(&work.root_id)?;
         let attachments = self.request_attachments(&work.root_id);
         self.enqueue(&root, &work.member_id, format!("此前工作未完成。请先检查已有文件和执行结果，避免重复产生副作用，再完成：\n{}\n用户最新补充与纠正：\n{supplements}",work.prompt),work.discussion,None,0)?;
+        // A cancelled resident actor can still own an abandoned permission
+        // interaction. Retry with a fresh actor, keeping the member's memory
+        // namespace and public history. Never detach a newer or active context.
+        if work.status == "cancelled"
+            && work.session_id.is_some()
+            && !self
+                .works
+                .iter()
+                .any(|other| other.member_id == work.member_id && other.active())
+        {
+            if let Some(member) = self.members.iter_mut().find(|m| m.id == work.member_id) {
+                if work.discussion && member.discussion_session_id == work.session_id {
+                    member.discussion_session_id = None;
+                    member.discussion_seen_seq = member.history_start_seq;
+                } else if !work.discussion && member.session_id == work.session_id {
+                    member.session_id = None;
+                    member.seen_seq = member.history_start_seq;
+                }
+            }
+        }
         let message = self.post(None, "user", format!("检查后继续：{}", work.prompt), None);
         message.id = root;
         message.attachments = attachments;

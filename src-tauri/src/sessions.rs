@@ -529,7 +529,9 @@ fn persisted_session_exists_from_root(
         .any(|summary| summary.session_id == session_id))
 }
 
-fn list_all_sessions_from_root(sessions_root: &Path) -> Result<Vec<SessionSummary>, String> {
+pub(crate) fn list_all_sessions_from_root(
+    sessions_root: &Path,
+) -> Result<Vec<SessionSummary>, String> {
     let mut out = Vec::new();
     let mut visited_sessions = 0_usize;
 

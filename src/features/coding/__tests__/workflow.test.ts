@@ -86,6 +86,18 @@ describe("coding workflow contract", () => {
     expect(continuation).toContain("RED → GREEN → REFACTOR");
   });
 
+  it("preserves the user's test-only boundary in a metadata-only plan repair turn", () => {
+    const requirement = "本轮只写测试，等待工作台记录 RED 后再实现生产代码。";
+    const prompt = buildPlanRevisionInstruction(task({
+      requirement,
+      nextAction: "revise_plan",
+      planIssues: [{ severity: "error", code: "missing_verification", message: "T1 缺少验证命令", nodeKeys: ["T1"] }],
+    }));
+    expect(prompt).toContain(requirement);
+    expect(prompt).not.toContain("修正后再继续实施");
+    expect(prompt).toContain("不修改任何工程文件");
+  });
+
   it("merges project checks with node-level verification contracts", () => {
     const commands = mergeTaskVerificationCommands(
       [{ kind: "build", command: "pnpm build", label: "构建" }],

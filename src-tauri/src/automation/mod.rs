@@ -880,7 +880,11 @@ pub(crate) async fn prepare_user_prompt(
     has_attachments: bool,
     send_now: bool,
 ) -> Result<Option<u64>, String> {
-    let mut intent = task::user_intent(user_text, has_attachments);
+    let mut intent = task::user_intent_for_selected_mode(
+        user_text,
+        has_attachments,
+        crate::meta::agent_mode(session_id).as_deref() == Some("browser_use"),
+    );
     if intent == task::UserIntent::Ordinary {
         // Replacing a model turn must also revoke its physical input lease,
         // including corrections such as "不要保存，先解释". Runtime cancellation

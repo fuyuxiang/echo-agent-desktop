@@ -8,6 +8,10 @@ use echo_agent_tools::types::output::ToolOutput;
 use schemars::JsonSchema;
 use serde::Deserialize;
 
+#[path = "memory_tool_listing.rs"]
+mod memory_tool_listing;
+use memory_tool_listing::model_memory_list_response;
+
 #[derive(Deserialize, JsonSchema)]
 pub(super) struct ManageMemoryInput {
     /// list, remember, correct, forget, or complete. Forget accepts id OR topic.
@@ -38,6 +42,7 @@ pub(super) struct ManageMemoryInput {
     offset: usize,
     #[serde(default)]
     limit: Option<usize>,
+    /// Include completed/expired history, never forgotten records.
     #[serde(default)]
     include_inactive: bool,
 }
@@ -91,7 +96,7 @@ impl Tool for ManageMemoryTool {
     fn description(&self, _: &ListToolsContext) -> ToolDescription {
         ToolDescription::new(
             "memory_manage",
-            "List or manage saved memories. Use for the user's explicit requests to remember, correct, forget a topic, or complete a tracked task. List first to obtain IDs and revisions before correcting or forgetting a particular record. Use global for cross-project personal preferences/background; workspace for current-project facts. Never claim a write succeeded without this tool succeeding. Forgotten source conversations are excluded from automatic re-extraction and assistant history retrieval. Do not use this tool to store secrets or facts inferred only from third-party documents.",
+            "List or manage saved memories. Use for the user's explicit requests to remember, correct, forget a topic, or complete a tracked task. List first to obtain IDs and revisions before correcting or forgetting a particular record. Use global for cross-project personal preferences/background; workspace for current-project facts. Never claim a write succeeded without this tool succeeding. Forgotten records are never returned, even with include_inactive. An empty list is not permission to recover forgotten facts from old revisions or internal memory files; when no reliable evidence remains, say you do not know. Forgotten source conversations are excluded from automatic re-extraction and assistant history retrieval. Do not use this tool to store secrets or facts inferred only from third-party documents.",
         )
     }
     fn capabilities(&self) -> ToolCapabilities {
@@ -111,25 +116,13 @@ impl Tool for ManageMemoryTool {
             return Err(error("memory_manage", "修改前请先读取记忆 ID 和 revision"));
         }
         let result: Result<serde_json::Value, std::io::Error> = (|| match input.action.as_str() {
-            "list" => {
-                let query = input.query.to_lowercase();
-                let items: Vec<_> = records::list(&self.storage, true)?
-                    .into_iter()
-                    .filter(|r| {
-                        (input.include_inactive || records::active(r))
-                            && (query.is_empty()
-                                || format!("{} {}", r.key, r.content)
-                                    .to_lowercase()
-                                    .contains(&query))
-                    })
-                    .collect();
-                let total = items.len();
-                let limit = input.limit.unwrap_or(15).clamp(1, 25);
-                let next = input.offset.saturating_add(limit);
-                Ok(
-                    serde_json::json!({"records":items.into_iter().skip(input.offset).take(limit).collect::<Vec<_>>(),"total":total,"nextOffset":if next < total {Some(next)} else {None}}),
-                )
-            }
+            "list" => Ok(model_memory_list_response(
+                records::list(&self.storage, true)?,
+                &input.query,
+                input.include_inactive,
+                input.offset,
+                input.limit,
+            )),
             "remember" | "correct" => {
                 if input.action == "correct"
                     && (input.id.is_none() || input.expected_revision.is_none())

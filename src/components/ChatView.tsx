@@ -3,7 +3,7 @@ import { SessionWorkspaceDirectory, SessionWorkspaceWarning } from "./SessionWor
 import { useEffect, useLayoutEffect, useMemo, useRef, useState, useCallback, type ReactNode } from "react";
 import { Play } from "lucide-react";
 import { TasksPanel } from "./TasksPanel";
-import { useSessionStore, type ToolCallView } from "@/stores/session-store";
+import { useSessionStore, type ChatMessage, type ToolCallView } from "@/stores/session-store";
 import { useSessionsStore } from "@/stores/sessions-store";
 import { useKnowledgeStore } from "@/stores/knowledge-store";
 import { hydrateKnowledgeTraces } from "@/lib/knowledge-traces-client";
@@ -68,6 +68,19 @@ function runtimePanelKey(view: WorkspaceView | null): RuntimePanelKey | null {
 function historyIsBusy(state: { streaming: boolean; sendNowPending?: boolean; control?: SessionControl }): boolean {
   return state.streaming || Boolean(state.sendNowPending)
     || state.control?.phase === "pausing" || state.control?.phase === "stopping";
+}
+
+function pausedTurnNeedsOriginalPrompt(messages: ChatMessage[]): boolean {
+  const userIndex = messages.map((message) => message.role).lastIndexOf("user");
+  if (userIndex < 0) return false;
+  const user = messages[userIndex];
+  if (!user.attachments?.length && !user.parts.some((part) => part.kind === "text" && part.text.trim())) return false;
+  const reply = messages.slice(userIndex + 1);
+  // Cancellation may precede admission of the original prompt into Runtime
+  // history. Retry that request only when no model or tool work can be replayed.
+  return reply.length > 0 && reply.every((message) => message.role === "assistant"
+    && message.complete && message.stopReason === "cancelled"
+    && message.parts.every((part) => part.kind !== "tool_call" && !part.text.trim()));
 }
 
 /** Center chat column: scrollable message list + composer pinned at bottom. */
@@ -291,9 +304,14 @@ export function ChatView({
   activeSessionRef.current = sessionId;
   const continueTask = async () => {
     if (!sessionId || !workspace.available || workspace.busy || continuingRef.current.has(sessionId) || automationMode !== "default" || !apiReady || modelLoading || awaitingQuestion || pendingPermission || awaitingPlan) return;
+    setHistoryAction(null);
     continuingRef.current.add(sessionId);
     setContinuingSessions(new Set(continuingRef.current));
     try {
+      if (pausedTurnNeedsOriginalPrompt(messages)) {
+        await performRetry("retry");
+        return;
+      }
       const accepted = await onSend("继续", []);
       if (accepted === false && activeSessionRef.current === sessionId) onToast?.("暂时无法继续，请检查当前任务状态后重试");
     } catch (cause) { if (activeSessionRef.current === sessionId) onToast?.(`继续失败：${friendlyError(cause)}`); }
@@ -342,7 +360,7 @@ export function ChatView({
   }, []);
 
   // ---- 消息级重试：文本回复重新生成；工具轮次明确二次确认后重新执行 ----
-  const [retryingSessionId, setRetryingSessionId] = useState<string | null>(null);
+  const [retryingSessions, setRetryingSessions] = useState(new Set<string>());
   const retryingSessionsRef = useRef(new Set<string>());
   const { requestConfirmation, dismiss: dismissRetry, dialog: retryDialog } = useAppDialog(sessionId);
   const retryBlocked = historyDisabled || Boolean(pendingPermission || awaitingQuestion || planApproval?.sessionId === sessionId);
@@ -367,35 +385,59 @@ export function ChatView({
     if (!userText.trim() && userAttachments.length === 0) return;
 
     retryingSessionsRef.current.add(targetSessionId);
-    setRetryingSessionId(targetSessionId);
+    setRetryingSessions(new Set(retryingSessionsRef.current));
+    setHistoryAction(null);
     try {
       const prepared = await onPrepareRetry?.(targetSessionId);
       if (prepared === false) return;
       const checkRetryState = () => {
         const current = useSessionStore.getState();
         const transcript = current.transcripts?.[targetSessionId];
+        const currentMessages = transcript?.messages
+          ?? (current.sessionId === targetSessionId ? current.messages : undefined);
+        const currentUser = currentMessages?.[currentMessages.map((message) => message.role).lastIndexOf("user")];
         if (current.sessionId === targetSessionId && retryBlockedRef.current
           || transcript?.streamingMessageId || transcript?.pendingSendNowPromptId
-          || transcript?.control?.phase === "pausing" || transcript?.control?.phase === "stopping") {
+          || transcript?.control?.phase === "pausing" || transcript?.control?.phase === "stopping"
+          || currentMessages && currentUser?.id !== lastUserMsg.id) {
           throw new Error("任务状态已变化，请稍后重试；原回复已保留");
         }
+        return { user: currentUser ?? lastUserMsg, messages: currentMessages ?? messages };
       };
       checkRetryState();
 
       // Rewind the conversation to the last user prompt (conversation only —
       // don't touch files), which drops the assistant turn we're regenerating.
       const points = await rewindPoints(targetSessionId);
-      checkRetryState();
-      if (points.length === 0) {
-        // Only a request that failed before the Runtime produced any work can
-        // be retried without a persisted turn. A completed reply must never be
-        // silently appended as a duplicate user message.
-        if (kind !== "retry") {
+      const { user: retryUser, messages: currentMessages } = checkRetryState();
+      const retryAttachments = retryUser.attachments ?? userAttachments;
+      // A preview is truncated and can be identical across different turns.
+      // Only Runtime's canonical prompt index authorizes deleting a turn.
+      const targetPoint = retryUser.promptIndex === undefined ? undefined
+        : points.find((point) => point.promptIndex === retryUser.promptIndex);
+      const latestPointIndex = points.reduce((latest, point) => Math.max(latest, point.promptIndex), -1);
+      if (targetPoint && targetPoint.promptIndex !== latestPointIndex) {
+        throw new Error("本轮之后已有新的任务记录，原回复已保留。请重新打开任务后重试。");
+      }
+      if (!targetPoint) {
+        if (points.length === 0 && kind !== "retry") {
           throw new Error(
             kind === "regenerate"
               ? "暂时无法替换这条回复，原回复已保留。请稍后重试。"
               : "暂时无法安全重新执行，原执行记录已保留。请发起新任务。",
           );
+        }
+        const userIndex = currentMessages.findIndex((message) => message.id === retryUser.id);
+        const reply = currentMessages.slice(userIndex + 1);
+        const noWork = reply.length > 0 && reply.every((message) => message.role === "assistant"
+          && message.complete && message.parts.every((part) => part.kind !== "tool_call" && !part.text.trim()));
+        const previousIndex = currentMessages.slice(0, userIndex).reduce((latest, message) =>
+          message.role === "user" && message.promptIndex !== undefined ? Math.max(latest, message.promptIndex) : latest, -1);
+        const notAdmitted = retryUser.promptIndex !== undefined
+          ? latestPointIndex < retryUser.promptIndex
+          : latestPointIndex <= previousIndex;
+        if (kind !== "retry" || !noWork || !notAdmitted) {
+          throw new Error("本轮记录尚未同步，原请求已保留。请重新打开任务后重试。");
         }
         const displayText = userText || "请分析附件。";
         useSessionStore.getState().discardMessagesFrom(targetSessionId, lastUserMsg.id);
@@ -403,23 +445,15 @@ export function ChatView({
           ? onRetrySend({
               sessionId: targetSessionId,
               displayText,
-              promptText: lastUserMsg.agentText ?? displayText,
-              attachments: userAttachments,
+              promptText: retryUser.agentText ?? displayText,
+              attachments: retryAttachments,
               kind,
             })
-          : onSend(displayText, userAttachments));
+          : onSend(displayText, retryAttachments));
         if (accepted === false) {
           throw new Error("未能启动重试，请确认当前模型可用后再试。");
         }
         return;
-      }
-      // Prefer replay metadata so the operation targets the clicked turn. A
-      // fresh live turn may not have an index yet, so use the latest point.
-      const targetPoint = lastUserMsg.promptIndex === undefined
-        ? points.reduce((a, b) => b.promptIndex > a.promptIndex ? b : a)
-        : points.find((point) => point.promptIndex === lastUserMsg.promptIndex);
-      if (!targetPoint) {
-        throw new Error("无法确认要替换的回复，原回复已保留。请刷新会话后重试。");
       }
       const execution = await rewindExecute(
         targetSessionId,
@@ -434,7 +468,7 @@ export function ChatView({
         ? stripAttachmentTransportContext(execution.promptText)
         : undefined;
       const restoredPromptText = restoredTransport
-        && userAttachments.length > 0
+        && retryAttachments.length > 0
         && restoredTransport.attachments.length > 0
         ? restoredTransport.text
         : execution.promptText;
@@ -442,20 +476,22 @@ export function ChatView({
         ? onRetrySend({
             sessionId: targetSessionId,
             displayText,
-            promptText: restoredPromptText ?? lastUserMsg.agentText ?? displayText,
-            attachments: userAttachments,
+            promptText: restoredPromptText ?? retryUser.agentText ?? displayText,
+            attachments: retryAttachments,
             kind,
           })
-        : onSend(displayText, userAttachments));
+        : onSend(displayText, retryAttachments));
       if (accepted === false) {
         throw new Error("回复已准备重试，但当前模型未能启动。请重试本轮请求。");
       }
       if (continuedInBackground) onToast?.("已在原会话中继续执行");
     } finally {
       retryingSessionsRef.current.delete(targetSessionId);
-      setRetryingSessionId((current) => current === targetSessionId ? null : current);
+      setRetryingSessions(new Set(retryingSessionsRef.current));
     }
   }, [sessionId, streaming, messages, onPrepareRetry, onRetrySend, onSend, onRewound, onToast]);
+
+  const replacingTurn = Boolean(sessionId && retryingSessions.has(sessionId)) || continuing;
 
   const handleRetry = useCallback((kind: MessageRetryKind) => {
     if (kind === "reexecute") {
@@ -795,7 +831,7 @@ export function ChatView({
       actions={{ onToast,
         onRewind: hasContent ? () => setHistoryAction("rewind") : undefined,
         onFork: hasContent ? () => setHistoryAction("fork") : undefined,
-      }} historyDisabled={historyDisabled}
+      }} historyDisabled={historyDisabled || replacingTurn}
       summary={{ searchable, hasContent, changeCount: changes.totalFiles, artifactCount: artifacts.length,
         hasPlan: hasVisiblePlan, planCompleted: plan?.entries.filter(e => e.status === "completed").length ?? 0,
         planTotal: plan?.entries.length ?? 0, subagentCount,
@@ -896,7 +932,7 @@ export function ChatView({
                       autoExpandProcess={false}
                       compactIdentity={m.role === "assistant" && messages[idx - 1]?.role === "assistant"}
                       latest={isLastAssistant}
-                      retrying={isLastAssistant && retryingSessionId === sessionId}
+                      retrying={isLastAssistant && Boolean(sessionId && retryingSessions.has(sessionId))}
                       retryDisabled={retryBlocked}
                       retryDisabledReason={!workspace.available || workspace.busy ? "请先恢复本任务的工作目录，再重试回复" : undefined}
                       onRetry={
@@ -956,13 +992,13 @@ export function ChatView({
               sessionId={sessionId}
               streaming={streaming}
               sendNowPending={sendNowPending}
-              awaitingQuestion={awaitingQuestion || Boolean(pendingPermission) || awaitingPlan || control?.phase === "pausing" || control?.phase === "stopping"}
+              awaitingQuestion={awaitingQuestion || Boolean(pendingPermission) || awaitingPlan || replacingTurn || control?.phase === "pausing" || control?.phase === "stopping"}
               onSendNow={streaming ? onSendNow : onSend}
             />
           )}
           <Composer
             streaming={streaming}
-            sendDisabled={!workspace.available || workspace.busy}
+            sendDisabled={!workspace.available || workspace.busy || replacingTurn}
             disabled={control?.phase === "pausing" || control?.phase === "stopping"}
             apiReady={apiReady}
             setupHint={setupHint}
@@ -1087,7 +1123,7 @@ export function ChatView({
         findToolCall={(id) => findToolCall(messages, id)}
       />
       {retryDialog}
-      {sessionId && historyAction && !historyDisabled && <RewindBar key={sessionId} sessionId={sessionId} cwd={cwd}
+      {sessionId && historyAction && !historyDisabled && !replacingTurn && <RewindBar key={sessionId} sessionId={sessionId} cwd={cwd}
         canExecute={canExecuteHistory}
         action={historyAction} onActionDone={() => { if (useSessionStore.getState().sessionId === sessionId) setHistoryAction(null); }} onRewound={onRewound}
         onForked={onForked} onToast={onToast} />}

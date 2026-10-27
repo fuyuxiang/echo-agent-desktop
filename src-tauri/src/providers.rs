@@ -50,6 +50,7 @@ const SYNCED_AT_KEY: &str = "echoagent_synced_at";
 const LEASE_UNTIL_KEY: &str = "echoagent_lease_until";
 const ALLOW_INSECURE_LOOPBACK_HTTP_ENV: &str = "ECHO_AGENT_ALLOW_INSECURE_LOOPBACK_HTTP";
 const MAX_PROVIDER_ERROR_BYTES: usize = 64 * 1024;
+const MAX_INFERENCE_PROBE_BYTES: usize = 1024 * 1024;
 const MAX_MODEL_LIST_BYTES: usize = 4 * 1024 * 1024;
 const MAX_DISCOVERED_MODELS: usize = 10_000;
 const MAX_RUNTIME_CONFIG_BYTES: u64 = 8 * 1024 * 1024;
@@ -2405,25 +2406,7 @@ async fn test_model_inference(
         .unwrap_or_else(|| "bearer".into());
     validate_auth_scheme(&auth_scheme)?;
 
-    let payload = match api_backend {
-        "responses" => serde_json::json!({
-            "model": model_id,
-            "input": "Reply with OK.",
-            "max_output_tokens": 16,
-            "stream": false
-        }),
-        "messages" => serde_json::json!({
-            "model": model_id,
-            "max_tokens": 1,
-            "messages": [{ "role": "user", "content": "Reply with OK." }],
-            "stream": false
-        }),
-        _ => serde_json::json!({
-            "model": model_id,
-            "messages": [{ "role": "user", "content": "Reply with OK." }],
-            "stream": false
-        }),
-    };
+    let payload = crate::provider_response::inference_probe_payload(api_backend, model_id);
 
     let client = provider_http_client(std::time::Duration::from_secs(30))?;
     let mut request = client.post(&url).json(&payload);
@@ -2450,19 +2433,18 @@ async fn test_model_inference(
         })?;
     let status = response.status();
     if status.is_success() {
-        return Ok(());
+        let (body, truncated) =
+            provider_response_bytes(response, MAX_INFERENCE_PROBE_BYTES).await?;
+        if truncated {
+            return Err("模型测试响应超过 1MB 限制".into());
+        }
+        return crate::provider_response::validate_inference(&body, api_backend, key);
     }
 
     let (body, truncated) = provider_response_bytes(response, MAX_PROVIDER_ERROR_BYTES)
         .await
         .unwrap_or_default();
-    let mut snippet = String::from_utf8_lossy(&body)
-        .chars()
-        .take(300)
-        .collect::<String>();
-    if truncated {
-        snippet.push('…');
-    }
+    let snippet = crate::provider_response::error_detail(&body, key, truncated, 300);
     Err(if snippet.trim().is_empty() {
         format!("模型接口返回 {status}")
     } else {
@@ -2512,13 +2494,7 @@ async fn fetch_models(
         let (body, truncated) = provider_response_bytes(resp, MAX_PROVIDER_ERROR_BYTES)
             .await
             .unwrap_or_default();
-        let mut snippet = String::from_utf8_lossy(&body)
-            .chars()
-            .take(200)
-            .collect::<String>();
-        if truncated {
-            snippet.push('…');
-        }
+        let snippet = crate::provider_response::error_detail(&body, key, truncated, 200);
         return Err(format!("API 返回 {status}：{snippet}"));
     }
 

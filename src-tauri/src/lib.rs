@@ -52,6 +52,7 @@ mod policy;
 mod process_supervisor;
 mod projects;
 mod providers;
+mod provider_response;
 mod resource_identity;
 mod session_artifacts;
 mod session_creation;
@@ -139,7 +140,8 @@ async fn required_shutdown<F: std::future::Future<Output = Result<(), String>>>(
 
 async fn shutdown_before_exit(app: &tauri::AppHandle) -> Result<(), String> {
     let state = app.state::<AppState>();
-    // Start the runtime's session flush immediately. It has its own 12-second
+    tracing::info!("application shutdown started");
+    // Start the runtime's session flush immediately. It has its own bounded
     // bound; a second two-second timeout would cancel it before persistence.
     let (theia, automation, _, runtime) = tokio::join!(
         stop_theia_for_exit(app),
@@ -152,6 +154,7 @@ async fn shutdown_before_exit(app: &tauri::AppHandle) -> Result<(), String> {
         .flatten()
         .collect::<Vec<_>>();
     if errors.is_empty() {
+        tracing::info!("application shutdown completed");
         Ok(())
     } else {
         Err(errors.join("；"))
@@ -334,6 +337,27 @@ fn request_graceful_exit(app: tauri::AppHandle) {
         }
         complete_prepared_exit(app, false);
     });
+}
+
+/// AppKit's predefined Quit invokes `terminate:` directly. Tao then delivers
+/// LoopDestroyed, without a preventable ExitRequested event. Route the menu
+/// and Cmd+Q through the same save/child-process barrier as tray/window exit.
+#[cfg(target_os = "macos")]
+fn application_menu(app: &tauri::AppHandle) -> tauri::Result<tauri::menu::Menu<tauri::Wry>> {
+    use tauri::menu::{Menu, MenuItem, MenuItemKind};
+    let menu = Menu::default(app)?;
+    let items = menu.items()?;
+    let application = items.first().and_then(MenuItemKind::as_submenu)
+        .ok_or_else(|| std::io::Error::other("macOS application menu is missing"))?;
+    let application_items = application.items()?;
+    let quit_index = application_items.len().checked_sub(1)
+        .filter(|index| matches!(application_items[*index], MenuItemKind::Predefined(_)))
+        .ok_or_else(|| std::io::Error::other("macOS default Quit menu is missing"))?;
+    application.remove_at(quit_index)?;
+    application.append(&MenuItem::with_id(
+        app, "echoagent.app.quit", "退出 EchoAgent", true, Some("CmdOrCtrl+Q"),
+    )?)?;
+    Ok(menu)
 }
 
 async fn restart_prepared_application(app: tauri::AppHandle) -> Result<(), String> {
@@ -743,6 +767,13 @@ pub fn run() {
             show_main_window(app);
         }
     }));
+
+    #[cfg(target_os = "macos")]
+    let builder = builder.menu(application_menu).on_menu_event(|app, event| {
+        if event.id.as_ref() == "echoagent.app.quit" {
+            request_graceful_exit(app.clone());
+        }
+    });
 
     let app = builder
         .setup(move |app| {

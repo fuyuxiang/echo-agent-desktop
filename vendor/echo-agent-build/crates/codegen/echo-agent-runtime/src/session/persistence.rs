@@ -1416,6 +1416,20 @@ impl SessionPersistence {
             .append_update_commit_aware(&self.info, update)
             .await;
         self.observe_append_update(&result);
+        // ContentChunk arrives before the buffered transcript reaches disk.
+        // Refresh after the durable terminal so a fast first index cannot keep
+        // an empty document until the next process-wide bootstrap. Failed
+        // appends must not publish a new search version.
+        if result.is_ok()
+            && matches!(update, SessionUpdate::EchoAgent(notification)
+                if matches!(&notification.update, EchoAgentSessionUpdate::TurnCompleted { .. }))
+        {
+            crate::session::storage::search::notify_session_updated(
+                self.search_index.decision().writer(),
+                &self.info.id.to_string(),
+                &self.info.cwd,
+            );
+        }
         result
     }
 
@@ -1725,6 +1739,13 @@ impl SessionPersistence {
     /// actually landed on disk, so a title rejected for racing a manual
     /// `/rename` is never announced.
     fn announce_adopted_title(&self, title: String) {
+        // The title was committed before this callback; keep FTS title/content
+        // hashes aligned even when title generation finishes after the turn.
+        crate::session::storage::search::notify_session_updated(
+            self.search_index.decision().writer(),
+            &self.info.id.to_string(),
+            &self.info.cwd,
+        );
         crate::session::summary::notify_client(&self.gateway, &self.info, &title);
         if let Some(sync) = &self.remote_sync {
             sync.set_title(title.clone());

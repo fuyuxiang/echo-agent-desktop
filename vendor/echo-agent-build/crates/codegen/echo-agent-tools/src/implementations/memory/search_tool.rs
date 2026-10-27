@@ -3,9 +3,12 @@
 use std::sync::Arc;
 
 use super::types::MemorySearchInput;
-use crate::types::memory_backend::{MemoryBackend, format_staleness_note};
+use crate::types::memory_backend::MemoryBackend;
 use crate::types::output::ToolOutput;
 use crate::types::tool::{ToolKind, ToolNamespace};
+
+#[path = "search_output.rs"]
+mod search_output;
 
 #[derive(Debug, Default)]
 pub struct MemorySearchImpl;
@@ -27,7 +30,12 @@ impl crate::types::tool_metadata::ToolMetadata for MemorySearchImpl {
          - You need project conventions, coding patterns, or user preferences\n\
          - The user mentions something discussed or decided in a previous session\n\
          - Starting work in an unfamiliar part of the codebase\n\
-         - After compaction when prior context may have been lost"
+         - After compaction when prior context may have been lost\n\n\
+         A successful empty search is a valid end of recall, not a storage error. \
+         For a narrow single-fact question, try at most one focused reformulation, \
+         then say you do not know if no exact evidence exists. Never substitute a \
+         similarly named subject or recover missing/forgotten facts through internal \
+         files or unrequested conversation history."
     }
 }
 
@@ -91,19 +99,8 @@ impl echo_agent_tool_runtime::Tool for MemorySearchImpl {
                 )
             })?;
         tracing::info!(target: crate::types::memory_backend::MEMORY_LOG_TARGET, results = results.len(), "MEMORY_SEARCH: complete");
-        if results.is_empty() {
-            return Ok(ToolOutput::Text(
-                "No memory results found for query.".into(),
-            ));
-        }
-        let mut output = format!("Found {} memory result(s):\n", results.len());
-        for (i, r) in results.iter().enumerate() {
-            let staleness = format_staleness_note(&r.source, r.created_at);
-            output.push_str(&format!(
-                "\n### Result {} (score: {:.2}, source: {})\n**File:** {} (lines {}-{})\n{}```\n{}\n```\n",
-                i + 1, r.score, r.source, r.path, r.start_line, r.end_line, staleness, r.snippet,
-            ));
-        }
-        Ok(ToolOutput::Text(output.into()))
+        Ok(ToolOutput::Text(
+            search_output::format_memory_search_results(&results).into(),
+        ))
     }
 }

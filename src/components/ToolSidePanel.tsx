@@ -803,7 +803,9 @@ async function loadPreviewContent(
   const absolutePath = await resolveAuthorizedPath(path, cwd);
   const base64 = await invoke<string>("read_file_base64", {
     path: absolutePath,
-    maxBytes: 1024 * 1024,
+    // Generated CJK PDFs embed fonts and commonly exceed the generic 1 MiB cap.
+    // Native code independently enforces the PDF-only bound after authorization.
+    maxBytes: kind === "pdf" ? 32 * 1024 * 1024 : 1024 * 1024,
   });
   return `data:${previewMimeType(path, kind)};base64,${base64}`;
 }

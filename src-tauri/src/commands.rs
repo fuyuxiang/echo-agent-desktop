@@ -1839,7 +1839,11 @@ pub async fn agent_shutdown(
 /// Stop the embedded Runtime without dropping session-end persistence hooks.
 /// Shared by the frontend restart command and the native tray Quit action.
 pub(crate) async fn stop_agent_runtime(state: &AppState) -> Result<(), String> {
-    stop_agent_runtime_with_grace(state, std::time::Duration::from_secs(12)).await
+    // SessionEnd includes model-assisted memory consolidation before the final
+    // disk ACK. Real provider calls can outlast 12 seconds even with idle tasks.
+    // Keep the persistence barrier and recoverable failure, but allow this work
+    // to finish before offering a runtime restart that would cancel it.
+    stop_agent_runtime_with_grace(state, std::time::Duration::from_secs(60)).await
 }
 
 async fn stop_agent_runtime_with_grace(

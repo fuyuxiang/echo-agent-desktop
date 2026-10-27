@@ -219,6 +219,25 @@ describe("ToolSidePanel navigation collapse", () => {
     expect(screen.getByRole("button", { name: "详情布局" })).toBeInTheDocument();
   });
 
+  it("previews an authorized generated Chinese PDF larger than the generic binary limit", async () => {
+    const path = "C:/work/qa_office_f3.pdf";
+    const generatedPdfBytes = 13_834_126;
+    vi.mocked(invoke).mockImplementation(async (command, args) => {
+      if (command === "path_stat") return { absolute: path, exists: true, kind: "file" };
+      if (command === "read_file_base64") {
+        const limit = (args as { maxBytes: number }).maxBytes;
+        if (limit < generatedPdfBytes) throw new Error("PDF exceeds the requested preview budget");
+        return "JVBERi0xLjcK";
+      }
+      return undefined;
+    });
+    const { container } = renderPanel("artifacts", [artifact(path)]);
+    fireEvent.click(screen.getByRole("button", { name: /^qa_office_f3\.pdf/ }));
+    await waitFor(() => expect(container.querySelector("iframe[title='qa_office_f3.pdf']"))
+      .toHaveAttribute("src", "data:application/pdf;base64,JVBERi0xLjcK"));
+    expect(screen.queryByText(/无法在面板内预览/)).not.toBeInTheDocument();
+  });
+
   it("waits for the persisted export receipt before reading a historical file", async () => {
     let authorize!: () => void;
     vi.mocked(invoke).mockImplementation(async command => {

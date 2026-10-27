@@ -500,6 +500,145 @@ fn rebase_value(value: &mut serde_json::Value, manifest: &Manifest, home: &Path,
         _ => {}
     }
 }
+/// Keep the authoritative encoded CWD directory consistent with the paths in
+/// restored summaries. Rewriting JSON alone makes discovery reject every row.
+fn rebase_session_directories(
+    staging: &Path,
+    manifest: &mut Manifest,
+    home: &Path,
+    app_data: &Path,
+) -> Result<Vec<PathBuf>, String> {
+    use echo_agent_runtime::util::echo_agent_home::encode_cwd_dirname;
+    let mut directories = BTreeMap::new();
+    for entry in &manifest.files {
+        let Some(rest) = entry.name.strip_prefix("sessions/") else {
+            continue;
+        };
+        let Some((directory, _)) = rest.split_once('/') else {
+            continue;
+        };
+        if directories.contains_key(directory) {
+            continue;
+        }
+        let decoded = urlencoding::decode(directory).map_err(|e| e.to_string())?;
+        let old_cwd = if Path::new(decoded.as_ref()).is_absolute() {
+            decoded.into_owned()
+        } else {
+            let sidecar = staging.join("sessions").join(directory).join(".cwd");
+            if !sidecar.is_file() {
+                continue;
+            }
+            String::from_utf8(crate::shell_fs::read_regular_file_bounded(
+                &sidecar,
+                16 * 1024,
+            )?)
+            .map_err(|e| e.to_string())?
+            .trim()
+            .to_string()
+        };
+        // Do not let a forged sidecar redirect another directory's records.
+        if old_cwd.chars().count() > 4096 || encode_cwd_dirname(&old_cwd) != directory {
+            continue;
+        }
+        let mut value = serde_json::Value::String(old_cwd.clone());
+        rebase_value(&mut value, manifest, home, app_data);
+        let new_cwd = value.as_str().ok_or("会话工作区无效")?.to_string();
+        // A reinstall can restore into exactly the original data-home path.
+        // Collect every verified CWD so missing application-owned task folders
+        // are recreated even when no archive path needs to move.
+        directories.insert(
+            directory.to_string(),
+            (encode_cwd_dirname(&new_cwd), new_cwd),
+        );
+    }
+    if directories.is_empty() {
+        return Ok(Vec::new());
+    }
+    let mut targets = HashSet::new();
+    let mut moves = Vec::new();
+    for entry in &manifest.files {
+        let mut name = entry.name.clone();
+        if let Some((directory, tail)) = entry
+            .name
+            .strip_prefix("sessions/")
+            .and_then(|s| s.split_once('/'))
+        {
+            if let Some((replacement, _)) = directories.get(directory) {
+                name = format!("sessions/{replacement}/{tail}");
+            }
+        }
+        if !allowed(&name) || !targets.insert(name.clone()) {
+            return Err("恢复后的会话路径冲突".into());
+        }
+        moves.push((entry.name.clone(), name));
+    }
+    // Snapshot all moving files first, so two source directories cannot clobber
+    // one another while the verified archive is normalized in private staging.
+    let snapshot = tempfile::tempdir_in(staging).map_err(|e| e.to_string())?;
+    for (old, new) in &moves {
+        if old != new {
+            atomic_copy(&staging.join(old), &snapshot.path().join(new))?;
+        }
+    }
+    for (entry, (old, new)) in manifest.files.iter_mut().zip(&moves) {
+        if old != new {
+            atomic_copy(&snapshot.path().join(new), &staging.join(new))?;
+            entry.name = new.clone();
+        }
+    }
+    let mut managed = Vec::new();
+    for (original, (directory, cwd)) in &directories {
+        if original != directory {
+            let name = format!("sessions/{directory}/.cwd");
+            crate::paths::write_private_file(&staging.join(&name), cwd.as_bytes())?;
+            let metadata = Entry {
+                name: name.clone(),
+                bytes: cwd.len() as u64,
+                sha256: format!("{:x}", Sha256::digest(cwd.as_bytes())),
+            };
+            if let Some(entry) = manifest.files.iter_mut().find(|e| e.name == name) {
+                *entry = metadata;
+            } else {
+                manifest.files.push(metadata);
+            }
+        }
+        // Only application-owned task folders may be recreated. External
+        // projects remain references and require the original workspace.
+        let root = home.join("workspaces/default/Tasks");
+        if let Ok(relative) = Path::new(cwd).strip_prefix(&root) {
+            if relative.components().count() == 1
+                && uuid::Uuid::parse_str(&relative.to_string_lossy()).is_ok()
+            {
+                managed.push(PathBuf::from(cwd));
+            }
+        }
+    }
+    validate(manifest)?;
+    Ok(managed)
+}
+
+fn restore_managed_task_directory(home: &Path, cwd: &Path) -> Result<(), String> {
+    let root = home.join("workspaces/default/Tasks");
+    let relative = cwd.strip_prefix(&root).map_err(|_| "恢复工作区超出范围")?;
+    if relative.components().count() != 1
+        || uuid::Uuid::parse_str(&relative.to_string_lossy()).is_err()
+    {
+        return Err("恢复工作区标识无效".into());
+    }
+    for ancestor in cwd.ancestors().take_while(|p| p.starts_with(home)) {
+        match fs::symlink_metadata(ancestor) {
+            Ok(metadata) if metadata.file_type().is_symlink() || !metadata.is_dir() => {
+                return Err("恢复工作区包含链接或非目录".into())
+            }
+            Ok(_) => {}
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+            Err(error) => return Err(error.to_string()),
+        }
+    }
+    fs::create_dir_all(cwd).map_err(|e| e.to_string())?;
+    crate::paths::harden_private_dir(cwd)
+}
+
 fn prepare_file(
     path: &Path,
     name: &str,
@@ -687,6 +826,8 @@ fn apply_pending_at(home: &Path, app_data: &Path) -> Result<(), String> {
     }
     let staging = tempfile::tempdir_in(home).map_err(|e| e.to_string())?;
     let mut manifest = unpack(&pending, staging.path())?;
+    let managed_task_directories =
+        rebase_session_directories(staging.path(), &mut manifest, home, app_data)?;
     let retaining_target_history = !manifest
         .files
         .iter()
@@ -845,6 +986,9 @@ fn apply_pending_at(home: &Path, app_data: &Path) -> Result<(), String> {
             &ui_path,
             &serde_json::to_vec(&ui_state).map_err(|e| e.to_string())?,
         )?;
+        for cwd in &managed_task_directories {
+            restore_managed_task_directory(home, cwd)?;
+        }
         journal.committed = true;
         crate::paths::write_private_file(
             &journal_path,
@@ -1052,6 +1196,221 @@ pub fn backup_acknowledge_ui() -> Result<(), String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn same_home_restore_recreates_missing_managed_tasks_without_fabricating_files() {
+        use echo_agent_runtime::util::echo_agent_home::encode_cwd_dirname;
+        for long_home in [false, true] {
+            let base = tempfile::tempdir().unwrap();
+            // Long paths use several legal components, rather than a single
+            // component exceeding the filesystem's 255-byte name limit.
+            let home = if long_home {
+                base.path()
+                    .join("profile".repeat(20))
+                    .join("nested".repeat(20))
+            } else {
+                base.path().join("profile")
+            };
+            let cwd = home.join("workspaces/default/Tasks/00000000-0000-4000-8000-000000000001");
+            fs::create_dir_all(&cwd).unwrap();
+            fs::write(cwd.join("business.txt"), "not part of the history backup").unwrap();
+            let directory = encode_cwd_dirname(&cwd.to_string_lossy());
+            let session_root = home.join("sessions").join(&directory);
+            fs::create_dir_all(session_root.join("saved-session")).unwrap();
+            if long_home {
+                fs::write(session_root.join(".cwd"), cwd.to_string_lossy().as_bytes()).unwrap();
+            }
+            fs::write(
+                session_root.join("saved-session/summary.json"),
+                serde_json::json!({
+                    "session_id":"saved-session", "cwd":cwd, "generated_title":"同路径恢复"
+                })
+                .to_string(),
+            )
+            .unwrap();
+            let archive = home.join("restore-pending.zip");
+            export(&home, &home, &archive, BTreeMap::new()).unwrap();
+            fs::remove_dir_all(home.join("sessions")).unwrap();
+            fs::remove_dir_all(home.join("workspaces")).unwrap();
+            apply_pending_at(&home, &home).unwrap();
+            assert!(
+                cwd.is_dir(),
+                "restoring to the same home must produce an openable task"
+            );
+            assert!(fs::read_dir(&cwd).unwrap().next().is_none());
+            let sessions =
+                crate::sessions::list_all_sessions_from_root(&home.join("sessions")).unwrap();
+            assert_eq!(sessions.len(), 1);
+            assert_eq!(Path::new(&sessions[0].cwd), cwd.canonicalize().unwrap());
+        }
+    }
+
+    #[test]
+    fn same_home_restore_preserves_existing_managed_workspace_files() {
+        let home = tempfile::tempdir().unwrap();
+        let cwd = home
+            .path()
+            .join("workspaces/default/Tasks/00000000-0000-4000-8000-000000000001");
+        fs::create_dir_all(&cwd).unwrap();
+        let directory =
+            echo_agent_runtime::util::echo_agent_home::encode_cwd_dirname(&cwd.to_string_lossy());
+        let session = home
+            .path()
+            .join("sessions")
+            .join(directory)
+            .join("saved-session");
+        fs::create_dir_all(&session).unwrap();
+        fs::write(
+            session.join("summary.json"),
+            serde_json::json!({"session_id":"saved-session","cwd":cwd}).to_string(),
+        )
+        .unwrap();
+        export(
+            home.path(),
+            home.path(),
+            &home.path().join("restore-pending.zip"),
+            BTreeMap::new(),
+        )
+        .unwrap();
+        let business = cwd.join("business.txt");
+        fs::write(&business, "newer workspace content").unwrap();
+        apply_pending_at(home.path(), home.path()).unwrap();
+        assert_eq!(
+            fs::read_to_string(business).unwrap(),
+            "newer workspace content"
+        );
+    }
+
+    #[test]
+    fn restored_sessions_rebase_authoritative_directories_and_openable_managed_cwds() {
+        use echo_agent_runtime::util::echo_agent_home::encode_cwd_dirname;
+        // Exercise both URL-encoded -> hashed and hashed -> URL-encoded paths.
+        for long_source in [false, true] {
+            let source_base = tempfile::tempdir().unwrap();
+            let target_base = tempfile::tempdir().unwrap();
+            let deep = "long-profile-".repeat(13);
+            let source = if long_source {
+                source_base.path().join(&deep)
+            } else {
+                source_base.path().join("source")
+            };
+            let target = if long_source {
+                target_base.path().join("target")
+            } else {
+                target_base.path().join(&deep)
+            };
+            fs::create_dir_all(&source).unwrap();
+            fs::create_dir_all(&target).unwrap();
+            let task = "00000000-0000-4000-8000-000000000001";
+            let old_cwd = source.join("workspaces/default/Tasks").join(task);
+            let new_cwd = target.join("workspaces/default/Tasks").join(task);
+            fs::create_dir_all(&old_cwd).unwrap();
+            let old_directory = encode_cwd_dirname(&old_cwd.to_string_lossy());
+            let directory = source.join("sessions").join(&old_directory);
+            fs::create_dir_all(directory.join("saved-session")).unwrap();
+            fs::write(directory.join(".cwd"), old_cwd.to_string_lossy().as_bytes()).unwrap();
+            fs::write(
+                directory.join("saved-session/summary.json"),
+                serde_json::json!({
+                    "session_id":"saved-session", "cwd":old_cwd, "generated_title":"恢复验收"
+                })
+                .to_string(),
+            )
+            .unwrap();
+            // Control reproduces the old JSON-only rewrite: the catalog rejects
+            // the mismatch between the CWD and its authoritative directory.
+            let control = tempfile::tempdir().unwrap();
+            let wrong = control.path().join(&old_directory).join("saved-session");
+            fs::create_dir_all(&wrong).unwrap();
+            fs::write(
+                wrong.join("summary.json"),
+                serde_json::json!({"session_id":"saved-session", "cwd":new_cwd}).to_string(),
+            )
+            .unwrap();
+            assert!(crate::sessions::list_all_sessions_from_root(control.path())
+                .unwrap()
+                .is_empty());
+            export(
+                &source,
+                &source,
+                &target.join("restore-pending.zip"),
+                BTreeMap::new(),
+            )
+            .unwrap();
+            apply_pending_at(&target, &target).unwrap();
+            let rows =
+                crate::sessions::list_all_sessions_from_root(&target.join("sessions")).unwrap();
+            assert_eq!(rows.len(), 1);
+            assert_eq!(rows[0].session_id, "saved-session");
+            assert_eq!(Path::new(&rows[0].cwd), new_cwd.canonicalize().unwrap());
+            let new_directory = target
+                .join("sessions")
+                .join(encode_cwd_dirname(&new_cwd.to_string_lossy()));
+            assert_eq!(
+                fs::read_to_string(new_directory.join(".cwd")).unwrap(),
+                new_cwd.to_string_lossy()
+            );
+            assert!(new_cwd.is_dir());
+            assert!(
+                fs::read_dir(&new_cwd).unwrap().next().is_none(),
+                "History recovery must not fabricate business files"
+            );
+        }
+    }
+
+    #[test]
+    fn restore_does_not_create_external_or_forged_workspaces() {
+        let source = tempfile::tempdir().unwrap();
+        let target = tempfile::tempdir().unwrap();
+        let outside = tempfile::tempdir().unwrap();
+        let cwd = outside.path().join("missing-repository");
+        let directory =
+            echo_agent_runtime::util::echo_agent_home::encode_cwd_dirname(&cwd.to_string_lossy());
+        let session = source
+            .path()
+            .join("sessions")
+            .join(directory)
+            .join("external-session");
+        fs::create_dir_all(&session).unwrap();
+        fs::write(
+            session.join("summary.json"),
+            serde_json::json!({"session_id":"external-session", "cwd":cwd}).to_string(),
+        )
+        .unwrap();
+        export(
+            source.path(),
+            source.path(),
+            &target.path().join("restore-pending.zip"),
+            BTreeMap::new(),
+        )
+        .unwrap();
+        apply_pending_at(target.path(), target.path()).unwrap();
+        assert!(!cwd.exists());
+        assert_eq!(
+            crate::sessions::list_all_sessions_from_root(&target.path().join("sessions"))
+                .unwrap()
+                .len(),
+            1
+        );
+        assert!(restore_managed_task_directory(
+            target.path(),
+            &target.path().join("workspaces/default/Tasks/../../escape")
+        )
+        .is_err());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn restored_managed_task_rejects_a_linked_ancestor() {
+        let target = tempfile::tempdir().unwrap();
+        let outside = tempfile::tempdir().unwrap();
+        std::os::unix::fs::symlink(outside.path(), target.path().join("workspaces")).unwrap();
+        let cwd = target
+            .path()
+            .join("workspaces/default/Tasks/00000000-0000-4000-8000-000000000001");
+        assert!(restore_managed_task_directory(target.path(), &cwd).is_err());
+        assert!(fs::read_dir(outside.path()).unwrap().next().is_none());
+    }
 
     #[test]
     fn group_restore_accepts_legacy_database_without_cleanup_tables() {

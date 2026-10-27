@@ -428,6 +428,21 @@
   min-width: 0;
   overflow: hidden;
 }
+.atm-row-open {
+  border: 0;
+  background: transparent;
+  padding: 0;
+  color: inherit;
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+  align-self: stretch;
+}
+.atm-row-open:focus-visible {
+  outline: 2px solid var(--echo-color-primary, #126bff);
+  outline-offset: 2px;
+  border-radius: 4px;
+}
 .atm-row-leading {
   width: 16px;
   min-height: 24px;

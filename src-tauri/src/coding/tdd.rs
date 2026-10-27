@@ -90,22 +90,9 @@ pub fn same_test_command(left: &str, right: &str) -> bool {
     canonical(left) == canonical(right)
 }
 
-pub fn is_test_path(path: &str) -> bool {
-    let path = path.replace('\\', "/").to_lowercase();
-    let name = path.rsplit('/').next().unwrap_or(&path);
-    path.contains("/__tests__/")
-        || path.starts_with("tests/")
-        || path.contains("/tests/")
-        || name.starts_with("test_")
-        || matches!(name, "test.js" | "test.cjs" | "test.mjs")
-        || name.ends_with("_test.py")
-        || name.ends_with("_test.rs")
-        || name.ends_with("_test.go")
-        || name.contains(".test.")
-        || name.contains(".spec.")
-        || name.ends_with("test.java")
-        || name.ends_with("tests.java")
-}
+#[path = "tdd_test_paths.rs"]
+mod test_paths;
+pub use test_paths::is_test_path;
 
 pub fn test_commands(root: &Path, task: &CodingTask) -> Vec<String> {
     let mut commands = verification::detect_commands(root)

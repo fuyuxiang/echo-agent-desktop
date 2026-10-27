@@ -173,7 +173,7 @@ function renderChat() {
 const baseProps = {
   onSend: vi.fn(),
   onPrepareRetry: vi.fn(async () => true),
-  onRetrySend: vi.fn(() => true),
+  onRetrySend: vi.fn((_request: import("@/lib/message-retry").MessageRetrySendRequest) => true),
   onCancel: vi.fn(),
   modelId: "m1",
   onToast: vi.fn(),
@@ -616,6 +616,185 @@ describe("ChatView pause/yield/resume 闭环", () => {
     expect(automationResume).not.toHaveBeenCalled();
   });
 
+  it("输出前暂停后继续会恢复原始请求和附件，不向空历史只发送继续", async () => {
+    setStore({
+      messages: [
+        {id:"u-empty",role:"user",complete:true,promptIndex:0,
+          agentText:"<project-context>original</project-context>\n只回复 ORIGINAL_GOAL",
+          attachments:["/workspace/selected-input.txt"],
+          parts:[{kind:"text",text:"只回复 ORIGINAL_GOAL"}]},
+        {id:"a-empty",role:"assistant",complete:true,stopReason:"cancelled",parts:[]},
+      ],
+      control:{action:"pause",phase:"paused",requestedAt:1},
+    });
+    renderChat();
+    fireEvent.click(screen.getByRole("button", {name:"继续任务"}));
+    await waitFor(() => expect(baseProps.onRetrySend).toHaveBeenCalledExactlyOnceWith({
+      sessionId:"s1", displayText:"只回复 ORIGINAL_GOAL",
+      promptText:"<project-context>original</project-context>\n只回复 ORIGINAL_GOAL",
+      attachments:["/workspace/selected-input.txt"], kind:"retry",
+    }));
+    expect(baseProps.onPrepareRetry).toHaveBeenCalledExactlyOnceWith("s1");
+    expect(baseProps.onSend).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    {parts:[{kind:"text",text:"已经完成部分内容"}]},
+    {parts:[{kind:"thought",text:"已经取得本轮上下文"}]},
+    {parts:[{kind:"tool_call",toolCall:{toolCallId:"write-once",title:"Write file",kind:"edit",status:"completed",content:[]}}]},
+  ])("有文本、思考或工具进展的暂停只继续，不重放已经执行的请求 %j", async ({parts}) => {
+    setStore({messages:[
+      {id:"u-progress",role:"user",complete:true,parts:[{kind:"text",text:"只执行一次写入"}]},
+      {id:"a-progress",role:"assistant",complete:true,stopReason:"cancelled",parts},
+    ],control:{action:"pause",phase:"paused",requestedAt:1}});
+    renderChat();
+    fireEvent.click(screen.getByRole("button", {name:"继续任务"}));
+    await waitFor(() => expect(baseProps.onSend).toHaveBeenCalledExactlyOnceWith("继续", []));
+    expect(baseProps.onRetrySend).not.toHaveBeenCalled();
+    expect(rewindExecute).not.toHaveBeenCalled();
+  });
+
+  it.each([undefined, 1])("已有历史但本轮未持久化时，只重发本轮原题并保留旧历史：%s", async (promptIndex) => {
+    vi.mocked(rewindPoints).mockResolvedValue([{promptIndex:0,promptPreview:"旧请求",toolNames:["write_file"]}]);
+    vi.mocked(rewindExecute).mockResolvedValue({targetPromptIndex:0,promptText:"旧请求"});
+    setStore({messages:[
+      {id:"old-user",role:"user",complete:true,promptIndex:0,parts:[{kind:"text",text:"旧请求"}]},
+      {id:"old-answer",role:"assistant",complete:true,parts:[{kind:"text",text:"旧回复必须保留"}]},
+      {id:"new-user",role:"user",complete:true,promptIndex,agentText:"<context>本轮上下文</context>\n新请求",attachments:["/workspace/本轮.txt"],parts:[{kind:"text",text:"新请求"}]},
+      {id:"new-answer",role:"assistant",complete:true,stopReason:"cancelled",parts:[]},
+    ],control:{action:"pause",phase:"paused",requestedAt:1}});
+    renderChat();
+    fireEvent.click(screen.getByRole("button", {name:"继续任务"}));
+    await waitFor(() => expect(baseProps.onRetrySend).toHaveBeenCalledExactlyOnceWith({
+      sessionId:"s1",displayText:"新请求",promptText:"<context>本轮上下文</context>\n新请求",attachments:["/workspace/本轮.txt"],kind:"retry",
+    }));
+    expect(rewindExecute).not.toHaveBeenCalled();
+    expect(storeState.discardMessagesFrom).toHaveBeenCalledExactlyOnceWith("s1", "new-user");
+    expect(screen.getByText("旧回复必须保留")).toBeInTheDocument();
+  });
+
+  it("已持久化的空取消轮次只回溯本轮，保留原始模型提示", async () => {
+    vi.mocked(rewindPoints).mockResolvedValue([{promptIndex:0}, {promptIndex:1}]);
+    vi.mocked(rewindExecute).mockResolvedValue({targetPromptIndex:1,promptText:"本轮原始模型提示"});
+    setStore({messages:[
+      {id:"old-user",role:"user",complete:true,promptIndex:0,parts:[{kind:"text",text:"旧请求"}]},
+      {id:"new-user",role:"user",complete:true,promptIndex:1,parts:[{kind:"text",text:"新请求"}]},
+      {id:"new-answer",role:"assistant",complete:true,stopReason:"cancelled",parts:[]},
+    ],control:{action:"pause",phase:"paused",requestedAt:1}});
+    renderChat();
+    fireEvent.click(screen.getByRole("button", {name:"继续任务"}));
+    await waitFor(() => expect(rewindExecute).toHaveBeenCalledExactlyOnceWith("s1", 1, "conversation_only", true));
+    expect(baseProps.onRetrySend).toHaveBeenCalledWith({sessionId:"s1",displayText:"新请求",promptText:"本轮原始模型提示",attachments:[],kind:"retry"});
+    expect(storeState.discardMessagesFrom).not.toHaveBeenCalled();
+  });
+
+  it("隐藏的中间轮次不阻塞尚未持久化的新请求恢复", async () => {
+    vi.mocked(rewindPoints).mockResolvedValue([0,1,2,3].map(promptIndex => ({promptIndex})));
+    setStore({messages:[
+      {id:"previous-user",role:"user",complete:true,promptIndex:3,parts:[{kind:"text",text:"最近的已入模请求"}]},
+      {id:"new-user",role:"user",complete:true,parts:[{kind:"text",text:"未入模的新请求"}]},
+      {id:"new-answer",role:"assistant",complete:true,stopReason:"cancelled",parts:[]},
+    ],control:{action:"pause",phase:"paused",requestedAt:1}});
+    renderChat();
+    fireEvent.click(screen.getByRole("button", {name:"继续任务"}));
+    await waitFor(() => expect(baseProps.onRetrySend).toHaveBeenCalledWith(expect.objectContaining({promptText:"未入模的新请求"})));
+    expect(rewindExecute).not.toHaveBeenCalled();
+  });
+
+  it("准备恢复期间保留可编辑草稿，同时阻止新发送和队列发送竞争历史", async () => {
+    let finish!: (points: import("@/lib/types").RewindPoint[]) => void;
+    vi.mocked(rewindPoints).mockImplementationOnce(() => new Promise(resolve => { finish = resolve; }));
+    setStore({messages:[
+      {id:"u-paused",role:"user",complete:true,parts:[{kind:"text",text:"恢复本轮"}]},
+      {id:"a-paused",role:"assistant",complete:true,stopReason:"cancelled",parts:[]},
+    ],control:{action:"pause",phase:"paused",requestedAt:1}});
+    useMessageQueueStore.getState().enqueue("s1","待发送",[]);
+    try {
+      renderChat();
+      const input = screen.getByRole("textbox");
+      fireEvent.change(input,{target:{value:"未发送的新草稿"}});
+      fireEvent.click(screen.getByRole("button", {name:"继续任务"}));
+      await waitFor(() => expect(rewindPoints).toHaveBeenCalledOnce());
+      expect(input).toBeEnabled();
+      expect(input).toHaveValue("未发送的新草稿");
+      expect(within(screen.getByRole("list",{name:"待发送队列"})).getByRole("button",{name:"立即发送"})).toBeDisabled();
+      fireEvent.keyDown(input,{key:"Enter",code:"Enter"});
+      expect(baseProps.onSend).not.toHaveBeenCalled();
+      await act(async () => finish([]));
+      expect(baseProps.onRetrySend).toHaveBeenCalledExactlyOnceWith({sessionId:"s1",displayText:"恢复本轮",promptText:"恢复本轮",attachments:[],kind:"retry"});
+      expect(input).toHaveValue("未发送的新草稿");
+    } finally { act(() => useMessageQueueStore.getState().clear("s1")); }
+  });
+
+  it("尚未绑定会话的新任务仍能发送首条消息", async () => {
+    setStore({sessionId:null,messages:[],control:undefined});
+    renderChat();
+    const input = screen.getByRole("textbox");
+    fireEvent.change(input,{target:{value:"新任务请求"}});
+    expect(screen.getByRole("button",{name:"发送"})).toBeEnabled();
+    fireEvent.keyDown(input,{key:"Enter",code:"Enter"});
+    await waitFor(() => expect(baseProps.onSend).toHaveBeenCalledExactlyOnceWith("新任务请求", []));
+  });
+
+  it("跨任务重试分别保留发送屏障，另一任务完成不会解锁原任务", async () => {
+    const pending = new Map<string, (points: import("@/lib/types").RewindPoint[]) => void>();
+    vi.mocked(rewindPoints).mockImplementation(sid => new Promise(resolve => { pending.set(sid, resolve); }));
+    const cancelled = (sid: string) => [
+      {id:`${sid}-user`,role:"user",complete:true,parts:[{kind:"text",text:`${sid} 的请求`}]},
+      {id:`${sid}-answer`,role:"assistant",complete:true,stopReason:"cancelled",parts:[]},
+    ];
+    const aMessages = cancelled("s1");
+    setStore({messages:aMessages});
+    const view = renderChat();
+    fireEvent.click(screen.getByRole("button",{name:"重试"}));
+    await waitFor(() => expect(pending.has("s1")).toBe(true));
+    setStore({sessionId:"s2",messages:cancelled("s2")});
+    view.rerender(<ThemeProvider><ChatView {...baseProps} /></ThemeProvider>);
+    fireEvent.click(screen.getByRole("button",{name:"重试"}));
+    await waitFor(() => expect(pending.has("s2")).toBe(true));
+    await act(async () => pending.get("s2")!([]));
+    setStore({sessionId:"s1",messages:aMessages});
+    view.rerender(<ThemeProvider><ChatView {...baseProps} /></ThemeProvider>);
+    const input = screen.getByRole("textbox");
+    fireEvent.change(input,{target:{value:"新草稿"}});
+    expect(screen.getByRole("button",{name:"发送"})).toBeDisabled();
+    expect(screen.getByRole("button",{name:"正在重试…"})).toBeDisabled();
+    await act(async () => pending.get("s1")!([]));
+    expect(screen.getByRole("button",{name:"发送"})).toBeEnabled();
+    expect(baseProps.onRetrySend.mock.calls.map(([request]) => request.sessionId)).toEqual(["s2","s1"]);
+  });
+
+  it("缺少本轮身份且存在未归属的后台记录时，保留现场并提示同步记录", async () => {
+    vi.mocked(rewindPoints).mockResolvedValue([{promptIndex:0,promptPreview:"同名请求"}, {promptIndex:1,promptPreview:"同名请求"}]);
+    setStore({messages:[
+      {id:"old-user",role:"user",complete:true,promptIndex:0,parts:[{kind:"text",text:"同名请求"}]},
+      {id:"new-user",role:"user",complete:true,parts:[{kind:"text",text:"同名请求"}]},
+      {id:"new-answer",role:"assistant",complete:true,stopReason:"cancelled",parts:[]},
+    ],control:{action:"pause",phase:"paused",requestedAt:1}});
+    renderChat();
+    fireEvent.click(screen.getByRole("button", {name:"继续任务"}));
+    await waitFor(() => expect(baseProps.onToast).toHaveBeenCalledWith(expect.stringContaining("重新打开任务")));
+    expect(rewindExecute).not.toHaveBeenCalled();
+    expect(baseProps.onRetrySend).not.toHaveBeenCalled();
+    expect(storeState.discardMessagesFrom).not.toHaveBeenCalled();
+  });
+
+  it("等待回溯点期间新请求已进入会话时，不再替换旧请求", async () => {
+    let finish!: (points: import("@/lib/types").RewindPoint[]) => void;
+    vi.mocked(rewindPoints).mockImplementationOnce(() => new Promise(resolve => { finish = resolve; }));
+    setStore({messages:[
+      {id:"first-user",role:"user",complete:true,promptIndex:0,parts:[{kind:"text",text:"旧请求"}]},
+      {id:"first-answer",role:"assistant",complete:true,stopReason:"cancelled",parts:[]},
+    ],control:{action:"pause",phase:"paused",requestedAt:1}});
+    renderChat();
+    fireEvent.click(screen.getByRole("button", {name:"继续任务"}));
+    await waitFor(() => expect(rewindPoints).toHaveBeenCalledOnce());
+    setStore({messages:[...storeState.messages, {id:"newer-user",role:"user",complete:true,parts:[{kind:"text",text:"更新的请求"}]}]});
+    await act(async () => finish([{promptIndex:0}]));
+    expect(rewindExecute).not.toHaveBeenCalled();
+    expect(baseProps.onRetrySend).not.toHaveBeenCalled();
+  });
+
   it("暂停且计划待确认时，继续与队列发送也必须等待当前决策", () => {
     setStore({control:{action:"pause",phase:"paused",requestedAt:1},planApproval:{requestId:"blocked-plan",sessionId:"s1",toolCallId:"plan",planContent:"待确认方案"}});
     useMessageQueueStore.getState().enqueue("s1","待发送",[]);
@@ -776,7 +955,7 @@ describe("ChatView pause/yield/resume 闭环", () => {
   it("工具轮次必须确认后才会重新执行，且只回溯对话", async () => {
     setStore({
       messages: [
-        { id: "u1", role: "user", complete: true, parts: [{ kind: "text", text: "帮我查查 ls" }] },
+        { id: "u1", role: "user", complete: true, promptIndex: 0, parts: [{ kind: "text", text: "帮我查查 ls" }] },
         {
           id: "a1",
           role: "assistant",

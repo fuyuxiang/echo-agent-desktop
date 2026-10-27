@@ -157,6 +157,39 @@ describe("session-store transcripts", () => {
     expect(useSessionStore.getState().control).toBeUndefined();
   });
 
+  it.each(["pausing", "paused"])("暂停屏障仍接收本轮迟到的身份元数据，不恢复执行：%s", (phase) => {
+    const store = useSessionStore.getState();
+    store.setSession("A");
+    store.pushUser("新请求");
+    store.startStreaming("A", "current-prompt");
+    store.requestControl("A", "pause", "current-prompt");
+    if (phase === "paused") store.confirmControl("A", "pause");
+    store.setSession("B");
+    store.setSession("A");
+    store.applyUpdate({sessionUpdate:"user_message_chunk",__sessionId:"A",
+      _meta:{promptIndex:7,promptId:"current-prompt"},content:{type:"text",text:"本轮实际模型提示",_meta:{displayText:"新请求",echoAgentAttachments:["/tmp/本轮.txt"]}},
+    } as never);
+    const state = useSessionStore.getState();
+    expect(state.messages[0]).toMatchObject({role:"user",promptIndex:7,agentText:"本轮实际模型提示",attachments:["/tmp/本轮.txt"]});
+    expect(textOf(0)).toBe("新请求");
+    expect(state.messages).toHaveLength(2);
+    expect(state.streaming).toBe(false);
+    expect(state.control?.phase).toBe(phase);
+  });
+
+  it("迟到的其他轮次元数据不能认领当前暂停请求", () => {
+    const store = useSessionStore.getState();
+    store.setSession("A"); store.pushUser("新请求");
+    store.startStreaming("A", "current-prompt");
+    store.requestControl("A", "pause", "current-prompt");
+    store.applyUpdate({sessionUpdate:"user_message_chunk",__sessionId:"A",
+      _meta:{promptIndex:3,promptId:"old-prompt"},content:{type:"text",text:"旧请求"},
+    } as never);
+    expect(useSessionStore.getState().messages[0].promptIndex).toBeUndefined();
+    expect(textOf(0)).toBe("新请求");
+    expect(useSessionStore.getState().streaming).toBe(false);
+  });
+
   it("稳定的暂停状态在 renderer 重载后按 session 恢复", () => {
     const store = useSessionStore.getState();
     store.setSession("A");
@@ -303,6 +336,44 @@ describe("session-store transcripts", () => {
       __sessionId: "A",
     } as never);
     expect(useSessionStore.getState().planApproval).toBeNull();
+  });
+
+  it.each(["A", "B"])("实时计划审批从路由归属恢复 sessionId：%s", (target) => {
+    const store = useSessionStore.getState();
+    store.setSession("A");
+    // subscribeAgentEvents removes the envelope sessionId before forwarding
+    // the live update. Its authoritative attribution is __sessionId.
+    store.applyUpdate({
+      sessionUpdate: "plan_approval_request",
+      requestId: `live-${target}`,
+      toolCallId: "exit-plan-live",
+      planContent: "# Await approval before creating the file",
+      __sessionId: target,
+    } as never);
+    expect(useSessionStore.getState().transcripts[target].planApprovals[0])
+      .toMatchObject({ sessionId: target, requestId: `live-${target}` });
+    if (target === "B") {
+      expect(useSessionStore.getState().planApproval).toBeNull();
+      store.setSession("B");
+    }
+    // ChatView requires this identity to render the formal approval actions.
+    expect(useSessionStore.getState().planApproval?.sessionId).toBe(target);
+  });
+
+  it("计划审批采用事件路由的会话归属，不采用冲突的负载字段", () => {
+    const store = useSessionStore.getState();
+    store.setSession("A");
+    store.applyUpdate({
+      sessionUpdate: "plan_approval_request",
+      requestId: "routed-B",
+      sessionId: "A",
+      toolCallId: "exit-plan-B",
+      __sessionId: "B",
+    } as never);
+    expect(useSessionStore.getState().planApproval).toBeNull();
+    store.setSession("B");
+    expect(useSessionStore.getState().planApproval)
+      .toMatchObject({ sessionId: "B", requestId: "routed-B" });
   });
 
   it("本地计划修订跟随会话缓存，初始化不标脏且丢弃缓存会清理", () => {

@@ -79,7 +79,12 @@ export function buildPlanRevisionInstruction(task: CodingTask): string {
 后端拒绝了当前执行计划：
 ${issueList(task.planIssues) || "计划契约不完整"}
 
-先停止新的代码写入。重新检查需求、当前差异和已有节点，使用原生 Plan/Task 工具发布完整计划。每个节点必须包含 Depends、Files、Reads、Consumes、Produces、Acceptance、Verify；无依赖或接口可写 -，但 Files、Acceptance、Verify 不得为空。所有文件使用工程相对路径，目录范围使用 /**。保留契约未变化且已经完成的节点标识，修正后再继续实施。`;
+本回合只修订执行计划，不修改任何工程文件、不运行实现命令、不启动实现子 Agent，也不执行下游节点。保留当前差异与已有完成记录，使用原生 Plan/Task 工具发布完整计划。每个节点必须包含 Depends、Files、Reads、Consumes、Produces、Acceptance、Verify；无依赖或接口可写 -，但 Files、Acceptance、Verify 不得为空。所有文件使用工程相对路径，目录范围使用 /**。
+
+原始用户目标与执行边界仍然有效：
+${task.requirement}
+
+发布修订计划后立即结束本回合。由工作台调度器重新检查测试先行 RED、用户暂停要求及下一节点；本回合不得因为计划修订成功就继续实现。`;
 }
 
 function lines(label: string, values: string[]): string {

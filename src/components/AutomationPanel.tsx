@@ -70,7 +70,7 @@ import {
   validateDraft,
   type AutomationDraft,
 } from "./automation/schedule-utils";
-import { Checkbox, Segmented } from "./automation/controls";
+import { Segmented } from "./automation/controls";
 import { AutomationTemplateGrid } from "./automation/AutomationTemplateGrid";
 import { AutomationEditPage, type ModelOption } from "./automation/AutomationEditPage";
 import { AutomationPermissionConfirmDialog } from "./automation/AutomationPermissionConfirmDialog";
@@ -1287,20 +1287,22 @@ function AutomationRow({
   return (
     <div
       className={`atm-row${isBatchMode ? " atm-row--batch" : ""}${menuOpen ? " atm-row--menu-open" : ""}`}
-      role="button"
-      tabIndex={0}
-      onClick={() => (isBatchMode ? onToggleSelect(automation.id) : onEdit(automation))}
-      onKeyDown={(event) => {
-        if (event.target !== event.currentTarget || (event.key !== "Enter" && event.key !== " ")) return;
-        event.preventDefault();
-        if (isBatchMode) onToggleSelect(automation.id);
-        else onEdit(automation);
-      }}
+      role="group"
+      aria-label={`自动化 ${automation.name}`}
     >
-      <div className="atm-row-left">
+      <button
+        type="button"
+        className="atm-row-left atm-row-open"
+        role={isBatchMode ? "checkbox" : undefined}
+        aria-label={`${isBatchMode ? "选择" : "编辑"}自动化「${automation.name}」`}
+        aria-checked={isBatchMode ? !!isSelected : undefined}
+        onClick={() => (isBatchMode ? onToggleSelect(automation.id) : onEdit(automation))}
+      >
         {isBatchMode && (
-          <span className="atm-row-leading">
-            <Checkbox className="atm-row-checkbox" checked={!!isSelected} />
+          <span className="atm-row-leading" aria-hidden="true">
+            <span className={`echo-checkbox${isSelected ? " echo-checkbox--checked" : ""} atm-row-checkbox`}>
+              <span className="echo-checkbox-box">{isSelected && "✓"}</span>
+            </span>
           </span>
         )}
         <div className="atm-row-content">
@@ -1325,7 +1327,7 @@ function AutomationRow({
             )}
           </div>
         </div>
-      </div>
+      </button>
       <div className="atm-row-right">
         <span className="atm-row-right-text">
           {isActive && nextLabel ? (

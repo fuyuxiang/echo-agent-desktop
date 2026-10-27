@@ -764,8 +764,9 @@ function activatePendingSendNow(transcript: SessionTranscript): SessionTranscrip
   };
 }
 
-/** Close the visible turn after a pause/stop request was accepted. The control
- * barrier remains, so a queued late chunk cannot reopen this transcript. */
+/** Close the visible turn after a pause/stop request was accepted. Keep even an
+ * empty terminal: continuation needs its prompt identity before any output.
+ * The control barrier prevents late chunks from reopening this transcript. */
 function finalizeControlledTranscript(
   transcript: SessionTranscript,
   control: SessionControl,
@@ -782,9 +783,6 @@ function finalizeControlledTranscript(
             ...(message.startedAt != null ? { completedAt } : {}),
           }
         : message
-    )
-    .filter(
-      (message) => !(message.id === transcript.streamingMessageId && message.parts.length === 0),
     );
   return {
     ...transcript,
@@ -1390,6 +1388,25 @@ export const useSessionStore = create<SessionState>((set, get) => {
         : undefined;
 
       applyToTranscript(target, (tr) => {
+        // Admission can race Pause: keep this turn's canonical identity and
+        // transport context even after its visible stream has been fenced.
+        // Never append messages, resume work or accept another prompt's echo.
+        if (!isReplay && tr.control?.promptId && t === "user_message_chunk"
+          && updatePromptId === tr.control.promptId) {
+          const chunk = normalizeUserChunk(u as unknown as Record<string, unknown>);
+          const userIndex = tr.messages.map((message) => message.role).lastIndexOf("user");
+          const user = tr.messages[userIndex];
+          if (chunk.hidden || chunk.promptIndex === undefined || !Number.isInteger(chunk.promptIndex)
+            || chunk.promptIndex < 0 || !user
+            || user.promptIndex !== undefined && user.promptIndex !== chunk.promptIndex
+            || !tr.messages.slice(userIndex + 1).some((message) => message.role === "assistant"
+              && message.promptId === updatePromptId)) return tr;
+          const messages = [...tr.messages];
+          messages[userIndex] = { ...user, promptIndex: chunk.promptIndex,
+            agentText: chunk.agentText ?? user.agentText,
+            attachments: mergePaths(user.attachments, chunk.attachments) };
+          return { ...tr, messages };
+        }
         if (tr.suppressReplay && REPLAY_SUPPRESSED.has(t)) return tr;
         if (
           !isReplay
@@ -1608,7 +1625,10 @@ export const useSessionStore = create<SessionState>((set, get) => {
             return { ...tr, planMode: agentMode === "plan", agentMode };
           }
           case "plan_approval_request": {
-            const request = u as unknown as PlanApprovalRequest;
+            // Live event routing moves sessionId to __sessionId. Restore the
+            // canonical transcript identity required by the approval UI; a
+            // payload field must not override the authoritative event route.
+            const request = { ...(u as unknown as PlanApprovalRequest), sessionId: target };
             const existing = tr.planApprovals ?? [];
             if (existing.some((item) => item.requestId === request.requestId)) return tr;
             return { ...tr, planApprovals: [...existing, request], planRevisionDirty: false };

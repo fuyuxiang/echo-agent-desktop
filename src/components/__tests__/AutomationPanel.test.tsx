@@ -618,6 +618,32 @@ describe("AutomationPanel（有任务/有记录）", () => {
     expect(trigger).toHaveFocus();
   });
 
+  it("编辑、测试运行和管理是独立控件，编辑不触发实际运行", async () => {
+    snapshot = { automations: [baseAutomation], records: [] };
+    render(<AutomationPanel />);
+    const edit = await screen.findByRole("button", { name: `编辑自动化「${baseAutomation.name}」` });
+    const run = screen.getByRole("button", { name: `测试运行「${baseAutomation.name}」` });
+    const manage = screen.getByRole("button", { name: `打开「${baseAutomation.name}」更多操作` });
+    for (const control of [edit, run, manage]) {
+      expect(control.parentElement?.closest('button, [role="button"]')).toBeNull();
+    }
+    fireEvent.click(edit);
+    expect(await screen.findByRole("textbox", { name: "名称" })).toHaveValue(baseAutomation.name);
+    expect(automationsRun).not.toHaveBeenCalled();
+  });
+
+  it("批量选择通过独立复选控件完成，不进入编辑或执行任务", async () => {
+    snapshot = { automations: [baseAutomation], records: [] };
+    render(<AutomationPanel />);
+    fireEvent.click(await screen.findByRole("button", { name: "批量管理" }));
+    const select = screen.getByRole("checkbox", { name: `选择自动化「${baseAutomation.name}」` });
+    expect(select).not.toBeChecked();
+    fireEvent.click(select);
+    expect(select).toBeChecked();
+    expect(screen.queryByRole("textbox", { name: "名称" })).toBeNull();
+    expect(automationsRun).not.toHaveBeenCalled();
+  });
+
   it("任务列表：显示名称与调度摘要", async () => {
     snapshot = { automations: [baseAutomation], records: [] };
     render(<AutomationPanel />);

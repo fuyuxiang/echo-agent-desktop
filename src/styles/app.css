@@ -2609,6 +2609,10 @@ button.knowledge-trace__item:hover {
   margin: 0 0 12px;
   padding-left: 24px;
 }
+.markdown-body ol {
+  /* Keep multi-digit markers inside the assistant body's clipped bounds. */
+  padding-inline-start: 3em;
+}
 .markdown-body li + li {
   margin-top: 4px;
 }

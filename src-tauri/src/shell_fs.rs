@@ -12,7 +12,8 @@ use tauri::State;
 use tauri_plugin_dialog::DialogExt;
 
 const TEXT_PREVIEW_MAX_BYTES: usize = 256 * 1024;
-const BINARY_PREVIEW_MAX_BYTES: usize = 1024 * 1024;
+#[path = "binary_preview_limits.rs"]
+mod binary_preview_limits;
 const DIRECTORY_LIST_MAX_ENTRIES: usize = 2_000;
 const TEXT_WRITE_MAX_BYTES: usize = 16 * 1024 * 1024;
 const MAX_AUTHORIZED_ROOTS: usize = 512;
@@ -1155,9 +1156,9 @@ fn read_text_file_authorized(
 }
 
 /// Read a file's raw bytes as a base64 string (for OOXML docx/pptx/sheet zip
-/// extraction in the frontend knowledge base). Not workspace-restricted — used
-/// for knowledge-source indexing of files the user explicitly picks.
-/// `max_bytes` defaults to 1 MiB.
+/// extraction in the frontend knowledge base). Native file authorization is
+/// required, including for knowledge sources the user explicitly picks.
+/// Defaults to 1 MiB; explicitly requested PDF previews are capped at 32 MiB.
 #[tauri::command]
 pub async fn read_file_base64(
     access: State<'_, FilesystemAccess>,
@@ -1177,12 +1178,12 @@ fn read_file_base64_authorized(
     if !authorized.is_file() {
         return Err(format!("不是文件：{}", authorized.display()));
     }
-    let limit = bounded_limit(max_bytes, BINARY_PREVIEW_MAX_BYTES);
+    let limit = binary_preview_limits::binary_preview_limit(&authorized, max_bytes);
     let (data, truncated) = read_bounded_prefix(&authorized, limit)?;
     if truncated {
         return Err(format!(
             "文件超过 {}KB 的二进制读取上限",
-            BINARY_PREVIEW_MAX_BYTES / 1024
+            limit / 1024
         ));
     }
     // Base64-standard encode (with padding).

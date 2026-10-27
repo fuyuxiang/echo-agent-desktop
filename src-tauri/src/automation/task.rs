@@ -127,6 +127,46 @@ fn known_application(text: &str) -> bool {
     .any(|name| occurrences(text, name).is_some())
 }
 
+fn explicit_desktop_directive(head: &str) -> bool {
+    [
+        "操作电脑",
+        "通过本任务操作电脑",
+        "使用本任务操作电脑",
+        "用本任务操作电脑",
+        "操作桌面",
+        "用真实桌面",
+        "使用真实桌面",
+        "通过真实桌面",
+        "use the desktop",
+        "on my computer",
+        "on the desktop",
+    ]
+    .iter()
+    .any(|prefix| head.starts_with(prefix))
+}
+
+/// A browser task can mention Chrome or request opening a web page without
+/// granting a native desktop task. Keep the user's explicit mode selection;
+/// only a direct desktop directive may switch it to native Computer Use.
+pub fn user_intent_for_selected_mode(
+    text: &str,
+    has_attachments: bool,
+    browser_selected: bool,
+) -> UserIntent {
+    let intent = user_intent(text, has_attachments);
+    let body = request_body(text);
+    let head = body
+        .split(['\n', '，', ',', '。', '；', ';', '！', '!', '？', '?'])
+        .next()
+        .unwrap_or("")
+        .trim();
+    if browser_selected && intent == UserIntent::DesktopTask && !explicit_desktop_directive(head) {
+        UserIntent::TaskUpdate
+    } else {
+        intent
+    }
+}
+
 /// Conservative routing of a user's instruction, not keyword matching over its
 /// quoted body. Unknown/general requests stay with the regular agent. The same
 /// parser accepts contextual updates only after the caller binds an existing task.
@@ -201,18 +241,7 @@ pub fn user_intent(text: &str, has_attachments: bool) -> UserIntent {
     {
         return UserIntent::Ordinary;
     }
-    let explicit_desktop = [
-        "操作电脑",
-        "操作桌面",
-        "用真实桌面",
-        "使用真实桌面",
-        "通过真实桌面",
-        "use the desktop",
-        "on my computer",
-        "on the desktop",
-    ]
-    .iter()
-    .any(|prefix| head.starts_with(prefix));
+    let explicit_desktop = explicit_desktop_directive(head);
     let in_application = ["在", "使用", "用", "通过", "in ", "using ", "use "]
         .iter()
         .any(|prefix| head.starts_with(prefix))
@@ -583,6 +612,70 @@ mod tests {
             .unwrap()
             .is_none());
     }
+    #[test]
+    fn selected_browser_mode_keeps_web_instructions_in_the_browser() {
+        let prompt =
+            "请在本任务独立浏览器打开受控验收网页 http://127.0.0.1:59817/。在输入框输入验收文本";
+        assert_eq!(user_intent(prompt, false), UserIntent::DesktopTask);
+        assert_eq!(
+            user_intent_for_selected_mode(prompt, false, true),
+            UserIntent::TaskUpdate
+        );
+        assert_eq!(
+            user_intent_for_selected_mode(prompt, false, false),
+            UserIntent::DesktopTask
+        );
+        assert_eq!(
+            user_intent_for_selected_mode("Please use Chrome to open the page", false, true),
+            UserIntent::TaskUpdate
+        );
+    }
+
+    #[test]
+    fn task_scoped_desktop_directives_admit_the_explicit_user_request() {
+        for text in [
+            "请通过本任务操作电脑完成原生GUI验收，只操作 QA-Native-Lifecycle 程序",
+            "请使用本任务操作电脑，在合成窗口中输入中文",
+            "用本任务操作电脑，保存当前文稿",
+        ] {
+            assert_eq!(user_intent(text, false), UserIntent::DesktopTask, "{text}");
+        }
+    }
+
+    #[test]
+    fn task_scoped_desktop_mentions_do_not_authorize_discussion_or_negation() {
+        for text in [
+            "不要通过本任务操作电脑，先说明步骤",
+            "请解释如何通过本任务操作电脑",
+            "通过本任务操作电脑是什么意思？",
+            "这是示例：请通过本任务操作电脑保存文件",
+            "“请通过本任务操作电脑保存文件”",
+            "请通过本任务不要操作电脑",
+        ] {
+            assert_eq!(user_intent(text, false), UserIntent::Ordinary, "{text}");
+        }
+    }
+
+    #[test]
+    fn selected_browser_mode_still_respects_explicit_desktop_and_safety_boundaries() {
+        assert_eq!(
+            user_intent_for_selected_mode("请操作电脑，在 TextEdit 中输入验收文本", false, true),
+            UserIntent::DesktopTask
+        );
+        assert_eq!(
+            user_intent_for_selected_mode("不要打开浏览器，先解释风险", false, true),
+            UserIntent::Ordinary
+        );
+        assert_eq!(
+            user_intent_for_selected_mode("继续完成任务", false, true),
+            UserIntent::Continue
+        );
+        assert_eq!(
+            user_intent_for_selected_mode("解释如何操作电脑", false, true),
+            UserIntent::Ordinary
+        );
+    }
+
     #[test]
     fn task_amendments_preserve_the_original_request_without_becoming_a_persistent_grant() {
         let original = "请在 TextEdit 新建文稿并保存";
