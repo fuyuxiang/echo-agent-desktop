@@ -135,14 +135,14 @@ export function ContextUsagePill({ sessionId, onRefreshSignal, estimate }: { ses
       <button
         type="button"
         ref={triggerRef}
-        aria-label={pct >= 60 ? `上下文已使用 ${pct}%` : "上下文与用量详情"}
+        aria-label={ctx ? `上下文已使用 ${pct}%` : "上下文与用量详情"}
         aria-haspopup="dialog"
         aria-expanded={open}
         className={"context-usage__pill" + (open ? " context-usage__pill--open" : "") + (pct >= 60 || estimate?.severity !== "ok" && estimate ? " context-usage__pill--attention" : "")}
         onClick={(e) => { e.stopPropagation(); setOpen((o) => !o); }}
         title={ctx ? `${pct}% · ${fmtToken(ctx.used, useWan)} / ${fmtToken(ctx.total, useWan)} 上下文已使用` : `本地估算：约 ${estimate?.newTokens} token，非计费结果`}
       >
-        {pct >= 60 ? <svg width="18" height="18" viewBox="0 0 18 18" className="context-usage__ring">
+        {ctx ? <svg width="18" height="18" viewBox="0 0 18 18" className="context-usage__ring" aria-hidden="true">
           <circle cx="9" cy="9" r={r} fill="none" className="context-usage__ring-track" />
           <circle
             cx="9" cy="9" r={r} fill="none"

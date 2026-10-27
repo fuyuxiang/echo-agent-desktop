@@ -13506,7 +13506,7 @@ body:has([aria-modal="true"]) .global-tooltip:not(.global-tooltip--dialog) {
   stroke-width: 2;
 }
 .context-usage__ring-progress {
-  stroke: var(--echo-accent, #6366f1);
+  stroke: currentColor;
   stroke-width: 2;
   stroke-linecap: round;
   transition: stroke-dashoffset 0.3s ease;

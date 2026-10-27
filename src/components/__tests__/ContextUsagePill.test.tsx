@@ -16,10 +16,11 @@ describe("context disclosure", () => {
     fireEvent.keyDown(document,{key:"Escape"});
     expect(screen.queryByRole("dialog")).toBeNull(); expect(trigger).toHaveFocus();
   });
-  it("正常容量弱化，达到阈值时直接显示占用", async () => {
+  it("正常容量也显示进度环，达到阈值时额外显示占用数字", async () => {
     vi.mocked(agentSessionInfo).mockResolvedValue(snapshot(30) as never);
     const {rerender} = render(<ContextUsagePill sessionId="a" />);
-    await screen.findByRole("button",{name:"上下文与用量详情"});
+    const trigger = await screen.findByRole("button",{name:"上下文已使用 30%"});
+    expect(trigger.querySelector(".context-usage__ring-progress")).toBeInTheDocument();
     expect(screen.queryByText("30%")).toBeNull();
     vi.mocked(agentSessionInfo).mockResolvedValue(snapshot(85) as never);
     rerender(<ContextUsagePill sessionId="b" />);
