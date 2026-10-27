@@ -26,6 +26,7 @@ jobs:
           cache: 'pnpm'
       - run: npm install --global npm@11.21.1 --ignore-scripts --no-audit --no-fund
       - run: pnpm install --frozen-lockfile
+      - run: python3 -m unittest discover -s scripts -p 'test_audit_dependencies.py'
       - run: python3 scripts/audit-dependencies.py --output security-audit-results
       - uses: actions/upload-artifact@v4
         if: always()

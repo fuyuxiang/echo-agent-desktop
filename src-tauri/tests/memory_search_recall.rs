@@ -2,7 +2,7 @@
 mod types {
     pub mod memory_backend {
         pub use echo_agent_tools::types::memory_backend::{
-            MemorySearchResult, format_staleness_note,
+            format_staleness_note, MemorySearchResult,
         };
     }
 }

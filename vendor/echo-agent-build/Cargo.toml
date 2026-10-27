@@ -116,7 +116,7 @@ anyhow = { version = "1", features = ["backtrace"] }
 arboard = "3.6"
 arc-swap = "1.7"
 assert_matches = "1.5.0"
-async-compression = { version = "0.4.17", default-features = false, features = ["gzip", "zstd", "tokio"] }
+async-compression = { version = "0.4.51", default-features = false, features = ["gzip", "zstd", "tokio"] }
 async-lsp = { version = "0.2.3", features = ["tokio", "tracing"] }
 async-openai = { path = "../async-openai/async-openai", version = "0.33.1", features = ["responses"] }
 async-stream = "0.3"
@@ -271,7 +271,7 @@ tokio-tungstenite = "0.27"
 tokio-util = { version = "0.7", features = ["rt"] }
 toml = "0.9"
 toml_edit = "0.22"
-tonic = { version = "0.14", features = ["tls-aws-lc", "gzip", "deflate", "zstd"] }
+tonic = { version = "0.14.7", features = ["tls-aws-lc", "gzip", "deflate", "zstd"] }
 tonic-prost = "0.14"
 tonic-prost-build = "0.14"
 tower = "0.5"
@@ -363,7 +363,8 @@ echo-agent-tracing = { path = "crates/common/echo-agent-tracing" }
 echo-agent-tty-utils = { path = "crates/codegen/echo-agent-tty-utils" }
 zbus = { version = "5" }
 zip = "9"
-zstd = "0.13"
+# RUSTSEC-2026-0391 and the related zstd-safe advisories require this release.
+zstd = "0.14.3"
 
 [profile.release]
 incremental = true

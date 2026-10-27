@@ -51,8 +51,8 @@ mod personal_knowledge;
 mod policy;
 mod process_supervisor;
 mod projects;
-mod providers;
 mod provider_response;
+mod providers;
 mod resource_identity;
 mod session_artifacts;
 mod session_creation;
@@ -347,15 +347,23 @@ fn application_menu(app: &tauri::AppHandle) -> tauri::Result<tauri::menu::Menu<t
     use tauri::menu::{Menu, MenuItem, MenuItemKind};
     let menu = Menu::default(app)?;
     let items = menu.items()?;
-    let application = items.first().and_then(MenuItemKind::as_submenu)
+    let application = items
+        .first()
+        .and_then(MenuItemKind::as_submenu)
         .ok_or_else(|| std::io::Error::other("macOS application menu is missing"))?;
     let application_items = application.items()?;
-    let quit_index = application_items.len().checked_sub(1)
+    let quit_index = application_items
+        .len()
+        .checked_sub(1)
         .filter(|index| matches!(application_items[*index], MenuItemKind::Predefined(_)))
         .ok_or_else(|| std::io::Error::other("macOS default Quit menu is missing"))?;
     application.remove_at(quit_index)?;
     application.append(&MenuItem::with_id(
-        app, "echoagent.app.quit", "退出 EchoAgent", true, Some("CmdOrCtrl+Q"),
+        app,
+        "echoagent.app.quit",
+        "退出 EchoAgent",
+        true,
+        Some("CmdOrCtrl+Q"),
     )?)?;
     Ok(menu)
 }

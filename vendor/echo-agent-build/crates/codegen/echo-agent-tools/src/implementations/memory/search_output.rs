@@ -1,4 +1,4 @@
-use crate::types::memory_backend::{MemorySearchResult, format_staleness_note};
+use crate::types::memory_backend::{format_staleness_note, MemorySearchResult};
 
 // The tool and host integration test share this exact model-facing formatter.
 pub(super) fn format_memory_search_results(results: &[MemorySearchResult]) -> String {

@@ -2,6 +2,14 @@
 
 依赖维护需要同时验证漏洞修复、调用方兼容性和最终安装包。审计通过只能说明所扫描的版本图未报告漏洞，不能代替编译、功能测试或桌面验收。
 
+## 2026-10-27 修复依据
+
+桌面和 Agent workspace 的锁文件均使用 `zstd 0.14.3`、`zstd-safe 8.2.0`、`zstd-sys 2.1.2+zstd.1.5.7`，处理 RUSTSEC-2026-0391、RUSTSEC-2026-0395 至 0406 和 RUSTSEC-2026-0410。直接依赖门槛同时调整为 `zstd 0.14.3`、`tonic 0.14.7` 和 `async-compression 0.4.51`，使传递依赖也选用修复版本。修复边界见 [zstd 公告](https://rustsec.org/advisories/RUSTSEC-2026-0391.html)、[zstd-safe 公告](https://rustsec.org/advisories/RUSTSEC-2026-0395.html)和 [zstd-sys 公告](https://rustsec.org/advisories/RUSTSEC-2026-0410.html)。`block-buffer 0.12.0` 升至上游修复版 `0.12.1`。
+
+对 GHSA-qwgh-2vcv-g2f7 的 `block-buffer 0.10.4` 命中进行单独源码复核：[该版本源码](https://docs.rs/block-buffer/0.10.4/src/block_buffer/lib.rs.html)将 `pos: u8` 与数据缓冲区分开存储，也没有公告中的 `ReadBuffer`。因此判断其不受该公告描述的内嵌游标破坏影响；这不是上游对受影响版本范围的更正。审计例外只接受这个包名、精确版本、公告编号及原始 crates.io 包的 SHA-256 `3078c7629b62d3f0439517fa394996acacc5cbc91c5a20d8c658e77abd503a71`，其他版本、公告、来源或校验值仍正常阻断。原始公告和复核依据保留在审计证据中，不全局忽略该公告。
+
+`src-tauri/tests/block_buffer_panic_safety.rs` 通过实际 `sha2 0.10` 依赖的 buffer API，分别验证带特殊字节输入的压缩回调、写入特殊字节的生成回调 panic 后，捕获 panic 并继续复用时游标不被覆盖。该测试由现有宿主测试 job 执行；审计 job 另运行 `python3 -m unittest discover -s scripts -p 'test_audit_dependencies.py'`，验证精确匹配、非原始发布包保护及其他安全发现仍使审计失败。
+
 ## 2026-10-24 修复依据
 
 宿主和 Runtime 的 Tokio 锁至 1.53.3、ctutils 锁至 0.4.4，分别处理 [RUSTSEC-2026-0386](https://rustsec.org/advisories/RUSTSEC-2026-0386.html) 和 [RUSTSEC-2026-0385](https://rustsec.org/advisories/RUSTSEC-2026-0385.html)。两个 workspace 分别更新，不以其中一个锁文件代替另一个。
@@ -111,7 +119,7 @@ python3 scripts/audit-dependencies.py rust --output /tmp/echo-rust-audit
 - 退出码 `1`：扫描完成但发现需处理的安全问题。
 - 退出码 `2`：扫描不完整，包括网络、工具、报告格式或补丁校验失败；不能作为安全检查通过。
 
-Rust 的纯停止维护公告单独记录在 `rust.json` 的 `maintenance` 中，安全发现保存在 `security` 中。CI 的 `dependency-security` job 保留审计产物。报告结论取决于执行时间和公告库覆盖范围；网络不可用、缺少平台环境或测试未完成时，应明确记录未验证部分。
+Rust 的纯停止维护公告单独记录在 `rust.json` 的 `maintenance` 中，安全发现保存在 `security` 中，经过精确版本复核的不受影响项及依据保存在 `not_affected` 中。CI 的 `dependency-security` job 保留审计产物。报告结论取决于执行时间和公告库覆盖范围；网络不可用、缺少平台环境或测试未完成时，应明确记录未验证部分。
 
 ## Dependabot 告警复核
 

@@ -131,19 +131,20 @@ mod memory_listing_privacy_tests {
             None,
         );
         assert_eq!(response["total"], 1);
-        assert!(
-            response["guidance"]
-                .as_str()
-                .unwrap_or_default()
-                .contains("exact subject")
-        );
+        assert!(response["guidance"]
+            .as_str()
+            .unwrap_or_default()
+            .contains("exact subject"));
     }
 
     #[test]
     fn structured_records_are_complete_and_not_memory_file_paths() {
         let response = model_memory_list_response(
             vec![record("opaque-record-id", "EXACT_FACT", "active")],
-            "", false, 0, None,
+            "",
+            false,
+            0,
+            None,
         );
         assert_eq!(response["recordType"], "structured_memory");
         assert_eq!(response["contentComplete"], true);
@@ -165,12 +166,10 @@ mod memory_listing_privacy_tests {
         );
         assert_eq!(response["total"], 0);
         assert_eq!(response["noReliableMemory"], true);
-        assert!(
-            response["guidance"]
-                .as_str()
-                .unwrap_or_default()
-                .contains("Do not")
-        );
+        assert!(response["guidance"]
+            .as_str()
+            .unwrap_or_default()
+            .contains("Do not"));
         assert!(!response.to_string().contains("FORGOTTEN_CANARY"));
     }
 }

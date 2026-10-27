@@ -15,6 +15,23 @@ import urllib.request
 ROOT = Path(__file__).resolve().parent.parent
 
 
+def reviewed_rust_exception(name, version, advisory, identities):
+    # The advisory's <0.12.1 range also matches 0.10.4, but that release stores
+    # pos in a separate u8, not inside buffer, and has no ReadBuffer. Neither
+    # callback in the advisory can overwrite it. Keep this review specific to
+    # the immutable crates.io artifact, with panic regression tests in CI.
+    if (name, version, advisory) == ("block-buffer", "0.10.4", "GHSA-qwgh-2vcv-g2f7") and identities == {
+        ("registry+https://github.com/rust-lang/crates.io-index",
+         "3078c7629b62d3f0439517fa394996acacc5cbc91c5a20d8c658e77abd503a71"),
+    }:
+        return {
+            "reason": "0.10.4 stores the cursor outside the buffer and has no ReadBuffer; callbacks cannot corrupt the cursor as described in this advisory.",
+            "source": "https://docs.rs/block-buffer/0.10.4/src/block_buffer/lib.rs.html",
+            "regression_test": "src-tauri/tests/block_buffer_panic_safety.rs",
+        }
+    return None
+
+
 def request(url, payload=None):
     data = None if payload is None else json.dumps(payload).encode()
     req = urllib.request.Request(url, data=data, headers={
@@ -66,11 +83,12 @@ def rust_audit(output):
     manifests = ["scripts/desktop-native-check/Cargo.lock", "src-tauri/Cargo.lock", "vendor/echo-agent-build/Cargo.lock",
                  "vendor/echo-agent-build/crates/codegen/echo-agent-markdown/fuzz/Cargo.lock",
                  "vendor/nucleo/Cargo.lock"]
-    packages = {}
+    packages, identities = {}, {}
     for manifest in manifests:
         for pkg in tomllib.loads((ROOT / manifest).read_text())["package"]:
             if pkg.get("source", "").startswith("registry+"):
                 packages.setdefault((pkg["name"], pkg["version"]), []).append(manifest)
+                identities.setdefault((pkg["name"], pkg["version"]), set()).add((pkg["source"], pkg.get("checksum")))
     # Local GLib is not a registry dependency: verify its exact backport instead
     # of adding a global ignore for the advisory.
     tauri = tomllib.loads((ROOT / "src-tauri/Cargo.toml").read_text())
@@ -114,7 +132,7 @@ def rust_audit(output):
         {"name": name, "version": version, "manifests": locations}
         for (name, version), locations in packages.items()
     ], indent=2))
-    findings, maintenance = [], []
+    findings, maintenance, not_affected = [], [], []
     for (name, version), vulns in matches:
         seen = set()
         for vuln in vulns:
@@ -127,6 +145,10 @@ def rust_audit(output):
             seen.add(canonical)
             row = {"package": name, "version": version, "advisory": canonical,
                    "summary": advisory.get("summary", ""), "manifests": packages[(name, version)]}
+            review = reviewed_rust_exception(name, version, canonical, identities[(name, version)])
+            if review:
+                not_affected.append(dict(row, review=review))
+                continue
             summary = row["summary"].lower()
             title = summary.replace("`", "").rstrip(".")
             # OSV's RustSec export may omit the informational field. Recognize
@@ -136,10 +158,13 @@ def rust_audit(output):
                 f"{name} has been discontinued", f"{name} is no longer maintained",
             }
             (maintenance if unmaintained else findings).append(row)
-    (output / "rust.json").write_text(json.dumps({"security": findings, "maintenance": maintenance}, indent=2))
+    (output / "rust.json").write_text(json.dumps({"security": findings, "maintenance": maintenance,
+                                                "not_affected": not_affected}, indent=2))
+    for row in not_affected:
+        print(f"rust: reviewed not affected: {row['package']} {row['version']}: {row['advisory']}: {row['review']['reason']}", flush=True)
     for row in findings:
         print(f"rust: {row['package']} {row['version']}: {row['advisory']}: {row['summary']}", flush=True)
-    print(f"rust: {len(items)} registry package versions; {len(findings)} security findings; {len(maintenance)} maintenance notices", flush=True)
+    print(f"rust: {len(items)} registry package versions; {len(findings)} security findings; {len(maintenance)} maintenance notices; {len(not_affected)} reviewed not affected", flush=True)
     return len(findings)
 
 

@@ -1181,10 +1181,7 @@ fn read_file_base64_authorized(
     let limit = binary_preview_limits::binary_preview_limit(&authorized, max_bytes);
     let (data, truncated) = read_bounded_prefix(&authorized, limit)?;
     if truncated {
-        return Err(format!(
-            "文件超过 {}KB 的二进制读取上限",
-            limit / 1024
-        ));
+        return Err(format!("文件超过 {}KB 的二进制读取上限", limit / 1024));
     }
     // Base64-standard encode (with padding).
     use base64::{engine::general_purpose::STANDARD, Engine as _};
