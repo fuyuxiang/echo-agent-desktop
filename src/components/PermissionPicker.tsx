@@ -183,6 +183,9 @@ export function PermissionPicker({
   useEffect(() => {
     if (!open) return;
     const frame = requestAnimationFrame(() => {
+      // The confirmation can open before this frame runs. Its Cancel button
+      // already owns focus, so the initial menu focus must not override it.
+      if (confirmCancelRef.current) return;
       const menu = popoverRef.current;
       (menu?.querySelector<HTMLButtonElement>('[aria-checked="true"]:not(:disabled)')
         ?? menu?.querySelector<HTMLButtonElement>('[role="menuitemradio"]:not(:disabled)'))?.focus();

@@ -251,6 +251,39 @@ describe("PermissionPicker", () => {
       .toHaveBeenCalledWith("session-1", "always-approve"));
   });
 
+  it("下一动画帧前打开确认框，菜单的延迟聚焦不会抢走取消按钮焦点", async () => {
+    vi.useFakeTimers({ toFake: ["requestAnimationFrame", "cancelAnimationFrame"] });
+    const user = userEvent.setup();
+    const view = render(<PermissionPicker />);
+    try {
+      const trigger = screen.getByRole("button", { name: "请求批准" });
+      await user.click(trigger);
+      const alwaysOption = screen.getByRole("menuitemradio", { name: /^本任务免审批/ });
+      await user.click(alwaysOption);
+
+      const dialog = screen.getByRole("alertdialog", { name: "确认本任务免审批" });
+      const cancel = within(dialog).getByRole("button", { name: "取消" });
+      expect(cancel).toHaveFocus();
+      await act(async () => vi.advanceTimersToNextFrame());
+      expect(cancel).toHaveFocus();
+      expect(mocks.permissionModeSet).not.toHaveBeenCalled();
+      expect(usePermissionModeStore.getState().homeMode).toBe("ask");
+
+      await user.keyboard("{Escape}");
+      await act(async () => vi.advanceTimersToNextFrame());
+      expect(screen.queryByRole("alertdialog")).toBeNull();
+      expect(alwaysOption).toHaveFocus();
+
+      await user.keyboard("{Escape}");
+      await act(async () => vi.advanceTimersToNextFrame());
+      expect(screen.queryByRole("menu")).toBeNull();
+      expect(trigger).toHaveFocus();
+    } finally {
+      view.unmount();
+      vi.useRealTimers();
+    }
+  });
+
   it("电脑模式的边界在确认时说明，切换成功后不重复弹提示", async () => {
     useSessionsStore.setState({ independent: [session("session-1")] });
     mocks.permissionModeGet.mockResolvedValue(modeStatus("session-1"));
