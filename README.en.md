@@ -113,6 +113,14 @@ Manage the memory switch and records under **Settings → Memory**. Completed ta
 
 Corrections and forgetting exclude superseded facts and associated sources from subsequent use. Inactive records remain available for inspection, and original chats remain in history. Turning memory off stops its use and automatic extraction in subsequent requests while keeping existing records manageable.
 
+### Reusable workflows
+
+Choose **Save as reusable workflow** on a chat or scheduled result. Default tasks share a workflow library while keeping their task files separate. Tasks with a selected workspace use that workspace’s library. Open **Skills → Reusable workflows** to inspect versions, sources, and test results.
+
+Verification compares model outputs against independent test cases. It runs without tools or connectors. You can enable a verified version as a workspace skill or pin it to a scheduled task. Scheduled runs check the actual model against the verified model and use the pinned instructions when the workspace publishes a newer revision.
+
+Automatic drafting is optional per workspace. It sends relevant task text, results, and feedback to the source task’s model for analysis. Drafts with existing checks can be verified automatically. Publishing and binding require user action.
+
 ### Expert groups
 
 Create an expert group from the sidebar's experts area or from a session team. Choose 1–8 local experts, a model, and a workspace; a coordinator joins automatically. Groups have their own chat, work records, decisions, and deliverables. Address a member with `@member name`, use `@全体` for everyone, or reply to a member. Read-only discussion restricts tools in the Runtime; execution uses each member's own Runtime session.
